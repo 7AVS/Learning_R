@@ -94,7 +94,7 @@ pcd_col_names = [
     "opn_prod_cnt", "actv_prod_cnt", "actv_prod_srvc_cnt", "ss_act_ind", "ss_opn_ind",
     "avg_yrs_rbc", "rbc_tenure", "life_stage", "value_for_money", "bi_clnt_seg", "vulnrblty_cd",
     "mny_in_potntl_cd", "mny_out_potntl_cd", "lifetm_val_5yr_clnt_cd", "credit_phase",
-    "wallet_band", "new_comer", "ngen", "ias", "age_band", "ftbc", "dor", "mb", "olb",
+    "wallet_band", "new_comer", "ngen", "ias", "age_band", "tibc", "dor", "mb", "olb",
     "impression_olb", "clicked_olb", "hsbc_ind"
 ]
 pcd_null_records = []
@@ -348,7 +348,7 @@ pli_col_names = [
     "actv_prod_cnt", "actv_prod_srvc_cnt", "ss_act_ind", "ss_opn_ind", "avg_yrs_rbc",
     "rbc_tenure", "life_stage", "value_for_money", "bi_clnt_seg", "vulnrblty_cd",
     "mny_in_potntl_cd", "mny_out_potntl_cd", "lifetm_val_5yr_clnt_cd", "credit_phase",
-    "wallet_band", "new_comer", "ngen", "ias", "age_band", "ftbc", "dor", "mb", "olb",
+    "wallet_band", "new_comer", "ngen", "ias", "age_band", "tibc", "dor", "mb", "olb",
     "csr_interactions", "oando", "oando_actioned", "oando_pending", "oando_declined",
     "oando_approved", "tactic_email", "email_disposition", "email_status", "impression_olb",
     "clicked_olb", "hsbc_ind", "usage_behaviour", "cv_score", "new_decile", "mobile_banner",
