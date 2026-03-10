@@ -97,17 +97,16 @@ pcd_col_names = [
     "wallet_band", "new_comer", "ngen", "ias", "age_band", "tibc", "dor", "mb", "olb",
     "impression_olb", "clicked_olb", "hsbc_ind"
 ]
-pcd_null_records = []
-for c in pcd_col_names:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
-        FROM {PCD}
-    """)
-    val = cursor.fetchall()[0][0]
-    cursor.close()
-    pcd_null_records.append({"column": c, "null_pct": val})
-pcd_nulls = pd.DataFrame(pcd_null_records).sort_values("null_pct", ascending=False)
+pcd_null_exprs = ",\n        ".join([
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
+    for c in pcd_col_names
+])
+cursor = EDW.cursor()
+cursor.execute(f"SELECT {pcd_null_exprs} FROM {PCD} SAMPLE {SAMPLE_SIZE}")
+pcd_null_row = cursor.fetchall()[0]
+cursor.close()
+pcd_nulls = pd.DataFrame({"column": pcd_col_names, "null_pct": list(pcd_null_row)})
+pcd_nulls = pcd_nulls.sort_values("null_pct", ascending=False)
 print("\nPCD Null %:")
 print(pcd_nulls.to_string(index=False))
 
@@ -355,17 +354,16 @@ pli_col_names = [
     "mobile_offer_hub", "impression_mb", "pb_client", "premier_client", "dt_acct_open",
     "clicked_mb", "tsne_ind"
 ]
-pli_null_records = []
-for c in pli_col_names:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
-        FROM {PLI}
-    """)
-    val = cursor.fetchall()[0][0]
-    cursor.close()
-    pli_null_records.append({"column": c, "null_pct": val})
-pli_nulls = pd.DataFrame(pli_null_records).sort_values("null_pct", ascending=False)
+pli_null_exprs = ",\n        ".join([
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
+    for c in pli_col_names
+])
+cursor = EDW.cursor()
+cursor.execute(f"SELECT {pli_null_exprs} FROM {PLI} SAMPLE {SAMPLE_SIZE}")
+pli_null_row = cursor.fetchall()[0]
+cursor.close()
+pli_nulls = pd.DataFrame({"column": pli_col_names, "null_pct": list(pli_null_row)})
+pli_nulls = pli_nulls.sort_values("null_pct", ascending=False)
 print("\nPLI Null %:")
 print(pli_nulls.to_string(index=False))
 
@@ -633,17 +631,16 @@ tpa_col_names = [
     "impression_olb", "clicked_olb", "cv_score", "impression_mb", "clicked_mb", "mobile_banner",
     "tactic_call", "cntct_atmpt_gnsis", "call_ans_gnsis", "agt_gnsis", "hsbc_ind", "rpc_gnsis"
 ]
-tpa_null_records = []
-for c in tpa_col_names:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
-        FROM {TPA}
-    """)
-    val = cursor.fetchall()[0][0]
-    cursor.close()
-    tpa_null_records.append({"column": c, "null_pct": val})
-tpa_nulls = pd.DataFrame(tpa_null_records).sort_values("null_pct", ascending=False)
+tpa_null_exprs = ",\n        ".join([
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
+    for c in tpa_col_names
+])
+cursor = EDW.cursor()
+cursor.execute(f"SELECT {tpa_null_exprs} FROM {TPA} SAMPLE {SAMPLE_SIZE}")
+tpa_null_row = cursor.fetchall()[0]
+cursor.close()
+tpa_nulls = pd.DataFrame({"column": tpa_col_names, "null_pct": list(tpa_null_row)})
+tpa_nulls = tpa_nulls.sort_values("null_pct", ascending=False)
 print("\nTPA Null %:")
 print(tpa_nulls.to_string(index=False))
 
