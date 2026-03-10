@@ -81,7 +81,7 @@ pcd_col_names = [
     "target_product_grouping", "channel_deploy_cc", "channel_deploy_dm", "channel_deploy_do",
     "channel_deploy_im", "channel_deploy_em", "channel_deploy_rd", "channel_deploy_iv",
     "channel_em_reminder", "channelcost", "channels", "dt_prod_change", "fy_prod_change",
-    "month_prod_change", "new_product", "nlbt_expected_value", "nlbt_expec_value_upgradepath",
+    "month_prod_change", "new_product", "nibt_expected_value", "nibt_expec_value_upgradepath",
     "report_groups_period", "test_groups_period", "responder", "responder_anyproduct",
     "responder_targetproduct", "responder_upgrade_path", "strategy_seg_cd", "cmpgn_seg",
     "strtgy_seg_desc", "act_ctl_seg", "student_indicator", "success_cd_1", "success_cd_2",
@@ -134,8 +134,8 @@ print("\n--- PCD Numeric Stats ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT
-        MIN(nlbt_expected_value), MAX(nlbt_expected_value), CAST(AVG(nlbt_expected_value) AS DECIMAL(12,2)),
-        MIN(nlbt_expec_value_upgradepath), MAX(nlbt_expec_value_upgradepath), CAST(AVG(nlbt_expec_value_upgradepath) AS DECIMAL(12,2)),
+        MIN(nibt_expected_value), MAX(nibt_expected_value), CAST(AVG(nibt_expected_value) AS DECIMAL(12,2)),
+        MIN(nibt_expec_value_upgradepath), MAX(nibt_expec_value_upgradepath), CAST(AVG(nibt_expec_value_upgradepath) AS DECIMAL(12,2)),
         MIN(channelcost), MAX(channelcost), CAST(AVG(channelcost) AS DECIMAL(10,2)),
         MIN(offer_bonus_cash), MAX(offer_bonus_cash), CAST(AVG(offer_bonus_cash) AS DECIMAL(10,2)),
         MIN(offer_bonus_points), MAX(offer_bonus_points), CAST(AVG(offer_bonus_points) AS DECIMAL(10,2)),
@@ -147,7 +147,7 @@ cursor.execute(f"""
 """)
 pcd_nums = cursor.fetchall()
 cursor.close()
-num_cols = ["nlbt_expected_value", "nlbt_expec_value_upgradepath", "channelcost",
+num_cols = ["nibt_expected_value", "nibt_expec_value_upgradepath", "channelcost",
             "offer_bonus_cash", "offer_bonus_points", "opn_prod_cnt",
             "actv_prod_cnt", "actv_prod_srvc_cnt", "avg_yrs_rbc"]
 pcd_num_df = pd.DataFrame([{
