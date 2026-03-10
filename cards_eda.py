@@ -76,7 +76,7 @@ print(pcd_dates_df.T.to_string(header=False))
 cursor = EDW.cursor()
 pcd_col_names = pcd_schema_df["column"].str.strip().tolist()
 pcd_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN \"{c}\" IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS \"{c}\""
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
     for c in pcd_col_names
 ])
 cursor.execute(f"SELECT {pcd_null_exprs} FROM {PCD}")
@@ -97,10 +97,10 @@ for col in ["mnemonic", "product_at_decision", "product_grouping_at_decision",
             "new_comer", "ngen", "ias", "hsbc_ind"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
         FROM {PCD}
-        GROUP BY "{col}"
+        GROUP BY {col}
         ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
@@ -143,10 +143,10 @@ for col in ["channel_deploy_cc", "channel_deploy_dm", "channel_deploy_do",
             "channel_deploy_iv", "channel_em_reminder"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT "{col}", COUNT(*) AS cnt,
+        SELECT {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
         FROM {PCD}
-        GROUP BY "{col}"
+        GROUP BY {col}
         ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
@@ -245,9 +245,9 @@ for col in ["invitation_to_upgrade", "target_product", "target_product_name",
             "target_product_grouping", "fulfillment_channel", "test_description", "test_value"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
-        FROM {PCD} GROUP BY "{col}" ORDER BY cnt DESC
+        FROM {PCD} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -307,7 +307,7 @@ print(pd.DataFrame([pli_dates[0]], columns=pli_date_cols).T.to_string(header=Fal
 # --- PLI: Null % per column ---
 pli_col_names = pli_schema_df["column"].str.strip().tolist()
 pli_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN \"{c}\" IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS \"{c}\""
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
     for c in pli_col_names
 ])
 cursor = EDW.cursor()
@@ -333,10 +333,10 @@ for col in ["increase_decrease", "product_current", "product_name_current",
             "multi_card_ind", "olb_active_90", "mobile_active_at_decision"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
         FROM {PLI}
-        GROUP BY "{col}"
+        GROUP BY {col}
         ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
@@ -399,9 +399,9 @@ print(pd.DataFrame([{"channel": ch_labels[i], "rate_pct": rows[0][i]} for i in r
 for col in ["channel", "response_channel", "response_source"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-        FROM {PLI} GROUP BY "{col}" ORDER BY cnt DESC
+        FROM {PLI} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -498,9 +498,9 @@ print("\n--- PLI SPID & Model ---")
 for col in ["spid", "spid_label", "decile", "new_decile"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-        FROM {PLI} GROUP BY "{col}" ORDER BY cnt DESC
+        FROM {PLI} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -568,7 +568,7 @@ print(pd.DataFrame([tpa_dates[0]], columns=[
 # --- TPA: Null % per column ---
 tpa_col_names = tpa_schema_df["column"].str.strip().tolist()
 tpa_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN \"{c}\" IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS \"{c}\""
+    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
     for c in tpa_col_names
 ])
 cursor = EDW.cursor()
@@ -592,10 +592,10 @@ for col in ["mnemonic", "target_seg", "tpa_ita", "like_for_like_group",
             "asc_on_app", "asc_on_app_source", "hsbc_ind"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
-        SELECT TOP 20 "{col}", COUNT(*) AS cnt,
+        SELECT TOP 20 {col}, COUNT(*) AS cnt,
                CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
         FROM {TPA}
-        GROUP BY "{col}"
+        GROUP BY {col}
         ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
