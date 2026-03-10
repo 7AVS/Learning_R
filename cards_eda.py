@@ -73,20 +73,20 @@ print("\nPCD Date Ranges:")
 print(pcd_dates_df.T.to_string(header=False))
 
 # --- PCD: Null % per column ---
-cursor = EDW.cursor()
 pcd_col_names = pcd_schema_df["column"].str.strip().tolist()
-pcd_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
-    for c in pcd_col_names
-])
-cursor.execute(f"SELECT {pcd_null_exprs} FROM {PCD}")
-pcd_null_results = cursor.fetchall()
-cursor.close()
-pcd_nulls = pd.DataFrame([pcd_null_results[0]], columns=pcd_col_names).T
-pcd_nulls.columns = ["null_pct"]
-pcd_nulls = pcd_nulls.sort_values("null_pct", ascending=False)
+pcd_null_records = []
+for c in pcd_col_names:
+    cursor = EDW.cursor()
+    cursor.execute(f"""
+        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
+        FROM {PCD}
+    """)
+    val = cursor.fetchall()[0][0]
+    cursor.close()
+    pcd_null_records.append({"column": c, "null_pct": val})
+pcd_nulls = pd.DataFrame(pcd_null_records).sort_values("null_pct", ascending=False)
 print("\nPCD Null %:")
-print(pcd_nulls.to_string())
+print(pcd_nulls.to_string(index=False))
 
 # --- PCD: Key categorical distributions ---
 print("\n--- PCD Categorical Distributions ---")
@@ -306,19 +306,19 @@ print(pd.DataFrame([pli_dates[0]], columns=pli_date_cols).T.to_string(header=Fal
 
 # --- PLI: Null % per column ---
 pli_col_names = pli_schema_df["column"].str.strip().tolist()
-pli_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
-    for c in pli_col_names
-])
-cursor = EDW.cursor()
-cursor.execute(f"SELECT {pli_null_exprs} FROM {PLI}")
-pli_null_results = cursor.fetchall()
-cursor.close()
-pli_nulls = pd.DataFrame([pli_null_results[0]], columns=pli_col_names).T
-pli_nulls.columns = ["null_pct"]
-pli_nulls = pli_nulls.sort_values("null_pct", ascending=False)
+pli_null_records = []
+for c in pli_col_names:
+    cursor = EDW.cursor()
+    cursor.execute(f"""
+        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
+        FROM {PLI}
+    """)
+    val = cursor.fetchall()[0][0]
+    cursor.close()
+    pli_null_records.append({"column": c, "null_pct": val})
+pli_nulls = pd.DataFrame(pli_null_records).sort_values("null_pct", ascending=False)
 print("\nPLI Null %:")
-print(pli_nulls.to_string())
+print(pli_nulls.to_string(index=False))
 
 # --- PLI: Key categorical distributions ---
 print("\n--- PLI Categorical Distributions ---")
@@ -567,19 +567,19 @@ print(pd.DataFrame([tpa_dates[0]], columns=[
 
 # --- TPA: Null % per column ---
 tpa_col_names = tpa_schema_df["column"].str.strip().tolist()
-tpa_null_exprs = ", ".join([
-    f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) AS {c}"
-    for c in tpa_col_names
-])
-cursor = EDW.cursor()
-cursor.execute(f"SELECT {tpa_null_exprs} FROM {TPA}")
-tpa_null_results = cursor.fetchall()
-cursor.close()
-tpa_nulls = pd.DataFrame([tpa_null_results[0]], columns=tpa_col_names).T
-tpa_nulls.columns = ["null_pct"]
-tpa_nulls = tpa_nulls.sort_values("null_pct", ascending=False)
+tpa_null_records = []
+for c in tpa_col_names:
+    cursor = EDW.cursor()
+    cursor.execute(f"""
+        SELECT CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))
+        FROM {TPA}
+    """)
+    val = cursor.fetchall()[0][0]
+    cursor.close()
+    tpa_null_records.append({"column": c, "null_pct": val})
+tpa_nulls = pd.DataFrame(tpa_null_records).sort_values("null_pct", ascending=False)
 print("\nTPA Null %:")
-print(tpa_nulls.to_string())
+print(tpa_nulls.to_string(index=False))
 
 # --- TPA: Key categorical distributions ---
 print("\n--- TPA Categorical Distributions ---")
