@@ -22,9 +22,6 @@ PCD = f"{DB}.cards_pcd_ongoing_decis_resp"
 PLI = f"{DB}.cards_pli_decision_resp"
 TPA = f"{DB}.cards_tpa_pcq_decision_resp"
 
-SAMPLE_SIZE = 500000
-print(f"Using SAMPLE {SAMPLE_SIZE:,} for distribution queries (faster, minimal accuracy loss)")
-
 print("Spark session ready. EDW connection assumed available.")
 
 
@@ -40,42 +37,25 @@ pcd_count = cursor.fetchall()[0][0]
 cursor.close()
 print(f"PCD Ongoing: {pcd_count:,} rows")
 
-# --- PCD: Schema / column listing ---
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT ColumnName, ColumnType, Nullable
-    FROM DBC.ColumnsV
-    WHERE DatabaseName = 'dl_mr_prod'
-      AND TableName = 'cards_pcd_ongoing_decis_resp'
-    ORDER BY ColumnId
-""")
-pcd_schema = cursor.fetchall()
-cursor.close()
-pcd_schema_df = pd.DataFrame(pcd_schema, columns=["column", "type", "nullable"])
-print("\nPCD Schema:")
-print(pcd_schema_df.to_string(index=False))
-
 # --- PCD: Date ranges ---
 cursor = EDW.cursor()
 cursor.execute(f"""
-    SELECT MIN(response_start) AS response_start_min, MAX(response_start) AS response_start_max,
-           MIN(response_end) AS response_end_min, MAX(response_end) AS response_end_max,
-           MIN(dt_prod_change) AS dt_prod_change_min, MAX(dt_prod_change) AS dt_prod_change_max,
-           MIN(success_dt_1) AS success_dt_1_min, MAX(success_dt_1) AS success_dt_1_max,
-           MIN(success_dt_2) AS success_dt_2_min, MAX(success_dt_2) AS success_dt_2_max
+    SELECT MIN(response_start), MAX(response_start),
+           MIN(response_end), MAX(response_end),
+           MIN(dt_prod_change), MAX(dt_prod_change),
+           MIN(success_dt_1), MAX(success_dt_1),
+           MIN(success_dt_2), MAX(success_dt_2)
     FROM {PCD}
 """)
-pcd_dates = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-pcd_dates_df = pd.DataFrame(pcd_dates, columns=[
-    "response_start_min", "response_start_max", "response_end_min", "response_end_max",
-    "dt_prod_change_min", "dt_prod_change_max", "success_dt_1_min", "success_dt_1_max",
-    "success_dt_2_min", "success_dt_2_max"
-])
 print("\nPCD Date Ranges:")
-print(pcd_dates_df.T.to_string(header=False))
+for label, mn, mx in [("response_start", r[0], r[1]), ("response_end", r[2], r[3]),
+                       ("dt_prod_change", r[4], r[5]), ("success_dt_1", r[6], r[7]),
+                       ("success_dt_2", r[8], r[9])]:
+    print(f"  {label}: {mn}  to  {mx}")
 
-# --- PCD: Null % per column ---
+# --- PCD: Null % per column (one query, positional mapping) ---
 pcd_col_names = [
     "acct_no", "clnt_no", "tactic_id_parent", "response_start", "response_end",
     "mnemonic", "fy_start", "treatmt_mn", "product_at_decision", "product_grouping_at_decision",
@@ -97,12 +77,12 @@ pcd_col_names = [
     "wallet_band", "new_comer", "ngen", "ias", "age_band", "tibc", "dor", "mb", "olb",
     "impression_olb", "clicked_olb", "hsbc_ind"
 ]
-pcd_null_exprs = ",\n        ".join([
+pcd_null_exprs = ", ".join([
     f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
     for c in pcd_col_names
 ])
 cursor = EDW.cursor()
-cursor.execute(f"SELECT {pcd_null_exprs} FROM (SELECT * FROM (SELECT * FROM {PCD} SAMPLE {SAMPLE_SIZE}) t) t")
+cursor.execute(f"SELECT {pcd_null_exprs} FROM {PCD}")
 pcd_null_row = cursor.fetchall()[0]
 cursor.close()
 pcd_nulls = pd.DataFrame({"column": pcd_col_names, "null_pct": list(pcd_null_row)})
@@ -118,16 +98,11 @@ for col in ["mnemonic", "product_at_decision", "product_grouping_at_decision",
             "report_groups_period", "strategy_seg_cd", "act_ctl_seg",
             "new_comer", "ngen", "ias", "hsbc_ind"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PCD} SAMPLE {SAMPLE_SIZE}) t
-        GROUP BY {col}
-        ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {PCD} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
-    df = pd.DataFrame(rows, columns=[col, "cnt", "pct"])
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pcd_count).round(2)
     print(f"\n  >> {col}:")
     print(df.to_string(index=False))
 
@@ -147,16 +122,12 @@ cursor.execute(f"""
         MIN(avg_yrs_rbc), MAX(avg_yrs_rbc), CAST(AVG(avg_yrs_rbc) AS DECIMAL(6,2))
     FROM {PCD}
 """)
-pcd_nums = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 num_cols = ["nibt_expected_value", "nibt_expec_value_upgradepath", "channelcost",
             "offer_bonus_cash", "offer_bonus_points", "opn_prod_cnt",
             "actv_prod_cnt", "actv_prod_srvc_cnt", "avg_yrs_rbc"]
-pcd_num_df = pd.DataFrame([{
-    "column": num_cols[i],
-    "min": pcd_nums[0][i*3], "max": pcd_nums[0][i*3+1], "avg": pcd_nums[0][i*3+2]
-} for i in range(len(num_cols))])
-print(pcd_num_df.to_string(index=False))
+print(pd.DataFrame([{"column": num_cols[i], "min": r[i*3], "max": r[i*3+1], "avg": r[i*3+2]} for i in range(len(num_cols))]).to_string(index=False))
 
 # --- PCD: Channel deployment flags ---
 print("\n--- PCD Channel Deployment ---")
@@ -164,16 +135,11 @@ for col in ["channel_deploy_cc", "channel_deploy_dm", "channel_deploy_do",
             "channel_deploy_im", "channel_deploy_em", "channel_deploy_rd",
             "channel_deploy_iv", "channel_em_reminder"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PCD} SAMPLE {SAMPLE_SIZE}) t
-        GROUP BY {col}
-        ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT {col}, COUNT(*) AS cnt FROM {PCD} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
-    df = pd.DataFrame(rows, columns=[col, "cnt", "pct"])
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pcd_count).round(2)
     print(f"\n  >> {col}:")
     print(df.to_string(index=False))
 
@@ -182,70 +148,68 @@ print("\n--- PCD Response Rates ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT
-        CAST(100.0 * SUM(CAST(responder_anyproduct AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS resp_any_pct,
-        CAST(100.0 * SUM(CAST(responder_targetproduct AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS resp_target_pct,
-        CAST(100.0 * SUM(CAST(responder_upgrade_path AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS resp_upgrade_pct
+        CAST(100.0 * SUM(CAST(responder_anyproduct AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(responder_targetproduct AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(responder_upgrade_path AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PCD}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame(rows, columns=["resp_any_pct", "resp_target_pct", "resp_upgrade_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["resp_any_pct", "resp_target_pct", "resp_upgrade_pct"]).to_string(index=False))
 
 # --- PCD: OandO funnel ---
 print("\n--- PCD OandO Funnel ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT
-        CAST(100.0 * SUM(CAST(oando AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS oando_pct,
-        CAST(100.0 * SUM(CAST(oando_actioned AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS actioned_pct,
-        CAST(100.0 * SUM(CAST(oando_pending AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS pending_pct,
-        CAST(100.0 * SUM(CAST(oando_declined AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS declined_pct,
-        CAST(100.0 * SUM(CAST(oando_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS approved_pct
+        CAST(100.0 * SUM(CAST(oando AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(oando_actioned AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(oando_pending AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(oando_declined AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(oando_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PCD}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame(rows, columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
 
 # --- PCD: Email ---
 print("\n--- PCD Email ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT
-        CAST(100.0 * SUM(CAST(tactic_email AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS tactic_email_pct,
-        CAST(100.0 * SUM(CAST(email_status AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS email_status_pct
+        CAST(100.0 * SUM(CAST(tactic_email AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(email_status AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PCD}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame(rows, columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
 
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {PCD} SAMPLE {SAMPLE_SIZE}) t GROUP BY email_disposition ORDER BY cnt DESC
-""")
+cursor.execute(f"SELECT TOP 20 email_disposition, COUNT(*) AS cnt FROM {PCD} GROUP BY email_disposition ORDER BY cnt DESC")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["email_disposition", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / pcd_count).round(2)
 print("\n  >> email_disposition:")
-print(pd.DataFrame(rows, columns=["email_disposition", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 # --- PCD: Digital & Self-Serve ---
 print("\n--- PCD Digital & Self-Serve ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT
-        CAST(100.0 * SUM(CAST(olb AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS olb_pct,
-        CAST(100.0 * SUM(CAST(mb AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS mb_pct,
-        CAST(100.0 * SUM(CAST(dor AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS dor_pct,
-        CAST(100.0 * SUM(CAST(ss_act_ind AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS ss_act_pct,
-        CAST(100.0 * SUM(CAST(ss_opn_ind AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)) AS ss_opn_pct
+        CAST(100.0 * SUM(CAST(olb AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(mb AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(dor AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(ss_act_ind AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
+        CAST(100.0 * SUM(CAST(ss_opn_ind AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PCD}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame(rows, columns=["olb_pct", "mb_pct", "dor_pct", "ss_act_pct", "ss_opn_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["olb_pct", "mb_pct", "dor_pct", "ss_act_pct", "ss_opn_pct"]).to_string(index=False))
 
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -253,28 +217,24 @@ cursor.execute(f"""
            MIN(clicked_olb), MAX(clicked_olb), CAST(AVG(clicked_olb) AS DECIMAL(10,2))
     FROM {PCD}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 print("\n  OLB impressions/clicks:")
-print(pd.DataFrame([{
-    "imp_olb_min": rows[0][0], "imp_olb_max": rows[0][1], "imp_olb_avg": rows[0][2],
-    "clk_olb_min": rows[0][3], "clk_olb_max": rows[0][4], "clk_olb_avg": rows[0][5]
-}]).to_string(index=False))
+print(pd.DataFrame([{"imp_olb_min": r[0], "imp_olb_max": r[1], "imp_olb_avg": r[2],
+                      "clk_olb_min": r[3], "clk_olb_max": r[4], "clk_olb_avg": r[5]}]).to_string(index=False))
 
 # --- PCD: Offer & Upgrade ---
 print("\n--- PCD Offers & Upgrades ---")
 for col in ["invitation_to_upgrade", "target_product", "target_product_name",
             "target_product_grouping", "fulfillment_channel", "test_description", "test_value"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PCD} SAMPLE {SAMPLE_SIZE}) t GROUP BY {col} ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {PCD} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pcd_count).round(2)
     print(f"\n  >> {col}:")
-    print(pd.DataFrame(rows, columns=[col, "cnt", "pct"]).to_string(index=False))
+    print(df.to_string(index=False))
 
 
 # ===================================================================
@@ -289,21 +249,6 @@ pli_count = cursor.fetchall()[0][0]
 cursor.close()
 print(f"\nPLI: {pli_count:,} rows")
 
-# --- PLI: Schema ---
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT ColumnName, ColumnType, Nullable
-    FROM DBC.ColumnsV
-    WHERE DatabaseName = 'dl_mr_prod'
-      AND TableName = 'cards_pli_decision_resp'
-    ORDER BY ColumnId
-""")
-pli_schema = cursor.fetchall()
-cursor.close()
-pli_schema_df = pd.DataFrame(pli_schema, columns=["column", "type", "nullable"])
-print("\nPLI Schema:")
-print(pli_schema_df.to_string(index=False))
-
 # --- PLI: Date ranges ---
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -317,14 +262,14 @@ cursor.execute(f"""
            MIN(dt_acct_open), MAX(dt_acct_open)
     FROM {PLI}
 """)
-pli_dates = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-pli_date_cols = ["decision_dt_min", "decision_dt_max", "actual_strt_min", "actual_strt_max",
-                 "parent_strt_min", "parent_strt_max", "treatmt_strt_min", "treatmt_strt_max",
-                 "treatmt_end_min", "treatmt_end_max", "cl_change_min", "cl_change_max",
-                 "spid_min", "spid_max", "acct_open_min", "acct_open_max"]
 print("\nPLI Date Ranges:")
-print(pd.DataFrame([pli_dates[0]], columns=pli_date_cols).T.to_string(header=False))
+for label, mn, mx in [("decision_dt", r[0], r[1]), ("actual_strt_dt", r[2], r[3]),
+                       ("parent_actual_strt_dt", r[4], r[5]), ("treatmt_strt_dt", r[6], r[7]),
+                       ("treatmt_end_dt", r[8], r[9]), ("dt_cl_change", r[10], r[11]),
+                       ("spid_proc_dt", r[12], r[13]), ("dt_acct_open", r[14], r[15])]:
+    print(f"  {label}: {mn}  to  {mx}")
 
 # --- PLI: Null % per column ---
 pli_col_names = [
@@ -354,12 +299,12 @@ pli_col_names = [
     "mobile_offer_hub", "impression_mb", "pb_client", "premier_client", "dt_acct_open",
     "clicked_mb", "tsne_ind"
 ]
-pli_null_exprs = ",\n        ".join([
+pli_null_exprs = ", ".join([
     f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
     for c in pli_col_names
 ])
 cursor = EDW.cursor()
-cursor.execute(f"SELECT {pli_null_exprs} FROM (SELECT * FROM {PLI} SAMPLE {SAMPLE_SIZE}) t")
+cursor.execute(f"SELECT {pli_null_exprs} FROM {PLI}")
 pli_null_row = cursor.fetchall()[0]
 cursor.close()
 pli_nulls = pd.DataFrame({"column": pli_col_names, "null_pct": list(pli_null_row)})
@@ -379,17 +324,13 @@ for col in ["increase_decrease", "product_current", "product_name_current",
             "spid_label", "hsbc_ind", "low_grow_ind", "low_revenue_ind",
             "multi_card_ind", "olb_active_90", "mobile_active_at_decision"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PLI} SAMPLE {SAMPLE_SIZE}) t
-        GROUP BY {col}
-        ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {PLI} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pli_count).round(2)
     print(f"\n  >> {col}:")
-    print(pd.DataFrame(rows, columns=[col, "cnt", "pct"]).to_string(index=False))
+    print(df.to_string(index=False))
 
 # --- PLI: Numeric summaries ---
 print("\n--- PLI Numeric Stats ---")
@@ -409,16 +350,12 @@ cursor.execute(f"""
         MIN(csr_interactions), MAX(csr_interactions), CAST(AVG(csr_interactions) AS DECIMAL(6,2))
     FROM {PLI}
 """)
-pli_nums = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 pli_num_cols = ["limit_increase_amt", "limit_decrease_amt", "cli_offer", "model_score",
                 "cv_score", "decile", "new_decile", "opn_prod_cnt", "actv_prod_cnt",
                 "avg_yrs_rbc", "csr_interactions"]
-pli_num_df = pd.DataFrame([{
-    "column": pli_num_cols[i],
-    "min": pli_nums[0][i*3], "max": pli_nums[0][i*3+1], "avg": pli_nums[0][i*3+2]
-} for i in range(len(pli_num_cols))])
-print(pli_num_df.to_string(index=False))
+print(pd.DataFrame([{"column": pli_num_cols[i], "min": r[i*3], "max": r[i*3+1], "avg": r[i*3+2]} for i in range(len(pli_num_cols))]).to_string(index=False))
 
 # --- PLI: Channel flags ---
 print("\n--- PLI Channel Flags ---")
@@ -438,22 +375,20 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(channel_rd AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 ch_labels = ["cc", "dm", "do", "ec", "em", "im", "in", "iu", "iv", "mb", "rd"]
-print(pd.DataFrame([{"channel": ch_labels[i], "rate_pct": rows[0][i]} for i in range(len(ch_labels))]).to_string(index=False))
+print(pd.DataFrame([{"channel": ch_labels[i], "rate_pct": r[i]} for i in range(len(ch_labels))]).to_string(index=False))
 
 for col in ["channel", "response_channel", "response_source"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PLI} SAMPLE {SAMPLE_SIZE}) t GROUP BY {col} ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {PLI} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pli_count).round(2)
     print(f"\n  >> {col}:")
-    print(pd.DataFrame(rows, columns=[col, "cnt", "pct"]).to_string(index=False))
+    print(df.to_string(index=False))
 
 # --- PLI: Key flags ---
 print("\n--- PLI Key Flags ---")
@@ -465,9 +400,9 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(student_indicator AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["responder_cli_pct", "decisioned_pct", "student_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["responder_cli_pct", "decisioned_pct", "student_pct"]).to_string(index=False))
 
 # --- PLI: OandO funnel ---
 print("\n--- PLI OandO Funnel ---")
@@ -481,9 +416,9 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(oando_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
 
 # --- PLI: Email ---
 print("\n--- PLI Email ---")
@@ -494,20 +429,18 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(email_status AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
 
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {PLI} SAMPLE {SAMPLE_SIZE}) t GROUP BY email_disposition ORDER BY cnt DESC
-""")
+cursor.execute(f"SELECT TOP 20 email_disposition, COUNT(*) AS cnt FROM {PLI} GROUP BY email_disposition ORDER BY cnt DESC")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["email_disposition", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / pli_count).round(2)
 print("\n  >> email_disposition:")
-print(pd.DataFrame(rows, columns=["email_disposition", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 # --- PLI: Digital ---
 print("\n--- PLI Digital ---")
@@ -518,9 +451,9 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(mb AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["olb_pct", "mb_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["olb_pct", "mb_pct"]).to_string(index=False))
 
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -532,27 +465,22 @@ cursor.execute(f"""
            MIN(mobile_offer_hub), MAX(mobile_offer_hub), CAST(AVG(mobile_offer_hub) AS DECIMAL(10,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 dig_cols = ["impression_olb", "clicked_olb", "impression_mb", "clicked_mb", "mobile_banner", "mobile_offer_hub"]
-print(pd.DataFrame([{
-    "column": dig_cols[i],
-    "min": rows[0][i*3], "max": rows[0][i*3+1], "avg": rows[0][i*3+2]
-} for i in range(len(dig_cols))]).to_string(index=False))
+print(pd.DataFrame([{"column": dig_cols[i], "min": r[i*3], "max": r[i*3+1], "avg": r[i*3+2]} for i in range(len(dig_cols))]).to_string(index=False))
 
 # --- PLI: SPID & Model ---
 print("\n--- PLI SPID & Model ---")
 for col in ["spid", "spid_label", "decile", "new_decile"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {PLI} SAMPLE {SAMPLE_SIZE}) t GROUP BY {col} ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {PLI} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / pli_count).round(2)
     print(f"\n  >> {col}:")
-    print(pd.DataFrame(rows, columns=[col, "cnt", "pct"]).to_string(index=False))
+    print(df.to_string(index=False))
 
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -562,10 +490,10 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(tsne_ind AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {PLI}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 print("\n  Client type flags:")
-print(pd.DataFrame([rows[0]], columns=["pb_client_pct", "premier_pct", "tsne_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["pb_client_pct", "premier_pct", "tsne_pct"]).to_string(index=False))
 
 
 # ===================================================================
@@ -580,21 +508,6 @@ tpa_count = cursor.fetchall()[0][0]
 cursor.close()
 print(f"\nTPA PCQ: {tpa_count:,} rows")
 
-# --- TPA: Schema ---
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT ColumnName, ColumnType, Nullable
-    FROM DBC.ColumnsV
-    WHERE DatabaseName = 'dl_mr_prod'
-      AND TableName = 'cards_tpa_pcq_decision_resp'
-    ORDER BY ColumnId
-""")
-tpa_schema = cursor.fetchall()
-cursor.close()
-tpa_schema_df = pd.DataFrame(tpa_schema, columns=["column", "type", "nullable"])
-print("\nTPA Schema:")
-print(tpa_schema_df.to_string(index=False))
-
 # --- TPA: Date ranges ---
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -604,13 +517,12 @@ cursor.execute(f"""
            MIN(response_dt), MAX(response_dt)
     FROM {TPA}
 """)
-tpa_dates = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 print("\nTPA Date Ranges:")
-print(pd.DataFrame([tpa_dates[0]], columns=[
-    "report_min", "report_max", "treatmt_strt_min", "treatmt_strt_max",
-    "treatmt_end_min", "treatmt_end_max", "response_min", "response_max"
-]).T.to_string(header=False))
+for label, mn, mx in [("report_dt", r[0], r[1]), ("treatmt_start_dt", r[2], r[3]),
+                       ("treatmt_end_dt", r[4], r[5]), ("response_dt", r[6], r[7])]:
+    print(f"  {label}: {mn}  to  {mx}")
 
 # --- TPA: Null % per column ---
 tpa_col_names = [
@@ -631,12 +543,12 @@ tpa_col_names = [
     "impression_olb", "clicked_olb", "cv_score", "impression_mb", "clicked_mb", "mobile_banner",
     "tactic_call", "cntct_atmpt_gnsis", "call_ans_gnsis", "agt_gnsis", "hsbc_ind", "rpc_gnsis"
 ]
-tpa_null_exprs = ",\n        ".join([
+tpa_null_exprs = ", ".join([
     f"CAST(100.0 * SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2))"
     for c in tpa_col_names
 ])
 cursor = EDW.cursor()
-cursor.execute(f"SELECT {tpa_null_exprs} FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t")
+cursor.execute(f"SELECT {tpa_null_exprs} FROM {TPA}")
 tpa_null_row = cursor.fetchall()[0]
 cursor.close()
 tpa_nulls = pd.DataFrame({"column": tpa_col_names, "null_pct": list(tpa_null_row)})
@@ -654,17 +566,13 @@ for col in ["mnemonic", "target_seg", "tpa_ita", "like_for_like_group",
             "product_applied", "product_applied_name",
             "asc_on_app", "asc_on_app_source", "hsbc_ind"]:
     cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-        FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t
-        GROUP BY {col}
-        ORDER BY cnt DESC
-    """)
+    cursor.execute(f"SELECT TOP 20 {col}, COUNT(*) AS cnt FROM {TPA} GROUP BY {col} ORDER BY cnt DESC")
     rows = cursor.fetchall()
     cursor.close()
+    df = pd.DataFrame(rows, columns=[col, "cnt"])
+    df["pct"] = (100.0 * df["cnt"] / tpa_count).round(2)
     print(f"\n  >> {col}:")
-    print(pd.DataFrame(rows, columns=[col, "cnt", "pct"]).to_string(index=False))
+    print(df.to_string(index=False))
 
 # --- TPA: Numeric summaries ---
 print("\n--- TPA Numeric Stats ---")
@@ -685,16 +593,13 @@ cursor.execute(f"""
         MIN(num_auth_users), MAX(num_auth_users), CAST(AVG(num_auth_users) AS DECIMAL(10,2))
     FROM {TPA}
 """)
-tpa_nums = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 tpa_num_cols = ["offer_rate_latest", "offer_rate_months_latest", "offer_fee_waiver_months_latest",
                 "offer_bonus_points_latest", "offer_cr_lmt_latest", "cr_lmt_approved",
                 "days_to_respond", "model_score", "expected_value",
                 "times_targeted", "num_coapps", "num_auth_users"]
-print(pd.DataFrame([{
-    "column": tpa_num_cols[i],
-    "min": tpa_nums[0][i*3], "max": tpa_nums[0][i*3+1], "avg": tpa_nums[0][i*3+2]
-} for i in range(len(tpa_num_cols))]).to_string(index=False))
+print(pd.DataFrame([{"column": tpa_num_cols[i], "min": r[i*3], "max": r[i*3+1], "avg": r[i*3+2]} for i in range(len(tpa_num_cols))]).to_string(index=False))
 
 # --- TPA: Application funnel ---
 print("\n--- TPA Application Funnel ---")
@@ -705,9 +610,9 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(app_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["app_completed_pct", "app_approved_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["app_completed_pct", "app_approved_pct"]).to_string(index=False))
 
 # --- TPA: Channel flags ---
 print("\n--- TPA Channel Flags ---")
@@ -728,21 +633,19 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(chnl_em_reminder AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 tpa_ch = ["dm", "do", "ec", "em", "im", "in", "iu", "iv", "mb", "md", "rd", "em_reminder"]
-print(pd.DataFrame([{"channel": tpa_ch[i], "rate_pct": rows[0][i]} for i in range(len(tpa_ch))]).to_string(index=False))
+print(pd.DataFrame([{"channel": tpa_ch[i], "rate_pct": r[i]} for i in range(len(tpa_ch))]).to_string(index=False))
 
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT TOP 20 channel, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t GROUP BY channel ORDER BY cnt DESC
-""")
+cursor.execute(f"SELECT TOP 20 channel, COUNT(*) AS cnt FROM {TPA} GROUP BY channel ORDER BY cnt DESC")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["channel", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / tpa_count).round(2)
 print("\n  >> channel (text):")
-print(pd.DataFrame(rows, columns=["channel", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 # --- TPA: OandO funnel ---
 print("\n--- TPA OandO Funnel ---")
@@ -756,9 +659,9 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(oando_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["oando_pct", "actioned_pct", "pending_pct", "declined_pct", "approved_pct"]).to_string(index=False))
 
 # --- TPA: Email ---
 print("\n--- TPA Email ---")
@@ -769,20 +672,18 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(email_status AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["tactic_email_pct", "email_status_pct"]).to_string(index=False))
 
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t GROUP BY email_disposition ORDER BY cnt DESC
-""")
+cursor.execute(f"SELECT TOP 20 email_disposition, COUNT(*) AS cnt FROM {TPA} GROUP BY email_disposition ORDER BY cnt DESC")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["email_disposition", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / tpa_count).round(2)
 print("\n  >> email_disposition:")
-print(pd.DataFrame(rows, columns=["email_disposition", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 # --- TPA: Digital ---
 print("\n--- TPA Digital ---")
@@ -795,13 +696,10 @@ cursor.execute(f"""
            MIN(mobile_banner), MAX(mobile_banner), CAST(AVG(mobile_banner) AS DECIMAL(10,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
 tpa_dig = ["impression_olb", "clicked_olb", "impression_mb", "clicked_mb", "mobile_banner"]
-print(pd.DataFrame([{
-    "column": tpa_dig[i],
-    "min": rows[0][i*3], "max": rows[0][i*3+1], "avg": rows[0][i*3+2]
-} for i in range(len(tpa_dig))]).to_string(index=False))
+print(pd.DataFrame([{"column": tpa_dig[i], "min": r[i*3], "max": r[i*3+1], "avg": r[i*3+2]} for i in range(len(tpa_dig))]).to_string(index=False))
 
 # --- TPA: Call Center (Genesis) ---
 print("\n--- TPA Call Center (Genesis) ---")
@@ -815,40 +713,36 @@ cursor.execute(f"""
         CAST(100.0 * SUM(CAST(rpc_gnsis AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
     FROM {TPA}
 """)
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(pd.DataFrame([rows[0]], columns=["tactic_call_pct", "contact_attempt_pct", "call_answered_pct", "agent_pct", "rpc_pct"]).to_string(index=False))
+print(pd.DataFrame([r], columns=["tactic_call_pct", "contact_attempt_pct", "call_answered_pct", "agent_pct", "rpc_pct"]).to_string(index=False))
 
 # --- TPA: Time analysis ---
 print("\n--- TPA Decision Timing ---")
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT decsn_year, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t GROUP BY decsn_year ORDER BY decsn_year
-""")
+cursor.execute(f"SELECT decsn_year, COUNT(*) AS cnt FROM {TPA} GROUP BY decsn_year ORDER BY decsn_year")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["decsn_year", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / tpa_count).round(2)
 print("  >> decsn_year:")
-print(pd.DataFrame(rows, columns=["decsn_year", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT decsn_month, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
-    FROM (SELECT * FROM {TPA} SAMPLE {SAMPLE_SIZE}) t GROUP BY decsn_month ORDER BY decsn_month
-""")
+cursor.execute(f"SELECT decsn_month, COUNT(*) AS cnt FROM {TPA} GROUP BY decsn_month ORDER BY decsn_month")
 rows = cursor.fetchall()
 cursor.close()
+df = pd.DataFrame(rows, columns=["decsn_month", "cnt"])
+df["pct"] = (100.0 * df["cnt"] / tpa_count).round(2)
 print("\n  >> decsn_month:")
-print(pd.DataFrame(rows, columns=["decsn_month", "cnt", "pct"]).to_string(index=False))
+print(df.to_string(index=False))
 
 
 # ===================================================================
 # Section 4: Sample Rows, Duplicate Checks & Data Recency
 # ===================================================================
 
-# --- Sample rows: eyeball actual data ---
+# --- Sample rows ---
 print("\n=== Sample Rows ===")
 for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
     cursor = EDW.cursor()
@@ -859,7 +753,7 @@ for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
     print(f"\n--- {label}: first 10 rows ---")
     print(pd.DataFrame(rows, columns=col_names).to_string(index=False))
 
-# --- PCD: Duplicate check on primary index ---
+# --- PCD: Duplicate check ---
 print("\n=== Duplicate Check: PCD (acct_no, clnt_no, tactic_id_parent, response_start, response_end) ===")
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -869,7 +763,7 @@ cursor.execute(f"""
                COUNT(*) AS cnt_per_key
         FROM {PCD}
         GROUP BY acct_no, clnt_no, tactic_id_parent, response_start, response_end
-    ) x
+    ) t
     GROUP BY cnt_per_key
     ORDER BY cnt_per_key DESC
 """)
@@ -882,7 +776,7 @@ if len(pcd_dup) == 1 and int(pcd_dup.iloc[0]["rows_per_key"]) == 1:
 else:
     print("  => DUPLICATES FOUND on primary index. Investigate.")
 
-# --- PLI: Duplicate check on primary index ---
+# --- PLI: Duplicate check ---
 print("\n=== Duplicate Check: PLI (parent_tactic_id, acct_no, clnt_no) ===")
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -892,7 +786,7 @@ cursor.execute(f"""
                COUNT(*) AS cnt_per_key
         FROM {PLI}
         GROUP BY parent_tactic_id, acct_no, clnt_no
-    ) x
+    ) t
     GROUP BY cnt_per_key
     ORDER BY cnt_per_key DESC
 """)
@@ -905,7 +799,7 @@ if len(pli_dup) == 1 and int(pli_dup.iloc[0]["rows_per_key"]) == 1:
 else:
     print("  => DUPLICATES FOUND on primary index. Investigate.")
 
-# --- TPA: Duplicate check on primary index ---
+# --- TPA: Duplicate check ---
 print("\n=== Duplicate Check: TPA (clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt) ===")
 cursor = EDW.cursor()
 cursor.execute(f"""
@@ -915,7 +809,7 @@ cursor.execute(f"""
                COUNT(*) AS cnt_per_key
         FROM {TPA}
         GROUP BY clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt
-    ) x
+    ) t
     GROUP BY cnt_per_key
     ORDER BY cnt_per_key DESC
 """)
@@ -928,25 +822,25 @@ if len(tpa_dup) == 1 and int(tpa_dup.iloc[0]["rows_per_key"]) == 1:
 else:
     print("  => DUPLICATES FOUND on primary index. Investigate.")
 
-# --- Data recency: most recent dates per table ---
+# --- Data recency ---
 print("\n=== Data Recency ===")
 cursor = EDW.cursor()
 cursor.execute(f"SELECT MAX(response_start), MAX(response_end) FROM {PCD}")
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(f"  PCD: latest response_start = {rows[0][0]}, latest response_end = {rows[0][1]}")
+print(f"  PCD: latest response_start = {r[0]}, latest response_end = {r[1]}")
 
 cursor = EDW.cursor()
 cursor.execute(f"SELECT MAX(decision_dt), MAX(actual_strt_dt) FROM {PLI}")
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(f"  PLI: latest decision_dt = {rows[0][0]}, latest actual_strt_dt = {rows[0][1]}")
+print(f"  PLI: latest decision_dt = {r[0]}, latest actual_strt_dt = {r[1]}")
 
 cursor = EDW.cursor()
 cursor.execute(f"SELECT MAX(report_dt), MAX(treatmt_start_dt), MAX(response_dt) FROM {TPA}")
-rows = cursor.fetchall()
+r = cursor.fetchall()[0]
 cursor.close()
-print(f"  TPA: latest report_dt = {rows[0][0]}, latest treatmt_start_dt = {rows[0][1]}, latest response_dt = {rows[0][2]}")
+print(f"  TPA: latest report_dt = {r[0]}, latest treatmt_start_dt = {r[1]}, latest response_dt = {r[2]}")
 
 # --- Row count summary ---
 print("\n=== Row Count Summary ===")
