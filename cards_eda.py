@@ -22,6 +22,9 @@ PCD = f"{DB}.cards_pcd_ongoing_decis_resp"
 PLI = f"{DB}.cards_pli_decision_resp"
 TPA = f"{DB}.cards_tpa_pcq_decision_resp"
 
+SAMPLE_SIZE = 500000
+print(f"Using SAMPLE {SAMPLE_SIZE:,} for distribution queries (faster, minimal accuracy loss)")
+
 print("Spark session ready. EDW connection assumed available.")
 
 
@@ -118,8 +121,8 @@ for col in ["mnemonic", "product_at_decision", "product_grouping_at_decision",
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
-        FROM {PCD}
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PCD} SAMPLE {SAMPLE_SIZE}
         GROUP BY {col}
         ORDER BY cnt DESC
     """)
@@ -164,8 +167,8 @@ for col in ["channel_deploy_cc", "channel_deploy_dm", "channel_deploy_do",
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
-        FROM {PCD}
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PCD} SAMPLE {SAMPLE_SIZE}
         GROUP BY {col}
         ORDER BY cnt DESC
     """)
@@ -221,8 +224,8 @@ print(pd.DataFrame(rows, columns=["tactic_email_pct", "email_status_pct"]).to_st
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
-    FROM {PCD} GROUP BY email_disposition ORDER BY cnt DESC
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {PCD} SAMPLE {SAMPLE_SIZE} GROUP BY email_disposition ORDER BY cnt DESC
 """)
 rows = cursor.fetchall()
 cursor.close()
@@ -266,8 +269,8 @@ for col in ["invitation_to_upgrade", "target_product", "target_product_name",
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pcd_count} AS DECIMAL(5,2)) AS pct
-        FROM {PCD} GROUP BY {col} ORDER BY cnt DESC
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PCD} SAMPLE {SAMPLE_SIZE} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -380,8 +383,8 @@ for col in ["increase_decrease", "product_current", "product_name_current",
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-        FROM {PLI}
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PLI} SAMPLE {SAMPLE_SIZE}
         GROUP BY {col}
         ORDER BY cnt DESC
     """)
@@ -446,8 +449,8 @@ for col in ["channel", "response_channel", "response_source"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-        FROM {PLI} GROUP BY {col} ORDER BY cnt DESC
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PLI} SAMPLE {SAMPLE_SIZE} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -500,8 +503,8 @@ print(pd.DataFrame([rows[0]], columns=["tactic_email_pct", "email_status_pct"]).
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-    FROM {PLI} GROUP BY email_disposition ORDER BY cnt DESC
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {PLI} SAMPLE {SAMPLE_SIZE} GROUP BY email_disposition ORDER BY cnt DESC
 """)
 rows = cursor.fetchall()
 cursor.close()
@@ -545,8 +548,8 @@ for col in ["spid", "spid_label", "decile", "new_decile"]:
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {pli_count} AS DECIMAL(5,2)) AS pct
-        FROM {PLI} GROUP BY {col} ORDER BY cnt DESC
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {PLI} SAMPLE {SAMPLE_SIZE} GROUP BY {col} ORDER BY cnt DESC
     """)
     rows = cursor.fetchall()
     cursor.close()
@@ -656,8 +659,8 @@ for col in ["mnemonic", "target_seg", "tpa_ita", "like_for_like_group",
     cursor = EDW.cursor()
     cursor.execute(f"""
         SELECT TOP 20 {col}, COUNT(*) AS cnt,
-               CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
-        FROM {TPA}
+               CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+        FROM {TPA} SAMPLE {SAMPLE_SIZE}
         GROUP BY {col}
         ORDER BY cnt DESC
     """)
@@ -736,8 +739,8 @@ print(pd.DataFrame([{"channel": tpa_ch[i], "rate_pct": rows[0][i]} for i in rang
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT TOP 20 channel, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
-    FROM {TPA} GROUP BY channel ORDER BY cnt DESC
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {TPA} SAMPLE {SAMPLE_SIZE} GROUP BY channel ORDER BY cnt DESC
 """)
 rows = cursor.fetchall()
 cursor.close()
@@ -776,8 +779,8 @@ print(pd.DataFrame([rows[0]], columns=["tactic_email_pct", "email_status_pct"]).
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT TOP 20 email_disposition, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
-    FROM {TPA} GROUP BY email_disposition ORDER BY cnt DESC
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {TPA} SAMPLE {SAMPLE_SIZE} GROUP BY email_disposition ORDER BY cnt DESC
 """)
 rows = cursor.fetchall()
 cursor.close()
@@ -824,8 +827,8 @@ print("\n--- TPA Decision Timing ---")
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT decsn_year, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
-    FROM {TPA} GROUP BY decsn_year ORDER BY decsn_year
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {TPA} SAMPLE {SAMPLE_SIZE} GROUP BY decsn_year ORDER BY decsn_year
 """)
 rows = cursor.fetchall()
 cursor.close()
@@ -835,8 +838,8 @@ print(pd.DataFrame(rows, columns=["decsn_year", "cnt", "pct"]).to_string(index=F
 cursor = EDW.cursor()
 cursor.execute(f"""
     SELECT decsn_month, COUNT(*) AS cnt,
-           CAST(100.0 * COUNT(*) / {tpa_count} AS DECIMAL(5,2)) AS pct
-    FROM {TPA} GROUP BY decsn_month ORDER BY decsn_month
+           CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,2)) AS pct
+    FROM {TPA} SAMPLE {SAMPLE_SIZE} GROUP BY decsn_month ORDER BY decsn_month
 """)
 rows = cursor.fetchall()
 cursor.close()
