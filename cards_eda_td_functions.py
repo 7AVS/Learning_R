@@ -218,13 +218,8 @@ for label, tbl, all_cols in [
         target = ", ".join([f"'{c}'" for c in batch])
         print(f"  Batch {i // batch_size + 1}: {', '.join(batch)}")
         cursor = EDW.cursor()
-        cursor.execute(f"""
-            SELECT * FROM TD_ColumnSummary (
-                ON {tbl} AS InputTable
-                USING
-                TargetColumns({target})
-            ) AS dt
-        """)
+        sql = f"SELECT * FROM TD_ColumnSummary (ON {tbl} AS InputTable USING TargetColumns({target})) AS dt"
+        cursor.execute(sql)
         rows = cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         cursor.close()
@@ -257,14 +252,8 @@ for label, tbl, num_cols in [
         target = ", ".join([f"'{c}'" for c in batch])
         print(f"  Batch {i // batch_size + 1}: {', '.join(batch)}")
         cursor = EDW.cursor()
-        cursor.execute(f"""
-            SELECT * FROM TD_UnivariateStatistics (
-                ON {tbl} AS InputTable
-                USING
-                TargetColumns({target})
-                Stats({stats_list})
-            ) AS dt
-        """)
+        sql = f"SELECT * FROM TD_UnivariateStatistics (ON {tbl} AS InputTable USING TargetColumns({target}) Stats({stats_list})) AS dt"
+        cursor.execute(sql)
         rows = cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         cursor.close()
@@ -289,13 +278,8 @@ for label, tbl, cat_cols in [
         target = ", ".join([f"'{c}'" for c in batch])
         print(f"  Batch {i // batch_size + 1}: {', '.join(batch)}")
         cursor = EDW.cursor()
-        cursor.execute(f"""
-            SELECT * FROM TD_CategoricalSummary (
-                ON {tbl} AS InputTable
-                USING
-                TargetColumns({target})
-            ) AS dt
-        """)
+        sql = f"SELECT * FROM TD_CategoricalSummary (ON {tbl} AS InputTable USING TargetColumns({target})) AS dt"
+        cursor.execute(sql)
         rows = cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         cursor.close()
