@@ -73,7 +73,27 @@ print("\nPCD Date Ranges:")
 print(pcd_dates_df.T.to_string(header=False))
 
 # --- PCD: Null % per column ---
-pcd_col_names = pcd_schema_df["column"].str.strip().tolist()
+pcd_col_names = [
+    "acct_no", "clnt_no", "tactic_id_parent", "response_start", "response_end",
+    "mnemonic", "fy_start", "treatmt_mn", "product_at_decision", "product_grouping_at_decision",
+    "product_name_at_decision", "relationship_mgmt", "offer_bonus_cash", "offer_bonus_points",
+    "offer_description", "invitation_to_upgrade", "target_product", "target_product_name",
+    "target_product_grouping", "channel_deploy_cc", "channel_deploy_dm", "channel_deploy_do",
+    "channel_deploy_im", "channel_deploy_em", "channel_deploy_rd", "channel_deploy_iv",
+    "channel_em_reminder", "channelcost", "channels", "dt_prod_change", "fy_prod_change",
+    "month_prod_change", "new_product", "nlbt_expected_value", "nlbt_expec_value_upgradepath",
+    "report_groups_period", "test_groups_period", "responder", "responder_anyproduct",
+    "responder_targetproduct", "responder_upgrade_path", "strategy_seg_cd", "cmpgn_seg",
+    "strtgy_seg_desc", "act_ctl_seg", "student_indicator", "success_cd_1", "success_cd_2",
+    "success_dt_1", "success_dt_2", "weeknum_response", "csr_interactions", "test_description",
+    "test_value", "tactic_email", "email_disposition", "email_status", "oando", "oando_actioned",
+    "oando_pending", "oando_declined", "oando_approved", "fulfillment_channel", "gu", "active",
+    "opn_prod_cnt", "actv_prod_cnt", "actv_prod_srvc_cnt", "ss_act_ind", "ss_opn_ind",
+    "avg_yrs_rbc", "rbc_tenure", "life_stage", "value_for_money", "bi_clnt_seg", "vulnrblty_cd",
+    "mny_in_potntl_cd", "mny_out_potntl_cd", "lifetm_val_5yr_clnt_cd", "credit_phase",
+    "wallet_band", "new_comer", "ngen", "ias", "age_band", "ftbc", "dor", "mb", "olb",
+    "impression_olb", "clicked_olb", "hsbc_ind"
+]
 pcd_null_records = []
 for c in pcd_col_names:
     cursor = EDW.cursor()
@@ -305,7 +325,33 @@ print("\nPLI Date Ranges:")
 print(pd.DataFrame([pli_dates[0]], columns=pli_date_cols).T.to_string(header=False))
 
 # --- PLI: Null % per column ---
-pli_col_names = pli_schema_df["column"].str.strip().tolist()
+pli_col_names = [
+    "parent_tactic_id", "acct_no", "clnt_no", "cellcode", "tst_grp_cd", "strategy_id",
+    "rpt_grp_cd", "newimm_seg", "dt_cl_change", "limit_increase_amt", "responder_cli",
+    "offer_description", "decision_dt", "increase_decrease", "actual_strt_dt",
+    "parent_actual_strt_dt", "treatmt_strt_dt", "treatmt_end_dt", "action_code", "mnemonic",
+    "channel", "channel_cc", "channel_dm", "channel_do", "channel_ec", "channel_em",
+    "channel_im", "channel_in", "channel_iu", "channel_iv", "channel_mb", "channel_rd",
+    "product_current", "product_name_current", "product_grouping_current", "wave",
+    "test_groups_period", "parent_test_group", "dm_redeploy_test_grp", "em_redeploy_test_grp",
+    "wave2", "limit_decrease_amt", "report_groups_period", "action_code_period",
+    "parent_tactic_id_period", "report_date", "fy_cmpgn_start", "month_cmpgn_start",
+    "fy_cl_change", "month_cl_change", "like_for_like", "like_for_like_label", "test",
+    "decisioned_acct", "student_indicator", "cli_offer", "response_channel", "response_source",
+    "channel_period_em_remind", "em_reminder_control", "pcl_expansion_pop", "spid", "spid_label",
+    "spid_proc_dt", "model_score", "decile", "new_to_campaign", "owner", "cpc_dni",
+    "mobile_active_at_decision", "dm_creative_id", "em_creative_id", "low_grow_ind",
+    "low_revenue_ind", "multi_card_ind", "olb_active_90", "gu", "active", "opn_prod_cnt",
+    "actv_prod_cnt", "actv_prod_srvc_cnt", "ss_act_ind", "ss_opn_ind", "avg_yrs_rbc",
+    "rbc_tenure", "life_stage", "value_for_money", "bi_clnt_seg", "vulnrblty_cd",
+    "mny_in_potntl_cd", "mny_out_potntl_cd", "lifetm_val_5yr_clnt_cd", "credit_phase",
+    "wallet_band", "new_comer", "ngen", "ias", "age_band", "ftbc", "dor", "mb", "olb",
+    "csr_interactions", "oando", "oando_actioned", "oando_pending", "oando_declined",
+    "oando_approved", "tactic_email", "email_disposition", "email_status", "impression_olb",
+    "clicked_olb", "hsbc_ind", "usage_behaviour", "cv_score", "new_decile", "mobile_banner",
+    "mobile_offer_hub", "impression_mb", "pb_client", "premier_client", "dt_acct_open",
+    "clicked_mb", "tsne_ind"
+]
 pli_null_records = []
 for c in pli_col_names:
     cursor = EDW.cursor()
@@ -566,7 +612,24 @@ print(pd.DataFrame([tpa_dates[0]], columns=[
 ]).T.to_string(header=False))
 
 # --- TPA: Null % per column ---
-tpa_col_names = tpa_schema_df["column"].str.strip().tolist()
+tpa_col_names = [
+    "report_dt", "mnemonic", "clnt_no", "like_for_like_group", "tactic_id", "decsn_year",
+    "decsn_month", "target_seg", "cmpgn_seg", "strtgy_seg_typ", "act_ctl_seg", "strtgy_seg_cd",
+    "tpa_ita", "channel", "chnl_dm", "chnl_do", "chnl_ec", "chnl_em", "chnl_im", "chnl_in",
+    "chnl_iu", "chnl_iv", "chnl_mb", "chnl_md", "chnl_rd", "chnl_em_reminder",
+    "offer_prod_latest_group", "offer_prod_latest", "offer_prod_latest_name",
+    "offer_rate_latest", "offer_rate_months_latest", "offer_fee_waiver_months_latest",
+    "offer_fee_waiver_latest", "offer_bonus_points_latest", "offer_description_latest",
+    "offer_cr_lmt_latest", "test_group_latest", "treatmt_start_dt", "treatmt_end_dt",
+    "response_dt", "acct_no", "days_to_respond", "app_approved", "app_completed",
+    "response_channel", "response_channel_grp", "product_applied", "product_applied_name",
+    "num_coapps", "num_auth_users", "cr_lmt_approved", "asc_on_app", "asc_on_app_source",
+    "times_targeted", "model_score", "expected_value", "model_score_decile",
+    "expected_value_decile", "csr_interactions", "oando", "oando_actioned", "oando_pending",
+    "oando_declined", "oando_approved", "tactic_email", "email_disposition", "email_status",
+    "impression_olb", "clicked_olb", "cv_score", "impression_mb", "clicked_mb", "mobile_banner",
+    "tactic_call", "cntct_atmpt_gnsis", "call_ans_gnsis", "agt_gnsis", "hsbc_ind", "rpc_gnsis"
+]
 tpa_null_records = []
 for c in tpa_col_names:
     cursor = EDW.cursor()
