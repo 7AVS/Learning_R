@@ -782,110 +782,114 @@ print(pd.DataFrame(rows, columns=["decsn_month", "cnt", "pct"]).to_string(index=
 
 
 # ===================================================================
-# Section 4: Cross-Table Comparison
+# Section 4: Sample Rows, Duplicate Checks & Data Recency
 # ===================================================================
 
+# --- Sample rows: eyeball actual data ---
+print("\n=== Sample Rows ===")
+for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
+    cursor = EDW.cursor()
+    cursor.execute(f"SELECT TOP 10 * FROM {tbl}")
+    rows = cursor.fetchall()
+    col_names = [desc[0] for desc in cursor.description]
+    cursor.close()
+    print(f"\n--- {label}: first 10 rows ---")
+    print(pd.DataFrame(rows, columns=col_names).to_string(index=False))
+
+# --- PCD: Duplicate check on primary index ---
+print("\n=== Duplicate Check: PCD (acct_no, clnt_no, tactic_id_parent, response_start, response_end) ===")
+cursor = EDW.cursor()
+cursor.execute(f"""
+    SELECT cnt_per_key, COUNT(*) AS num_groups
+    FROM (
+        SELECT acct_no, clnt_no, tactic_id_parent, response_start, response_end,
+               COUNT(*) AS cnt_per_key
+        FROM {PCD}
+        GROUP BY acct_no, clnt_no, tactic_id_parent, response_start, response_end
+    ) x
+    GROUP BY cnt_per_key
+    ORDER BY cnt_per_key DESC
+""")
+rows = cursor.fetchall()
+cursor.close()
+pcd_dup = pd.DataFrame(rows, columns=["rows_per_key", "num_groups"])
+print(pcd_dup.to_string(index=False))
+if len(pcd_dup) == 1 and int(pcd_dup.iloc[0]["rows_per_key"]) == 1:
+    print("  => Primary index is UNIQUE — no duplicates.")
+else:
+    print("  => DUPLICATES FOUND on primary index. Investigate.")
+
+# --- PLI: Duplicate check on primary index ---
+print("\n=== Duplicate Check: PLI (parent_tactic_id, acct_no, clnt_no) ===")
+cursor = EDW.cursor()
+cursor.execute(f"""
+    SELECT cnt_per_key, COUNT(*) AS num_groups
+    FROM (
+        SELECT parent_tactic_id, acct_no, clnt_no,
+               COUNT(*) AS cnt_per_key
+        FROM {PLI}
+        GROUP BY parent_tactic_id, acct_no, clnt_no
+    ) x
+    GROUP BY cnt_per_key
+    ORDER BY cnt_per_key DESC
+""")
+rows = cursor.fetchall()
+cursor.close()
+pli_dup = pd.DataFrame(rows, columns=["rows_per_key", "num_groups"])
+print(pli_dup.to_string(index=False))
+if len(pli_dup) == 1 and int(pli_dup.iloc[0]["rows_per_key"]) == 1:
+    print("  => Primary index is UNIQUE — no duplicates.")
+else:
+    print("  => DUPLICATES FOUND on primary index. Investigate.")
+
+# --- TPA: Duplicate check on primary index ---
+print("\n=== Duplicate Check: TPA (clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt) ===")
+cursor = EDW.cursor()
+cursor.execute(f"""
+    SELECT cnt_per_key, COUNT(*) AS num_groups
+    FROM (
+        SELECT clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt,
+               COUNT(*) AS cnt_per_key
+        FROM {TPA}
+        GROUP BY clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt
+    ) x
+    GROUP BY cnt_per_key
+    ORDER BY cnt_per_key DESC
+""")
+rows = cursor.fetchall()
+cursor.close()
+tpa_dup = pd.DataFrame(rows, columns=["rows_per_key", "num_groups"])
+print(tpa_dup.to_string(index=False))
+if len(tpa_dup) == 1 and int(tpa_dup.iloc[0]["rows_per_key"]) == 1:
+    print("  => Primary index is UNIQUE — no duplicates.")
+else:
+    print("  => DUPLICATES FOUND on primary index. Investigate.")
+
+# --- Data recency: most recent dates per table ---
+print("\n=== Data Recency ===")
+cursor = EDW.cursor()
+cursor.execute(f"SELECT MAX(response_start), MAX(response_end) FROM {PCD}")
+rows = cursor.fetchall()
+cursor.close()
+print(f"  PCD: latest response_start = {rows[0][0]}, latest response_end = {rows[0][1]}")
+
+cursor = EDW.cursor()
+cursor.execute(f"SELECT MAX(decision_dt), MAX(actual_strt_dt) FROM {PLI}")
+rows = cursor.fetchall()
+cursor.close()
+print(f"  PLI: latest decision_dt = {rows[0][0]}, latest actual_strt_dt = {rows[0][1]}")
+
+cursor = EDW.cursor()
+cursor.execute(f"SELECT MAX(report_dt), MAX(treatmt_start_dt), MAX(response_dt) FROM {TPA}")
+rows = cursor.fetchall()
+cursor.close()
+print(f"  TPA: latest report_dt = {rows[0][0]}, latest treatmt_start_dt = {rows[0][1]}, latest response_dt = {rows[0][2]}")
+
+# --- Row count summary ---
 print("\n=== Row Count Summary ===")
 print(f"  PCD Ongoing: {pcd_count:>12,}")
 print(f"  PLI:         {pli_count:>12,}")
 print(f"  TPA PCQ:     {tpa_count:>12,}")
 print(f"  Total:       {pcd_count + pli_count + tpa_count:>12,}")
 
-# --- Distinct clients per table ---
-print("\n--- Distinct Clients per Table ---")
-for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
-    cursor = EDW.cursor()
-    cursor.execute(f"SELECT COUNT(DISTINCT clnt_no) FROM {tbl}")
-    cnt = cursor.fetchall()[0][0]
-    cursor.close()
-    print(f"  {label}: {cnt:,} distinct clients")
-
-# --- Pairwise client overlap ---
-print("\n--- Client Overlap ---")
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT COUNT(DISTINCT a.clnt_no)
-    FROM (SELECT DISTINCT clnt_no FROM {PCD}) a
-    INNER JOIN (SELECT DISTINCT clnt_no FROM {PLI}) b ON a.clnt_no = b.clnt_no
-""")
-pcd_pli = cursor.fetchall()[0][0]
-cursor.close()
-print(f"  PCD-PLI overlap: {pcd_pli:,} clients")
-
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT COUNT(DISTINCT a.clnt_no)
-    FROM (SELECT DISTINCT clnt_no FROM {PCD}) a
-    INNER JOIN (SELECT DISTINCT CAST(clnt_no AS DECIMAL(14,0)) AS clnt_no FROM {TPA}) b ON a.clnt_no = b.clnt_no
-""")
-pcd_tpa = cursor.fetchall()[0][0]
-cursor.close()
-print(f"  PCD-TPA overlap: {pcd_tpa:,} clients")
-
-cursor = EDW.cursor()
-cursor.execute(f"""
-    SELECT COUNT(DISTINCT a.clnt_no)
-    FROM (SELECT DISTINCT clnt_no FROM {PLI}) a
-    INNER JOIN (SELECT DISTINCT CAST(clnt_no AS DECIMAL(14,0)) AS clnt_no FROM {TPA}) b ON a.clnt_no = b.clnt_no
-""")
-pli_tpa = cursor.fetchall()[0][0]
-cursor.close()
-print(f"  PLI-TPA overlap: {pli_tpa:,} clients")
-
-# --- Mnemonic comparison ---
-print("\n=== Mnemonic Comparison ===")
-for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 10 mnemonic, COUNT(*) AS cnt
-        FROM {tbl} GROUP BY mnemonic ORDER BY cnt DESC
-    """)
-    rows = cursor.fetchall()
-    cursor.close()
-    print(f"\n  {label}:")
-    print(pd.DataFrame(rows, columns=["mnemonic", "cnt"]).to_string(index=False))
-
-# --- HSBC indicator comparison ---
-print("\n=== HSBC Indicator ===")
-for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT TOP 5 hsbc_ind, COUNT(*) AS cnt
-        FROM {tbl} GROUP BY hsbc_ind ORDER BY cnt DESC
-    """)
-    rows = cursor.fetchall()
-    cursor.close()
-    print(f"\n  {label}:")
-    print(pd.DataFrame(rows, columns=["hsbc_ind", "cnt"]).to_string(index=False))
-
-# --- OandO comparison ---
-print("\n=== OandO Rates Across Tables ===")
-for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
-    cursor = EDW.cursor()
-    cursor.execute(f"""
-        SELECT
-            CAST(100.0 * SUM(CAST(oando AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
-            CAST(100.0 * SUM(CAST(oando_actioned AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
-            CAST(100.0 * SUM(CAST(oando_pending AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
-            CAST(100.0 * SUM(CAST(oando_declined AS INTEGER)) / COUNT(*) AS DECIMAL(5,2)),
-            CAST(100.0 * SUM(CAST(oando_approved AS INTEGER)) / COUNT(*) AS DECIMAL(5,2))
-        FROM {tbl}
-    """)
-    rows = cursor.fetchall()
-    cursor.close()
-    print(f"\n  {label}:")
-    print(pd.DataFrame([rows[0]], columns=["oando", "actioned", "pending", "declined", "approved"]).to_string(index=False))
-
-
-# ===================================================================
-# Summary & Next Steps
-# ===================================================================
-# Review after execution:
-# 1. Data volumes — row counts and date ranges per table
-# 2. Data quality — null percentages, unexpected values
-# 3. Distributions — categorical skew, numeric outliers
-# 4. Overlap — client/account coverage across tables
-# 5. Channel usage — deployment patterns
-# 6. Response rates — conversion funnels
-# 7. Segmentation — demographic and behavioral segments
 print("\n=== EDA Complete ===")
