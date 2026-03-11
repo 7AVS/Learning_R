@@ -987,17 +987,6 @@ eda_results["row_count_summary"] = pd.DataFrame([
 
 print("\n=== Saving EDA Results to HDFS ===")
 
-# --- Save each result as CSV ---
-for name, df in eda_results.items():
-    csv_path = f"{HDFS_OUT}/{name}.csv"
-    try:
-        local_csv = f"/tmp/{name}.csv"
-        df.to_csv(local_csv, index=False)
-        os.system(f"hdfs dfs -put -f {local_csv} {csv_path}")
-        print(f"  Saved: {csv_path}")
-    except Exception as e:
-        print(f"  FAILED {csv_path}: {e}")
-
 # --- Build HTML report ---
 html_parts = []
 html_parts.append("""<!DOCTYPE html>
