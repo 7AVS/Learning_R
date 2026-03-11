@@ -859,7 +859,7 @@ eda_results["TPA_decsn_month"] = df
 print("\n=== Sample Rows ===")
 for label, tbl in [("PCD", PCD), ("PLI", PLI), ("TPA", TPA)]:
     cursor = EDW.cursor()
-    cursor.execute(f"SELECT * FROM {tbl} SAMPLE 10")
+    cursor.execute(f"SELECT * FROM {tbl} LIMIT 10")
     rows = cursor.fetchall()
     col_names = [desc[0] for desc in cursor.description]
     cursor.close()
