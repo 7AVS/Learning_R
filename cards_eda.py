@@ -1,12 +1,12 @@
 # ===================================================================
 # Cards Decision & Response — Exploratory Data Analysis
 # ===================================================================
-# Three tables from dl_mr_prod accessed via EDW (Teradata):
+# Three tables from dl_mr_prod accessed via EDW (Trino):
 # - PCD Ongoing (cards_pcd_ongoing_decis_resp) — 92 columns
 # - PLI (cards_pli_decision_resp) — 125 columns
 # - TPA PCQ (cards_tpa_pcq_decision_resp) — 79 columns
 #
-# EDW connection is pre-established. Queries use Teradata SQL syntax.
+# EDW connection is pre-established. Queries use ANSI SQL (Trino-compatible).
 
 from pyspark.sql import SparkSession
 import pandas as pd
