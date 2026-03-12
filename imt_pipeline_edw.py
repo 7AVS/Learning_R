@@ -268,9 +268,10 @@ for mth in seg_months:
     # Batch clients in chunks of 1000 for the IN clause
     for i in range(0, len(clients_in_month), 1000):
         batch = clients_in_month[i:i+1000]
-        clnt_in = ",".join(f"'{c}'" for c in batch)
+        # CLNT_NO is decimal(13,0) in seg table — no quotes, cast to numeric
+        clnt_in = ",".join(str(c) for c in batch)
         seg_sql = f"""
-            SELECT CLNT_NO, CLNT_STRTGY_SEG_CD, NEW_IMGRNT_CD, CLNT_CATG_SEG_CD
+            SELECT CAST(CLNT_NO AS VARCHAR) AS CLNT_NO, CLNT_STRTGY_SEG_CD, NEW_IMGRNT_CD, CLNT_CATG_SEG_CD
             FROM {SEG_TABLE}
             WHERE MTH_END_DT = DATE '{mth_str}'
                 AND CLNT_NO IN ({clnt_in})
