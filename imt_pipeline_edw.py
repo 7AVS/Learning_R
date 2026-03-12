@@ -245,78 +245,17 @@ print(result_df.groupby(['MNE', 'TST_GRP_CD']).agg(
 ).round(4).to_string())
 
 
-# %% [5] Segmentation Enrichment — separate query, batched by month
+# %% [5] Segmentation Enrichment — SKIPPED (do in pandas if needed later)
+# Removed: seg query was hitting type mismatches and spool issues
+# Segment columns set to placeholder values
 
 print("=" * 60)
-print("SEGMENTATION ENRICHMENT")
+print("SEGMENTATION — skipped (not querying DG6V01)")
 
-# Get distinct (CLNT_NO, month_before_treatment) pairs
-result_df['SEG_MTH'] = (result_df['TREATMT_STRT_DT'].dt.to_period('M') - 1).dt.to_timestamp() + pd.offsets.MonthEnd(0)
-seg_months = sorted(result_df['SEG_MTH'].dropna().unique())
-print(f"  Segmentation months to query: {len(seg_months)}")
-
-seg_results = []
-for mth in seg_months:
-    mth_str = pd.Timestamp(mth).strftime('%Y-%m-%d')
-    clients_in_month = result_df[result_df['SEG_MTH'] == mth]['CLNT_NO'].unique()
-    if len(clients_in_month) == 0:
-        continue
-
-    # Batch clients in chunks of 1000 for the IN clause
-    for i in range(0, len(clients_in_month), 1000):
-        batch = clients_in_month[i:i+1000]
-        # CLNT_NO is decimal(13,0) in seg table — must pass as numbers, no quotes
-        numeric_ids = []
-        for c in batch:
-            try:
-                numeric_ids.append(str(int(c)))
-            except (ValueError, TypeError):
-                continue
-        if not numeric_ids:
-            continue
-        clnt_in = ",".join(numeric_ids)
-        seg_sql = f"""
-            SELECT CAST(CLNT_NO AS VARCHAR) AS CLNT_NO, CLNT_STRTGY_SEG_CD, NEW_IMGRNT_CD, CLNT_CATG_SEG_CD
-            FROM {SEG_TABLE}
-            WHERE MTH_END_DT = DATE '{mth_str}'
-                AND CLNT_NO IN ({clnt_in})
-        """
-        try:
-            batch_df = edw_query(seg_sql, f"seg {mth_str} batch {i//1000+1}")
-            batch_df['SEG_MTH'] = pd.Timestamp(mth)
-            seg_results.append(batch_df)
-        except Exception as e:
-            print(f"  WARNING: seg query failed for {mth_str}: {e}")
-
-if seg_results:
-    seg_df = pd.concat(seg_results, ignore_index=True)
-    seg_df['CLNT_NO'] = seg_df['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
-
-    # Map segment codes to labels
-    seg_map = {'NI': 'Newcomer', 'NGEN_NS': 'N-Gen Non-Student',
-               'YOUTH': 'Youth', 'NGEN_ST': 'Student'}
-    seg_df['SEGMENT'] = seg_df['CLNT_STRTGY_SEG_CD'].map(seg_map).fillna('Mass')
-
-    imm_map = {'PERM': 'Permanent Resident', 'STDYX': 'Foreign Student',
-               'TPWK': 'Temporary Worker', 'OTHER': 'Other'}
-    seg_df['NEWCOMER_SEGMENT'] = seg_df['NEW_IMGRNT_CD'].map(imm_map)
-
-    new_existing_map = {'NEW': 'NEW', 'NEWISH': 'EXISTING', 'EXIST': 'EXISTING', 'RETURN': 'EXISTING'}
-    seg_df['NEW_EXISTING'] = seg_df['CLNT_CATG_SEG_CD'].str.strip().map(new_existing_map).fillna('OTHER')
-
-    # Merge to result
-    result_df = result_df.merge(
-        seg_df[['CLNT_NO', 'SEG_MTH', 'SEGMENT', 'NEWCOMER_SEGMENT', 'NEW_EXISTING']],
-        on=['CLNT_NO', 'SEG_MTH'], how='left'
-    )
-    result_df['SEGMENT'] = result_df['SEGMENT'].fillna('Unknown')
-    print(f"\nSegmentation merged: {seg_df['CLNT_NO'].nunique():,} clients enriched")
-    print(result_df['SEGMENT'].value_counts().to_string())
-else:
-    print("  No segmentation data retrieved. Adding placeholder columns.")
-    result_df['SEGMENT'] = 'Unknown'
-    result_df['NEWCOMER_SEGMENT'] = None
-    result_df['NEW_EXISTING'] = 'Unknown'
+result_df['SEGMENT'] = 'All'
+result_df['NEWCOMER_SEGMENT'] = None
+result_df['NEW_EXISTING'] = 'All'
+print("  Placeholder columns added. Enrich later if needed.")
 
 
 # %% [6] Email Metrics — query ALL tactic IDs against vendor feedback

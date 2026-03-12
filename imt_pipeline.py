@@ -19,7 +19,7 @@ spark = SparkSession.builder \
 
 # --- Source paths ---
 TACTIC_EVNT_HIST_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
-SUCCESS_ROOT = "/prod/sz/tsz/00050/data/DDNTA_EXT_CHNL_EVNT"
+SUCCESS_ROOT = "/prod/sz/tsz/00050/data/DDWTA_EXT_CHNL_EVNT"
 
 # --- Campaign config ---
 YEARS = [2025, 2026]
