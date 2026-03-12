@@ -267,22 +267,64 @@ email_tactic_ids = result_df['TACTIC_ID'].unique().tolist()
 print(f"  Querying {len(email_tactic_ids)} tactic IDs against vendor feedback...")
 print(f"  Sample tactic IDs: {email_tactic_ids[:5]}")
 
-# Diagnostic: check if vendor feedback has ANY data for our tactics
+# ── DIAGNOSTICS: confirm signal detection ──
 if len(email_tactic_ids) > 0:
     diag_list = ",".join(f"'{t}'" for t in email_tactic_ids[:10])
+    print(f"\n  --- EMAIL DIAGNOSTICS ---")
+
+    # 1. Do our TACTIC_IDs exist as TREATMENT_IDs?
     try:
-        diag_df = edw_query(f"""
+        d1 = edw_query(f"""
             SELECT COUNT(*) AS cnt, COUNT(DISTINCT TREATMENT_ID) AS tactic_cnt
             FROM {EMAIL_MASTER}
             WHERE TREATMENT_ID IN ({diag_list})
-        """, "email diagnostic")
-        cnt, tcnt = diag_df.iloc[0]['cnt'], diag_df.iloc[0]['tactic_cnt']
-        print(f"  DIAGNOSTIC: vendor_feedback has {cnt} rows for first 10 tactics ({tcnt} matched)")
-        if cnt == 0:
-            print("  WARNING: No vendor feedback data found. TREATMENT_ID may not match TACTIC_ID.")
-            print(f"  Try: SELECT DISTINCT TREATMENT_ID FROM {EMAIL_MASTER} WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%' LIMIT 10")
+        """, "diag1: exact TACTIC_ID match")
+        print(f"  Exact match: {d1.iloc[0]['cnt']} rows, {d1.iloc[0]['tactic_cnt']} tactics matched")
     except Exception as e:
-        print(f"  DIAGNOSTIC query failed: {e}")
+        print(f"  diag1 failed: {e}")
+
+    # 2. What TREATMENT_IDs exist for IRI/IPC in vendor feedback?
+    try:
+        d2 = edw_query(f"""
+            SELECT TREATMENT_ID, COUNT(*) AS cnt
+            FROM {EMAIL_MASTER}
+            WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%'
+            GROUP BY TREATMENT_ID
+            ORDER BY cnt DESC
+            LIMIT 20
+        """, "diag2: IRI/IPC in vendor feedback")
+        if len(d2) > 0:
+            print(f"  IRI/IPC TREATMENT_IDs found in vendor feedback:")
+            print(d2.to_string(index=False))
+        else:
+            print("  NO IRI/IPC TREATMENT_IDs found in vendor feedback at all.")
+    except Exception as e:
+        print(f"  diag2 failed: {e}")
+
+    # 3. Sample of our TACTIC_IDs vs vendor TREATMENT_IDs (format comparison)
+    try:
+        d3 = edw_query(f"""
+            SELECT DISTINCT TREATMENT_ID
+            FROM {EMAIL_MASTER}
+            LIMIT 5
+        """, "diag3: sample TREATMENT_IDs")
+        print(f"  Sample TREATMENT_IDs in vendor feedback: {d3['TREATMENT_ID'].tolist()}")
+        print(f"  Sample TACTIC_IDs from our data:         {email_tactic_ids[:5]}")
+    except Exception as e:
+        print(f"  diag3 failed: {e}")
+
+    # 4. Check DISPOSITION_CD values (are they int or string?)
+    try:
+        d4 = edw_query(f"""
+            SELECT DISTINCT FE.DISPOSITION_CD, typeof(FE.DISPOSITION_CD) AS dtype
+            FROM {EMAIL_EVENT} FE
+            LIMIT 10
+        """, "diag4: disposition_cd type")
+        print(f"  DISPOSITION_CD values/type: {d4.to_dict('records')}")
+    except Exception as e:
+        print(f"  diag4 failed: {e}")
+
+    print(f"  --- END DIAGNOSTICS ---\n")
 
 BATCH_SIZE = 50
 email_results = []
@@ -320,8 +362,18 @@ for i in range(0, len(email_tactic_ids), BATCH_SIZE):
 
 if email_results:
     email_df = pd.concat(email_results, ignore_index=True)
+    print(f"\n  Raw email rows from EDW: {len(email_df):,}")
+    print(f"  Sample CLNT_NO (raw):  {email_df['CLNT_NO'].head(3).tolist()}")
+    print(f"  Sample CLNT_NO (tactic): {result_df['CLNT_NO'].head(3).tolist()}")
+
     email_df['CLNT_NO'] = email_df['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
     email_df.rename(columns={'TREATMENT_ID': 'TACTIC_ID'}, inplace=True)
+
+    # Check overlap before merge
+    overlap = set(email_df['CLNT_NO']) & set(result_df['CLNT_NO'])
+    print(f"  CLNT_NO overlap: {len(overlap):,} out of {email_df['CLNT_NO'].nunique():,} email clients")
+    tactic_overlap = set(email_df['TACTIC_ID']) & set(result_df['TACTIC_ID'])
+    print(f"  TACTIC_ID overlap: {len(tactic_overlap):,}")
 
     result_df = result_df.merge(email_df, on=['CLNT_NO', 'TACTIC_ID'], how='left')
     for ec in ['EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']:
