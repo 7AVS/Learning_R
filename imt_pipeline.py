@@ -239,7 +239,7 @@ print(f"Result: {total:,} rows, {success:,} successes ({100*success/total:.2f}%)
 
 
 # %% Cell 4b: Email Engagement — Send/Open/Click/Unsub
-# Source: DT3V01.VENDOR_FEEDBACK_MASTER + VENDOR_FEEDBACK_EVENT (via EDW)
+# Source: DTZV01.VENDOR_FEEDBACK_MASTER + VENDOR_FEEDBACK_EVENT (via EDW)
 # Query ALL tactic IDs — join key is TREATMENT_ID = TACTIC_ID, no channel pre-filter needed
 
 print("=== Loading Email Engagement ===")
@@ -263,7 +263,7 @@ if len(em_tactics) > 0:
     diag_list = "','".join(em_tactics[:10])
     diag_sql = f"""
         SELECT COUNT(*) AS cnt, COUNT(DISTINCT TREATMENT_ID) AS tactic_cnt
-        FROM DT3V01.VENDOR_FEEDBACK_MASTER
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
         WHERE TREATMENT_ID IN ('{diag_list}')
     """
     try:
@@ -274,7 +274,7 @@ if len(em_tactics) > 0:
         print(f"  DIAGNOSTIC: vendor_feedback has {diag_row[0]} rows for first 10 tactics ({diag_row[1]} matched)")
         if diag_row[0] == 0:
             print("  WARNING: No vendor feedback data found. TREATMENT_ID may not match TACTIC_ID format.")
-            print(f"  Check: SELECT DISTINCT TREATMENT_ID FROM DT3V01.VENDOR_FEEDBACK_MASTER WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%' LIMIT 10")
+            print(f"  Check: SELECT DISTINCT TREATMENT_ID FROM DTZV01.VENDOR_FEEDBACK_MASTER WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%' LIMIT 10")
     except Exception as e:
         print(f"  DIAGNOSTIC query failed: {e}")
 
@@ -299,8 +299,8 @@ if len(em_tactics) > 0:
                 MAX(CASE WHEN disposition_cd = 2 THEN CAST(disposition_dt_tm AS DATE) END) AS EMAIL_OPENED_DT,
                 MAX(CASE WHEN disposition_cd = 3 THEN CAST(disposition_dt_tm AS DATE) END) AS EMAIL_CLICKED_DT,
                 MAX(CASE WHEN disposition_cd = 4 THEN CAST(disposition_dt_tm AS DATE) END) AS EMAIL_UNSUBSCRIBED_DT
-            FROM DT3V01.VENDOR_FEEDBACK_MASTER FEEDBACK_MASTER
-            INNER JOIN DT3V01.VENDOR_FEEDBACK_EVENT FEEDBACK_EVENT
+            FROM DTZV01.VENDOR_FEEDBACK_MASTER FEEDBACK_MASTER
+            INNER JOIN DTZV01.VENDOR_FEEDBACK_EVENT FEEDBACK_EVENT
                 ON FEEDBACK_MASTER.consumer_id_hashed = FEEDBACK_EVENT.consumer_id_hashed
                 AND FEEDBACK_MASTER.TREATMENT_ID = FEEDBACK_EVENT.TREATMENT_ID
             WHERE FEEDBACK_MASTER.TREATMENT_ID IN ('{tactic_id_list}')

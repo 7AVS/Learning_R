@@ -18,11 +18,11 @@ CONTROL_GROUP = "TG7"
 EXCLUDED_TACTIC = "20221891RI"
 
 # ── Table references (Teradata via Trino) ──
-TACTIC_TABLE = "DT3V01.TACTIC_EVNT_IP_AR_H60M"
+TACTIC_TABLE = "DTZV01.TACTIC_EVNT_IP_AR_H60M"
 SEG_TABLE = "DG6V01.CLNT_DERIV_DTA_HIST"
 EVENT_TABLE = "DDNV01.EXT_CDP_CHNL_EVNT"
-EMAIL_MASTER = "DT3V01.VENDOR_FEEDBACK_MASTER"
-EMAIL_EVENT = "DT3V01.VENDOR_FEEDBACK_EVENT"
+EMAIL_MASTER = "DTZV01.VENDOR_FEEDBACK_MASTER"
+EMAIL_EVENT = "DTZV01.VENDOR_FEEDBACK_EVENT"
 
 # ── Event filters ──
 ACTVY_FILTER = "031"       # International Money Transfer
@@ -268,8 +268,16 @@ for mth in seg_months:
     # Batch clients in chunks of 1000 for the IN clause
     for i in range(0, len(clients_in_month), 1000):
         batch = clients_in_month[i:i+1000]
-        # CLNT_NO is decimal(13,0) in seg table — no quotes, cast to numeric
-        clnt_in = ",".join(str(c) for c in batch)
+        # CLNT_NO is decimal(13,0) in seg table — must pass as numbers, no quotes
+        numeric_ids = []
+        for c in batch:
+            try:
+                numeric_ids.append(str(int(c)))
+            except (ValueError, TypeError):
+                continue
+        if not numeric_ids:
+            continue
+        clnt_in = ",".join(numeric_ids)
         seg_sql = f"""
             SELECT CAST(CLNT_NO AS VARCHAR) AS CLNT_NO, CLNT_STRTGY_SEG_CD, NEW_IMGRNT_CD, CLNT_CATG_SEG_CD
             FROM {SEG_TABLE}
