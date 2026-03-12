@@ -232,21 +232,22 @@ print(f"Result: {total:,} rows, {success:,} successes ({100*success/total:.2f}%)
 
 # %% Cell 4b: Email Engagement — Send/Open/Click/Unsub
 # Source: DTZV01.VENDOR_FEEDBACK_MASTER + VENDOR_FEEDBACK_EVENT (via EDW)
-# Only loads email data for tactics with EM-channel deployments
+# Query ALL tactic IDs — join key is TREATMENT_ID = TACTIC_ID, no channel pre-filter needed
 
 print("=== Loading Email Engagement ===")
 
-# Identify tactics with email deployments (TACTIC_CELL_CD contains "EM")
+# Query ALL tactic IDs — join key is TREATMENT_ID = TACTIC_ID, no channel pre-filter needed
+# (TACTIC_CELL_CD may be empty for IMT campaigns; ADDNL_DECSN_DATA1 has channel info
+#  but the vendor feedback tables already filter to email-only dispositions)
 em_tactics = (
     result_df
-    .filter(F.col("TACTIC_CELL_CD").contains("EM"))
     .select("TACTIC_ID")
     .distinct()
     .toPandas()["TACTIC_ID"]
     .tolist()
 )
 
-print(f"Tactics with email channel: {len(em_tactics)}")
+print(f"Querying email metrics for {len(em_tactics)} unique tactic IDs...")
 
 if len(em_tactics) > 0:
     # Query EDW for email feedback in batches (Trino has query size limits)
@@ -353,7 +354,7 @@ if len(em_tactics) > 0:
             .withColumn("EMAIL_UNSUBSCRIBED_DT", F.lit(None).cast("date"))
         )
 else:
-    print("No email-channel tactics found. Adding zero columns.")
+    print("No tactic IDs found — skipping email metrics.")
     result_df = (
         result_df
         .withColumn("EMAIL_SENT", F.lit(0))
@@ -553,10 +554,10 @@ email_metrics = [
 
 email_vintage_parts = []
 
-# Only compute email curves for tactics with email deployments
-email_result = result_df.filter(F.col("TACTIC_CELL_CD").contains("EM"))
+# Use full population — vendor feedback tables already filter to email-only dispositions
+email_result = result_df
 email_pop = email_result.count()
-print(f"Email population (EM tactics): {email_pop:,}")
+print(f"Email vintage population (all tactics): {email_pop:,}")
 
 if email_pop > 0:
     for metric_name, flag_col, date_col in email_metrics:
@@ -636,7 +637,7 @@ if email_pop > 0:
     vintage_pd = pd.concat([vintage_pd, email_vintage_pd], ignore_index=True)
     print(f"\nCombined vintage curves: {len(vintage_pd):,} rows (IMT success + email)")
 else:
-    print("No email population — skipping email vintage curves.")
+    print("No email data found — skipping email vintage curves.")
 
 
 # %% Cell 8: Export CSV with Download Link
