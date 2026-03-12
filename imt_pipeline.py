@@ -34,7 +34,9 @@ CHNL_TYP_CD_FILTER = ["021", "034"]
 SRC_DTA_STORE_CD_FILTER = ["139", "140"]
 
 # Measurement window
-MAX_DAYS = 90
+# IRI is trigger-based (30-day window), IPC is 90-day window
+MNE_WINDOWS = {"IRI": 30, "IPC": 90}
+MAX_DAYS = max(MNE_WINDOWS.values())  # 90, used for data pull range
 MAX_WEEKS = 12  # 0..12 = 13 weeks
 
 success_paths = [f"{SUCCESS_ROOT}/CAPTR_DT={y}*" for y in YEARS]
@@ -59,6 +61,7 @@ tactic_df = (
     .withColumn("TST_GRP_CD", F.trim(F.col("TST_GRP_CD")))
     .withColumn("RPT_GRP_CD", F.trim(F.col("RPT_GRP_CD")))
     .filter(F.col("TST_GRP_CD").isin(ACTION_GROUP, CONTROL_GROUP))
+    .filter(F.col("TREATMT_STRT_DT") >= "2025-01-01")
     .filter(F.col("TREATMT_STRT_DT") < DATA_END_DATE)
     .withColumn("WINDOW_DAYS", F.datediff(F.col("TREATMT_END_DT"), F.col("TREATMT_STRT_DT")))
     .withColumn("COHORT", F.date_format(F.col("TREATMT_STRT_DT"), "yyyy-MM"))
@@ -144,12 +147,17 @@ joined = (
     )
 )
 
-# Compute days since start and keep events within 0-90 days
+# Per-MNE window: IRI=30d, IPC=90d
+_mne_max = F.lit(MAX_DAYS)
+for _mne, _days in MNE_WINDOWS.items():
+    _mne_max = F.when(F.col("a.MNE") == _mne, F.lit(_days)).otherwise(_mne_max)
+
 with_days = (
     joined
     .withColumn("DAYS_SINCE_START", F.datediff(F.col("e.EVENT_DATE"), F.col("a.TREATMT_STRT_DT")))
-    .filter((F.col("DAYS_SINCE_START") >= 0) & (F.col("DAYS_SINCE_START") <= MAX_DAYS))
-    .withColumn("WEEK_INDEX", F.floor(F.col("DAYS_SINCE_START") / 7))  # 0..12
+    .withColumn("MNE_MAX_DAYS", _mne_max)
+    .filter((F.col("DAYS_SINCE_START") >= 0) & (F.col("DAYS_SINCE_START") <= F.col("MNE_MAX_DAYS")))
+    .withColumn("WEEK_INDEX", F.floor(F.col("DAYS_SINCE_START") / 7))
 )
 
 # Base DataFrame with unqualified column names
@@ -248,6 +256,27 @@ em_tactics = (
 )
 
 print(f"Querying email metrics for {len(em_tactics)} unique tactic IDs...")
+print(f"  Sample tactic IDs: {em_tactics[:5]}")
+
+# Diagnostic: check if vendor feedback has ANY data for our tactics
+if len(em_tactics) > 0:
+    diag_list = "','".join(em_tactics[:10])
+    diag_sql = f"""
+        SELECT COUNT(*) AS cnt, COUNT(DISTINCT TREATMENT_ID) AS tactic_cnt
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE TREATMENT_ID IN ('{diag_list}')
+    """
+    try:
+        cursor = EDW.cursor()
+        cursor.execute(diag_sql)
+        diag_row = cursor.fetchone()
+        cursor.close()
+        print(f"  DIAGNOSTIC: vendor_feedback has {diag_row[0]} rows for first 10 tactics ({diag_row[1]} matched)")
+        if diag_row[0] == 0:
+            print("  WARNING: No vendor feedback data found. TREATMENT_ID may not match TACTIC_ID format.")
+            print(f"  Check: SELECT DISTINCT TREATMENT_ID FROM DTZV01.VENDOR_FEEDBACK_MASTER WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%' LIMIT 10")
+    except Exception as e:
+        print(f"  DIAGNOSTIC query failed: {e}")
 
 if len(em_tactics) > 0:
     # Query EDW for email feedback in batches (Trino has query size limits)
@@ -534,6 +563,13 @@ vintage_filled = (
     .orderBy("MNE", "COHORT", "TST_GRP_CD", "RPT_GRP_CD", "DAY")
 )
 
+# Filter to per-MNE window (IRI keeps days 0-30, IPC keeps 0-90)
+_vint_max = F.lit(MAX_DAYS)
+for _mne, _days in MNE_WINDOWS.items():
+    _vint_max = F.when(F.col("MNE") == _mne, F.lit(_days)).otherwise(_vint_max)
+
+vintage_filled = vintage_filled.filter(F.col("DAY") <= _vint_max)
+
 vintage_pd = vintage_filled.toPandas()
 
 print(f"Vintage curves: {len(vintage_pd):,} rows")
@@ -577,7 +613,7 @@ if email_pop > 0:
             .filter(F.col(flag_col) == 1)
             .filter(F.col(date_col).isNotNull())
             .withColumn("DAYS_TO_SUCCESS", F.datediff(F.col(date_col), F.col("TREATMT_STRT_DT")))
-            .filter((F.col("DAYS_TO_SUCCESS") >= 0) & (F.col("DAYS_TO_SUCCESS") <= MAX_DAYS))
+            .filter((F.col("DAYS_TO_SUCCESS") >= 0))  # per-MNE window applied after vintage generation
             .select("CLNT_NO", *group_cols, "DAYS_TO_SUCCESS")
         )
 
@@ -624,6 +660,12 @@ if email_pop > 0:
                 "DAY", "WINDOW_DAYS", "CLIENT_CNT", "SUCCESS_CNT", "RATE"
             )
         )
+
+        # Filter to per-MNE window
+        _em_vint_max = F.lit(MAX_DAYS)
+        for _mne, _days in MNE_WINDOWS.items():
+            _em_vint_max = F.when(F.col("MNE") == _mne, F.lit(_days)).otherwise(_em_vint_max)
+        em_vintage_filled = em_vintage_filled.filter(F.col("DAY") <= _em_vint_max)
 
         email_vintage_parts.append(em_vintage_filled)
         print(f"  {metric_name}: done")

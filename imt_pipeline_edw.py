@@ -32,7 +32,9 @@ SRC_FILTERS = ("139", "140")
 EVENT_START = "2021-11-10"
 
 # ── Measurement ──
-MAX_DAYS = 90
+# IRI is trigger-based (30-day window), IPC is 90-day window
+MNE_WINDOWS = {"IRI": 30, "IPC": 90}
+MAX_DAYS = max(MNE_WINDOWS.values())  # 90, used for data pull range
 HDFS_OUTPUT = "/user/427966379/eda_output"
 
 def edw_query(sql, desc=""):
@@ -72,7 +74,7 @@ tactic_df = edw_query(f"""
     WHERE (TACTIC_ID LIKE '_______IRI%' OR TACTIC_ID LIKE '_______IPC%')
         AND TST_GRP_CD IN ('{ACTION_GROUP}', '{CONTROL_GROUP}')
         AND TACTIC_ID <> '{EXCLUDED_TACTIC}'
-        AND TREATMT_STRT_DT >= DATE '2022-01-01'
+        AND TREATMT_STRT_DT >= DATE '2025-01-01'
 """, "tactics")
 
 # ── Transform in pandas ──
@@ -167,6 +169,9 @@ matched = merged[
     (merged['CAPTR_DT'] <= merged['TREATMT_END_DT'])
 ].copy()
 matched['DAYS'] = (matched['CAPTR_DT'] - matched['TREATMT_STRT_DT']).dt.days
+matched['MNE'] = matched['TACTIC_ID'].str[7:10]
+matched['MAX_WINDOW'] = matched['MNE'].map(MNE_WINDOWS).fillna(MAX_DAYS)
+matched = matched[matched['DAYS'] <= matched['MAX_WINDOW']].copy()
 print(f"  Matched events: {len(matched):,}")
 
 # Aggregate per client × tactic
@@ -315,6 +320,24 @@ print("EMAIL METRICS")
 
 email_tactic_ids = result_df['TACTIC_ID'].unique().tolist()
 print(f"  Querying {len(email_tactic_ids)} tactic IDs against vendor feedback...")
+print(f"  Sample tactic IDs: {email_tactic_ids[:5]}")
+
+# Diagnostic: check if vendor feedback has ANY data for our tactics
+if len(email_tactic_ids) > 0:
+    diag_list = ",".join(f"'{t}'" for t in email_tactic_ids[:10])
+    try:
+        diag_df = edw_query(f"""
+            SELECT COUNT(*) AS cnt, COUNT(DISTINCT TREATMENT_ID) AS tactic_cnt
+            FROM {EMAIL_MASTER}
+            WHERE TREATMENT_ID IN ({diag_list})
+        """, "email diagnostic")
+        cnt, tcnt = diag_df.iloc[0]['cnt'], diag_df.iloc[0]['tactic_cnt']
+        print(f"  DIAGNOSTIC: vendor_feedback has {cnt} rows for first 10 tactics ({tcnt} matched)")
+        if cnt == 0:
+            print("  WARNING: No vendor feedback data found. TREATMENT_ID may not match TACTIC_ID.")
+            print(f"  Try: SELECT DISTINCT TREATMENT_ID FROM {EMAIL_MASTER} WHERE TREATMENT_ID LIKE '%IRI%' OR TREATMENT_ID LIKE '%IPC%' LIMIT 10")
+    except Exception as e:
+        print(f"  DIAGNOSTIC query failed: {e}")
 
 BATCH_SIZE = 50
 email_results = []
@@ -382,7 +405,8 @@ for mne in IMT_MNES:
 
     for grp in [ACTION_GROUP, CONTROL_GROUP]:
         g = m[m['TST_GRP_CD'] == grp]
-        print(f"  {grp}: {len(g):,} clients, success={g['SUCCESS_FLAG'].mean()*100:.2f}%, "
+        print(f"  {grp}: {len(g):,} clients, window={MNE_WINDOWS.get(mne, MAX_DAYS)}d, "
+              f"success={g['SUCCESS_FLAG'].mean()*100:.2f}%, "
               f"avg_imt={g['IMT'].mean():.3f}, avg_amt=${g['AMT_CAD'].mean():,.2f}")
         if 'EMAIL_SENT' in g.columns:
             es = g['EMAIL_SENT'].sum()
@@ -412,10 +436,11 @@ for keys, grp in result_df.groupby(group_cols):
     mne, cohort, tst, rpt = keys
     n = len(grp)
     wd = int(grp['WINDOW_DAYS'].median())
+    mne_max = MNE_WINDOWS.get(mne, MAX_DAYS)  # IRI=30, IPC=90
 
     # IMT success curve
     succ_days = grp[grp['SUCCESS_FLAG'] == 1]['DAYS_TO_SUCCESS'].dropna()
-    for day in range(MAX_DAYS + 1):
+    for day in range(mne_max + 1):
         s = int((succ_days <= day).sum())
         vintage_rows.append({
             'MNE': mne, 'COHORT': cohort, 'TST_GRP_CD': tst, 'RPT_GRP_CD': rpt,
@@ -437,11 +462,11 @@ for keys, grp in result_df.groupby(group_cols):
         if len(em) > 0:
             em[date_col] = pd.to_datetime(em[date_col], errors='coerce')
             em_days = ((em[date_col] - em['TREATMT_STRT_DT']).dt.days).dropna()
-            em_days = em_days[(em_days >= 0) & (em_days <= MAX_DAYS)]
+            em_days = em_days[(em_days >= 0) & (em_days <= mne_max)]
         else:
             em_days = pd.Series(dtype=float)
 
-        for day in range(MAX_DAYS + 1):
+        for day in range(mne_max + 1):
             s = int((em_days <= day).sum())
             vintage_rows.append({
                 'MNE': mne, 'COHORT': cohort, 'TST_GRP_CD': tst, 'RPT_GRP_CD': rpt,
@@ -452,10 +477,12 @@ for keys, grp in result_df.groupby(group_cols):
 vintage_df = pd.DataFrame(vintage_rows)
 print(f"Vintage curves: {len(vintage_df):,} rows, metrics: {vintage_df['METRIC'].unique().tolist()}")
 
-# Day-90 summary
-d90 = vintage_df[vintage_df['DAY'] == 90]
-print(f"\nDay-90 rates:")
-print(d90.groupby(['MNE', 'TST_GRP_CD', 'METRIC']).agg(
+# Final-day summary (IRI@30, IPC@90)
+vintage_df['_mne_max'] = vintage_df['MNE'].map(MNE_WINDOWS).fillna(MAX_DAYS).astype(int)
+d_final = vintage_df[vintage_df['DAY'] == vintage_df['_mne_max']]
+vintage_df.drop(columns='_mne_max', inplace=True)
+print(f"\nFinal-day rates (IRI@30d, IPC@90d):")
+print(d_final.groupby(['MNE', 'TST_GRP_CD', 'METRIC']).agg(
     clients=('CLIENT_CNT', 'sum'), rate=('RATE', 'mean')
 ).round(2).to_string())
 
