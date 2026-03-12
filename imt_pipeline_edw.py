@@ -83,7 +83,8 @@ tactic_df['TREATMT_STRT_DT'] = pd.to_datetime(tactic_df['TREATMT_STRT_DT'])
 tactic_df['TREATMT_END_DT'] = pd.to_datetime(tactic_df['TREATMT_END_DT'])
 tactic_df['MNE'] = tactic_df['TACTIC_ID'].str[7:10]
 tactic_df['COHORT'] = tactic_df['TREATMT_STRT_DT'].dt.strftime('%Y-%m')
-tactic_df['WINDOW_DAYS'] = (tactic_df['TREATMT_END_DT'] - tactic_df['TREATMT_STRT_DT']).dt.days
+# WINDOW_DAYS = hard MNE window (IRI=30, IPC=90), not TREATMT_END_DT - TREATMT_STRT_DT
+tactic_df['WINDOW_DAYS'] = tactic_df['MNE'].map(MNE_WINDOWS).fillna(MAX_DAYS).astype(int)
 tactic_df['MO_DT'] = tactic_df['TREATMT_STRT_DT'].values.astype('datetime64[M]')
 
 # TST_GRP_CD already filtered in SQL. Dedup only.
@@ -160,18 +161,14 @@ print("JOINING & COMPUTING METRICS")
 
 # Merge events to tactics on CLNT_NO
 merged = events_df.merge(
-    tactic_df[['CLNT_NO', 'TACTIC_ID', 'TREATMT_STRT_DT', 'TREATMT_END_DT']],
+    tactic_df[['CLNT_NO', 'TACTIC_ID', 'MNE', 'TREATMT_STRT_DT']],
     on='CLNT_NO'
 )
-# Filter: event within treatment window
-matched = merged[
-    (merged['CAPTR_DT'] >= merged['TREATMT_STRT_DT']) &
-    (merged['CAPTR_DT'] <= merged['TREATMT_END_DT'])
-].copy()
-matched['DAYS'] = (matched['CAPTR_DT'] - matched['TREATMT_STRT_DT']).dt.days
-matched['MNE'] = matched['TACTIC_ID'].str[7:10]
-matched['MAX_WINDOW'] = matched['MNE'].map(MNE_WINDOWS).fillna(MAX_DAYS)
-matched = matched[matched['DAYS'] <= matched['MAX_WINDOW']].copy()
+# Success window = TREATMT_STRT_DT to TREATMT_STRT_DT + MNE_WINDOW (hard 30/90 days)
+# NOT based on TREATMT_END_DT which varies
+merged['MNE_WINDOW'] = merged['MNE'].map(MNE_WINDOWS).fillna(MAX_DAYS).astype(int)
+merged['DAYS'] = (merged['CAPTR_DT'] - merged['TREATMT_STRT_DT']).dt.days
+matched = merged[(merged['DAYS'] >= 0) & (merged['DAYS'] <= merged['MNE_WINDOW'])].copy()
 print(f"  Matched events: {len(matched):,}")
 
 # Aggregate per client × tactic

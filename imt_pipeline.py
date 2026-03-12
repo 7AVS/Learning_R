@@ -63,7 +63,7 @@ tactic_df = (
     .filter(F.col("TST_GRP_CD").isin(ACTION_GROUP, CONTROL_GROUP))
     .filter(F.col("TREATMT_STRT_DT") >= "2025-01-01")
     .filter(F.col("TREATMT_STRT_DT") < DATA_END_DATE)
-    .withColumn("WINDOW_DAYS", F.datediff(F.col("TREATMT_END_DT"), F.col("TREATMT_STRT_DT")))
+    .withColumn("WINDOW_DAYS", F.when(F.substring(F.col("TACTIC_ID"), 8, 3) == "IRI", F.lit(30)).otherwise(F.lit(90)))
     .withColumn("COHORT", F.date_format(F.col("TREATMT_STRT_DT"), "yyyy-MM"))
     .select(
         "CLNT_NO", "TACTIC_ID", "MNE", "TST_GRP_CD", "RPT_GRP_CD",
@@ -137,26 +137,22 @@ tactic_keys = (
     .dropDuplicates(["CLNT_NO", "TACTIC_ID", "TREATMT_STRT_DT"])
 )
 
-# Join events to tactics where event date is within treatment window
-joined = (
-    events_df.alias("e")
-    .join(tactic_keys.alias("a"), on="CLNT_NO", how="inner")
-    .where(
-        (F.col("e.EVENT_DATE") >= F.col("a.TREATMT_STRT_DT")) &
-        (F.col("e.EVENT_DATE") <= F.col("a.TREATMT_END_DT"))
-    )
-)
-
-# Per-MNE window: IRI=30d, IPC=90d
+# Success window = TREATMT_STRT_DT to TREATMT_STRT_DT + MNE_WINDOW (hard 30/90 days)
+# NOT based on TREATMT_END_DT which varies
 _mne_max = F.lit(MAX_DAYS)
 for _mne, _days in MNE_WINDOWS.items():
     _mne_max = F.when(F.col("a.MNE") == _mne, F.lit(_days)).otherwise(_mne_max)
 
-with_days = (
-    joined
+joined = (
+    events_df.alias("e")
+    .join(tactic_keys.alias("a"), on="CLNT_NO", how="inner")
     .withColumn("DAYS_SINCE_START", F.datediff(F.col("e.EVENT_DATE"), F.col("a.TREATMT_STRT_DT")))
     .withColumn("MNE_MAX_DAYS", _mne_max)
     .filter((F.col("DAYS_SINCE_START") >= 0) & (F.col("DAYS_SINCE_START") <= F.col("MNE_MAX_DAYS")))
+)
+
+with_days = (
+    joined
     .withColumn("WEEK_INDEX", F.floor(F.col("DAYS_SINCE_START") / 7))
 )
 
