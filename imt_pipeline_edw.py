@@ -1,13 +1,13 @@
 # %% [1] Configuration
-# IMT Pipeline — EDW Only (Teradata via Trino)
-# Replicates SAS proc sql pipeline using EDW cursor pattern
-# Produces vintage curves in VVD v3 format + email metrics
+# IMT Pipeline — EDW Only (Teradata via Trino) — OPTIMIZED
+# No cross-table SQL joins. Each table queried independently, joined in pandas.
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import base64
 import os
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -15,410 +15,415 @@ warnings.filterwarnings('ignore')
 IMT_MNES = ["IRI", "IPC"]
 ACTION_GROUP = "TG4"
 CONTROL_GROUP = "TG7"
-DATA_END_DATE = "2026-03-01"
-TACTIC_DATE_PREFIX = "2022"  # substr(tactic_id,1,7) >= this (year filter)
-EXCLUDED_TACTIC = "20221891RI"  # known bad tactic_id
+EXCLUDED_TACTIC = "20221891RI"
 
-# ── Teradata/Trino table references ──
+# ── Table references (Teradata via Trino) ──
 TACTIC_TABLE = "DT3V01.TACTIC_EVNT_IP_AR_H60M"
-# Alternative: DT3V01.TACTIC_EVNT_IP_AR_HIST
 SEG_TABLE = "DG6V01.CLNT_DERIV_DTA_HIST"
 EVENT_TABLE = "DDNV01.EXT_CDP_CHNL_EVNT"
-EMAIL_MASTER_TABLE = "DTZV01.VENDOR_FEEDBACK_MASTER"
-EMAIL_EVENT_TABLE = "DTZV01.VENDOR_FEEDBACK_EVENT"
+EMAIL_MASTER = "DTZV01.VENDOR_FEEDBACK_MASTER"
+EMAIL_EVENT = "DTZV01.VENDOR_FEEDBACK_EVENT"
 
-# ── Success event filters ──
-ACTVY_TYP_CD_FILTER = "031"          # International Money Transfer
-CHNL_TYP_CD_OLB = "034"              # Online Banking
-CHNL_TYP_CD_MB = "021"               # Mobile Apps
-SRC_DTA_STORE_CD_FILTER = ["139", "140"]
-EVENT_START_DATE = "2021-11-10"
+# ── Event filters ──
+ACTVY_FILTER = "031"       # International Money Transfer
+CHNL_OLB = "034"           # Online Banking
+CHNL_MB = "021"            # Mobile Apps
+SRC_FILTERS = ("139", "140")
+EVENT_START = "2021-11-10"
 
 # ── Measurement ──
 MAX_DAYS = 90
 HDFS_OUTPUT = "/user/427966379/eda_output"
 
+def edw_query(sql, desc=""):
+    """Run SQL via EDW cursor, return DataFrame. Shows timing."""
+    t0 = time.time()
+    if desc:
+        print(f"  [{desc}] executing...", end=" ", flush=True)
+    cursor = EDW.cursor()
+    cursor.execute(sql)
+    rows = cursor.fetchall()
+    cols = [d[0] for d in cursor.description]
+    cursor.close()
+    elapsed = time.time() - t0
+    print(f"{len(rows):,} rows in {elapsed:.0f}s")
+    return pd.DataFrame(rows, columns=cols)
+
 print("Configuration loaded.")
-print(f"Campaigns: {IMT_MNES}")
-print(f"Action: {ACTION_GROUP}, Control: {CONTROL_GROUP}")
-print(f"Tables: {TACTIC_TABLE}, {EVENT_TABLE}")
+print(f"Campaigns: {IMT_MNES} | Action: {ACTION_GROUP}, Control: {CONTROL_GROUP}")
 
-# %% [2] Experiment Population — Tactic + Segmentation from EDW
-# Mirrors SAS Part 1: TACTIC table with LEFT JOIN to segmentation
 
-tactic_sql = f"""
-SELECT DISTINCT
-    A.CLNT_NO,
-    A.TACTIC_ID,
-    A.RPT_GRP_CD,
-    A.TACTIC_CELL_CD,
-    A.TST_GRP_CD,
-    A.ADDNL_DECSN_DATA1,
-    A.TACTIC_DECSN_VRB_INFO,
-    A.TREATMT_MN,
-    A.TREATMT_STRT_DT,
-    A.TREATMT_END_DT,
-    SUBSTR(A.TACTIC_ID, 8, 3) AS MNE,
+# %% [2] Tactic Population — NO JOINS, simple filter
+# Pull raw tactics, filter/transform in pandas
 
-    CASE
-        WHEN SEG.CLNT_STRTGY_SEG_CD = 'NI'      THEN 'Newcomer'
-        WHEN SEG.CLNT_STRTGY_SEG_CD = 'NGEN_NS'  THEN 'N-Gen Non-Student'
-        WHEN SEG.CLNT_STRTGY_SEG_CD = 'YOUTH'    THEN 'Youth'
-        WHEN SEG.CLNT_STRTGY_SEG_CD = 'NGEN_ST'  THEN 'Student'
-        ELSE 'Mass'
-    END AS SEGMENT,
+print("=" * 60)
+print("PULLING TACTIC POPULATION")
 
-    CASE
-        WHEN SEG.NEW_IMGRNT_CD = 'PERM' THEN 'Permanent Resident'
-        WHEN SEG.NEW_IMGRNT_CD = 'STDYX' THEN 'Foreign Student'
-        WHEN SEG.NEW_IMGRNT_CD = 'TPWK'  THEN 'Temporary Worker'
-        WHEN SEG.NEW_IMGRNT_CD = 'OTHER' THEN 'Other'
-        ELSE NULL
-    END AS NEWCOMER_SEGMENT,
+# Push ALL filters to SQL to minimize spool:
+# - TST_GRP_CD filter (eliminates most rows)
+# - LIKE instead of SUBSTR (better index usage in Teradata)
+# - Date filter to reduce scan
+tactic_df = edw_query(f"""
+    SELECT
+        CLNT_NO, TACTIC_ID, RPT_GRP_CD, TACTIC_CELL_CD, TST_GRP_CD,
+        ADDNL_DECSN_DATA1, TACTIC_DECSN_VRB_INFO, TREATMT_MN,
+        TREATMT_STRT_DT, TREATMT_END_DT
+    FROM {TACTIC_TABLE}
+    WHERE (TACTIC_ID LIKE '_______IRI%' OR TACTIC_ID LIKE '_______IPC%')
+        AND TST_GRP_CD IN ('{ACTION_GROUP}', '{CONTROL_GROUP}')
+        AND TACTIC_ID <> '{EXCLUDED_TACTIC}'
+        AND TREATMT_STRT_DT >= DATE '2022-01-01'
+""", "tactics")
 
-    CASE
-        WHEN TRIM(SEG.CLNT_CATG_SEG_CD) = 'NEW' THEN 'NEW'
-        WHEN TRIM(SEG.CLNT_CATG_SEG_CD) IN ('NEWISH', 'EXIST', 'RETURN') THEN 'EXISTING'
-        ELSE 'OTHER'
-    END AS NEW_EXISTING
-
-FROM {TACTIC_TABLE} A
-LEFT JOIN {SEG_TABLE} SEG
-    ON A.CLNT_NO = SEG.CLNT_NO
-    AND SEG.MTH_END_DT = DATE_TRUNC('month', A.TREATMT_STRT_DT) - INTERVAL '1' DAY
-WHERE SUBSTR(A.TACTIC_ID, 8, 3) IN ('IRI', 'IPC')
-    AND A.TACTIC_ID <> '{EXCLUDED_TACTIC}'
-ORDER BY A.CLNT_NO, A.TREATMT_STRT_DT
-"""
-
-print("Querying tactic population from EDW...")
-print(f"Table: {TACTIC_TABLE} LEFT JOIN {SEG_TABLE}")
-cursor = EDW.cursor()
-cursor.execute(tactic_sql)
-tactic_rows = cursor.fetchall()
-tactic_cols = [desc[0] for desc in cursor.description]
-cursor.close()
-
-tactic_df = pd.DataFrame(tactic_rows, columns=tactic_cols)
-
-# Normalize CLNT_NO: strip leading zeros
-tactic_df['CLNT_NO'] = tactic_df['CLNT_NO'].astype(str).str.lstrip('0')
-
-# Derive cohort (yyyy-MM from treatment start)
+# ── Transform in pandas ──
+tactic_df['CLNT_NO'] = tactic_df['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
 tactic_df['TREATMT_STRT_DT'] = pd.to_datetime(tactic_df['TREATMT_STRT_DT'])
 tactic_df['TREATMT_END_DT'] = pd.to_datetime(tactic_df['TREATMT_END_DT'])
+tactic_df['MNE'] = tactic_df['TACTIC_ID'].str[7:10]
 tactic_df['COHORT'] = tactic_df['TREATMT_STRT_DT'].dt.strftime('%Y-%m')
 tactic_df['WINDOW_DAYS'] = (tactic_df['TREATMT_END_DT'] - tactic_df['TREATMT_STRT_DT']).dt.days
-
-# mo_dt: treatment start minus day-of-month (first of month)
 tactic_df['MO_DT'] = tactic_df['TREATMT_STRT_DT'].values.astype('datetime64[M]')
 
-# Filter to test/control groups
-tactic_df = tactic_df[tactic_df['TST_GRP_CD'].isin([ACTION_GROUP, CONTROL_GROUP])].copy()
+# TST_GRP_CD already filtered in SQL. Dedup only.
+tactic_df.drop_duplicates(subset=['CLNT_NO', 'TACTIC_ID'], inplace=True)
 
-# Duplicate check
-dup_counts = tactic_df.groupby(['CLNT_NO', 'TACTIC_ID']).size().reset_index(name='DUP')
-dup_counts = dup_counts[dup_counts['DUP'] > 1]
-
-print(f"\n{'='*60}")
-print(f"Tactic population: {len(tactic_df):,} rows")
-print(f"Unique clients:    {tactic_df['CLNT_NO'].nunique():,}")
-print(f"Unique tactics:    {tactic_df['TACTIC_ID'].nunique():,}")
-print(f"Duplicate keys:    {len(dup_counts):,}")
-print(f"Date range:        {tactic_df['TREATMT_STRT_DT'].min()} to {tactic_df['TREATMT_STRT_DT'].max()}")
-print(f"\nBy MNE:")
-print(tactic_df.groupby('MNE').agg(
-    clients=('CLNT_NO', 'nunique'),
-    rows=('CLNT_NO', 'count')
+print(f"\nTactic population: {len(tactic_df):,} rows")
+print(f"  Clients: {tactic_df['CLNT_NO'].nunique():,}")
+print(f"  Tactics: {tactic_df['TACTIC_ID'].nunique():,}")
+print(f"  Date range: {tactic_df['TREATMT_STRT_DT'].min().date()} to {tactic_df['TREATMT_STRT_DT'].max().date()}")
+print(f"\n  By MNE × TST_GRP_CD:")
+print(tactic_df.groupby(['MNE', 'TST_GRP_CD']).agg(
+    n=('CLNT_NO', 'count'), clients=('CLNT_NO', 'nunique')
 ).to_string())
-print(f"\nBy TST_GRP_CD:")
-print(tactic_df.groupby('TST_GRP_CD').agg(
-    clients=('CLNT_NO', 'nunique'),
-    rows=('CLNT_NO', 'count')
-).to_string())
-print(f"\nBy SEGMENT:")
-print(tactic_df['SEGMENT'].value_counts().to_string())
-print(f"\nBy COHORT (top 10):")
-print(tactic_df['COHORT'].value_counts().head(10).to_string())
 
-# %% [3] Success Events — IMT metrics at 30/60/90 day windows
-# Mirrors SAS Part 2: JOIN tactic to events, compute windowed metrics
-# Does the heavy join in Trino SQL, pulls aggregated result (1 row per client×tactic)
 
-success_sql = f"""
-SELECT
-    a.CLNT_NO,
-    a.TACTIC_ID,
+# %% [3] Success Events — independent pull, NO SQL JOIN
+# Pull IMT events with tight date range from tactic dates, filter to our clients in pandas
 
-    /* ── Period anchoring (SAS-equivalent) ── */
-    FLOOR(DATE_DIFF('day', DATE '2021-11-01', MIN(b.CAPTR_DT)) / 30) + 1 AS PERIOD_ANCHORED_SUCCESS,
+print("=" * 60)
+print("PULLING IMT SUCCESS EVENTS")
 
-    /* ── Overall IMT counts ── */
-    COUNT(DISTINCT b.EVNT_ID) AS IMT,
-    COUNT(DISTINCT CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_ID END) AS IMT_30,
-    COUNT(DISTINCT CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_ID END) AS IMT_60,
-    COUNT(DISTINCT CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_ID END) AS IMT_90,
+min_dt = tactic_df['TREATMT_STRT_DT'].min()
+max_dt = tactic_df['TREATMT_END_DT'].max()
+print(f"  Date window: {min_dt.date()} to {max_dt.date()}")
 
-    /* ── Dollar amounts ── */
-    SUM(b.EVNT_AMT_CAD) AS AMT_CAD,
-    SUM(CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_30,
-    SUM(CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_60,
-    SUM(CASE WHEN DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_90,
+# Batch by QUARTER to avoid spool overflow on the events table
+# Each quarter query scans ~3 months of data = manageable spool
+client_set = set(tactic_df['CLNT_NO'].unique())
+event_chunks = []
 
-    /* ── OLB (Online Banking, CHNL_TYP_CD = '034') ── */
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' THEN b.EVNT_ID END) AS IMT_OL,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_ID END) AS IMT_OL_30,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_ID END) AS IMT_OL_60,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_ID END) AS IMT_OL_90,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_OL,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_OL_30,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_OL_60,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_OLB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_OL_90,
+# Build quarterly date ranges from min_dt to max_dt
+q_starts = pd.date_range(
+    start=min_dt.to_period('Q').start_time,
+    end=max_dt,
+    freq='QS'
+)
 
-    /* ── MB (Mobile, CHNL_TYP_CD = '021') ── */
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' THEN b.EVNT_ID END) AS IMT_MB,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_ID END) AS IMT_MB_30,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_ID END) AS IMT_MB_60,
-    COUNT(DISTINCT CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_ID END) AS IMT_MB_90,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_MB,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 30 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_MB_30,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 60 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_MB_60,
-    SUM(CASE WHEN b.CHNL_TYP_CD = '{CHNL_TYP_CD_MB}' AND DATE_DIFF('day', a.TREATMT_STRT_DT, b.CAPTR_DT) <= 90 THEN b.EVNT_AMT_CAD ELSE 0 END) AS AMT_MB_90,
+for qs in q_starts:
+    qe = qs + pd.offsets.QuarterEnd(0)
+    qs_str = qs.strftime('%Y-%m-%d')
+    qe_str = qe.strftime('%Y-%m-%d')
 
-    /* ── Per-client aggregates ── */
-    COUNT(DISTINCT b.EVNT_ID) AS EVNT_ID_PER_CLNT,
-    COUNT(DISTINCT b.AR_ID) AS ACCT_PER_CLNT,
+    chunk = edw_query(f"""
+        SELECT
+            CLNT_NO, CAPTR_DT, EVNT_ID, AR_ID, EVNT_AMT_CAD, CHNL_TYP_CD
+        FROM {EVENT_TABLE}
+        WHERE ACTVY_TYP_CD = '{ACTVY_FILTER}'
+            AND CHNL_TYP_CD IN ('{CHNL_OLB}', '{CHNL_MB}')
+            AND SRC_DTA_STORE_CD IN ('{SRC_FILTERS[0]}', '{SRC_FILTERS[1]}')
+            AND CAPTR_DT >= DATE '{qs_str}'
+            AND CAPTR_DT <= DATE '{qe_str}'
+    """, f"events {qs_str[:7]}")
 
-    /* ── Vintage curve inputs ── */
-    MIN(b.CAPTR_DT) AS FIRST_SUCCESS_DATE
+    if len(chunk) > 0:
+        chunk['CLNT_NO'] = chunk['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
+        chunk = chunk[chunk['CLNT_NO'].isin(client_set)]
+        if len(chunk) > 0:
+            event_chunks.append(chunk)
 
-FROM {TACTIC_TABLE} a
-LEFT JOIN {EVENT_TABLE} b
-    ON a.CLNT_NO = b.CLNT_NO
-    AND b.CAPTR_DT BETWEEN a.TREATMT_STRT_DT AND a.TREATMT_END_DT
-    AND b.ACTVY_TYP_CD = '{ACTVY_TYP_CD_FILTER}'
-    AND b.CHNL_TYP_CD IN ('{CHNL_TYP_CD_OLB}', '{CHNL_TYP_CD_MB}')
-    AND b.SRC_DTA_STORE_CD IN ('139', '140')
-    AND b.CAPTR_DT >= DATE '{EVENT_START_DATE}'
-WHERE SUBSTR(a.TACTIC_ID, 8, 3) IN ('IRI', 'IPC')
-    AND a.TACTIC_ID <> '{EXCLUDED_TACTIC}'
-    AND a.TST_GRP_CD IN ('{ACTION_GROUP}', '{CONTROL_GROUP}')
-GROUP BY a.CLNT_NO, a.TACTIC_ID
-"""
+if event_chunks:
+    events_df = pd.concat(event_chunks, ignore_index=True)
+else:
+    events_df = pd.DataFrame(columns=['CLNT_NO', 'CAPTR_DT', 'EVNT_ID', 'AR_ID', 'EVNT_AMT_CAD', 'CHNL_TYP_CD'])
 
-print("Querying success events from EDW (this may take several minutes)...")
-print(f"Join: {TACTIC_TABLE} × {EVENT_TABLE}")
-print(f"Filters: ACTVY_TYP_CD={ACTVY_TYP_CD_FILTER}, CHNL_TYP_CD IN ({CHNL_TYP_CD_OLB},{CHNL_TYP_CD_MB})")
+events_df['CAPTR_DT'] = pd.to_datetime(events_df['CAPTR_DT'])
+events_df['EVNT_AMT_CAD'] = pd.to_numeric(events_df['EVNT_AMT_CAD'], errors='coerce').fillna(0)
+print(f"\n  Total matched events: {len(events_df):,} for {events_df['CLNT_NO'].nunique():,} clients")
 
-cursor = EDW.cursor()
-cursor.execute(success_sql)
-success_rows = cursor.fetchall()
-success_cols = [desc[0] for desc in cursor.description]
-cursor.close()
 
-success_df = pd.DataFrame(success_rows, columns=success_cols)
-success_df['CLNT_NO'] = success_df['CLNT_NO'].astype(str).str.lstrip('0')
+# %% [4] Join + Compute Metrics (all in pandas)
 
-print(f"\n{'='*60}")
-print(f"Success result: {len(success_df):,} rows")
-print(f"Clients with IMT > 0: {(success_df['IMT'] > 0).sum():,}")
-print(f"Clients with no IMT:  {(success_df['IMT'] == 0).sum():,} (or NULL)")
-print(f"\nIMT counts summary:")
-for col in ['IMT', 'IMT_30', 'IMT_60', 'IMT_90', 'IMT_OL', 'IMT_MB']:
-    if col in success_df.columns:
-        vals = pd.to_numeric(success_df[col], errors='coerce').fillna(0)
-        print(f"  {col:12s}: mean={vals.mean():.3f}, max={vals.max():.0f}, >0={( vals > 0).sum():,}")
-print(f"\nAmount summary:")
-for col in ['AMT_CAD', 'AMT_30', 'AMT_60', 'AMT_90']:
-    if col in success_df.columns:
-        vals = pd.to_numeric(success_df[col], errors='coerce').fillna(0)
-        print(f"  {col:12s}: mean=${vals.mean():,.2f}, total=${vals.sum():,.2f}")
+print("=" * 60)
+print("JOINING & COMPUTING METRICS")
 
-# %% [4] Merge Tactic Population with Success Metrics
+# Merge events to tactics on CLNT_NO
+merged = events_df.merge(
+    tactic_df[['CLNT_NO', 'TACTIC_ID', 'TREATMT_STRT_DT', 'TREATMT_END_DT']],
+    on='CLNT_NO'
+)
+# Filter: event within treatment window
+matched = merged[
+    (merged['CAPTR_DT'] >= merged['TREATMT_STRT_DT']) &
+    (merged['CAPTR_DT'] <= merged['TREATMT_END_DT'])
+].copy()
+matched['DAYS'] = (matched['CAPTR_DT'] - matched['TREATMT_STRT_DT']).dt.days
+print(f"  Matched events: {len(matched):,}")
 
-# Merge on CLNT_NO + TACTIC_ID
+# Aggregate per client × tactic
+def agg_success(g):
+    """Compute all success metrics for one client×tactic group."""
+    d = {}
+    d['IMT'] = g['EVNT_ID'].nunique()
+    d['FIRST_SUCCESS_DATE'] = g['CAPTR_DT'].min()
+    d['AMT_CAD'] = g['EVNT_AMT_CAD'].sum()
+
+    for window in [30, 60, 90]:
+        w = g[g['DAYS'] <= window]
+        d[f'IMT_{window}'] = w['EVNT_ID'].nunique()
+        d[f'AMT_{window}'] = w['EVNT_AMT_CAD'].sum()
+
+    # OLB (034)
+    olb = g[g['CHNL_TYP_CD'] == CHNL_OLB]
+    d['IMT_OL'] = olb['EVNT_ID'].nunique()
+    d['AMT_OL'] = olb['EVNT_AMT_CAD'].sum()
+    for window in [30, 60, 90]:
+        w = olb[olb['DAYS'] <= window]
+        d[f'IMT_OL_{window}'] = w['EVNT_ID'].nunique()
+        d[f'AMT_OL_{window}'] = w['EVNT_AMT_CAD'].sum()
+
+    # MB (021)
+    mb = g[g['CHNL_TYP_CD'] == CHNL_MB]
+    d['IMT_MB'] = mb['EVNT_ID'].nunique()
+    d['AMT_MB'] = mb['EVNT_AMT_CAD'].sum()
+    for window in [30, 60, 90]:
+        w = mb[mb['DAYS'] <= window]
+        d[f'IMT_MB_{window}'] = w['EVNT_ID'].nunique()
+        d[f'AMT_MB_{window}'] = w['EVNT_AMT_CAD'].sum()
+
+    d['EVNT_ID_PER_CLNT'] = g['EVNT_ID'].nunique()
+    d['ACCT_PER_CLNT'] = g['AR_ID'].nunique()
+    return pd.Series(d)
+
+if len(matched) > 0:
+    print("  Aggregating per client × tactic (this may take a minute)...")
+    success_df = matched.groupby(['CLNT_NO', 'TACTIC_ID']).apply(agg_success).reset_index()
+else:
+    # Empty success DataFrame with correct columns
+    metric_cols = ['IMT', 'FIRST_SUCCESS_DATE', 'AMT_CAD']
+    for w in [30, 60, 90]:
+        metric_cols += [f'IMT_{w}', f'AMT_{w}']
+    for ch in ['OL', 'MB']:
+        metric_cols += [f'IMT_{ch}', f'AMT_{ch}']
+        for w in [30, 60, 90]:
+            metric_cols += [f'IMT_{ch}_{w}', f'AMT_{ch}_{w}']
+    metric_cols += ['EVNT_ID_PER_CLNT', 'ACCT_PER_CLNT']
+    success_df = pd.DataFrame(columns=['CLNT_NO', 'TACTIC_ID'] + metric_cols)
+
+# Merge back to full tactic population
 result_df = tactic_df.merge(success_df, on=['CLNT_NO', 'TACTIC_ID'], how='left')
 
-# Fill NULLs for clients with no success events
-imt_cols = [c for c in result_df.columns if c.startswith(('IMT', 'AMT_', 'EVNT_ID_PER', 'ACCT_PER'))]
-for col in imt_cols:
-    result_df[col] = pd.to_numeric(result_df[col], errors='coerce').fillna(0)
+# Fill NULLs
+num_cols = [c for c in result_df.columns if c.startswith(('IMT', 'AMT_', 'EVNT_ID_PER', 'ACCT_PER'))]
+for c in num_cols:
+    result_df[c] = pd.to_numeric(result_df[c], errors='coerce').fillna(0)
 
-# Derive success flag and days-to-success
 result_df['FIRST_SUCCESS_DATE'] = pd.to_datetime(result_df['FIRST_SUCCESS_DATE'], errors='coerce')
 result_df['DAYS_TO_SUCCESS'] = (result_df['FIRST_SUCCESS_DATE'] - result_df['TREATMT_STRT_DT']).dt.days
 result_df['SUCCESS_FLAG'] = (result_df['IMT'] > 0).astype(int)
 
-# Period anchoring (SAS: floor((CAPTR_DT - 01NOV2021) / 30) + 1)
-result_df['PERIOD_ANCHORED_TACTIC'] = (
-    (result_df['TREATMT_STRT_DT'] - pd.Timestamp('2021-11-01')).dt.days // 30 + 1
-)
-
-print(f"{'='*60}")
-print(f"Merged result: {len(result_df):,} rows")
-print(f"  Success (IMT > 0):   {result_df['SUCCESS_FLAG'].sum():,} ({result_df['SUCCESS_FLAG'].mean()*100:.2f}%)")
-print(f"  No success:          {(result_df['SUCCESS_FLAG'] == 0).sum():,}")
-print(f"\nBy MNE × TST_GRP_CD:")
-pivot = result_df.groupby(['MNE', 'TST_GRP_CD']).agg(
-    clients=('CLNT_NO', 'nunique'),
+print(f"\nResult: {len(result_df):,} rows")
+print(f"  Success: {result_df['SUCCESS_FLAG'].sum():,} ({result_df['SUCCESS_FLAG'].mean()*100:.2f}%)")
+print(f"\n  By MNE × TST_GRP_CD:")
+print(result_df.groupby(['MNE', 'TST_GRP_CD']).agg(
+    n=('CLNT_NO', 'count'),
     success=('SUCCESS_FLAG', 'sum'),
     rate=('SUCCESS_FLAG', 'mean'),
     avg_imt=('IMT', 'mean'),
     avg_amt=('AMT_CAD', 'mean')
-).round(4)
-print(pivot.to_string())
-print(f"\nDays-to-success distribution (successful clients):")
-succ = result_df[result_df['SUCCESS_FLAG'] == 1]['DAYS_TO_SUCCESS']
-if len(succ) > 0:
-    print(f"  Min: {succ.min():.0f}, Median: {succ.median():.0f}, Mean: {succ.mean():.1f}, Max: {succ.max():.0f}")
+).round(4).to_string())
 
-# %% [5] Email Metrics — from Vendor Feedback tables
-# Same logic as imt_pipeline.py Cell 4b
-# Query ALL tactic IDs — join key is TREATMENT_ID = TACTIC_ID, no channel pre-filter needed
 
-# Query ALL tactic IDs — join key is TREATMENT_ID = TACTIC_ID, no channel pre-filter needed
-# (TACTIC_CELL_CD may be empty for IMT campaigns; ADDNL_DECSN_DATA1 has channel info
-#  but the vendor feedback tables already filter to email-only dispositions)
-email_tactic_ids = result_df['TACTIC_ID'].unique().tolist()
+# %% [5] Segmentation Enrichment — separate query, batched by month
 
-print(f"Querying email metrics for {len(email_tactic_ids)} unique tactic IDs...")
+print("=" * 60)
+print("SEGMENTATION ENRICHMENT")
 
-if len(email_tactic_ids) > 0:
-    # Query in batches of 50
-    BATCH_SIZE = 50
-    email_results = []
+# Get distinct (CLNT_NO, month_before_treatment) pairs
+result_df['SEG_MTH'] = (result_df['TREATMT_STRT_DT'].dt.to_period('M') - 1).dt.to_timestamp() + pd.offsets.MonthEnd(0)
+seg_months = sorted(result_df['SEG_MTH'].dropna().unique())
+print(f"  Segmentation months to query: {len(seg_months)}")
 
-    for i in range(0, len(email_tactic_ids), BATCH_SIZE):
-        batch = email_tactic_ids[i:i+BATCH_SIZE]
-        tactic_list = ",".join([f"'{t}'" for t in batch])
+seg_results = []
+for mth in seg_months:
+    mth_str = pd.Timestamp(mth).strftime('%Y-%m-%d')
+    clients_in_month = result_df[result_df['SEG_MTH'] == mth]['CLNT_NO'].unique()
+    if len(clients_in_month) == 0:
+        continue
 
-        email_sql = f"""
-        SELECT
-            FM.CLNT_NO,
-            FM.TREATMENT_ID,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 1 THEN 1 ELSE 0 END) AS EMAIL_SENT,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 2 THEN 1 ELSE 0 END) AS EMAIL_OPENED,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 3 THEN 1 ELSE 0 END) AS EMAIL_CLICKED,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 4 THEN 1 ELSE 0 END) AS EMAIL_UNSUBSCRIBED,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 1 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_SENT_DT,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 2 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_OPENED_DT,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 3 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_CLICKED_DT,
-            MAX(CASE WHEN FE.DISPOSITION_CD = 4 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_UNSUBSCRIBED_DT
-        FROM {EMAIL_MASTER_TABLE} FM
-        INNER JOIN {EMAIL_EVENT_TABLE} FE
-            ON FM.CONSUMER_ID_HASHED = FE.CONSUMER_ID_HASHED
-            AND FM.TREATMENT_ID = FE.TREATMENT_ID
-        WHERE FM.TREATMENT_ID IN ({tactic_list})
-        GROUP BY FM.CLNT_NO, FM.TREATMENT_ID
+    # Batch clients in chunks of 1000 for the IN clause
+    for i in range(0, len(clients_in_month), 1000):
+        batch = clients_in_month[i:i+1000]
+        clnt_in = ",".join(f"'{c}'" for c in batch)
+        seg_sql = f"""
+            SELECT CLNT_NO, CLNT_STRTGY_SEG_CD, NEW_IMGRNT_CD, CLNT_CATG_SEG_CD
+            FROM {SEG_TABLE}
+            WHERE MTH_END_DT = DATE '{mth_str}'
+                AND CLNT_NO IN ({clnt_in})
         """
+        try:
+            batch_df = edw_query(seg_sql, f"seg {mth_str} batch {i//1000+1}")
+            batch_df['SEG_MTH'] = pd.Timestamp(mth)
+            seg_results.append(batch_df)
+        except Exception as e:
+            print(f"  WARNING: seg query failed for {mth_str}: {e}")
 
-        cursor = EDW.cursor()
-        cursor.execute(email_sql)
-        rows = cursor.fetchall()
-        cols = [desc[0] for desc in cursor.description]
-        cursor.close()
+if seg_results:
+    seg_df = pd.concat(seg_results, ignore_index=True)
+    seg_df['CLNT_NO'] = seg_df['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
 
-        if rows:
-            batch_df = pd.DataFrame(rows, columns=cols)
-            email_results.append(batch_df)
-        print(f"  Batch {i//BATCH_SIZE + 1}/{(len(email_tactic_ids)-1)//BATCH_SIZE + 1}: {len(rows)} rows")
+    # Map segment codes to labels
+    seg_map = {'NI': 'Newcomer', 'NGEN_NS': 'N-Gen Non-Student',
+               'YOUTH': 'Youth', 'NGEN_ST': 'Student'}
+    seg_df['SEGMENT'] = seg_df['CLNT_STRTGY_SEG_CD'].map(seg_map).fillna('Mass')
 
-    if email_results:
-        email_df = pd.concat(email_results, ignore_index=True)
-        email_df['CLNT_NO'] = email_df['CLNT_NO'].astype(str).str.lstrip('0')
+    imm_map = {'PERM': 'Permanent Resident', 'STDYX': 'Foreign Student',
+               'TPWK': 'Temporary Worker', 'OTHER': 'Other'}
+    seg_df['NEWCOMER_SEGMENT'] = seg_df['NEW_IMGRNT_CD'].map(imm_map)
 
-        # Merge to result
-        result_df = result_df.merge(
-            email_df.rename(columns={'TREATMENT_ID': 'TACTIC_ID'}),
-            on=['CLNT_NO', 'TACTIC_ID'],
-            how='left'
-        )
-        for ec in ['EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']:
-            result_df[ec] = result_df[ec].fillna(0).astype(int)
+    new_existing_map = {'NEW': 'NEW', 'NEWISH': 'EXISTING', 'EXIST': 'EXISTING', 'RETURN': 'EXISTING'}
+    seg_df['NEW_EXISTING'] = seg_df['CLNT_CATG_SEG_CD'].str.strip().map(new_existing_map).fillna('OTHER')
 
-        print(f"\nEmail metrics merged: {len(email_df):,} client-tactic pairs")
-        print(f"  Sent: {result_df['EMAIL_SENT'].sum():,}")
-        print(f"  Opened: {result_df['EMAIL_OPENED'].sum():,}")
-        print(f"  Clicked: {result_df['EMAIL_CLICKED'].sum():,}")
-        print(f"  Unsubscribed: {result_df['EMAIL_UNSUBSCRIBED'].sum():,}")
-    else:
-        print("No email engagement data found.")
-        for ec in ['EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']:
-            result_df[ec] = 0
-        for ec in ['EMAIL_SENT_DT', 'EMAIL_OPENED_DT', 'EMAIL_CLICKED_DT', 'EMAIL_UNSUBSCRIBED_DT']:
-            result_df[ec] = pd.NaT
+    # Merge to result
+    result_df = result_df.merge(
+        seg_df[['CLNT_NO', 'SEG_MTH', 'SEGMENT', 'NEWCOMER_SEGMENT', 'NEW_EXISTING']],
+        on=['CLNT_NO', 'SEG_MTH'], how='left'
+    )
+    result_df['SEGMENT'] = result_df['SEGMENT'].fillna('Unknown')
+    print(f"\nSegmentation merged: {seg_df['CLNT_NO'].nunique():,} clients enriched")
+    print(result_df['SEGMENT'].value_counts().to_string())
 else:
-    print("No tactic IDs found — skipping email metrics.")
+    print("  No segmentation data retrieved. Adding placeholder columns.")
+    result_df['SEGMENT'] = 'Unknown'
+    result_df['NEWCOMER_SEGMENT'] = None
+    result_df['NEW_EXISTING'] = 'Unknown'
+
+
+# %% [6] Email Metrics — query ALL tactic IDs against vendor feedback
+
+print("=" * 60)
+print("EMAIL METRICS")
+
+email_tactic_ids = result_df['TACTIC_ID'].unique().tolist()
+print(f"  Querying {len(email_tactic_ids)} tactic IDs against vendor feedback...")
+
+BATCH_SIZE = 50
+email_results = []
+
+for i in range(0, len(email_tactic_ids), BATCH_SIZE):
+    batch = email_tactic_ids[i:i+BATCH_SIZE]
+    tactic_list = ",".join(f"'{t}'" for t in batch)
+
+    email_sql = f"""
+    SELECT
+        FM.CLNT_NO,
+        FM.TREATMENT_ID,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 1 THEN 1 ELSE 0 END) AS EMAIL_SENT,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 2 THEN 1 ELSE 0 END) AS EMAIL_OPENED,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 3 THEN 1 ELSE 0 END) AS EMAIL_CLICKED,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 4 THEN 1 ELSE 0 END) AS EMAIL_UNSUBSCRIBED,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 1 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_SENT_DT,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 2 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_OPENED_DT,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 3 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_CLICKED_DT,
+        MAX(CASE WHEN FE.DISPOSITION_CD = 4 THEN CAST(FE.DISPOSITION_DT_TM AS DATE) END) AS EMAIL_UNSUBSCRIBED_DT
+    FROM {EMAIL_MASTER} FM
+    INNER JOIN {EMAIL_EVENT} FE
+        ON FM.CONSUMER_ID_HASHED = FE.CONSUMER_ID_HASHED
+        AND FM.TREATMENT_ID = FE.TREATMENT_ID
+    WHERE FM.TREATMENT_ID IN ({tactic_list})
+    GROUP BY FM.CLNT_NO, FM.TREATMENT_ID
+    """
+
+    try:
+        batch_df = edw_query(email_sql, f"email batch {i//BATCH_SIZE+1}/{(len(email_tactic_ids)-1)//BATCH_SIZE+1}")
+        if len(batch_df) > 0:
+            email_results.append(batch_df)
+    except Exception as e:
+        print(f"  WARNING: email batch failed: {e}")
+
+if email_results:
+    email_df = pd.concat(email_results, ignore_index=True)
+    email_df['CLNT_NO'] = email_df['CLNT_NO'].astype(str).str.strip().str.lstrip('0')
+    email_df.rename(columns={'TREATMENT_ID': 'TACTIC_ID'}, inplace=True)
+
+    result_df = result_df.merge(email_df, on=['CLNT_NO', 'TACTIC_ID'], how='left')
+    for ec in ['EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']:
+        result_df[ec] = result_df[ec].fillna(0).astype(int)
+
+    sent = result_df['EMAIL_SENT'].sum()
+    print(f"\n  Email: {sent:,} sent, {result_df['EMAIL_OPENED'].sum():,} opened, "
+          f"{result_df['EMAIL_CLICKED'].sum():,} clicked")
+else:
+    print("  No email data found.")
     for ec in ['EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']:
         result_df[ec] = 0
     for ec in ['EMAIL_SENT_DT', 'EMAIL_OPENED_DT', 'EMAIL_CLICKED_DT', 'EMAIL_UNSUBSCRIBED_DT']:
         result_df[ec] = pd.NaT
 
-# %% [6] Population Summary & Sample Ratio Mismatch (SRM) Check
 
-print("="*60)
+# %% [7] Population Summary & SRM
+
+print("=" * 60)
 print("POPULATION SUMMARY")
-print("="*60)
 
 for mne in IMT_MNES:
-    mne_data = result_df[result_df['MNE'] == mne]
+    m = result_df[result_df['MNE'] == mne]
     print(f"\n{'─'*40}")
-    print(f"MNE: {mne} — {len(mne_data):,} rows, {mne_data['CLNT_NO'].nunique():,} unique clients")
+    print(f"MNE: {mne} — {len(m):,} rows, {m['CLNT_NO'].nunique():,} clients")
 
     for grp in [ACTION_GROUP, CONTROL_GROUP]:
-        g = mne_data[mne_data['TST_GRP_CD'] == grp]
-        print(f"\n  {grp}: {len(g):,} clients")
-        print(f"    Success rate:  {g['SUCCESS_FLAG'].mean()*100:.2f}%")
-        print(f"    Avg IMT count: {g['IMT'].mean():.3f}")
-        print(f"    Avg AMT_CAD:   ${g['AMT_CAD'].mean():,.2f}")
+        g = m[m['TST_GRP_CD'] == grp]
+        print(f"  {grp}: {len(g):,} clients, success={g['SUCCESS_FLAG'].mean()*100:.2f}%, "
+              f"avg_imt={g['IMT'].mean():.3f}, avg_amt=${g['AMT_CAD'].mean():,.2f}")
         if 'EMAIL_SENT' in g.columns:
-            print(f"    Email sent:    {g['EMAIL_SENT'].sum():,} ({g['EMAIL_SENT'].mean()*100:.1f}%)")
-            print(f"    Email opened:  {g['EMAIL_OPENED'].sum():,} ({g['EMAIL_OPENED'].mean()*100:.1f}%)")
+            es = g['EMAIL_SENT'].sum()
+            if es > 0:
+                print(f"    email: sent={es:,}, opened={g['EMAIL_OPENED'].sum():,}, "
+                      f"clicked={g['EMAIL_CLICKED'].sum():,}")
 
-    # SRM check (chi-square)
+    # SRM
     from scipy import stats
-    action_n = len(mne_data[mne_data['TST_GRP_CD'] == ACTION_GROUP])
-    control_n = len(mne_data[mne_data['TST_GRP_CD'] == CONTROL_GROUP])
-    total = action_n + control_n
-    if total > 0:
-        expected_ratio = action_n / total
-        chi2, p_val = stats.chisquare([action_n, control_n])
-        print(f"\n  SRM: Action={action_n:,}, Control={control_n:,}, Ratio={expected_ratio:.4f}")
-        print(f"  Chi-sq={chi2:.2f}, p-value={p_val:.4f}", end="")
-        print("  ⚠ POSSIBLE SRM" if p_val < 0.01 else "  ✓ OK")
+    a_n = len(m[m['TST_GRP_CD'] == ACTION_GROUP])
+    c_n = len(m[m['TST_GRP_CD'] == CONTROL_GROUP])
+    if a_n + c_n > 0:
+        chi2, p = stats.chisquare([a_n, c_n])
+        status = "POSSIBLE SRM" if p < 0.01 else "OK"
+        print(f"  SRM: {a_n:,} vs {c_n:,}, ratio={a_n/(a_n+c_n):.3f}, p={p:.4f} [{status}]")
 
-print(f"\n{'='*60}")
-print("SEGMENT DISTRIBUTION")
-for col in ['SEGMENT', 'NEWCOMER_SEGMENT', 'NEW_EXISTING']:
-    if col in result_df.columns:
-        print(f"\n{col}:")
-        print(result_df.groupby(['MNE', col]).size().unstack(fill_value=0).to_string())
 
-# %% [7] Vintage Curves — VVD v3 format
-# MNE | COHORT | TST_GRP_CD | RPT_GRP_CD | METRIC | DAY | WINDOW_DAYS | CLIENT_CNT | SUCCESS_CNT | RATE
+# %% [8] Vintage Curves — VVD v3 format
+
+print("=" * 60)
+print("BUILDING VINTAGE CURVES")
 
 vintage_rows = []
-
-# Group keys
 group_cols = ['MNE', 'COHORT', 'TST_GRP_CD', 'RPT_GRP_CD']
 
 for keys, grp in result_df.groupby(group_cols):
     mne, cohort, tst, rpt = keys
-    client_cnt = len(grp)
-    window_days = int(grp['WINDOW_DAYS'].median())
+    n = len(grp)
+    wd = int(grp['WINDOW_DAYS'].median())
 
-    # ── IMT Success vintage curve ──
-    successful = grp[grp['SUCCESS_FLAG'] == 1]['DAYS_TO_SUCCESS'].dropna()
+    # IMT success curve
+    succ_days = grp[grp['SUCCESS_FLAG'] == 1]['DAYS_TO_SUCCESS'].dropna()
     for day in range(MAX_DAYS + 1):
-        success_cnt = int((successful <= day).sum())
-        rate = round(success_cnt / client_cnt * 100, 2) if client_cnt > 0 else 0.0
+        s = int((succ_days <= day).sum())
         vintage_rows.append({
             'MNE': mne, 'COHORT': cohort, 'TST_GRP_CD': tst, 'RPT_GRP_CD': rpt,
-            'METRIC': 'imt_success', 'DAY': day, 'WINDOW_DAYS': window_days,
-            'CLIENT_CNT': client_cnt, 'SUCCESS_CNT': success_cnt, 'RATE': rate
+            'METRIC': 'imt_success', 'DAY': day, 'WINDOW_DAYS': wd,
+            'CLIENT_CNT': n, 'SUCCESS_CNT': s, 'RATE': round(s / n * 100, 2) if n > 0 else 0
         })
 
-    # ── Email vintage curves (if email data exists) ──
+    # Email curves
     email_metrics = {
         'email_sent': ('EMAIL_SENT', 'EMAIL_SENT_DT'),
         'email_open': ('EMAIL_OPENED', 'EMAIL_OPENED_DT'),
@@ -426,225 +431,143 @@ for keys, grp in result_df.groupby(group_cols):
         'email_unsub': ('EMAIL_UNSUBSCRIBED', 'EMAIL_UNSUBSCRIBED_DT'),
     }
     for metric_name, (flag_col, date_col) in email_metrics.items():
-        if flag_col in grp.columns and date_col in grp.columns:
-            em_grp = grp[grp[flag_col] == 1].copy()
-            if len(em_grp) > 0:
-                em_grp[date_col] = pd.to_datetime(em_grp[date_col], errors='coerce')
-                em_grp['EM_DAYS'] = (em_grp[date_col] - em_grp['TREATMT_STRT_DT']).dt.days
-                em_days = em_grp['EM_DAYS'].dropna()
-                em_days = em_days[(em_days >= 0) & (em_days <= MAX_DAYS)]
-            else:
-                em_days = pd.Series(dtype=float)
+        if flag_col not in grp.columns or date_col not in grp.columns:
+            continue
+        em = grp[grp[flag_col] == 1].copy()
+        if len(em) > 0:
+            em[date_col] = pd.to_datetime(em[date_col], errors='coerce')
+            em_days = ((em[date_col] - em['TREATMT_STRT_DT']).dt.days).dropna()
+            em_days = em_days[(em_days >= 0) & (em_days <= MAX_DAYS)]
+        else:
+            em_days = pd.Series(dtype=float)
 
-            for day in range(MAX_DAYS + 1):
-                success_cnt = int((em_days <= day).sum())
-                rate = round(success_cnt / client_cnt * 100, 2) if client_cnt > 0 else 0.0
-                vintage_rows.append({
-                    'MNE': mne, 'COHORT': cohort, 'TST_GRP_CD': tst, 'RPT_GRP_CD': rpt,
-                    'METRIC': metric_name, 'DAY': day, 'WINDOW_DAYS': window_days,
-                    'CLIENT_CNT': client_cnt, 'SUCCESS_CNT': success_cnt, 'RATE': rate
-                })
+        for day in range(MAX_DAYS + 1):
+            s = int((em_days <= day).sum())
+            vintage_rows.append({
+                'MNE': mne, 'COHORT': cohort, 'TST_GRP_CD': tst, 'RPT_GRP_CD': rpt,
+                'METRIC': metric_name, 'DAY': day, 'WINDOW_DAYS': wd,
+                'CLIENT_CNT': n, 'SUCCESS_CNT': s, 'RATE': round(s / n * 100, 2) if n > 0 else 0
+            })
 
 vintage_df = pd.DataFrame(vintage_rows)
+print(f"Vintage curves: {len(vintage_df):,} rows, metrics: {vintage_df['METRIC'].unique().tolist()}")
 
-print(f"{'='*60}")
-print(f"Vintage curves: {len(vintage_df):,} rows")
-print(f"  Metrics: {vintage_df['METRIC'].unique().tolist()}")
-print(f"  Groups:  {vintage_df.groupby(group_cols).ngroups}")
-print(f"\nDay-90 summary by MNE × TST_GRP_CD × METRIC:")
-day90 = vintage_df[vintage_df['DAY'] == 90]
-print(day90.groupby(['MNE', 'TST_GRP_CD', 'METRIC']).agg(
-    client_cnt=('CLIENT_CNT', 'sum'),
-    success_cnt=('SUCCESS_CNT', 'sum'),
-    avg_rate=('RATE', 'mean')
+# Day-90 summary
+d90 = vintage_df[vintage_df['DAY'] == 90]
+print(f"\nDay-90 rates:")
+print(d90.groupby(['MNE', 'TST_GRP_CD', 'METRIC']).agg(
+    clients=('CLIENT_CNT', 'sum'), rate=('RATE', 'mean')
 ).round(2).to_string())
 
-# %% [8] Lift & Statistical Significance
+
+# %% [9] Lift & Significance
 
 from scipy import stats
 
-print("="*60)
-print("LIFT ANALYSIS (Action vs Control)")
-print("="*60)
+print("=" * 60)
+print("LIFT ANALYSIS")
 
 lift_rows = []
 for mne in IMT_MNES:
-    mne_data = result_df[result_df['MNE'] == mne]
-    action = mne_data[mne_data['TST_GRP_CD'] == ACTION_GROUP]
-    control = mne_data[mne_data['TST_GRP_CD'] == CONTROL_GROUP]
-
-    if len(action) == 0 or len(control) == 0:
-        print(f"\n{mne}: Missing action or control group, skipping.")
+    m = result_df[result_df['MNE'] == mne]
+    a = m[m['TST_GRP_CD'] == ACTION_GROUP]
+    c = m[m['TST_GRP_CD'] == CONTROL_GROUP]
+    if len(a) == 0 or len(c) == 0:
         continue
 
-    metrics = {
-        'SUCCESS_RATE': ('SUCCESS_FLAG', 'mean'),
-        'AVG_IMT_COUNT': ('IMT', 'mean'),
-        'AVG_AMT_CAD': ('AMT_CAD', 'mean'),
-        'IMT_30_RATE': ('IMT_30', lambda x: (x > 0).mean()),
-        'IMT_60_RATE': ('IMT_60', lambda x: (x > 0).mean()),
-        'IMT_90_RATE': ('IMT_90', lambda x: (x > 0).mean()),
-    }
-    if 'EMAIL_OPENED' in result_df.columns:
-        metrics['EMAIL_OPEN_RATE'] = ('EMAIL_OPENED', 'mean')
-        metrics['EMAIL_CLICK_RATE'] = ('EMAIL_CLICKED', 'mean')
+    print(f"\n{mne}: Action(n={len(a):,}) vs Control(n={len(c):,})")
+    print(f"  {'Metric':<20s} {'Action':>10s} {'Control':>10s} {'Lift':>10s} {'p':>8s}")
 
-    print(f"\n{'─'*40}")
-    print(f"MNE: {mne}")
-    print(f"  Action (n={len(action):,})  vs  Control (n={len(control):,})")
-    print(f"  {'Metric':<20s} {'Action':>10s} {'Control':>10s} {'Lift':>10s} {'p-value':>10s}")
+    metrics = [
+        ('SUCCESS_RATE', 'SUCCESS_FLAG', 'mean'),
+        ('AVG_IMT', 'IMT', 'mean'),
+        ('AVG_AMT', 'AMT_CAD', 'mean'),
+        ('IMT_30_RATE', 'IMT_30', lambda x: (x > 0).mean()),
+        ('IMT_60_RATE', 'IMT_60', lambda x: (x > 0).mean()),
+        ('IMT_90_RATE', 'IMT_90', lambda x: (x > 0).mean()),
+    ]
+    if 'EMAIL_OPENED' in a.columns:
+        metrics.append(('EMAIL_OPEN', 'EMAIL_OPENED', 'mean'))
+        metrics.append(('EMAIL_CLICK', 'EMAIL_CLICKED', 'mean'))
 
-    for metric_name, (col, agg_func) in metrics.items():
-        if col not in action.columns:
+    for name, col, func in metrics:
+        if col not in a.columns:
             continue
-        a_val = agg_func(action[col]) if callable(agg_func) else action[col].agg(agg_func)
-        c_val = agg_func(control[col]) if callable(agg_func) else control[col].agg(agg_func)
-        lift = ((a_val - c_val) / c_val * 100) if c_val != 0 else float('inf')
+        av = func(a[col]) if callable(func) else a[col].agg(func)
+        cv = func(c[col]) if callable(func) else c[col].agg(func)
+        lift = ((av - cv) / cv * 100) if cv != 0 else 0
 
-        # Two-proportion z-test for rates, t-test for means
-        if 'RATE' in metric_name:
-            # z-test for proportions
-            a_n, c_n = len(action), len(control)
-            a_s = int(a_val * a_n)
-            c_s = int(c_val * c_n)
-            p_pool = (a_s + c_s) / (a_n + c_n) if (a_n + c_n) > 0 else 0
-            se = np.sqrt(p_pool * (1 - p_pool) * (1/a_n + 1/c_n)) if p_pool > 0 and p_pool < 1 else 1
-            z = (a_val - c_val) / se if se > 0 else 0
-            p_val = 2 * (1 - stats.norm.cdf(abs(z)))
+        if 'RATE' in name or name.startswith('EMAIL'):
+            an, cn = len(a), len(c)
+            a_s, c_s = int(av * an), int(cv * cn)
+            pp = (a_s + c_s) / (an + cn) if (an + cn) > 0 else 0
+            se = np.sqrt(pp * (1 - pp) * (1/an + 1/cn)) if 0 < pp < 1 else 1
+            z = (av - cv) / se if se > 0 else 0
+            pv = 2 * (1 - stats.norm.cdf(abs(z)))
         else:
-            t_stat, p_val = stats.ttest_ind(
-                pd.to_numeric(action[col], errors='coerce').fillna(0),
-                pd.to_numeric(control[col], errors='coerce').fillna(0),
+            _, pv = stats.ttest_ind(
+                pd.to_numeric(a[col], errors='coerce').fillna(0),
+                pd.to_numeric(c[col], errors='coerce').fillna(0),
                 equal_var=False
             )
 
-        sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else ""
-        print(f"  {metric_name:<20s} {a_val:>10.4f} {c_val:>10.4f} {lift:>+9.1f}% {p_val:>9.4f} {sig}")
-
-        lift_rows.append({
-            'MNE': mne, 'METRIC': metric_name,
-            'ACTION_VAL': a_val, 'CONTROL_VAL': c_val,
-            'LIFT_PCT': lift, 'P_VALUE': p_val
-        })
+        sig = "***" if pv < 0.001 else "**" if pv < 0.01 else "*" if pv < 0.05 else ""
+        print(f"  {name:<20s} {av:>10.4f} {cv:>10.4f} {lift:>+9.1f}% {pv:>8.4f} {sig}")
+        lift_rows.append({'MNE': mne, 'METRIC': name, 'ACTION': av, 'CONTROL': cv, 'LIFT': lift, 'P': pv})
 
 lift_df = pd.DataFrame(lift_rows)
 
-# %% [9] Export — CSV Download Link + HDFS Backup
+
+# %% [10] Export — Download Links + HDFS Backup
 
 from IPython.display import display, HTML
 
-# ── Vintage curves CSV ──
-csv_data = vintage_df.to_csv(index=False)
-size_mb = len(csv_data.encode('utf-8')) / (1024 * 1024)
-print(f"Vintage curves CSV: {size_mb:.2f} MB, {len(vintage_df):,} rows")
+print("=" * 60)
+print("EXPORT")
 
-if size_mb <= 50:
-    b64 = base64.b64encode(csv_data.encode()).decode()
-    filename = "imt_edw_vintage_curves.csv"
-    link = f'<a download="{filename}" href="data:text/csv;base64,{b64}" target="_blank" style="font-size:16px; padding:10px 20px; background:#264f78; color:white; text-decoration:none; border-radius:4px;">Download {filename} ({size_mb:.1f} MB)</a>'
+def make_download_link(df, filename):
+    csv = df.to_csv(index=False)
+    mb = len(csv.encode()) / (1024 * 1024)
+    if mb > 50:
+        print(f"  {filename}: {mb:.1f} MB — too large for browser download")
+        return
+    b64 = base64.b64encode(csv.encode()).decode()
+    link = (f'<a download="{filename}" href="data:text/csv;base64,{b64}" '
+            f'target="_blank" style="font-size:16px;padding:10px 20px;background:#264f78;'
+            f'color:white;text-decoration:none;border-radius:4px;">'
+            f'Download {filename} ({mb:.1f} MB)</a>')
     display(HTML(link))
-else:
-    print(f"WARNING: CSV too large for browser download ({size_mb:.1f} MB). Use HDFS backup.")
+    print(f"  {filename}: {mb:.1f} MB, {len(df):,} rows")
 
-# ── Lift summary CSV ──
+# Vintage curves
+make_download_link(vintage_df, "imt_edw_vintage_curves.csv")
+
+# Client detail
+detail_cols = [c for c in ['CLNT_NO', 'TACTIC_ID', 'MNE', 'COHORT', 'TST_GRP_CD', 'RPT_GRP_CD',
+    'SEGMENT', 'NEWCOMER_SEGMENT', 'NEW_EXISTING', 'TREATMT_STRT_DT', 'TREATMT_END_DT',
+    'WINDOW_DAYS', 'SUCCESS_FLAG', 'DAYS_TO_SUCCESS', 'FIRST_SUCCESS_DATE',
+    'IMT', 'IMT_30', 'IMT_60', 'IMT_90', 'AMT_CAD', 'AMT_30', 'AMT_60', 'AMT_90',
+    'IMT_OL', 'IMT_OL_30', 'IMT_OL_60', 'IMT_OL_90', 'AMT_OL', 'AMT_OL_30', 'AMT_OL_60', 'AMT_OL_90',
+    'IMT_MB', 'IMT_MB_30', 'IMT_MB_60', 'IMT_MB_90', 'AMT_MB', 'AMT_MB_30', 'AMT_MB_60', 'AMT_MB_90',
+    'EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED'
+] if c in result_df.columns]
+make_download_link(result_df[detail_cols], "imt_edw_client_detail.csv")
+
+# Lift
 if len(lift_df) > 0:
-    lift_csv = lift_df.to_csv(index=False)
-    lift_b64 = base64.b64encode(lift_csv.encode()).decode()
-    lift_link = f'<a download="imt_edw_lift_summary.csv" href="data:text/csv;base64,{lift_b64}" target="_blank" style="font-size:16px; padding:10px 20px; background:#264f78; color:white; text-decoration:none; border-radius:4px;">Download imt_edw_lift_summary.csv</a>'
-    display(HTML(lift_link))
+    make_download_link(lift_df, "imt_edw_lift_summary.csv")
 
-# ── Client-level detail CSV ──
-detail_cols = ['CLNT_NO', 'TACTIC_ID', 'MNE', 'COHORT', 'TST_GRP_CD', 'RPT_GRP_CD',
-               'SEGMENT', 'NEWCOMER_SEGMENT', 'NEW_EXISTING', 'TREATMT_STRT_DT', 'TREATMT_END_DT',
-               'WINDOW_DAYS', 'SUCCESS_FLAG', 'DAYS_TO_SUCCESS', 'FIRST_SUCCESS_DATE',
-               'IMT', 'IMT_30', 'IMT_60', 'IMT_90',
-               'AMT_CAD', 'AMT_30', 'AMT_60', 'AMT_90',
-               'IMT_OL', 'IMT_OL_30', 'IMT_OL_60', 'IMT_OL_90',
-               'IMT_MB', 'IMT_MB_30', 'IMT_MB_60', 'IMT_MB_90',
-               'AMT_OL', 'AMT_OL_30', 'AMT_OL_60', 'AMT_OL_90',
-               'AMT_MB', 'AMT_MB_30', 'AMT_MB_60', 'AMT_MB_90',
-               'EMAIL_SENT', 'EMAIL_OPENED', 'EMAIL_CLICKED', 'EMAIL_UNSUBSCRIBED']
-detail_cols = [c for c in detail_cols if c in result_df.columns]
-detail_csv = result_df[detail_cols].to_csv(index=False)
-detail_size = len(detail_csv.encode('utf-8')) / (1024 * 1024)
-if detail_size <= 50:
-    detail_b64 = base64.b64encode(detail_csv.encode()).decode()
-    detail_link = f'<a download="imt_edw_client_detail.csv" href="data:text/csv;base64,{detail_b64}" target="_blank" style="font-size:16px; padding:10px 20px; background:#264f78; color:white; text-decoration:none; border-radius:4px;">Download imt_edw_client_detail.csv ({detail_size:.1f} MB)</a>'
-    display(HTML(detail_link))
-
-# ── HDFS backup ──
+# HDFS backup
 try:
-    local_path = "/tmp/imt_edw_vintage_curves.csv"
-    vintage_df.to_csv(local_path, index=False)
-    os.system(f"hdfs dfs -mkdir -p {HDFS_OUTPUT}")
-    os.system(f"hdfs dfs -put -f {local_path} {HDFS_OUTPUT}/imt_edw_vintage_curves.csv")
-    print(f"\nHDFS backup: {HDFS_OUTPUT}/imt_edw_vintage_curves.csv")
-
-    local_detail = "/tmp/imt_edw_client_detail.csv"
-    result_df[detail_cols].to_csv(local_detail, index=False)
-    os.system(f"hdfs dfs -put -f {local_detail} {HDFS_OUTPUT}/imt_edw_client_detail.csv")
-    print(f"HDFS backup: {HDFS_OUTPUT}/imt_edw_client_detail.csv")
+    for fname, df in [("imt_edw_vintage_curves.csv", vintage_df),
+                       ("imt_edw_client_detail.csv", result_df[detail_cols])]:
+        local = f"/tmp/{fname}"
+        df.to_csv(local, index=False)
+        os.system(f"hdfs dfs -mkdir -p {HDFS_OUTPUT}")
+        os.system(f"hdfs dfs -put -f {local} {HDFS_OUTPUT}/{fname}")
+        print(f"  HDFS: {HDFS_OUTPUT}/{fname}")
 except Exception as e:
-    print(f"HDFS backup failed: {e}")
+    print(f"  HDFS backup failed: {e}")
 
-# %% [10] Mega Summary Output
-
-print("="*70)
-print("IMT PIPELINE — EDW ONLY — SUMMARY")
-print("="*70)
-
-print(f"\nData source:  EDW (Teradata via Trino)")
-print(f"Tables:       {TACTIC_TABLE} × {EVENT_TABLE}")
-print(f"Segmentation: {SEG_TABLE}")
-print(f"Email:        {EMAIL_MASTER_TABLE} × {EMAIL_EVENT_TABLE}")
-print(f"Campaigns:    {IMT_MNES}")
-print(f"Groups:       Action={ACTION_GROUP}, Control={CONTROL_GROUP}")
-print(f"Window:       0-{MAX_DAYS} days")
-
-print(f"\n{'─'*70}")
-print(f"POPULATION")
-print(f"  Total rows:     {len(result_df):,}")
-print(f"  Unique clients: {result_df['CLNT_NO'].nunique():,}")
-print(f"  Date range:     {result_df['TREATMT_STRT_DT'].min().date()} to {result_df['TREATMT_STRT_DT'].max().date()}")
-print(f"  Cohorts:        {result_df['COHORT'].nunique()}")
-
-print(f"\n{'─'*70}")
-print(f"SUCCESS RATES (0-90 days)")
-for mne in IMT_MNES:
-    m = result_df[result_df['MNE'] == mne]
-    a = m[m['TST_GRP_CD'] == ACTION_GROUP]['SUCCESS_FLAG']
-    c = m[m['TST_GRP_CD'] == CONTROL_GROUP]['SUCCESS_FLAG']
-    a_rate = a.mean() * 100 if len(a) > 0 else 0
-    c_rate = c.mean() * 100 if len(c) > 0 else 0
-    lift = ((a_rate - c_rate) / c_rate * 100) if c_rate > 0 else 0
-    print(f"  {mne}: Action={a_rate:.2f}% (n={len(a):,}), Control={c_rate:.2f}% (n={len(c):,}), Lift={lift:+.1f}%")
-
-print(f"\n{'─'*70}")
-print(f"CHANNEL BREAKDOWN (0-90 days, Action group)")
-for mne in IMT_MNES:
-    a = result_df[(result_df['MNE'] == mne) & (result_df['TST_GRP_CD'] == ACTION_GROUP)]
-    if len(a) > 0:
-        ol_rate = (a['IMT_OL_90'] > 0).mean() * 100
-        mb_rate = (a['IMT_MB_90'] > 0).mean() * 100
-        print(f"  {mne}: OLB={ol_rate:.2f}%, Mobile={mb_rate:.2f}%")
-
-print(f"\n{'─'*70}")
-print(f"EMAIL ENGAGEMENT")
-if 'EMAIL_SENT' in result_df.columns:
-    em = result_df[result_df['EMAIL_SENT'] == 1]
-    if len(em) > 0:
-        print(f"  Sent:         {len(em):,}")
-        print(f"  Open rate:    {em['EMAIL_OPENED'].mean()*100:.1f}%")
-        print(f"  Click rate:   {em['EMAIL_CLICKED'].mean()*100:.1f}%")
-        print(f"  Unsub rate:   {em['EMAIL_UNSUBSCRIBED'].mean()*100:.1f}%")
-    else:
-        print("  No email data.")
-
-print(f"\n{'─'*70}")
-print(f"VINTAGE CURVES: {len(vintage_df):,} data points")
-print(f"OUTPUTS:")
-print(f"  1. imt_edw_vintage_curves.csv  (download link above)")
-print(f"  2. imt_edw_client_detail.csv   (download link above)")
-print(f"  3. imt_edw_lift_summary.csv    (download link above)")
-print(f"  4. HDFS: {HDFS_OUTPUT}/imt_edw_*.csv")
-print("="*70)
+print("\n" + "=" * 60)
+print("DONE.")
