@@ -109,6 +109,7 @@ events_df = (
     .filter(F.col("SRC_DTA_STORE_CD").isin(SRC_DTA_STORE_CD_FILTER))
     .filter(F.col("CAPTR_DT_DATE").isNotNull())
     .filter(F.col("EVENT_DATE").isNotNull())
+    .filter(F.col("CAPTR_DT_DATE") >= "2025-01-01")
 )
 
 # Pre-filter to experiment clients only (massive performance boost)
