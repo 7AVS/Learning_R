@@ -15,15 +15,15 @@ ods = spark.table("prod_x610_crm.ods_mr_hist") \
     .where((F.col("prod_mn") == "PCQ")
            & (F.col("effectdate") >= F.expr("date '2026-01-01'")))
 
-# ── 2. Parse JSON once, cache the small filtered set ────────────────────
-parsed = ods.select(
-    "clnt_id",
-    F.from_json("treatmt_dtl",      "map<string,string>").alias("treatmt_dtl"),
-    F.from_json("treatmt_dtl_en",   "map<string,string>").alias("treatmt_dtl_en"),
-    F.from_json("treatmt_adnl_dtl", "map<string,string>").alias("treatmt_adnl_dtl")
-).cache()
+# ── 2. Parse JSON once, cache the filtered set ─────────────────────────
+parsed = ods \
+    .withColumn("m_dtl",   F.from_json("treatmt_dtl",      "map<string,string>")) \
+    .withColumn("m_dtlen", F.from_json("treatmt_dtl_en",    "map<string,string>")) \
+    .withColumn("m_adnl",  F.from_json("treatmt_adnl_dtl", "map<string,string>")) \
+    .drop("treatmt_dtl", "treatmt_dtl_en", "treatmt_adnl_dtl") \
+    .cache()
 
-# ── 3. Selected categorical keys only (from original EDA) ───────────────
+# ── 3. Selected categorical keys only ──────────────────────────────────
 keys_dtl = [
     "TREATMT_CD", "CTA_CD", "PAPP_PRD_IND", "PUBL_IND", "UPDT_FLAG",
     "LEAD_TYP", "LEAD_SCR", "PROD_FAMILY_CD", "PROD_NAME_CD", "PROD_CD",
@@ -43,20 +43,29 @@ keys_adnl = [
     "BUS_MKT_ID", "MNE", "PRIORITY_SCR", "RANKING",
 ]
 
-# ── 4. Explode maps, keep only selected keys ────────────────────────────
-key_filter = keys_dtl + keys_dtlen + keys_adnl
+# ── 4. Build stack expressions (element_at on cached parsed maps) ───────
+def kv_array(map_col, json_field, keys):
+    return F.array(*[
+        F.struct(
+            F.lit(json_field).alias("json_field"),
+            F.lit(k).alias("key"),
+            F.element_at(map_col, F.lit(k)).alias("value")
+        )
+        for k in keys
+    ])
 
-dfs = []
-for col_name in ["treatmt_dtl", "treatmt_dtl_en", "treatmt_adnl_dtl"]:
-    dfs.append(
-        parsed.select(
-            "clnt_id",
-            F.lit(col_name).alias("json_field"),
-            F.explode(col_name)
-        ).where(F.col("key").isin(key_filter))
-    )
+stacked = parsed.select(
+    "clnt_id",
+    F.concat(
+        kv_array(F.col("m_dtl"),   "treatmt_dtl",      keys_dtl),
+        kv_array(F.col("m_dtlen"), "treatmt_dtl_en",    keys_dtlen),
+        kv_array(F.col("m_adnl"),  "treatmt_adnl_dtl",  keys_adnl),
+    ).alias("kv")
+)
 
-exploded = dfs[0].unionByName(dfs[1]).unionByName(dfs[2])
+exploded = stacked.select("clnt_id", F.explode_outer("kv").alias("kv")) \
+    .select("clnt_id", "kv.json_field", "kv.key", "kv.value") \
+    .where(F.col("value").isNotNull())
 
 # ── 5. Aggregate: distinct clients per json_field / key / value ─────────
 results = exploded.groupBy("json_field", "key", "value") \
