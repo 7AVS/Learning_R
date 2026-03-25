@@ -33,10 +33,15 @@ SELECT
              * SUM(CASE WHEN COALESCE(chnl_dm, 0) = 0 THEN COALESCE(app_approved, 0) ELSE 0 END)
              / SUM(CASE WHEN COALESCE(chnl_dm, 0) = 0 THEN 1 ELSE 0 END), 2)
     END                                                   AS approval_rate_no_dm,
-    -- Response channel breakdown (discover actual values)
-    SUM(CASE WHEN app_approved = 1 THEN 1 ELSE 0 END)    AS total_approved_check,
-    COUNT(DISTINCT CASE WHEN app_approved = 1 THEN response_channel_grp END) AS distinct_resp_chnl_grps,
-    COUNT(DISTINCT CASE WHEN app_approved = 1 THEN asc_on_app_source END)    AS distinct_asc_sources,
+    -- Response channel breakdown (where approved clients applied from)
+    SUM(CASE WHEN app_approved = 1 AND response_channel_grp = 'Online'           THEN 1 ELSE 0 END) AS approved_via_online,
+    SUM(CASE WHEN app_approved = 1 AND response_channel_grp = 'Mobile'           THEN 1 ELSE 0 END) AS approved_via_mobile,
+    SUM(CASE WHEN app_approved = 1 AND response_channel_grp = 'Branch/Advice Ctr' THEN 1 ELSE 0 END) AS approved_via_branch,
+    SUM(CASE WHEN app_approved = 1 AND response_channel_grp = 'Other'            THEN 1 ELSE 0 END) AS approved_via_other,
+    -- ASC attribution
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC'  THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC'     THEN 1 ELSE 0 END) AS approved_no_asc,
     -- Avg days to respond
     ROUND(AVG(CASE WHEN app_approved = 1 THEN days_to_respond END), 1) AS avg_days_to_approve
 FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
