@@ -8,6 +8,29 @@
 #
 # Here's the recommended design for the PLI mobile channel test.
 #
+# BASELINE ASSUMPTIONS:
+#
+# The baseline response rate drives the entire calculation. Here's how we arrived at it:
+#
+# Source: cards_pli_decision_resp, mobile population-level response rate
+# (mobile responders / total eligible population, not mobile-only responders)
+#
+# Monthly RR history (FY 2025):
+#   Apr 2025:  14%    |  Jul 2025:  18%    |  Oct 2025:  19%
+#   May 2025:  14%    |  Aug 2025:  16%    |  Nov 2025:  22%
+#   Jun 2025:  16%    |  Sep 2025:  19%    |  Dec 2025:  19%
+#                                           |  Jan 2026:  15%
+#
+# FY 2025 monthly average: 12.51% (used as primary baseline)
+# Monthly population average: 486,821 eligible clients
+#
+# Three scenarios tested to ensure robustness:
+#   Pessimistic: 10.50% (Jan 2026 — lowest recent month, 55,560/528,002)
+#   Current:     12.51% (FY 2025 monthly average)
+#   Optimistic:  15.40% (Nov 2025 — highest recent month, 99,704/648,547)
+#
+# The design is powered across all three scenarios.
+#
 # RECOMMENDATION: 10/45/45 split
 #
 # Arm                  | Description                              | Allocation | ~Monthly n
