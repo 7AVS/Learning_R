@@ -1,0 +1,54 @@
+Subject: AUH Phase 2 (Rewards) — Experiment Design Recommendation
+
+To: Daniel Chin [and team]
+From: Andre Santos
+
+---
+
+Recommendation: Launch Phase 2 with a 90/10 test/control split, separate from Phase 1 controls.
+
+---
+
+**Why Phase 2 is materially different from Phase 1**
+
+Phase 1 targeted NonRewards card holders (~190K population) and is live at 70/30. Phase 2 targets Rewards card holders — a much larger and more behaviorally distinct segment (~2.2M population).
+
+Organic baseline data shows Rewards holders add Authorized Users at roughly 3x the rate of NonRewards clients:
+
+| Segment     | Organic AU Add Rate (Quarterly) |
+|-------------|--------------------------------|
+| NonRewards  | 0.06% – 0.09%                  |
+| Rewards     | 0.20% – 0.25%                  |
+
+This higher baseline matters for power: we need to detect a smaller absolute lift to claim success, and we have far more population to work with.
+
+---
+
+**Recommended split: 90/10**
+
+At 2.2M total population and a 24% Web channel share (~528K), a 90/10 split gives ~52K control clients in the smallest channel. Against a 0.20% baseline, that supports an MDE of approximately 0.05 percentage points — well within a meaningful detection threshold.
+
+A 70/30 split (as in Phase 1) would be unnecessarily conservative given the population size. It withholds treatment from ~220K additional clients for no statistical benefit.
+
+If stakeholders prefer a more cautious approach, 80/20 is an acceptable fallback. See the attached MDE calculator for full scenarios by channel.
+
+---
+
+**Separate controls for Phase 1 and Phase 2**
+
+I recommend maintaining separate control groups for each phase rather than sharing. Overlap between Rewards and NonRewards portfolios is only 2.9% of the combined base — too small to justify the added complexity of a shared holdout. Clean, independent controls keep measurement unambiguous.
+
+---
+
+**Decisions needed from partners**
+
+1. **Split confirmation** — 90/10 recommended; 80/20 as fallback
+2. **Channel distribution** — Same as Phase 1 (Web 24% / Model 23% / Random 53%), or adjusted?
+3. **Arm structure** — Same Comm+Offer / Comm Only arms as Phase 1, or Communication Only for Phase 2?
+4. **Deployment timeline** — Target remains April 30; confirm this is still the working date
+
+Attachments: MDE calculator (editable scenarios by channel and split), organic baseline rates by segment.
+
+Let me know if you have questions or want to discuss before I finalize the design.
+
+Andre
