@@ -57,33 +57,10 @@ TABLES:
 WITH
 
 -- ---------------------------------------------------------------------------
--- CTE 1: fiscal_quarters
--- Define start and end dates for each fiscal quarter in scope.
--- Fiscal year ends October: Q1=Nov-Jan, Q2=Feb-Apr, Q3=May-Jul, Q4=Aug-Oct.
--- ---------------------------------------------------------------------------
-fiscal_quarters AS (
-    SELECT DATE '2024-11-01' AS q_start, DATE '2025-01-31' AS q_end, 'FY2025 Q1' AS fiscal_period
-    UNION ALL
-    SELECT DATE '2025-02-01', DATE '2025-04-30', 'FY2025 Q2'
-    UNION ALL
-    SELECT DATE '2025-05-01', DATE '2025-07-31', 'FY2025 Q3'
-    UNION ALL
-    SELECT DATE '2025-08-01', DATE '2025-10-31', 'FY2025 Q4'
-    UNION ALL
-    SELECT DATE '2025-11-01', DATE '2026-01-31', 'FY2026 Q1'
-    UNION ALL
-    SELECT DATE '2026-02-01', DATE '2026-04-30', 'FY2026 Q2'
-    UNION ALL
-    SELECT DATE '2026-05-01', DATE '2026-07-31', 'FY2026 Q3'
-    UNION ALL
-    SELECT DATE '2026-08-01', DATE '2026-10-31', 'FY2026 Q4'
-),
-
--- ---------------------------------------------------------------------------
--- CTE 2: elig_accounts
--- Open qualifying cards with product type flags and fiscal quarter assigned.
--- One row per client-date-product. Uses DT_RECORD_EXT + 1 as the effective
--- snapshot date. Filtered to the full analysis window.
+-- CTE 1: elig_accounts
+-- Open qualifying cards with product type and fiscal period derived inline.
+-- Uses DT_RECORD_EXT + 1 as the effective snapshot date.
+-- Fiscal year ends Oct: Q1=Nov-Jan, Q2=Feb-Apr, Q3=May-Jul, Q4=Aug-Oct.
 -- ---------------------------------------------------------------------------
 elig_accounts AS (
     SELECT
@@ -94,19 +71,25 @@ elig_accounts AS (
                 THEN 'Rewards'
             WHEN UPPER(c.visa_prod_cd) IN ('PLT','CLO','MC1','MCP','VPR')
                 THEN 'NonRewards'
-            ELSE NULL
         END                                              AS prod_type,
-        fq.fiscal_period
+        CAST(
+            'FY' ||
+            CAST(CASE WHEN EXTRACT(MONTH FROM (c.DT_RECORD_EXT + 1)) IN (11,12)
+                      THEN EXTRACT(YEAR FROM (c.DT_RECORD_EXT + 1)) + 1
+                      ELSE EXTRACT(YEAR FROM (c.DT_RECORD_EXT + 1))
+                 END AS VARCHAR(4))
+            || ' Q' ||
+            CASE
+                WHEN EXTRACT(MONTH FROM (c.DT_RECORD_EXT + 1)) IN (11,12,1) THEN '1'
+                WHEN EXTRACT(MONTH FROM (c.DT_RECORD_EXT + 1)) IN (2,3,4)   THEN '2'
+                WHEN EXTRACT(MONTH FROM (c.DT_RECORD_EXT + 1)) IN (5,6,7)   THEN '3'
+                ELSE '4'
+            END
+        AS VARCHAR(12))                                  AS fiscal_period
     FROM D3CV12A.DLY_FULL_PORTFOLIO c
-    INNER JOIN fiscal_quarters fq
-        ON (c.DT_RECORD_EXT + 1) BETWEEN fq.q_start AND fq.q_end
     WHERE
-        -- Restrict DT_RECORD_EXT to the full analysis window
-        c.DT_RECORD_EXT >= DATE '2024-11-01' - 1
-        AND c.DT_RECORD_EXT <= DATE '2026-10-31' - 1
-        -- Open cards only
+        c.DT_RECORD_EXT BETWEEN DATE '2024-11-01' - 1 AND DATE '2026-10-31' - 1
         AND UPPER(c.status) = 'OPEN'
-        -- Only qualifying product codes (Rewards or NonRewards)
         AND UPPER(c.visa_prod_cd) IN (
             'AVP','GCP','GPR','IAV','MC2','MC4',   -- Rewards
             'PLT','CLO','MC1','MCP','VPR'           -- NonRewards
@@ -114,7 +97,7 @@ elig_accounts AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 3: auh_treatments
+-- CTE 2: auh_treatments
 -- AUH campaign treatment windows per client.
 -- Null end dates coalesced to a far-future date (open-ended treatments).
 -- ---------------------------------------------------------------------------
@@ -129,7 +112,7 @@ auh_treatments AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 4: elig_organic_days
+-- CTE 3: elig_organic_days
 -- Client-day combinations where the client had an open qualifying card AND
 -- was NOT under active AUH treatment on that day.
 -- This is the organic eligibility check at the daily level.
@@ -150,7 +133,7 @@ elig_organic_days AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 5: base_dedup
+-- CTE 4: base_dedup
 -- One row per client-quarter with Rewards-precedence classification.
 -- A client with ANY Rewards day in the quarter = Rewards for that quarter.
 -- A client with only NonRewards days = NonRewards.
@@ -169,7 +152,7 @@ base_dedup AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 6: organic_base
+-- CTE 5: organic_base
 -- Final organic base: one row per client-quarter with segment assignment.
 -- ---------------------------------------------------------------------------
 organic_base AS (
@@ -184,18 +167,29 @@ organic_base AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 7: au_events
--- AU addition events from the account events table, with fiscal quarter
--- assigned. Filters to dtl_evnt_typ_cd = 191 AND ADD_RELTN_CD = 3 (AU adds).
+-- CTE 6: au_events
+-- AU addition events with fiscal period derived inline (same logic as base).
+-- Filters to dtl_evnt_typ_cd = 191 AND ADD_RELTN_CD = 3 (AU adds).
 -- ---------------------------------------------------------------------------
 au_events AS (
     SELECT
         e.evnt_dt,
         e.clnt_no,
-        fq.fiscal_period
+        CAST(
+            'FY' ||
+            CAST(CASE WHEN EXTRACT(MONTH FROM e.evnt_dt) IN (11,12)
+                      THEN EXTRACT(YEAR FROM e.evnt_dt) + 1
+                      ELSE EXTRACT(YEAR FROM e.evnt_dt)
+                 END AS VARCHAR(4))
+            || ' Q' ||
+            CASE
+                WHEN EXTRACT(MONTH FROM e.evnt_dt) IN (11,12,1) THEN '1'
+                WHEN EXTRACT(MONTH FROM e.evnt_dt) IN (2,3,4)   THEN '2'
+                WHEN EXTRACT(MONTH FROM e.evnt_dt) IN (5,6,7)   THEN '3'
+                ELSE '4'
+            END
+        AS VARCHAR(12))                                  AS fiscal_period
     FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY e
-    INNER JOIN fiscal_quarters fq
-        ON e.evnt_dt BETWEEN fq.q_start AND fq.q_end
     WHERE
         e.evnt_dt > DATE '2024-11-01'
         AND e.dtl_evnt_typ_cd = 191
@@ -203,7 +197,7 @@ au_events AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 8: succ_candidates
+-- CTE 7: succ_candidates
 -- Distinct client-quarter pairs where an AU addition event occurred.
 -- De-duplication: one row per client per quarter (multiple events → one success).
 -- ---------------------------------------------------------------------------
@@ -215,7 +209,7 @@ succ_candidates AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- CTE 9: base_success_joined
+-- CTE 8: base_success_joined
 -- Join organic base to success candidates at the quarter + client level.
 -- A client counts as a success only if they were in the organic base for
 -- that quarter AND had at least one AU event during that quarter.
