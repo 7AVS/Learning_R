@@ -5,7 +5,7 @@ From: Andre Santos
 
 ---
 
-Recommendation: Launch Phase 2 with a 70/30 test/control split (matching Phase 1), with separate controls per phase.
+Recommendation: Launch Phase 2 with a 70/30 test/control split, separate controls from Phase 1.
 
 ---
 
@@ -13,9 +13,9 @@ BACKGROUND
 
 Phase 1 (NonRewards, ~190K) is live. Phase 2 extends AUH to the broader card portfolio (~540K deployment population).
 
-To inform the design, I built the organic AU baseline across the full card portfolio. Key finding: Rewards card holders add Authorized Users organically at roughly 3x the rate of NonRewards holders. This supports the case for Phase 2 — there's a larger organic signal to amplify with the campaign.
+I looked at the organic AU addition rates across the full portfolio. Rewards holders are about 3x more likely to add an AU than NonRewards holders without any campaign contact. That's one of the reasons Phase 2 makes sense — we're going after a group that already shows higher propensity for this product.
 
-The organic baseline data is attached for reference, but the experiment design below uses the Phase 1 observed rates as the starting point, stress-tested with two growth assumptions.
+The organic data is attached separately. The experiment design below uses Phase 1 observed rates as the starting point.
 
 ---
 
@@ -24,47 +24,39 @@ PHASE 2 DESIGN
 Population: 539,620
 Arms: Arm 1 (Comm+Offer, 70%) / Arm 2 (Comm Only, 30%)
 Treatment/Control split: 70/30 within each arm
-Channels: Web (24%) / Model (23%) / Random (53%)
+Test groups: Web (24%) / Model (23%) / Random (53%)
 Significance: 5% (one-sided)
 Power: 80%
 
-Phase 1 observed baseline rates (RR Baseline):
+Since Phase 2 targets a more active segment, we expect higher response rates than Phase 1. The question is how much higher. I ran two scenarios using the Phase 1 observed rates as the starting point:
 
-  Channel    Treatment RR    Control RR
-  Web        0.12%           0.06%
-  Model      0.19%           0.06%
-  Random     0.05%           0.02%
-  Total      0.10%           0.05%
+Scenario A — Conservative (25% increase over Phase 1 rates):
+At the arm level, all comparisons are powered. At the test group level within Arm 2 (the smaller arm), Web and Model are tighter but still within detectable range.
 
-Phase 2 will likely see higher response rates than Phase 1, since Rewards holders are more active organically. The question is how much higher. I stress-tested two scenarios:
+Scenario B — Optimistic (55% increase over Phase 1 rates):
+Higher baselines mean less noise, so MDEs improve across the board. All comparisons are comfortably powered.
 
-Scenario A — Conservative (25% increase from Phase 1 baseline):
-Assumes Phase 2 rates are 25% above Phase 1 observed rates. Under this assumption, MDEs remain within detectable range at the arm level for all comparisons. At the channel level within Arm 2 (the smaller arm), Web and Model groups are tighter but still powered for meaningful lift detection.
-
-Scenario B — Optimistic (55% increase from Phase 1 baseline):
-Assumes Phase 2 rates are 55% above Phase 1 observed rates. Higher baselines reduce variance, so MDEs improve across the board. All comparisons are comfortably powered.
-
-Both scenarios are modeled in the attached MDE calculator. You can adjust the increase % in cell F1 to test any assumption.
+Both scenarios are in the attached calculator. You can change the increase % in cell F1 to test other assumptions.
 
 ---
 
 SEPARATE CONTROLS
 
-I recommend separate control groups for Phase 1 and Phase 2. Portfolio overlap between Rewards and NonRewards holders is only 2.9% — too small to justify a shared holdout. Independent controls keep attribution clean.
+Phase 1 and Phase 2 should each have their own control groups. The overlap between Rewards and NonRewards portfolios is only 2.9%, so there's no real benefit to sharing a holdout — it would just make things harder to measure.
 
 ---
 
 DECISIONS NEEDED
 
-1. Baseline growth assumption — 25% (conservative) or 55% (optimistic)? This determines the expected lift targets and whether we're comfortable with the MDEs at the channel level.
-2. Channel distribution — Same as Phase 1 (Web 24% / Model 23% / Random 53%), or adjusted?
+1. Baseline growth assumption — 25% or 55%? This drives the expected lift targets and whether we're comfortable with the MDEs at the test group level.
+2. Test group distribution — Same as Phase 1 (Web 24% / Model 23% / Random 53%), or different?
 3. Arm structure — Same Comm+Offer / Comm Only as Phase 1, or different for Phase 2?
-4. Deployment timeline — April 30 target still holds?
+4. Timeline — April 30 still the target?
 
 Attachments:
-- MDE calculator with editable baseline increase scenarios (25% and 55%)
+- MDE calculator with editable baseline increase (25% and 55% scenarios)
 - Organic AU baseline rates by segment (Rewards vs NonRewards, quarterly)
 
-Let me know if you have questions or want to walk through the scenarios before I finalize.
+Let me know if you want to walk through the scenarios before I finalize.
 
 Andre
