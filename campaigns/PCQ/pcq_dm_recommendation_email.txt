@@ -1,0 +1,71 @@
+Subject: PCQ DM Test — 7th Decile Expansion, Control Split Recommendation
+
+To: [Business owners]
+From: Andre Santos
+
+---
+
+Recommendation: Start with deciles 7-8 at 5% control. Expand to 7-9 at 25-30% control if broader coverage is preferred.
+
+---
+
+WHAT WE'RE TESTING
+
+Whether DM drives incremental credit card acquisitions for clients in the 7th model score decile and below. These are clients who currently receive digital-only contact. The test adds DM to measure if it lifts approval rates above what we see organically.
+
+We have a cap of 120,000 DMs per monthly deployment, which limits how many deciles we can include and how large the control group can be.
+
+---
+
+OPTIONS
+
+The trade-off is straightforward: more deciles = more clients included, but we need a larger control group to fit within the 120K cap. Larger control = fewer DMs sent, but better ability to detect smaller lifts.
+
+Option A — Deciles 7-8, 5% control
+  Population:  ~99,000
+  DMs sent:    ~94,000 (within cap)
+  Control:     ~5,000
+  MDE:         0.19pp
+
+Option B — Deciles 7-9, 30% control
+  Population:  ~158,000
+  DMs sent:    ~111,000 (within cap)
+  Control:     ~47,000
+  MDE:         0.08pp
+
+Option C — Deciles 7-10, 50% control
+  Population:  ~126,000
+  DMs sent:    ~63,000 (within cap)
+  Control:     ~63,000
+  MDE:         0.05pp
+
+All three options can detect the expected DM lift based on historical rates. Option A maximizes DMs sent. Option B and C give stronger measurement but hold back more clients from treatment.
+
+Note: lower deciles have lower baseline approval rates, so the expected lift is smaller in those groups. Expanding beyond 7-8 gives broader coverage but each additional decile contributes less.
+
+---
+
+BASELINE
+
+We're using January 2026 Period-ASC approval rates by decile. These are filtered to application-source-confirmed responses only, which gives us the true campaign-attributed rate. The rates are stable across recent periods.
+
+  Decile    Baseline (Period-ASC)
+  7th       0.30%
+  8th       ~0.25%
+  9th       ~0.19%
+  10th      ~0.18%
+
+---
+
+WHAT WE NEED FROM YOU
+
+1. Decile scope — 7-8 (our recommendation) or broader?
+2. If broader, are you comfortable with a larger control group (25-30%) to stay within cap?
+3. Confirm 120K cap is firm per deployment
+4. Deployment timeline — April 7 still the target for the first wave?
+
+The full MDE calculator is attached with all scenarios. You can adjust the control % and see the impact on what we can detect.
+
+Let me know if you want to walk through this before we finalize.
+
+Andre
