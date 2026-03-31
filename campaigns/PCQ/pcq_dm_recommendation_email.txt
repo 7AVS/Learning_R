@@ -63,11 +63,9 @@ These are filtered to campaign-attributed responses only and are stable across r
 
 WHAT WE NEED FROM YOU
 
-1. Are you comfortable expanding beyond the 7th decile to use the full DM capacity?
-2. If yes — how far? Deciles 7-8 (recommended), 7-9, or 7-10?
-3. If going broader, a larger control group (25-30%) is needed to stay within cap. Is that acceptable?
-4. Confirm the 120K cap is firm per deployment.
-5. Deployment timeline — April 7 still the target?
+1. Which option — A (7-8), B (7-9), or C (7-10)? The control size adjusts accordingly.
+2. Confirm the 120K cap is firm per deployment.
+3. Deployment timeline — April 7 still the target?
 
 The MDE calculator is attached with all scenarios. You can adjust the decile range and control % to see the trade-offs.
 
