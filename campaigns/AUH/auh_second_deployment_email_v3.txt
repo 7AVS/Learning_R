@@ -1,0 +1,25 @@
+Subject: AUH Second Deployment — Experiment Design & Recommended Splits
+
+Hi [partners],
+
+Here's the experiment design for the AUH second deployment covering both Rewards and Non-Rewards.
+
+ORGANIC BASELINE
+
+Before sizing the splits, we looked at organic authorized user addition rates across the portfolio. Rewards cardholders add AUs at roughly 2.5 to 3 times the rate of Non-Rewards holders. Combined with the response data from the first Non-Rewards deployment, this gave us the baselines to size both experiments.
+
+NON-REWARDS (~190K)
+
+Based on observed response rates from the first deployment, we're moving the treatment/control split from 50/50 to 70/30 at the test group level. The experiment remains powered across all test groups at this reduced control size.
+
+REWARDS (~540K)
+
+For the arm split, we're recommending 70/30 — 70% Communication + Offer, 30% Communication Only. Treatment/control within each arm is also 70/30 at the test group level.
+
+We tested this against conservative (25% increase over Non-Rewards observed rates) and optimistic scenarios. Under the conservative scenario, all arm-level comparisons and most test-group-level comparisons are powered. The calculator is attached with an editable baseline assumption if you'd like to run other scenarios.
+
+The detailed breakdown of population sizes, MDEs, and minimum required samples per comparison is in the attached workbook.
+
+Let me know if you have any questions or if anything needs adjusting before we finalize.
+
+Andre
