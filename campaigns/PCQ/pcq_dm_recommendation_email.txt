@@ -41,7 +41,7 @@ Option C — Deciles 7-10, 50% control
   Control:     ~63,000
   MDE:         0.05pp
 
-All three options can detect the DM lift based on what we've seen historically. Option A maximizes the number of DMs sent. Options B and C cover more deciles and give us stronger measurement, but hold back more clients.
+Option A maximizes the number of DMs sent. Options B and C cover more deciles and give us stronger measurement, but hold back more clients.
 
 Lower deciles have lower baseline approval rates, so the expected response drops as we go further. Each additional decile contributes less, but it's still incremental reach we wouldn't have otherwise.
 
