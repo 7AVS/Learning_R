@@ -1,2 +1,6 @@
 *.md
 *.ipynb
+
+# Allow project instructions
+!CLAUDE.md
+!WORKSTREAMS.md
