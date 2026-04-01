@@ -35,6 +35,146 @@
 
 
 -- ---------------------------------------------------------------------------
+-- QUERY 0: Categorical Field EDA — understand the GA4 ecommerce table
+-- ---------------------------------------------------------------------------
+-- Goal: Before searching for specific promo names, profile the key categorical
+-- fields so we know what values exist and can interpret Query 1 results with
+-- context. Each sub-query is independent — run them in any order.
+--
+-- Run all queries in Trino.
+-- ---------------------------------------------------------------------------
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0a — event_name: What event types exist?
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - Which event_name maps to a banner view vs. a click?
+--     Typically "view_promotion" = view, "select_promotion" = click — but confirm.
+--   - Are there checkout / purchase events mixed in? (begin_checkout, purchase)
+--   - unique_users vs total_events gap tells you how often users repeat the event.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    event_name,
+    COUNT(*)                       AS total_events,
+    COUNT(DISTINCT user_pseudo_id) AS unique_users
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY event_name
+ORDER BY total_events DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0b — platform: What platforms exist?
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - Expect WEB, ANDROID, IOS (or lowercase variants).
+--   - Any unexpected platform values that would indicate bad data or test traffic?
+--   - Volume split across platforms — useful when filtering for web-only banners.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    platform,
+    COUNT(*)                       AS total_events,
+    COUNT(DISTINCT user_pseudo_id) AS unique_users
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY platform
+ORDER BY total_events DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0c — it_item_name: Candidate field for promo tags
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - Are any of the 3 ESV promo names (HISA / ESV keywords) present here?
+--   - What is the general naming convention? Structured codes vs. free text?
+--   - How many distinct values total? A small set = controlled taxonomy.
+--     A huge set = likely free text or campaign-level naming.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    it_item_name,
+    COUNT(*) AS total_events
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY it_item_name
+ORDER BY total_events DESC
+LIMIT 100;
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0d — selected_promotion_name: Candidate field for promo tags
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - Same as 0c — does this field carry structured promo name codes?
+--   - Is this field mostly NULL/empty with occasional values, or broadly populated?
+--   - Do the values here overlap with it_item_name, or are they distinct?
+-- ---------------------------------------------------------------------------
+
+SELECT
+    selected_promotion_name,
+    COUNT(*) AS total_events
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY selected_promotion_name
+ORDER BY total_events DESC
+LIMIT 100;
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0e — it_creative_name: Candidate field for promo tags
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - Creative-level naming — may carry banner variant identifiers.
+--   - Are ESV/HISA keywords present here?
+--   - High cardinality here is normal (one row per creative variant).
+-- ---------------------------------------------------------------------------
+
+SELECT
+    it_creative_name,
+    COUNT(*) AS total_events
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY it_creative_name
+ORDER BY total_events DESC
+LIMIT 100;
+
+
+-- ---------------------------------------------------------------------------
+-- QUERY 0f — ip_sf_campaign_mnemonic: Candidate field for promo tags
+-- ---------------------------------------------------------------------------
+-- What to look for:
+--   - This field may carry the RBC campaign mnemonic (e.g., ESV, PCD, AUH).
+--   - If populated: values should be short codes, not full promo names.
+--   - If ESV tags land here, the value will likely be "ESV" or a variant,
+--     not the full structured promo name string.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    ip_sf_campaign_mnemonic,
+    COUNT(*) AS total_events
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year  = '2026'
+    AND month IN ('03', '04')
+GROUP BY ip_sf_campaign_mnemonic
+ORDER BY total_events DESC
+LIMIT 100;
+
+
+-- ---------------------------------------------------------------------------
 -- QUERY 1: Field Discovery — where do ESV tags land?
 -- ---------------------------------------------------------------------------
 -- Goal: Find ESV promo records in GA4 and confirm which field contains the
