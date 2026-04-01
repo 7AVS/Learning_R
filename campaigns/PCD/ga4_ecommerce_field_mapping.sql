@@ -138,6 +138,23 @@
 
 
 -- =============================================================================
+-- EXISTING PCD PROMO NAMES (pre-async, as of March 2026)
+-- =============================================================================
+-- These are OLDER PCD campaigns, NOT the new async banners launching ~April 20.
+-- The new async banners will use PB_CC_ALL_26_02_RBC_PCD_* prefix (from Rajani).
+-- These older ones use NBO_PB_CC_PCD_* or NBO-PB_CC_PCD_* prefixes.
+--
+--   NBO_PB_CC_PCD_24_09_RBC_AVP_70K          (Sep 2024) — 57,500 viewers, 981 clickers, 1.7% CTR
+--   NBO-PB_CC_PCD_22_10_RBC_IOP-CreditCard-Upgrade (Oct 2022) — 54,106 viewers, 828 clickers, 1.5% CTR
+--   NBO-PB_CC_PCD_22_10_RBC_ION-CreditCard-Upgrade (Oct 2022) — 52,618 viewers, 843 clickers, 1.6% CTR
+--   NBO_PB_CC_PCD_24_09_RBC_IAV              (Sep 2024) — 43,667 viewers, 931 clickers, 2.1% CTR
+--   NBO_PB_CC_PCD_24_09_RBC_AVP_25K          (Sep 2024) — 15,207 viewers, 159 clickers, 1.0% CTR
+--   NBO_PB_CC_PCD_24_09_RBC_GCP              (Sep 2024) — 14,541 viewers, 296 clickers, 2.0% CTR
+--
+-- Baseline PCD banner CTR range: 1.0% - 2.1% (user basis, March 2026 data)
+-- Use this as comparison baseline for the new async banners post-launch.
+--
+-- =============================================================================
 -- VALIDATION QUERY: Re-run to verify field mapping is still accurate
 -- =============================================================================
 -- Run this periodically if you suspect the schema or tagging has changed.
