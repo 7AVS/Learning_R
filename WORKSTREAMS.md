@@ -1,6 +1,6 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-03-17
+Last updated: 2026-04-01
 
 ## Priority Stack
 
@@ -8,10 +8,11 @@ Last updated: 2026-03-17
 - **Ask:** Daily stats for LOB — available leads, banner views, clicks, CTR
 - **Jira:** NBA-12268
 - **Requestor:** Daniel Chin
-- **Status:** Exploratory SQL built (`campaigns/PCD/pcd_async_banner_explore.sql`), waiting on confirmed banner codes (it_item_name, it_item_id, it_creative_name) from Melissa Baker
+- **Status:** WAITING FOR LAUNCH. All 4 queries built and ready (`campaigns/PCD/pcd_async_banner_explore.sql`). Promo names confirmed by Rajani Singineedi (2026-03-18). Email documentation complete (`campaigns/PCD/pcd_promo_names_email.md`). Launch postponed from ~Mar 25 to ~Apr 20.
 - **Tables:** ga4_ecommerce (banner events), cards_pcd_ongoing_decis_resp (population)
-- **Launch:** ~2026-03-25
-- **Next:** Run Query 1 to discover existing PCD banner events. Follow up with Melissa.
+- **Launch:** ~2026-04-20 (postponed from ~2026-03-25)
+- **Next:** Run Query 1 post-launch to validate which GA4 field promo names land in.
+- **Blocked on:** Launch date (~Apr 20)
 
 ### 2. AUH Experiment Design / Control Split (HIGH)
 - **Ask:** Prepare for tomorrow's experiment design discussion
@@ -49,14 +50,14 @@ Last updated: 2026-03-17
 ## Blocked Items
 | Item | Blocked on | Owner | Since |
 |------|-----------|-------|-------|
-| PCD banner tracking | Banner codes (GA tag) | Melissa Baker | 2026-03-16 |
+| PCD banner tracking | Launch date (~Apr 20) | — | 2026-03-18 |
 | AUH Phase 2 execution | Execution person unassigned | Tracy/pod | 2026-03-16 |
 
 ## Key Dates
 | Date | Event |
 |------|-------|
 | 2026-03-18 | AUH experiment design discussion |
-| ~2026-03-25 | PCD async banner launch |
+| ~2026-04-20 | PCD async banner launch (postponed from Mar 25) |
 | 2026-04-24 | PI Planning |
 | 2026-04-30 | AUH Phase 2 launch |
 | 2026-05 | TPA IO deployment, PLI sales modal |
