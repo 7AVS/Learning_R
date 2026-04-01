@@ -116,6 +116,14 @@
 -- ESV VALIDATION FINDINGS (2026-04-01)
 -- =============================================================================
 --
+-- CAVEAT: ESV was queried ONLY to validate GA4 field mapping (which field holds
+-- promo names, which event_name values fire for views vs. clicks). It was NOT
+-- used as a comparable campaign to PCD. ESV may not be a Cards product at all —
+-- it likely tracks a savings/investment product (High-Interest Savings Account).
+-- Do NOT use ESV CTR numbers as PCD baselines. Real PCD baselines are the
+-- existing PCD promo names documented in the "EXISTING PCD PROMO NAMES" section
+-- below (1-2% CTR range, user basis).
+--
 -- Confirmed ESV promo names from Rajani (2026-03-18):
 --   1. PB_CHEQ_ALL_26_02_RBC_HISA_Offer_Hub_Banner       — NOT showing in data
 --   2. PB_CHEQ_ALL_26_02_RBC_HISA_PDA_Product_Page        — ACTIVE (11.5K viewers, 1.3K clickers)
