@@ -1,0 +1,42 @@
+Subject: Authorized Users — Second Deployment Experiment Design
+
+Hi [partners],
+
+We're ready to share the experiment design for the second AUH deployment. This deployment introduces Rewards cards and adjusts the Non-Rewards design based on what we learned from the first run.
+
+Here's what the second deployment looks like for each bucket:
+
+NON-REWARDS (~190K)
+
+This bucket is already in market from the first deployment. Based on the response data we've collected so far, we're confident we can reduce the control holdout from 50% to 30%. That means more of the population receives the campaign while still giving us a clean read on performance.
+
+  - 70% treatment / 30% control
+
+Everything else stays the same — same communication, same targeting approach.
+
+REWARDS (~540K)
+
+This is the new bucket launching in the second deployment. Rewards cardholders show a naturally higher propensity to add authorized users — roughly 2.5 to 3 times the rate of Non-Rewards — so we have a strong foundation to work from.
+
+We're recommending a two-arm structure to understand whether the offer drives additional lift beyond the communication alone:
+
+  - Arm 1 — Communication + Offer (70% of population)
+  - Arm 2 — Communication Only (30% of population)
+  - Within each arm: 70% treatment / 30% control
+
+This design lets us measure the overall campaign effect and isolate the offer's contribution separately.
+
+WHY WE'RE CONFIDENT IN THE DESIGN
+
+We stress-tested the sample sizes across conservative and optimistic response scenarios. Even under the most conservative assumptions, the volumes in both buckets support reliable measurement at standard confidence levels. The detailed calculator is available if anyone wants to review the scenarios.
+
+NEXT STEPS
+
+We'd like to confirm the following before we finalize:
+  1. Are the arm definitions (Communication + Offer vs Communication Only) aligned with what's being built on the deployment side?
+  2. Any concerns with the 70/30 control reduction for Non-Rewards?
+  3. Target deployment date — are we still tracking to the current timeline?
+
+Happy to walk through any of this on a call if that's easier.
+
+Andre

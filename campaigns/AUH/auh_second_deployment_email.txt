@@ -1,0 +1,41 @@
+Subject: AUH Second Deployment — Organic Baseline Review & Updated Recommendations
+
+Hi Daniel,
+
+Following up on the organic baseline review you asked for. Here's what we found and what I'm recommending for the second deployment.
+
+ORGANIC BASELINE
+
+Rewards cardholders add authorized users at roughly 2.5–3x the rate of Non-Rewards holders without any campaign contact. That tells us two things: Rewards is a higher-propensity segment, and we have room to be more aggressive with the experiment splits without losing power.
+
+SECOND DEPLOYMENT — WHAT'S CHANGING
+
+The second deployment touches both buckets. Here's the recommendation for each.
+
+1. Non-Rewards (Phase 1) — Adjusting the control split
+
+We now have baselines from the first deployment. Based on the observed response rates, we can safely reduce control from 50% down to 30%. That puts more population into treatment while still giving us enough control volume to detect meaningful lift.
+
+  Population: ~190K
+  Structure: Communication vs No Contact (single arm, unchanged)
+  Treatment/Control: 70/30 (was 50/50)
+  Test groups: Web / Model / Random — same distribution as first deployment
+
+2. Rewards (Phase 2) — New introduction
+
+This is the new bucket launching in the second deployment. Given the organic rates, even the conservative scenario (assuming a 25% increase over Phase 1 observed rates) keeps all arm-level and most test-group-level comparisons well within detectable range.
+
+  Population: ~540K
+  Structure: Two arms — Comm+Offer (70%) / Comm Only (30%)
+  Treatment/Control: 70/30 within each arm
+  Test groups: Web (24%) / Model (23%) / Random (53%)
+
+The two-arm structure lets us isolate the effect of the offer component on top of the communication itself.
+
+BOTTOM LINE
+
+Both buckets run 70/30 treatment/control. The difference is Rewards adds a second arm to test whether the offer drives incremental lift beyond just the communication. The MDE calculator is attached if you want to play with the assumptions — the baseline increase % is editable.
+
+Let me know if you want to walk through any of this before we lock it in.
+
+Andre
