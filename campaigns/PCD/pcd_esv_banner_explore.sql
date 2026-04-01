@@ -28,7 +28,7 @@
 -- Once answered: port Query 2 pattern (daily tracker) directly to PCD.
 --
 -- Tables:
---   ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino)
+--   edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino)
 --   GA4 partitioned by year/month/day (varchar) — always filter to avoid full scans.
 --
 -- =============================================================================
@@ -59,7 +59,7 @@ SELECT
     platform,
     COUNT(DISTINCT user_pseudo_id) AS unique_users,
     COUNT(*)                       AS total_events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter — March and April 2026 (ESV is live now)
     year = '2026'
@@ -113,7 +113,7 @@ SELECT
     platform,
     COUNT(DISTINCT user_pseudo_id) AS unique_users,
     COUNT(*)                       AS total_events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter — March and April 2026
     year = '2026'
@@ -163,7 +163,7 @@ SELECT
     event_name,
     COUNT(DISTINCT user_pseudo_id) AS unique_users,
     COUNT(*)                       AS total_events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter — March and April 2026
     year = '2026'

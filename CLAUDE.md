@@ -26,11 +26,11 @@ Measurement and analytics infrastructure for the Cards pod (NBA). Contains schem
 - **Teradata (Tactic history):** DTZV01.TACTIC_EVNT_IP_AR_H60M
 - **Teradata (Events):** DDWV01.EXT_CDP_CHNL_EVNT
 - **Teradata (Email):** DTZV01.VENDOR_FEEDBACK_MASTER, DTZV01.VENDOR_FEEDBACK_EVENT
-- **Trino (GA4):** ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce, ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
+- **Trino (GA4):** edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce, edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
 - **Segment:** DG6V01.CLNT_DERIV_DTA_HIST
 
 ## SQL Conventions
-- GA4 tables are in Trino (catalog: ed10_im). Use Trino SQL syntax.
+- GA4 tables are in Trino (catalog: edl0_im). Use Trino SQL syntax.
 - Campaign tables are in Teradata. Use Teradata SQL syntax (TOP instead of LIMIT, QUALIFY for window filters, etc.).
 - GA4 partitioned by year/month/day (varchar). Always filter these to avoid full scans.
 - TACTIC_ID structure: positions 8-10 = MNE (campaign mnemonic, e.g. AUH, PCL, PCQ, IRI/IPC for IMT).

@@ -29,8 +29,8 @@
 --     - Which event_name values map to view vs click?
 --
 -- Tables:
---   1. ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino — GA4 ecommerce events)
---   2. ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow      (Trino — GA4 narrow events)
+--   1. edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino — GA4 ecommerce events)
+--   2. edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow      (Trino — GA4 narrow events)
 --   3. dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp                (Teradata — PCD decision/response)
 --
 -- =============================================================================
@@ -58,7 +58,7 @@ SELECT
     ip_sf_campaign_mnemonic,
     platform,
     COUNT(*) AS events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter — only need 2026 data (launch ~2026-03-25)
     year = '2026'
@@ -106,7 +106,7 @@ SELECT
     platform,
     COUNT(DISTINCT user_pseudo_id) AS unique_users,
     COUNT(*)                       AS total_events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter — launch ~2026-03-25
     year = '2026'
@@ -184,7 +184,7 @@ SELECT
     user_id,
     COUNT(*)                       AS events,
     COUNT(DISTINCT user_pseudo_id) AS devices
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     year = '2026'
     -- CONFIRMED promo names — same dual-field search as Query 2

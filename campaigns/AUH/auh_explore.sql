@@ -35,7 +35,7 @@
 --   3. DDWV01.EXT_CDP_CHNL_EVNT             (Teradata via Trino — channel events)
 --   4. DTZV01.VENDOR_FEEDBACK_MASTER         (Teradata via Trino — email master)
 --   5. DTZV01.VENDOR_FEEDBACK_EVENT          (Teradata via Trino — email events)
---   6. ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino — GA4 ecommerce)
+--   6. edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce  (Trino — GA4 ecommerce)
 --
 -- =============================================================================
 
@@ -195,7 +195,7 @@ SELECT
     ip_sf_campaign_mnemonic,
     platform,
     COUNT(*)                         AS events
-FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
     -- Partition filter
     year = '2026'
