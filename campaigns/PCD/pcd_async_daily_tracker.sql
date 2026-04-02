@@ -3,44 +3,184 @@
 -- =============================================================================
 --
 -- Purpose:
---   Daily tracker for PCD Cards Upgrade async banners. Reports banner views,
---   clicks, and CTR by date and platform. Ready to hand to the dashboard team.
+--   Daily tracker for PCD Cards Upgrade async banners. Reports the four
+--   metrics requested by Daniel Chin (NBA-12268):
+--     1. Available PCD Leads (test vs control)
+--     2. Banner Views
+--     3. Banner Clicks
+--     4. Banner CTR
 --
 -- Context:
 --   - Jira: NBA-12268 (requested by Daniel Chin)
---   - Metrics needed: Available PCD Leads, Banner Views, Banner Clicks, Banner CTR
 --   - Launch: ~2026-04-20 (async deployment)
 --   - Promo names confirmed by Rajani Singineedi (2026-03-18)
 --   - Field mapping validated via ESV EDA (2026-04-01)
 --
--- Confirmed PCD async promo names (it_item_name):
+-- Architecture:
+--   Data lives in TWO systems — queries must be run separately and joined
+--   in the dashboard or Excel.
+--
+--   TERADATA (EDW):
+--     - DTZV01.TACTIC_EVNT_IP_AR_H60M → deployed population, tactic IDs
+--     - dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp → test/control split
+--     Delivers: Metric 1 (Available PCD Leads by test/control)
+--
+--   STARBURST (GA4):
+--     - edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+--     Delivers: Metrics 2-4 (Banner Views, Clicks, CTR)
+--
+-- Confirmed PCD async promo names (it_item_name in GA4):
 --   1. PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_AVP
 --   2. PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_IAV
 --   3. PB_CC_ALL_26_02_RBC_PCD_PPCN
 --   4. PB_CC_ALL_26_02_RBC_PCD_Offer_Hub_Banner
 --
 -- Field decisions (from GA4 EDA 2026-04-01):
---   - Banner identification: it_item_name (confirmed — promo names land here)
+--   - Banner ID field: it_item_name
 --   - View event: view_promotion
 --   - Click event: select_promotion
 --   - Campaign filter: ip_sf_campaign_mnemonic = 'PCD'
---   - selected_promotion_name: NOT used (contains SF insight names, not promo names)
---
--- Table: edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
--- Platform: Starburst (Trino-compatible SQL)
---
--- NOTE: Existing PCD banners (NBO_PB_CC_PCD_24_09_*, NBO-PB_CC_PCD_22_10_*)
--- are excluded by the it_item_name IN filter. Only the new async banners
--- are tracked here.
 --
 -- =============================================================================
 
 
+-- #############################################################################
+-- SECTION A: TERADATA (EDW) — Available PCD Leads + Test/Control
+-- #############################################################################
+-- Run these in Teradata. These queries deliver Metric 1.
+-- #############################################################################
+
+
 -- ---------------------------------------------------------------------------
--- QUERY 1: Daily Banner Performance (Views, Clicks, CTR by date + platform)
+-- A1: Discover PCD async tactic IDs (run ONCE post-deployment)
 -- ---------------------------------------------------------------------------
--- This is the primary production query. Pivot view_promotion and
--- select_promotion into columns for a clean daily report.
+-- Find the tactic ID for the async deployment that launched ~April 20.
+-- TACTIC_ID positions 8-10 = MNE. For PCD: SUBSTR(TACTIC_ID, 8, 3) = 'PCD'
+--
+-- Look for the tactic ID with TREATMT_STRT_DT on or after 2026-04-20.
+-- That's the async deployment.
+--
+-- Run in Teradata.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    TACTIC_ID,
+    SUBSTR(TACTIC_ID, 8, 3)       AS mnemonic,
+    TST_GRP_CD,
+    RPT_GRP_CD,
+    MIN(TREATMT_STRT_DT)          AS first_treatment_date,
+    MAX(TREATMT_END_DT)           AS last_treatment_date,
+    COUNT(DISTINCT CLNT_NO)       AS unique_clients,
+    COUNT(*)                      AS total_events
+FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+WHERE
+    SUBSTR(TACTIC_ID, 8, 3) = 'PCD'
+    AND TREATMT_STRT_DT >= '2026-04-01'
+GROUP BY
+    TACTIC_ID,
+    SUBSTR(TACTIC_ID, 8, 3),
+    TST_GRP_CD,
+    RPT_GRP_CD
+ORDER BY first_treatment_date DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- A2: Daily Available PCD Leads by Test/Control (Metric 1)
+-- ---------------------------------------------------------------------------
+-- Once you identify the correct tactic ID from A1, plug it in here.
+-- This gives the daily denominator: how many clients were deployed,
+-- split by test vs control (TST_GRP_CD).
+--
+-- Replace '<<TACTIC_ID>>' with the actual tactic ID from A1.
+--
+-- Run in Teradata.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    EVNT_DT                       AS event_date,
+    TST_GRP_CD                    AS test_control,
+    RPT_GRP_CD                    AS report_group,
+    COUNT(DISTINCT CLNT_NO)       AS available_leads,
+    COUNT(*)                      AS total_events
+FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+WHERE
+    TACTIC_ID = '<<TACTIC_ID>>'
+GROUP BY
+    EVNT_DT,
+    TST_GRP_CD,
+    RPT_GRP_CD
+ORDER BY
+    event_date,
+    test_control;
+
+
+-- ---------------------------------------------------------------------------
+-- A3: PCD Decision/Response — Test/Control Population Summary
+-- ---------------------------------------------------------------------------
+-- Alternative view of test/control from the PCD decision/response table.
+-- Uses act_ctl_seg and test_value for segmentation.
+-- Cross-reference with A2 to validate population counts match.
+--
+-- Run in Teradata.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    tactic_id_parent,
+    act_ctl_seg,
+    test_value,
+    test_description,
+    mnemonic,
+    COUNT(DISTINCT clnt_no)       AS unique_clients,
+    COUNT(DISTINCT acct_no)       AS unique_accounts,
+    MIN(response_start)           AS earliest_response_start,
+    MAX(response_end)             AS latest_response_end
+FROM dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp
+WHERE
+    response_start >= '2026-04-01'
+GROUP BY
+    tactic_id_parent,
+    act_ctl_seg,
+    test_value,
+    test_description,
+    mnemonic
+ORDER BY unique_clients DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- A4: Client-Level Extract for Join with GA4
+-- ---------------------------------------------------------------------------
+-- Pull the client list with test/control assignment. Export this to join
+-- with GA4 data (in Excel or in HDFS/PySpark when that pipeline is built).
+--
+-- Replace '<<TACTIC_ID>>' with the actual tactic ID from A1.
+--
+-- Run in Teradata. Export results for cross-system join.
+-- ---------------------------------------------------------------------------
+
+SELECT DISTINCT
+    CLNT_NO,
+    TACTIC_ID,
+    TST_GRP_CD                    AS test_control,
+    RPT_GRP_CD                    AS report_group,
+    TREATMT_STRT_DT               AS treatment_start,
+    TREATMT_END_DT                AS treatment_end
+FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+WHERE
+    TACTIC_ID = '<<TACTIC_ID>>';
+
+
+-- #############################################################################
+-- SECTION B: STARBURST (GA4) — Banner Views, Clicks, CTR
+-- #############################################################################
+-- Run these in Starburst. These queries deliver Metrics 2, 3, and 4.
+-- #############################################################################
+
+
+-- ---------------------------------------------------------------------------
+-- B1: Daily Banner Performance — Views, Clicks, CTR by Platform (Metrics 2-4)
+-- ---------------------------------------------------------------------------
+-- Primary production query. Pivot view_promotion and select_promotion
+-- into columns for a clean daily report.
 --
 -- Run in Starburst. Adjust year/month partition filter as needed.
 -- ---------------------------------------------------------------------------
@@ -91,10 +231,10 @@ ORDER BY
 
 
 -- ---------------------------------------------------------------------------
--- QUERY 2: Daily Banner Performance by Promo Name
+-- B2: Daily Banner Performance by Promo Name
 -- ---------------------------------------------------------------------------
--- Same as Query 1 but broken out by individual promo name (it_item_name).
--- Use this to see which specific banner/placement drives the most traffic.
+-- Same as B1 but broken out by individual promo name (it_item_name).
+-- Shows which specific banner/placement drives the most traffic.
 -- ---------------------------------------------------------------------------
 
 SELECT
@@ -137,10 +277,9 @@ ORDER BY
 
 
 -- ---------------------------------------------------------------------------
--- QUERY 3: Cumulative Summary (since launch)
+-- B3: Cumulative Summary Since Launch
 -- ---------------------------------------------------------------------------
--- Roll-up across the full post-launch period. Use this for weekly/monthly
--- reporting or quick status checks.
+-- Roll-up across the full post-launch period for weekly/monthly reporting.
 -- ---------------------------------------------------------------------------
 
 SELECT
@@ -182,121 +321,81 @@ ORDER BY
     platform;
 
 
--- =============================================================================
--- TACTIC EVENT TABLE — Deployment Population (Teradata)
--- =============================================================================
--- The GA4 queries above show WHO interacted with the banners.
--- The tactic event table shows WHO was DEPLOYED (offered the banner).
--- Cross-referencing both validates that deployment and tracking are in sync.
---
--- Table: DTZV01.TACTIC_EVNT_IP_AR_H60M (Teradata)
--- TACTIC_ID structure: positions 8-10 = MNE (campaign mnemonic)
---   For PCD: positions 8-10 = 'PCD'
---
--- NOTE: These are Teradata SQL queries. Run in Teradata, NOT Starburst.
--- The tactic ID for the async deployment won't exist until ~April 20.
--- Once deployed, identify the tactic ID by:
---   1. Julian date of deployment + 'PCD' mnemonic
---   2. Or filter TACTIC_ID where SUBSTR(TACTIC_ID, 8, 3) = 'PCD'
---      and deployment date matches
--- =============================================================================
-
-
 -- ---------------------------------------------------------------------------
--- QUERY 4: Discover PCD tactic IDs (run post-deployment)
+-- B4: Client-Level GA4 Extract for Join with Teradata
 -- ---------------------------------------------------------------------------
--- Find all PCD tactic IDs to identify the async deployment.
--- Look for the tactic ID matching the April 20+ deployment date.
+-- Pull GA4 users who interacted with PCD async banners. The ep_srf_id2
+-- field may map to clnt_no in Teradata (not yet validated — see note).
 --
--- Run in Teradata.
+-- Export this and join with A4 (Teradata client extract) to get:
+--   - Test clients who viewed/clicked (test group response)
+--   - Control clients who viewed/clicked (should be zero — leakage check)
+--
+-- NOTE: The ep_srf_id2 → clnt_no mapping has NOT been validated.
+-- Run this post-launch and check whether ep_srf_id2 values look like
+-- client numbers (numeric, reasonable length). If they don't match,
+-- check user_id as an alternative.
 -- ---------------------------------------------------------------------------
 
 SELECT
-    TACTIC_ID,
-    SUBSTR(TACTIC_ID, 8, 3)       AS mnemonic,
-    MIN(EVNT_DT)                  AS first_event_date,
-    MAX(EVNT_DT)                  AS last_event_date,
-    COUNT(DISTINCT CLNT_NO)       AS unique_clients,
-    COUNT(*)                      AS total_events
-FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+    ep_srf_id2,
+    user_id,
+    user_pseudo_id,
+    CAST(event_date AS DATE)      AS event_date,
+    event_name,
+    it_item_name                  AS promo_name,
+    platform
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE
-    SUBSTR(TACTIC_ID, 8, 3) = 'PCD'
-    AND EVNT_DT >= '2026-04-01'
-GROUP BY
-    TACTIC_ID,
-    SUBSTR(TACTIC_ID, 8, 3)
-ORDER BY first_event_date DESC;
+    year = '2026'
+    AND month IN ('04', '05', '06')
+    AND it_item_name IN (
+        'PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_AVP',
+        'PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_IAV',
+        'PB_CC_ALL_26_02_RBC_PCD_PPCN',
+        'PB_CC_ALL_26_02_RBC_PCD_Offer_Hub_Banner'
+    )
+    AND ip_sf_campaign_mnemonic = 'PCD'
+    AND event_name IN ('view_promotion', 'select_promotion')
+    AND ep_srf_id2 IS NOT NULL
+ORDER BY
+    event_date,
+    ep_srf_id2;
+
+
+-- #############################################################################
+-- SECTION C: RECONCILIATION — Cross-System Validation
+-- #############################################################################
 
 
 -- ---------------------------------------------------------------------------
--- QUERY 5: Daily deployed population by tactic ID
+-- Reconciliation Workflow
 -- ---------------------------------------------------------------------------
--- Once you identify the correct tactic ID from Query 4, plug it in here
--- to get the daily deployed population (denominator for response rate).
+-- The tracker output combines results from BOTH systems. To assemble
+-- Daniel's four metrics:
 --
--- Replace '<<TACTIC_ID>>' with the actual tactic ID.
+-- METRIC 1 — Available PCD Leads (test vs control):
+--   Source: Query A2 (Teradata)
+--   Output: Daily count of deployed clients by TST_GRP_CD
 --
--- Run in Teradata.
--- ---------------------------------------------------------------------------
-
-SELECT
-    EVNT_DT                       AS event_date,
-    TACTIC_ID,
-    COUNT(DISTINCT CLNT_NO)       AS deployed_clients,
-    COUNT(*)                      AS total_events
-FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
-WHERE
-    TACTIC_ID = '<<TACTIC_ID>>'
-    AND EVNT_DT >= '2026-04-01'
-GROUP BY
-    EVNT_DT,
-    TACTIC_ID
-ORDER BY event_date;
-
-
--- ---------------------------------------------------------------------------
--- QUERY 6: PCD decision/response table — test vs control population
--- ---------------------------------------------------------------------------
--- The PCD decision/response table has the test/control segmentation.
--- Use this to get the "Available PCD Leads" denominator and understand
--- the act_ctl_seg / test_value split.
+-- METRIC 2 — Banner Views:
+--   Source: Query B1 (Starburst) → view_users / view_events columns
 --
--- Table: dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp (Teradata)
+-- METRIC 3 — Banner Clicks:
+--   Source: Query B1 (Starburst) → click_users / click_events columns
 --
--- Run in Teradata.
--- ---------------------------------------------------------------------------
-
-SELECT
-    tactic_id_parent,
-    act_ctl_seg,
-    test_value,
-    COUNT(DISTINCT clnt_no)       AS unique_clients,
-    COUNT(*)                      AS total_records
-FROM dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp
-WHERE
-    response_start >= '2026-04-01'
-GROUP BY
-    tactic_id_parent,
-    act_ctl_seg,
-    test_value
-ORDER BY unique_clients DESC;
-
-
--- ---------------------------------------------------------------------------
--- RECONCILIATION NOTES
--- ---------------------------------------------------------------------------
--- These queries run in DIFFERENT systems (Starburst vs Teradata).
--- To reconcile:
+-- METRIC 4 — Banner CTR:
+--   Source: Query B1 (Starburst) → ctr_users_pct column
+--   Or: click_users / view_users * 100
 --
--- 1. Run Query 5 (Teradata) → get deployed client count per day
--- 2. Run Query 1 (Starburst) → get banner view/click users per day
--- 3. Compare in Excel:
---    - Deployed clients (Teradata) should >= view users (GA4)
---    - If GA4 shows MORE users than deployed, there's a tagging leak
---    - If GA4 shows significantly FEWER, some clients aren't seeing the banner
+-- CROSS-SYSTEM JOIN (for test/control breakdown of views/clicks):
+--   1. Export A4 (Teradata) → client list with test/control flags
+--   2. Export B4 (Starburst) → client-level GA4 interactions
+--   3. Join on CAST(ep_srf_id2 AS BIGINT) = CLNT_NO (if mapping validates)
+--   4. This gives: views/clicks/CTR split by test vs control
 --
--- Join feasibility (from exploratory work):
---   GA4 field ep_srf_id2 or user_id may map to clnt_no in Teradata.
---   This has NOT been validated yet — run Query 4 from
---   pcd_async_banner_explore.sql to test after launch.
+-- VALIDATION CHECKS:
+--   - A2 deployed clients >= B1 view_users (if not, tagging leak)
+--   - Control group in B4 should have zero/near-zero banner events
+--   - If control clients show banner views, flag as contamination
 -- ---------------------------------------------------------------------------
