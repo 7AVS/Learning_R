@@ -73,3 +73,61 @@ except Exception as e:
 #   (Casper primary) and EDL (SCOT secondary) independently,
 #   then merge on clnt_no in pandas.
 # ------------------------------------------------------------
+
+
+# ------------------------------------------------------------
+# Cell 2 — Run VBA Vintage Queries
+#
+# Reads vba_vintage_curves_trino.sql and runs both queries:
+#   Query 1 = Summary (leads, responders, rates by fiscal qtr)
+#   Query 2 = Vintage curves (0-90 day daily + cumulative)
+# ------------------------------------------------------------
+
+import os
+
+sql_path = os.path.join(os.path.dirname(__file__), 'vba_vintage_curves_trino.sql')
+with open(sql_path) as f:
+    raw_sql = f.read()
+
+# Split on marker between Query 1 and Query 2
+parts = raw_sql.split('-- @@SPLIT@@')
+# Strip comments-only blocks and find actual queries (contain WITH or SELECT)
+queries = []
+for part in parts:
+    stripped = '\n'.join(line for line in part.strip().split('\n')
+                        if not line.strip().startswith('--') and line.strip())
+    if stripped.strip().rstrip(';'):
+        queries.append(part.strip().rstrip(';'))
+
+print(f"Found {len(queries)} queries in SQL file")
+
+# Query 1 — Summary
+try:
+    df_summary = edw_query(queries[0], desc="VBA Summary")
+    print(df_summary)
+except Exception as e:
+    print(f"Query 1 (Summary) failed: {e}")
+
+# Query 2 — Vintage Curves
+try:
+    df_vintage = edw_query(queries[1], desc="VBA Vintage Curves")
+    print(df_vintage)
+except Exception as e:
+    print(f"Query 2 (Vintage Curves) failed: {e}")
+
+
+# ------------------------------------------------------------
+# Cell 3 — Export to CSV
+# ------------------------------------------------------------
+
+try:
+    df_summary.to_csv(os.path.join(os.path.dirname(__file__), 'vba_vintage_summary.csv'), index=False)
+    print(f"Summary exported: vba_vintage_summary.csv ({len(df_summary)} rows)")
+except Exception as e:
+    print(f"Summary CSV export failed: {e}")
+
+try:
+    df_vintage.to_csv(os.path.join(os.path.dirname(__file__), 'vba_vintage_curves.csv'), index=False)
+    print(f"Vintage curves exported: vba_vintage_curves.csv ({len(df_vintage)} rows)")
+except Exception as e:
+    print(f"Vintage curves CSV export failed: {e}")
