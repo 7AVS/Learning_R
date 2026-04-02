@@ -42,10 +42,16 @@ except Exception as e:
     print(f"FAIL — EDW cursor could not reach Teradata: {e}")
 
 
-# Test 2 — EDL (Starburst/Trino): SCOT credit application snapshot
+# Test 2 — EDL: SCOT credit application snapshot (via EDW cursor)
+# Fields from original SAS transcription (vba_success_original_sas.sql)
 sql_edl = """
-SELECT *
+SELECT
+    creditapplication_borrowers_borrowersrfnumber,
+    creditapplication_creditapplicationstatuscode,
+    creditapplication_createddatetime,
+    creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
+WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory IN ('CREDIT_CARD')
 LIMIT 5
 """
 
