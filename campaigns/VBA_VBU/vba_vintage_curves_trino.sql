@@ -72,11 +72,7 @@ scot_apps_raw AS (
     -- SECONDARY source: credit card applications from SCOT (one row per client)
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
-        MAX(CASE
-            WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
-            THEN CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER)
-            ELSE NULL
-        END)                                                           AS visa_acct_no,
+        CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER) AS visa_acct_no,
         MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
         MAX(CASE
             WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
@@ -189,11 +185,7 @@ scot_apps_raw AS (
     -- SECONDARY source: SCOT credit application snapshot (one row per client)
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
-        MAX(CASE
-            WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
-            THEN CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER)
-            ELSE NULL
-        END)                                                           AS visa_acct_no,
+        CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER) AS visa_acct_no,
         MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
         MAX(CASE
             WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
