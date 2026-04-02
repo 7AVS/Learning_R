@@ -58,6 +58,7 @@ casper_apps AS (
     SELECT
         vba.clnt_no,
         vba.tactic_id,
+        CASE WHEN p3c.Status IN ('A') THEN p3c.acct_no ELSE NULL END AS visa_acct_no,
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
@@ -76,6 +77,11 @@ scot_apps_raw AS (
     -- Credit card applications from SCOT (one row per client)
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
+        MAX(CASE
+            WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
+            THEN CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER)
+            ELSE NULL
+        END)                                                           AS visa_acct_no,
         MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
         MAX(CASE
             WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
@@ -89,6 +95,7 @@ scot_apps AS (
     SELECT
         vba.clnt_no,
         vba.tactic_id,
+        scot.visa_acct_no,
         scot.visa_app_approved,
         scot.visa_response_dt
     FROM vba_pop vba
@@ -98,9 +105,9 @@ scot_apps AS (
 ),
 all_apps AS (
     -- Combine both sources
-    SELECT clnt_no, tactic_id, visa_app_approved, visa_response_dt FROM casper_apps
+    SELECT clnt_no, tactic_id, visa_acct_no, visa_app_approved, visa_response_dt FROM casper_apps
     UNION ALL
-    SELECT clnt_no, tactic_id, visa_app_approved, visa_response_dt FROM scot_apps
+    SELECT clnt_no, tactic_id, visa_acct_no, visa_app_approved, visa_response_dt FROM scot_apps
 ),
 client_success AS (
     -- Deduplicate: one row per client+tactic, best outcome
