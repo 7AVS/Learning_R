@@ -3,32 +3,28 @@
 -- =============================================================================
 --
 -- Purpose:
---   Daily vintage curves showing credit card application success rates over
---   a 0-90 day window post-deployment. VBA success = new credit card
---   application approved (NOT product changes like VBU).
+--   Daily vintage curves showing credit card application rates over a 0-90 day
+--   window post-deployment, tracked SEPARATELY by data source so you can
+--   compare signal quality between Casper and SCOT.
 --
--- Adapted from: VBU Validation workbook vintage structure (Daniel Chin)
--- Success logic from: VBA Campaign Success SAS code (transcribed)
+-- Success definition (from VBA SAS code):
+--   Primary (Casper — p3c.appl_fact_dly):
+--     Status IN ('D','O','A'), PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND = 'N'
+--     Exclude visa_prod_cd IN ('CCL','BXX'), exclude Cell_Code IN ('PATACT','GV0320')
+--     Approved = Status = 'A'
+--   Secondary (SCOT — tsz_00222 joined to tactic population):
+--     productcategory = 'CREDIT_CARD', statuscode = 'FULFILLED'
 --
--- VBA vs VBU — DIFFERENT success definitions:
---   VBU: product CHANGE on existing account (dly_full_portfolio → AIB target)
---   VBA: new credit card APPLICATION approved (Casper + SCOT)
---   DO NOT use dly_full_portfolio, AIB, or prior_target for VBA.
+-- Two tiers — same metric, different sources:
+--   PRIMARY   = Casper (p3c.appl_fact_dly) — EDW application fact table
+--   SECONDARY = SCOT (tsz_00222) — Visa SCOT response, joined to population
+--   These are kept separate throughout. No UNION between them.
 --
 -- Tables:
 --   DG6V01.tactic_evnt_ip_ar_hist — tactic population
 --   p3c.appl_fact_dly — Casper: credit card application fact (Teradata)
 --   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot — SCOT
 --   SYS_CALENDAR.CALENDAR — system calendar for zero-fill scaffold
---
--- Success definition (from VBA SAS code):
---   Casper: Status IN ('D','O','A'), PROD_APPRVD IN ('B','E'),
---           CR_LMT_CHG_IND = 'N', exclude CCL/BXX, exclude PATACT/GV0320
---           Approved = Status 'A'
---   SCOT:   productcategory = 'CREDIT_CARD', statuscode = 'FULFILLED'
---   Combined: visa_app_approved = 1 from either source
---   Response date: earliest visa_Response_Dt
---   Window: response date BETWEEN treatmt_strt_dt AND treatmt_end_dt
 --
 -- Vintage = days from treatmt_strt_dt to earliest visa_Response_Dt (0-90)
 --
@@ -54,7 +50,7 @@ WITH vba_pop AS (
         AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
 ),
 casper_apps AS (
-    -- Credit card applications from Casper (p3c.appl_fact_dly)
+    -- PRIMARY source: credit card applications from Casper (p3c.appl_fact_dly)
     SELECT
         vba.clnt_no,
         vba.tactic_id,
@@ -74,7 +70,7 @@ casper_apps AS (
         AND (p3c.Cell_Code IS NULL OR p3c.Cell_Code <> 'GV0320')
 ),
 scot_apps_raw AS (
-    -- Credit card applications from SCOT (one row per client)
+    -- SECONDARY source: credit card applications from SCOT (one row per client)
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
         MAX(CASE
@@ -91,7 +87,7 @@ scot_apps_raw AS (
     GROUP BY 1
 ),
 scot_apps AS (
-    -- SCOT applications joined to VBA population (within treatment window)
+    -- SECONDARY source joined to VBA population (within treatment window)
     SELECT
         vba.clnt_no,
         vba.tactic_id,
@@ -103,29 +99,13 @@ scot_apps AS (
         ON vba.clnt_no = scot.clnt_no
     WHERE scot.visa_response_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
 ),
-all_apps AS (
-    -- Combine both sources
-    SELECT clnt_no, tactic_id, visa_acct_no, visa_app_approved, visa_response_dt FROM casper_apps
-    UNION ALL
-    SELECT clnt_no, tactic_id, visa_acct_no, visa_app_approved, visa_response_dt FROM scot_apps
+responders_primary AS (
+    -- PRIMARY (Casper): approved applications only
+    SELECT DISTINCT clnt_no, tactic_id FROM casper_apps WHERE visa_app_approved = 1
 ),
-client_success AS (
-    -- Deduplicate: one row per client+tactic, best outcome
-    SELECT
-        clnt_no,
-        tactic_id,
-        MAX(visa_app_approved)                                     AS visa_app_approved,
-        MIN(CASE WHEN visa_app_approved = 1 THEN visa_response_dt END) AS earliest_response_dt
-    FROM all_apps
-    GROUP BY clnt_no, tactic_id
-),
-responders_any AS (
-    -- Any application (approved or not) within window
-    SELECT DISTINCT clnt_no, tactic_id FROM all_apps
-),
-responders_approved AS (
-    -- Approved applications only
-    SELECT DISTINCT clnt_no, tactic_id FROM client_success WHERE visa_app_approved = 1
+responders_secondary AS (
+    -- SECONDARY (SCOT): approved applications only
+    SELECT DISTINCT clnt_no, tactic_id FROM scot_apps WHERE visa_app_approved = 1
 )
 SELECT
     SUBSTR(b.tactic_id, 8, 3)                     AS MNE,
@@ -143,21 +123,21 @@ SELECT
         ELSE 'error'
     END                                            AS yearqtr,
     COUNT(DISTINCT b.clnt_no)                      AS leads,
-    COUNT(DISTINCT ra.clnt_no)                     AS apps_any,
-    COUNT(DISTINCT rp.clnt_no)                     AS apps_approved,
-    CASE WHEN COUNT(DISTINCT b.clnt_no) = 0 THEN 0
-        ELSE CAST(COUNT(DISTINCT ra.clnt_no) AS DECIMAL(18,6))
-             / CAST(COUNT(DISTINCT b.clnt_no) AS DECIMAL(18,6))
-    END                                            AS app_rate_any,
+    COUNT(DISTINCT rp.clnt_no)                     AS primary_responders,
+    COUNT(DISTINCT rs.clnt_no)                     AS secondary_responders,
     CASE WHEN COUNT(DISTINCT b.clnt_no) = 0 THEN 0
         ELSE CAST(COUNT(DISTINCT rp.clnt_no) AS DECIMAL(18,6))
              / CAST(COUNT(DISTINCT b.clnt_no) AS DECIMAL(18,6))
-    END                                            AS approval_rate
+    END                                            AS primary_rate,
+    CASE WHEN COUNT(DISTINCT b.clnt_no) = 0 THEN 0
+        ELSE CAST(COUNT(DISTINCT rs.clnt_no) AS DECIMAL(18,6))
+             / CAST(COUNT(DISTINCT b.clnt_no) AS DECIMAL(18,6))
+    END                                            AS secondary_rate
 FROM vba_pop b
-LEFT JOIN responders_any ra
-    ON ra.clnt_no = b.clnt_no AND ra.tactic_id = b.tactic_id
-LEFT JOIN responders_approved rp
+LEFT JOIN responders_primary rp
     ON rp.clnt_no = b.clnt_no AND rp.tactic_id = b.tactic_id
+LEFT JOIN responders_secondary rs
+    ON rs.clnt_no = b.clnt_no AND rs.tactic_id = b.tactic_id
 GROUP BY 1, 2, 3, 4
 ORDER BY 1, 2, 3, 4;
 
@@ -166,7 +146,9 @@ ORDER BY 1, 2, 3, 4;
 -- QUERY 2: Vintage Curves — Daily + Cumulative (0-90 days)
 -- ---------------------------------------------------------------------------
 -- Vintage = days from treatment start to application response date
--- "Any" = any application received; "Approved" = application approved
+-- PRIMARY  = Casper (p3c.appl_fact_dly) — EDW source
+-- SECONDARY = SCOT (tsz_00222) — Visa SCOT response source
+-- Both track approved applications only (visa_app_approved = 1)
 -- ---------------------------------------------------------------------------
 
 WITH vba_pop AS (
@@ -182,11 +164,13 @@ WITH vba_pop AS (
         AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
 ),
 casper_apps AS (
+    -- PRIMARY source: Casper application fact
     SELECT
         vba.clnt_no,
         vba.tactic_id,
         vba.Treat_Start_DT,
         vba.Treat_End_DT,
+        CASE WHEN p3c.Status IN ('A') THEN p3c.acct_no ELSE NULL END AS visa_acct_no,
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
@@ -202,8 +186,14 @@ casper_apps AS (
         AND (p3c.Cell_Code IS NULL OR p3c.Cell_Code <> 'GV0320')
 ),
 scot_apps_raw AS (
+    -- SECONDARY source: SCOT credit application snapshot (one row per client)
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
+        MAX(CASE
+            WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
+            THEN CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS INTEGER)
+            ELSE NULL
+        END)                                                           AS visa_acct_no,
         MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
         MAX(CASE
             WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
@@ -213,11 +203,13 @@ scot_apps_raw AS (
     GROUP BY 1
 ),
 scot_apps AS (
+    -- SECONDARY source joined to VBA population (within treatment window)
     SELECT
         vba.clnt_no,
         vba.tactic_id,
         vba.Treat_Start_DT,
         vba.Treat_End_DT,
+        scot.visa_acct_no,
         scot.visa_app_approved,
         scot.visa_response_dt
     FROM vba_pop vba
@@ -225,66 +217,62 @@ scot_apps AS (
         ON vba.clnt_no = scot.clnt_no
     WHERE scot.visa_response_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
 ),
-all_apps AS (
-    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, visa_app_approved, visa_response_dt FROM casper_apps
-    UNION ALL
-    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, visa_app_approved, visa_response_dt FROM scot_apps
-),
-earliest_any_by_client AS (
-    -- Earliest application (any status) per client
+earliest_primary_by_client AS (
+    -- PRIMARY (Casper): earliest approved response per client
     SELECT
         clnt_no,
         tactic_id,
         Treat_Start_DT,
         Treat_End_DT,
-        MIN(visa_response_dt)                      AS first_app_dt
-    FROM all_apps
-    GROUP BY 1, 2, 3, 4
-),
-earliest_approved_by_client AS (
-    -- Earliest APPROVED application per client
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        MIN(visa_response_dt)                      AS first_app_dt
-    FROM all_apps
+        MIN(visa_response_dt)                      AS first_response_dt
+    FROM casper_apps
     WHERE visa_app_approved = 1
     GROUP BY 1, 2, 3, 4
 ),
-vintages_any AS (
-    -- Vintage in days for ANY application; keep 0..90
+earliest_secondary_by_client AS (
+    -- SECONDARY (SCOT): earliest approved response per client
+    SELECT
+        clnt_no,
+        tactic_id,
+        Treat_Start_DT,
+        Treat_End_DT,
+        MIN(visa_response_dt)                      AS first_response_dt
+    FROM scot_apps
+    WHERE visa_app_approved = 1
+    GROUP BY 1, 2, 3, 4
+),
+vintages_primary AS (
+    -- Vintage in days for PRIMARY (Casper) approved; keep 0..90
     SELECT
         clnt_no,
         tactic_id,
         Treat_Start_DT,
         Treat_End_DT,
         CAST(CASE
-            WHEN first_app_dt < Treat_Start_DT THEN 0
-            ELSE first_app_dt - Treat_Start_DT
+            WHEN first_response_dt < Treat_Start_DT THEN 0
+            ELSE first_response_dt - Treat_Start_DT
         END AS INTEGER)                            AS vintage
-    FROM earliest_any_by_client
+    FROM earliest_primary_by_client
     WHERE CAST(CASE
-            WHEN first_app_dt < Treat_Start_DT THEN 0
-            ELSE first_app_dt - Treat_Start_DT
+            WHEN first_response_dt < Treat_Start_DT THEN 0
+            ELSE first_response_dt - Treat_Start_DT
         END AS INTEGER) BETWEEN 0 AND 90
 ),
-vintages_approved AS (
-    -- Vintage in days for APPROVED applications; keep 0..90
+vintages_secondary AS (
+    -- Vintage in days for SECONDARY (SCOT) approved; keep 0..90
     SELECT
         clnt_no,
         tactic_id,
         Treat_Start_DT,
         Treat_End_DT,
         CAST(CASE
-            WHEN first_app_dt < Treat_Start_DT THEN 0
-            ELSE first_app_dt - Treat_Start_DT
+            WHEN first_response_dt < Treat_Start_DT THEN 0
+            ELSE first_response_dt - Treat_Start_DT
         END AS INTEGER)                            AS vintage
-    FROM earliest_approved_by_client
+    FROM earliest_secondary_by_client
     WHERE CAST(CASE
-            WHEN first_app_dt < Treat_Start_DT THEN 0
-            ELSE first_app_dt - Treat_Start_DT
+            WHEN first_response_dt < Treat_Start_DT THEN 0
+            ELSE first_response_dt - Treat_Start_DT
         END AS INTEGER) BETWEEN 0 AND 90
 ),
 cohort AS (
@@ -296,24 +284,26 @@ cohort AS (
     FROM vba_pop b
     GROUP BY 1, 2, 3
 ),
-successes_any AS (
+successes_primary AS (
+    -- Daily approved count from PRIMARY (Casper) per vintage day
     SELECT
         SUBSTR(v.tactic_id, 8, 3)                 AS mne,
         v.Treat_Start_DT,
         v.Treat_End_DT,
         v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS apps_daily_any
-    FROM vintages_any v
+        COUNT(DISTINCT v.clnt_no)                  AS success_daily_primary
+    FROM vintages_primary v
     GROUP BY 1, 2, 3, 4
 ),
-successes_approved AS (
+successes_secondary AS (
+    -- Daily approved count from SECONDARY (SCOT) per vintage day
     SELECT
         SUBSTR(v.tactic_id, 8, 3)                 AS mne,
         v.Treat_Start_DT,
         v.Treat_End_DT,
         v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS apps_daily_approved
-    FROM vintages_approved v
+        COUNT(DISTINCT v.clnt_no)                  AS success_daily_secondary
+    FROM vintages_secondary v
     GROUP BY 1, 2, 3, 4
 ),
 scaffold AS (
@@ -339,29 +329,29 @@ SELECT
     s.Treat_End_DT,
     s.vintage,
     s.leads,
-    COALESCE(a.apps_daily_any, 0)                  AS apps_daily_any,
-    SUM(COALESCE(a.apps_daily_any, 0)) OVER (
+    COALESCE(p.success_daily_primary, 0)           AS success_daily_primary,
+    SUM(COALESCE(p.success_daily_primary, 0)) OVER (
         PARTITION BY s.mne, s.Treat_Start_DT, s.Treat_End_DT
         ORDER BY s.vintage
         ROWS UNBOUNDED PRECEDING
-    )                                              AS apps_cum_any,
-    COALESCE(p.apps_daily_approved, 0)             AS apps_daily_approved,
-    SUM(COALESCE(p.apps_daily_approved, 0)) OVER (
+    )                                              AS success_cum_primary,
+    COALESCE(sc.success_daily_secondary, 0)        AS success_daily_secondary,
+    SUM(COALESCE(sc.success_daily_secondary, 0)) OVER (
         PARTITION BY s.mne, s.Treat_Start_DT, s.Treat_End_DT
         ORDER BY s.vintage
         ROWS UNBOUNDED PRECEDING
-    )                                              AS apps_cum_approved
+    )                                              AS success_cum_secondary
 FROM scaffold s
-LEFT JOIN successes_any a
-    ON a.mne = s.mne
-    AND a.Treat_Start_DT = s.Treat_Start_DT
-    AND a.Treat_End_DT = s.Treat_End_DT
-    AND a.vintage = s.vintage
-LEFT JOIN successes_approved p
+LEFT JOIN successes_primary p
     ON p.mne = s.mne
     AND p.Treat_Start_DT = s.Treat_Start_DT
     AND p.Treat_End_DT = s.Treat_End_DT
     AND p.vintage = s.vintage
+LEFT JOIN successes_secondary sc
+    ON sc.mne = s.mne
+    AND sc.Treat_Start_DT = s.Treat_Start_DT
+    AND sc.Treat_End_DT = s.Treat_End_DT
+    AND sc.vintage = s.vintage
 ORDER BY s.mne, s.Treat_Start_DT, s.Treat_End_DT, s.vintage;
 
 
@@ -375,13 +365,14 @@ ORDER BY s.mne, s.Treat_Start_DT, s.Treat_End_DT, s.vintage;
 --
 -- 3. p3c.appl_fact_dly may need catalog prefix in Starburst.
 --
--- 4. "Any" = any credit card application received (approved or not)
---    "Approved" = application with visa_app_approved = 1
---    These replace VBU's "any product change" / "primary (AIB)" categories.
+-- 4. PRIMARY = Casper (p3c.appl_fact_dly) — EDW application fact table.
+--    SECONDARY = SCOT (tsz_00222) — Visa SCOT response joined to population.
+--    Both are separate throughout — no UNION between them. The vintage curves
+--    let you compare which source detects applications earlier or more completely.
 --
 -- 5. The SCOT table (tsz_00222) uses long JSON-flattened column names.
 --    These are correct as written.
 --
--- 6. Duplicates between Casper and SCOT are handled by earliest_*_by_client
---    CTEs (MIN date per client).
+-- 6. Both vintage tiers filter visa_app_approved = 1 (approved only).
+--    Overlap between sources is expected — a client can appear in both.
 -- ---------------------------------------------------------------------------
