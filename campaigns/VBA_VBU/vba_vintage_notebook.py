@@ -100,7 +100,7 @@ casper_apps AS (
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
-    INNER JOIN p3c.appl_fact_dly p3c
+    INNER JOIN d3cv12a.appl_fact_dly p3c
         ON vba.clnt_no = p3c.bus_clnt_no
     WHERE
         p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
@@ -214,7 +214,7 @@ casper_apps AS (
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
-    INNER JOIN p3c.appl_fact_dly p3c
+    INNER JOIN d3cv12a.appl_fact_dly p3c
         ON vba.clnt_no = p3c.bus_clnt_no
     WHERE
         p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT

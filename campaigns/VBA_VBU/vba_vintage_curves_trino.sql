@@ -8,7 +8,7 @@
 --   compare signal quality between Casper and SCOT.
 --
 -- Success definition (from VBA SAS code):
---   Primary (Casper — p3c.appl_fact_dly):
+--   Primary (Casper — d3cv12a.appl_fact_dly):
 --     Status IN ('D','O','A'), PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND = 'N'
 --     Exclude visa_prod_cd IN ('CCL','BXX'), exclude Cell_Code IN ('PATACT','GV0320')
 --     Approved = Status = 'A'
@@ -16,13 +16,13 @@
 --     productcategory = 'CREDIT_CARD', statuscode = 'FULFILLED'
 --
 -- Two tiers — same metric, different sources:
---   PRIMARY   = Casper (p3c.appl_fact_dly) — EDW application fact table
+--   PRIMARY   = Casper (d3cv12a.appl_fact_dly) — EDW application fact table
 --   SECONDARY = SCOT (tsz_00222) — Visa SCOT response, joined to population
 --   These are kept separate throughout. No UNION between them.
 --
 -- Tables:
 --   DG6V01.tactic_evnt_ip_ar_hist — tactic population
---   p3c.appl_fact_dly — Casper: credit card application fact (Teradata)
+--   d3cv12a.appl_fact_dly — Casper: credit card application fact (Teradata)
 --   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot — SCOT
 --
 -- Vintage = days from treatmt_strt_dt to earliest visa_Response_Dt (0-90)
@@ -49,7 +49,7 @@ WITH vba_pop AS (
         AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
 ),
 casper_apps AS (
-    -- PRIMARY source: credit card applications from Casper (p3c.appl_fact_dly)
+    -- PRIMARY source: credit card applications from Casper (d3cv12a.appl_fact_dly)
     SELECT
         vba.clnt_no,
         vba.tactic_id,
@@ -57,7 +57,7 @@ casper_apps AS (
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
-    INNER JOIN p3c.appl_fact_dly p3c
+    INNER JOIN d3cv12a.appl_fact_dly p3c
         ON vba.clnt_no = p3c.bus_clnt_no
     WHERE
         p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
@@ -146,7 +146,7 @@ ORDER BY 1, 2, 3, 4;
 -- QUERY 2: Vintage Curves — Daily + Cumulative (0-90 days)
 -- ---------------------------------------------------------------------------
 -- Vintage = days from treatment start to application response date
--- PRIMARY  = Casper (p3c.appl_fact_dly) — EDW source
+-- PRIMARY  = Casper (d3cv12a.appl_fact_dly) — EDW source
 -- SECONDARY = SCOT (tsz_00222) — Visa SCOT response source
 -- Both track approved applications only (visa_app_approved = 1)
 -- ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ casper_apps AS (
         CASE WHEN p3c.Status IN ('A') THEN 1 ELSE 0 END   AS visa_app_approved,
         p3c.app_rcv_dt                                     AS visa_response_dt
     FROM vba_pop vba
-    INNER JOIN p3c.appl_fact_dly p3c
+    INNER JOIN d3cv12a.appl_fact_dly p3c
         ON vba.clnt_no = p3c.bus_clnt_no
     WHERE
         p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
@@ -354,9 +354,9 @@ ORDER BY s.mne, s.Treat_Start_DT, s.Treat_End_DT, s.vintage;
 -- ---------------------------------------------------------------------------
 -- 1. Uses Trino DATE_DIFF('day', start, end) for vintage day calculation.
 --
--- 2. p3c.appl_fact_dly may need catalog prefix in Starburst.
+-- 2. d3cv12a.appl_fact_dly may need catalog prefix in Starburst.
 --
--- 3. PRIMARY = Casper (p3c.appl_fact_dly) — EDW application fact table.
+-- 3. PRIMARY = Casper (d3cv12a.appl_fact_dly) — EDW application fact table.
 --    SECONDARY = SCOT (tsz_00222) — Visa SCOT response joined to population.
 --    Both are separate throughout — no UNION between them. The vintage curves
 --    let you compare which source detects applications earlier or more completely.
