@@ -28,7 +28,7 @@ def edw_query(sql, desc=""):
 
 # Test 1 — Teradata (EDW): tactic history table, VBA rows
 sql_edw = """
-SELECT TACTIC_ID, CLNT_NO, ADDNL_DATA_DT
+SELECT *
 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
 WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBA'
 LIMIT 5
@@ -44,7 +44,7 @@ except Exception as e:
 
 # Test 2 — EDL (Starburst/Trino): SCOT credit application snapshot
 sql_edl = """
-SELECT clnt_no, creditapplicationstatuscode, creditapplication_createddatetime
+SELECT *
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
 LIMIT 5
 """
