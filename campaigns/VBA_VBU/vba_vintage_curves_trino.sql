@@ -83,7 +83,7 @@ scot_apps_raw AS (
         END)                                                           AS visa_app_approved
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
     WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory IN ('CREDIT_CARD')
-    GROUP BY 1
+    GROUP BY 1, 2
 ),
 scot_apps AS (
     -- SECONDARY source joined to VBA population (within treatment window)
@@ -200,7 +200,7 @@ scot_apps_raw AS (
         END)                                                           AS visa_app_approved
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
     WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory IN ('CREDIT_CARD')
-    GROUP BY 1
+    GROUP BY 1, 2
 ),
 scot_apps AS (
     -- SECONDARY source joined to VBA population (within treatment window)
