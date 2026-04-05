@@ -53,10 +53,9 @@ casper AS (
         AND p.CR_LMT_CHG_IND = 'N'
         AND p.visa_prod_cd NOT IN ('CCL','BXX')
 ),
-scot AS (
+scot_raw AS (
     SELECT
-        v.tactic_id,
-        v.clnt_no,
+        CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
         MAX(
             CASE
                 WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
@@ -65,18 +64,27 @@ scot AS (
                 )
             END
         )                                                              AS visa_acct_no,
-        MIN(CAST(s.creditapplication_createddatetime AS DATE))         AS visa_response_dt,
+        MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
         CASE
-            WHEN MAX(CASE WHEN s.creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0 END) = 1
+            WHEN MAX(CASE WHEN creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0 END) = 1
             THEN 1 ELSE 0
-        END                                                            AS visa_app_approved,
+        END                                                            AS visa_app_approved
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
+    WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
+    GROUP BY CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER)
+),
+scot AS (
+    SELECT
+        v.tactic_id,
+        v.clnt_no,
+        s.visa_acct_no,
+        s.visa_app_approved,
+        s.visa_response_dt,
         'Scott' AS response_source
     FROM vba v
-    JOIN edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot s
-        ON v.clnt_no = CAST(s.creditapplication_borrowers_borrowersrfnumber AS INTEGER)
-    WHERE s.creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
-        AND CAST(s.creditapplication_createddatetime AS DATE) BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
-    GROUP BY v.tactic_id, v.clnt_no
+    JOIN scot_raw s
+        ON v.clnt_no = s.clnt_no
+    WHERE s.visa_response_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
 ),
 responses AS (
     SELECT tactic_id, clnt_no, visa_acct_no, visa_app_approved,
@@ -170,6 +178,26 @@ casper_apps AS (
         AND p3c.CR_LMT_CHG_IND = 'N'
         AND p3c.visa_prod_cd NOT IN ('CCL','BXX')
 ),
+scot_apps_raw AS (
+    SELECT
+        CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
+        MAX(
+            CASE
+                WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
+                THEN TRY_CAST(
+                    creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT
+                )
+            END
+        )                                                              AS visa_acct_no,
+        MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
+        CASE
+            WHEN MAX(CASE WHEN creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0 END) = 1
+            THEN 1 ELSE 0
+        END                                                            AS visa_app_approved
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
+    WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
+    GROUP BY CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER)
+),
 scot_apps AS (
     SELECT
         vba.clnt_no,
@@ -177,25 +205,13 @@ scot_apps AS (
         vba.Treat_Start_DT,
         vba.Treat_End_DT,
         vba.tst_grp_cd,
-        MAX(
-            CASE
-                WHEN s.creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
-                THEN TRY_CAST(
-                    s.creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT
-                )
-            END
-        )                                                              AS visa_acct_no,
-        MIN(CAST(s.creditapplication_createddatetime AS DATE))         AS visa_response_dt,
-        CASE
-            WHEN MAX(CASE WHEN s.creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0 END) = 1
-            THEN 1 ELSE 0
-        END                                                            AS visa_app_approved
+        scot.visa_acct_no,
+        scot.visa_app_approved,
+        scot.visa_response_dt
     FROM vba_pop vba
-    JOIN edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot s
-        ON vba.clnt_no = CAST(s.creditapplication_borrowers_borrowersrfnumber AS INTEGER)
-    WHERE s.creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
-        AND CAST(s.creditapplication_createddatetime AS DATE) BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
-    GROUP BY vba.clnt_no, vba.tactic_id, vba.Treat_Start_DT, vba.Treat_End_DT, vba.tst_grp_cd
+    INNER JOIN scot_apps_raw scot
+        ON vba.clnt_no = scot.clnt_no
+    WHERE scot.visa_response_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
 ),
 earliest_primary_by_client AS (
     SELECT
