@@ -56,22 +56,18 @@ casper AS (
 scot_raw AS (
     SELECT
         CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
-        MAX(
-            CASE
-                WHEN creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid IS NOT NULL
-                THEN TRY_CAST(
-                    creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT
-                )
-            END
+        TRY_CAST(
+            creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT
         )                                                              AS visa_acct_no,
         MIN(CAST(creditapplication_createddatetime AS DATE))           AS visa_response_dt,
-        CASE
-            WHEN MAX(CASE WHEN creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0 END) = 1
-            THEN 1 ELSE 0
-        END                                                            AS visa_app_approved
+        MAX(CASE
+            WHEN creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0
+        END)                                                           AS visa_app_approved
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
     WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
-    GROUP BY CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER)
+    GROUP BY
+        CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER),
+        TRY_CAST(creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT)
 ),
 scot AS (
     SELECT
