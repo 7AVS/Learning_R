@@ -47,7 +47,8 @@ casper_apps AS (
     FROM vba_pop vba
     INNER JOIN D3CV12A.appl_fact_dly p3c
         ON vba.clnt_no = p3c.bus_clnt_no
-    WHERE p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
+    WHERE p3c.app_rcv_dt >= DATE '2025-11-01'
+        AND p3c.app_rcv_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
         AND p3c.Status IN ('A','D','O')
         AND p3c.PROD_APPRVD IN ('B','E')
         AND (p3c.Cell_Code IS NULL OR p3c.Cell_Code NOT IN ('PATACT','GV0320'))
@@ -72,6 +73,7 @@ scot_apps_raw AS (
         END                                                            AS visa_app_approved
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
     WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
+        AND CAST(creditapplication_createddatetime AS DATE) >= DATE '2025-11-01'
     GROUP BY CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER)
 ),
 scot_apps AS (
