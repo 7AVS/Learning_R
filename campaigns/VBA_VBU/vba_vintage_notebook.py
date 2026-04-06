@@ -194,62 +194,41 @@ scot_apps AS (
         vba.tst_grp_cd,
         TRY_CAST(s.creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid AS BIGINT)
 ),
-earliest_primary_by_client AS (
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        tst_grp_cd,
-        MIN(visa_response_dt) AS first_response_dt
+all_responses AS (
+    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
+           visa_app_approved, visa_response_dt, 'Casper' AS response_source
     FROM casper_apps
-    WHERE visa_app_approved = 1
-    GROUP BY clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd
-),
-earliest_secondary_by_client AS (
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        tst_grp_cd,
-        MIN(visa_response_dt) AS first_response_dt
+    UNION ALL
+    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
+           visa_app_approved, visa_response_dt, 'Scott' AS response_source
     FROM scot_apps
-    WHERE visa_app_approved = 1
-    GROUP BY clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd
 ),
-vintages_primary AS (
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        tst_grp_cd,
-        CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
-        END AS vintage
-    FROM earliest_primary_by_client
-    WHERE CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
-        END BETWEEN 0 AND 90
+success AS (
+    SELECT *
+    FROM (
+        SELECT
+            clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
+            visa_response_dt, response_source,
+            ROW_NUMBER() OVER (
+                PARTITION BY tactic_id, clnt_no
+                ORDER BY visa_response_dt ASC
+            ) AS rn
+        FROM all_responses
+        WHERE visa_app_approved = 1
+    ) t
+    WHERE rn = 1
 ),
-vintages_secondary AS (
+vintages AS (
     SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        tst_grp_cd,
+        clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
         CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
+            WHEN visa_response_dt < Treat_Start_DT THEN 0
+            ELSE DATE_DIFF('day', Treat_Start_DT, visa_response_dt)
         END AS vintage
-    FROM earliest_secondary_by_client
+    FROM success
     WHERE CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
+            WHEN visa_response_dt < Treat_Start_DT THEN 0
+            ELSE DATE_DIFF('day', Treat_Start_DT, visa_response_dt)
         END BETWEEN 0 AND 90
 ),
 cohort AS (
@@ -262,26 +241,15 @@ cohort AS (
     FROM vba_pop b
     GROUP BY SUBSTR(b.tactic_id, 8, 3), b.tst_grp_cd, b.Treat_Start_DT, b.Treat_End_DT
 ),
-successes_primary AS (
+successes_daily AS (
     SELECT
         SUBSTR(v.tactic_id, 8, 3)                 AS mne,
         v.tst_grp_cd,
         v.Treat_Start_DT,
         v.Treat_End_DT,
         v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS success_daily_primary
-    FROM vintages_primary v
-    GROUP BY SUBSTR(v.tactic_id, 8, 3), v.tst_grp_cd, v.Treat_Start_DT, v.Treat_End_DT, v.vintage
-),
-successes_secondary AS (
-    SELECT
-        SUBSTR(v.tactic_id, 8, 3)                 AS mne,
-        v.tst_grp_cd,
-        v.Treat_Start_DT,
-        v.Treat_End_DT,
-        v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS success_daily_secondary
-    FROM vintages_secondary v
+        COUNT(DISTINCT v.clnt_no)                  AS success_daily
+    FROM vintages v
     GROUP BY SUBSTR(v.tactic_id, 8, 3), v.tst_grp_cd, v.Treat_Start_DT, v.Treat_End_DT, v.vintage
 ),
 scaffold AS (
@@ -302,31 +270,19 @@ SELECT
     s.Treat_End_DT,
     s.vintage,
     s.leads,
-    COALESCE(p.success_daily_primary, 0)           AS success_daily_primary,
-    SUM(COALESCE(p.success_daily_primary, 0)) OVER (
+    COALESCE(d.success_daily, 0)                   AS success_daily,
+    SUM(COALESCE(d.success_daily, 0)) OVER (
         PARTITION BY s.mne, s.tst_grp_cd, s.Treat_Start_DT, s.Treat_End_DT
         ORDER BY s.vintage
         ROWS UNBOUNDED PRECEDING
-    )                                              AS success_cum_primary,
-    COALESCE(sc.success_daily_secondary, 0)        AS success_daily_secondary,
-    SUM(COALESCE(sc.success_daily_secondary, 0)) OVER (
-        PARTITION BY s.mne, s.tst_grp_cd, s.Treat_Start_DT, s.Treat_End_DT
-        ORDER BY s.vintage
-        ROWS UNBOUNDED PRECEDING
-    )                                              AS success_cum_secondary
+    )                                              AS success_cum
 FROM scaffold s
-LEFT JOIN successes_primary p
-    ON p.mne = s.mne
-    AND p.tst_grp_cd = s.tst_grp_cd
-    AND p.Treat_Start_DT = s.Treat_Start_DT
-    AND p.Treat_End_DT = s.Treat_End_DT
-    AND p.vintage = s.vintage
-LEFT JOIN successes_secondary sc
-    ON sc.mne = s.mne
-    AND sc.tst_grp_cd = s.tst_grp_cd
-    AND sc.Treat_Start_DT = s.Treat_Start_DT
-    AND sc.Treat_End_DT = s.Treat_End_DT
-    AND sc.vintage = s.vintage
+LEFT JOIN successes_daily d
+    ON d.mne = s.mne
+    AND d.tst_grp_cd = s.tst_grp_cd
+    AND d.Treat_Start_DT = s.Treat_Start_DT
+    AND d.Treat_End_DT = s.Treat_End_DT
+    AND d.vintage = s.vintage
 ORDER BY s.mne, s.tst_grp_cd, s.Treat_Start_DT, s.Treat_End_DT, s.vintage
 """
 
