@@ -127,7 +127,8 @@ casper_events AS (
     INNER JOIN D3CV12A.appl_fact_dly p
         ON v.clnt_no = p.bus_clnt_no
     WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
-      AND (p.status IN ('D', 'O') OR (p.status = 'A' AND p.SRC_TSYS_ACCT_IND = 'Y'))
+      AND p.status = 'A'
+      AND p.SRC_TSYS_ACCT_IND = 'Y'
       AND p.PROD_APPRVD IN ('B', 'E')
       AND (p.Cell_Code IS NULL OR p.Cell_Code <> 'PATACT')
       AND p.CR_LMT_CHG_IND = 'N'
@@ -137,7 +138,7 @@ casper_events AS (
 SELECT tactic_id, clnt_no, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
        visa_acct_no, visa_response_dt, visa_app_approved, response_source
 FROM casper_events
-WHERE row_num = 1 OR visa_acct_no IS NULL
+WHERE row_num = 1
 """
 
 df_casper = load_or_query('casper_responses', sql_casper, spark, 'Casper')
@@ -174,11 +175,12 @@ else:
             F.col('creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory').alias('productcategory')
         )
         .filter(F.col('productcategory') == 'CREDIT_CARD')
-        .drop('productcategory')
+        .filter(F.col('statuscode') == 'FULFILLED')
+        .drop('productcategory', 'statuscode')
     )
 
-    # Aggregate by clnt_no ONLY (matching reference query GROUP BY 1)
-    # visa_acct_no: MAX with NULL handling (CASE WHEN ... IS NULL THEN NULL ELSE CAST AS INT)
+    # Aggregate by clnt_no ONLY (matching reference: GROUP BY 1, pre-filtered to FULFILLED)
+    # visa_acct_no: MAX with NULL handling (CASE WHEN IS NULL THEN NULL ELSE CAST AS INT)
     df_scot_agg = (
         df_scot_raw
         .groupBy('clnt_no')
@@ -186,9 +188,9 @@ else:
             F.max(
                 F.when(F.col('tsys_acct_id_raw').isNotNull(), F.col('tsys_acct_id_raw').cast('int'))
             ).alias('visa_acct_no'),
-            F.min('visa_response_dt').alias('visa_response_dt'),
-            F.max(F.when(F.col('statuscode') == 'FULFILLED', 1).otherwise(0)).alias('visa_app_approved')
+            F.min('visa_response_dt').alias('visa_response_dt')
         )
+        .withColumn('visa_app_approved', F.lit(1))
     )
 
     # Join to population AFTER aggregation (matching reference: scot_apps_raw → scot_apps)
@@ -300,6 +302,30 @@ df_scot_approved = (
 
 print(f"SCOT approved vintage rows (0-90d): {df_scot_approved.count():,}")
 
+# --- 6b2: Any — deduped across sources, earliest approved per client ---
+df_any_approved = (
+    df_casper_approved.select('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'first_response_dt', 'mne', 'vintage')
+    .unionByName(
+        df_scot_approved.select('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'first_response_dt', 'mne', 'vintage')
+    )
+)
+
+# Keep earliest per client — recompute vintage from the earliest across both sources
+w_any = Window.partitionBy('tactic_id', 'clnt_no').orderBy('first_response_dt')
+df_any_approved = (
+    df_any_approved
+    .withColumn('rn', F.row_number().over(w_any))
+    .filter(F.col('rn') == 1)
+    .drop('rn')
+    .withColumn(
+        'vintage',
+        F.greatest(F.lit(0), F.datediff(F.col('first_response_dt'), F.col('Treat_Start_DT')))
+    )
+    .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
+)
+
+print(f"Any (deduped) approved vintage rows (0-90d): {df_any_approved.count():,}")
+
 # --- 6c: Cohort — leads per (mne, tst_grp_cd, Treat_Start_DT, Treat_End_DT) ---
 df_cohort = (
     df_pop
@@ -317,7 +343,13 @@ df_days = spark.range(0, 91).withColumnRenamed('id', 'vintage')
 df_scaffold = df_cohort.crossJoin(df_days)
 print(f"\nScaffold rows (should be cohort rows * 91): {df_scaffold.count():,}")
 
-# --- 6e: Daily success counts per source ---
+# --- 6e: Daily success counts — per source + deduped any ---
+df_success_any = (
+    df_any_approved
+    .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
+    .agg(F.countDistinct('clnt_no').alias('success_daily_any'))
+)
+
 df_success_primary = (
     df_casper_approved
     .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
@@ -335,12 +367,13 @@ join_keys = ['mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage']
 
 df_scaffold_joined = (
     df_scaffold
+    .join(df_success_any,       on=join_keys, how='left')
     .join(df_success_primary,   on=join_keys, how='left')
     .join(df_success_secondary, on=join_keys, how='left')
-    .fillna({'success_daily_primary': 0, 'success_daily_secondary': 0})
+    .fillna({'success_daily_any': 0, 'success_daily_primary': 0, 'success_daily_secondary': 0})
 )
 
-# --- 6g: Cumulative sums via Window — separate per source ---
+# --- 6g: Cumulative sums via Window ---
 w_vintage = (
     Window
     .partitionBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT')
@@ -350,6 +383,7 @@ w_vintage = (
 
 df_vintage = (
     df_scaffold_joined
+    .withColumn('success_cum_any',       F.sum('success_daily_any').over(w_vintage))
     .withColumn('success_cum_primary',   F.sum('success_daily_primary').over(w_vintage))
     .withColumn('success_cum_secondary', F.sum('success_daily_secondary').over(w_vintage))
     .orderBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
