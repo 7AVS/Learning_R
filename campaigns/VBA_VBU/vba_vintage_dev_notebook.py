@@ -136,54 +136,55 @@ df_casper.show(5, truncate=False)
 # Full WITH clause included. vba CTE mirrors Cell 2 exactly.
 # GROUP BY happens server-side to match production query exactly.
 
-sql_scot = """
-WITH vba AS (
-    SELECT DISTINCT
-        CAST(E.tactic_id AS VARCHAR(50))              AS tactic_id,
-        E.clnt_no,
-        CAST(E.treatmt_strt_dt AS DATE)               AS Treat_Start_DT,
-        CAST(
-            COALESCE(E.treatmt_end_dt, E.treatmt_strt_dt) AS DATE
-        )                                             AS Treat_End_DT,
-        E.tst_grp_cd
-    FROM DG6V01.tactic_evnt_ip_ar_hist E
-    WHERE E.treatmt_strt_dt >= DATE '2025-11-01'
-      AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
-      AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
-)
-SELECT
-    v.tactic_id,
-    v.clnt_no,
-    v.Treat_Start_DT,
-    v.Treat_End_DT,
-    v.tst_grp_cd,
-    TRY_CAST(
-        s.creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid
-        AS BIGINT
-    )                                                  AS visa_acct_no,
-    MAX(CASE
-        WHEN s.creditapplication_creditapplicationstatuscode = 'FULFILLED' THEN 1 ELSE 0
-    END)                                               AS visa_app_approved,
-    CAST(MIN(s.creditapplication_createddatetime) AS DATE) AS visa_response_dt,
-    'Scott'                                            AS response_source
-FROM vba v
-INNER JOIN edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot s
-    ON v.clnt_no = CAST(s.creditapplication_borrowers_borrowersrfnumber AS INTEGER)
-   AND CAST(s.creditapplication_createddatetime AS DATE) BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
-WHERE s.creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
-GROUP BY
-    v.tactic_id,
-    v.clnt_no,
-    v.Treat_Start_DT,
-    v.Treat_End_DT,
-    v.tst_grp_cd,
-    TRY_CAST(
-        s.creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid
-        AS BIGINT
-    )
-"""
+# Read SCOT from HDFS (parquet) — only the 4 columns we need from the 971-column table
+SCOT_HDFS = '/prod/sz/tsz/00222/data/CREDIT_APPLICATION_SNAPSHOT'
+scot_cache = f"{CACHE_DIR}/scot_responses.parquet"
 
-df_scot = load_or_query('scot_responses', sql_scot, spark, 'SCOT')
+if os.path.exists(scot_cache):
+    print(f"  [SCOT] Loaded from cache: {scot_cache}")
+    df_scot = spark.read.parquet(scot_cache)
+else:
+    print(f"  [SCOT] Reading from HDFS: {SCOT_HDFS}")
+    t0 = time.time()
+
+    # Read only the columns we need
+    df_scot_raw = (
+        spark.read.parquet(SCOT_HDFS)
+        .select(
+            F.col('creditapplication_borrowers_borrowersrfnumber').cast('int').alias('clnt_no'),
+            F.col('creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid').cast('long').alias('visa_acct_no'),
+            F.col('creditapplication_createddatetime').cast('date').alias('visa_response_dt'),
+            F.col('creditapplication_creditapplicationstatuscode').alias('statuscode'),
+            F.col('creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory').alias('productcategory')
+        )
+        .filter(F.col('productcategory') == 'CREDIT_CARD')
+        .drop('productcategory')
+    )
+
+    # Join to population (treatment window filter) and aggregate — same logic as production SQL
+    df_scot_joined = (
+        df_scot_raw
+        .join(df_pop, on='clnt_no', how='inner')
+        .filter(
+            (F.col('visa_response_dt') >= F.col('Treat_Start_DT'))
+            & (F.col('visa_response_dt') <= F.col('Treat_End_DT'))
+        )
+    )
+
+    df_scot = (
+        df_scot_joined
+        .groupBy('tactic_id', 'clnt_no', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'visa_acct_no')
+        .agg(
+            F.max(F.when(F.col('statuscode') == 'FULFILLED', 1).otherwise(0)).alias('visa_app_approved'),
+            F.min('visa_response_dt').alias('visa_response_dt')
+        )
+        .withColumn('response_source', F.lit('Scott'))
+    )
+
+    df_scot.write.mode('overwrite').parquet(scot_cache)
+    elapsed = time.time() - t0
+    print(f"  [SCOT] {df_scot.count():,} rows in {elapsed:.0f}s — cached to: {scot_cache}")
+
 print(f"\nSCOT rows: {df_scot.count():,}")
 df_scot.show(5, truncate=False)
 
