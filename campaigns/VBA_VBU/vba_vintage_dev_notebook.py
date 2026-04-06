@@ -104,26 +104,40 @@ WITH vba AS (
     WHERE E.treatmt_strt_dt >= DATE '2025-11-01'
       AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
       AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
+),
+casper_events AS (
+    SELECT
+        v.tactic_id,
+        v.clnt_no,
+        v.Treat_Start_DT,
+        v.Treat_End_DT,
+        v.tst_grp_cd,
+        CASE WHEN p.Status = 'A' THEN p.acct_no END      AS visa_acct_no,
+        CAST(p.app_rcv_dt AS DATE)                        AS visa_response_dt,
+        CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END       AS visa_app_approved,
+        'Casper'                                          AS response_source,
+        ROW_NUMBER() OVER (
+            PARTITION BY v.clnt_no, p.acct_no
+            ORDER BY
+                p.Cell_Code DESC NULLS LAST,
+                CASE WHEN p.Status = 'A' THEN p.cr_lmt_off ELSE NULL END DESC NULLS LAST,
+                p.app_rcv_dt
+        ) AS row_num
+    FROM vba v
+    INNER JOIN D3CV12A.appl_fact_dly p
+        ON v.clnt_no = p.bus_clnt_no
+    WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
+      AND (p.status IN ('D', 'O') OR (p.status = 'A' AND p.SRC_TSYS_ACCT_IND = 'Y'))
+      AND p.PROD_APPRVD IN ('B', 'E')
+      AND (p.Cell_Code IS NULL OR p.Cell_Code <> 'PATACT')
+      AND p.CR_LMT_CHG_IND = 'N'
+      AND p.visa_prod_cd NOT IN ('CCL', 'BXX')
+      AND p.Cell_Code NOT IN ('GV0320')
 )
-SELECT
-    v.tactic_id,
-    v.clnt_no,
-    v.Treat_Start_DT,
-    v.Treat_End_DT,
-    v.tst_grp_cd,
-    CASE WHEN p.Status = 'A' THEN p.acct_no END      AS visa_acct_no,
-    CAST(p.app_rcv_dt AS DATE)                        AS visa_response_dt,
-    CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END        AS visa_app_approved,
-    'Casper'                                           AS response_source
-FROM vba v
-INNER JOIN D3CV12A.appl_fact_dly p
-    ON v.clnt_no = p.bus_clnt_no
-WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
-  AND p.Status IN ('A','D','O')
-  AND p.PROD_APPRVD IN ('B','E')
-  AND (p.Cell_Code IS NULL OR p.Cell_Code NOT IN ('PATACT','GV0320'))
-  AND p.CR_LMT_CHG_IND = 'N'
-  AND p.visa_prod_cd NOT IN ('CCL','BXX')
+SELECT tactic_id, clnt_no, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
+       visa_acct_no, visa_response_dt, visa_app_approved, response_source
+FROM casper_events
+WHERE row_num = 1 OR visa_acct_no IS NULL
 """
 
 df_casper = load_or_query('casper_responses', sql_casper, spark, 'Casper')
@@ -148,11 +162,13 @@ else:
     t0 = time.time()
 
     # Read only the columns we need
+    tsys_col = 'creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid'
+
     df_scot_raw = (
         spark.read.parquet(SCOT_HDFS)
         .select(
             F.col('creditapplication_borrowers_borrowersrfnumber').cast('int').alias('clnt_no'),
-            F.col('creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid').cast('long').alias('visa_acct_no'),
+            F.col(tsys_col).alias('tsys_acct_id_raw'),
             F.col('creditapplication_createddatetime').cast('date').alias('visa_response_dt'),
             F.col('creditapplication_creditapplicationstatuscode').alias('statuscode'),
             F.col('creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory').alias('productcategory')
@@ -161,22 +177,27 @@ else:
         .drop('productcategory')
     )
 
-    # Join to population (treatment window filter) and aggregate — same logic as production SQL
-    df_scot_joined = (
+    # Aggregate by clnt_no ONLY (matching reference query GROUP BY 1)
+    # visa_acct_no: MAX with NULL handling (CASE WHEN ... IS NULL THEN NULL ELSE CAST AS INT)
+    df_scot_agg = (
         df_scot_raw
+        .groupBy('clnt_no')
+        .agg(
+            F.max(
+                F.when(F.col('tsys_acct_id_raw').isNotNull(), F.col('tsys_acct_id_raw').cast('int'))
+            ).alias('visa_acct_no'),
+            F.min('visa_response_dt').alias('visa_response_dt'),
+            F.max(F.when(F.col('statuscode') == 'FULFILLED', 1).otherwise(0)).alias('visa_app_approved')
+        )
+    )
+
+    # Join to population AFTER aggregation (matching reference: scot_apps_raw → scot_apps)
+    df_scot = (
+        df_scot_agg
         .join(df_pop, on='clnt_no', how='inner')
         .filter(
             (F.col('visa_response_dt') >= F.col('Treat_Start_DT'))
             & (F.col('visa_response_dt') <= F.col('Treat_End_DT'))
-        )
-    )
-
-    df_scot = (
-        df_scot_joined
-        .groupBy('tactic_id', 'clnt_no', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'visa_acct_no')
-        .agg(
-            F.max(F.when(F.col('statuscode') == 'FULFILLED', 1).otherwise(0)).alias('visa_app_approved'),
-            F.min('visa_response_dt').alias('visa_response_dt')
         )
         .withColumn('response_source', F.lit('Scott'))
     )
@@ -247,37 +268,37 @@ df_summary.show(50, truncate=False)
 # %%
 # Cell 6 — Vintage Curves 0-90 days (pure PySpark)
 
-# --- 6a: Union Casper + SCOT, deduplicate to earliest approved per client ---
-#   Same logic as the summary: one client = one source = earliest approved response.
-df_all_approved = (
-    df_responses
+# --- 6a: Casper — earliest approved per (clnt_no, tactic_id) ---
+df_casper_approved = (
+    df_casper
     .filter(F.col('visa_app_approved') == 1)
-)
-
-w_dedup_vintage = Window.partitionBy('tactic_id', 'clnt_no').orderBy(F.col('visa_response_dt').asc())
-
-df_earliest = (
-    df_all_approved
-    .withColumn('rn', F.row_number().over(w_dedup_vintage))
-    .filter(F.col('rn') == 1)
-    .drop('rn')
-)
-
-# --- 6b: Compute vintage day per client ---
-df_vintages = (
-    df_earliest
+    .groupBy('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd')
+    .agg(F.min('visa_response_dt').alias('first_response_dt'))
     .withColumn('mne', F.substring('tactic_id', 8, 3))
     .withColumn(
         'vintage',
-        F.greatest(
-            F.lit(0),
-            F.datediff(F.col('visa_response_dt'), F.col('Treat_Start_DT'))
-        )
+        F.greatest(F.lit(0), F.datediff(F.col('first_response_dt'), F.col('Treat_Start_DT')))
     )
     .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
 )
 
-print(f"Deduped approved vintage rows (0-90d): {df_vintages.count():,}")
+print(f"Casper approved vintage rows (0-90d): {df_casper_approved.count():,}")
+
+# --- 6b: SCOT — earliest approved per (clnt_no, tactic_id) ---
+df_scot_approved = (
+    df_scot
+    .filter(F.col('visa_app_approved') == 1)
+    .groupBy('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd')
+    .agg(F.min('visa_response_dt').alias('first_response_dt'))
+    .withColumn('mne', F.substring('tactic_id', 8, 3))
+    .withColumn(
+        'vintage',
+        F.greatest(F.lit(0), F.datediff(F.col('first_response_dt'), F.col('Treat_Start_DT')))
+    )
+    .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
+)
+
+print(f"SCOT approved vintage rows (0-90d): {df_scot_approved.count():,}")
 
 # --- 6c: Cohort — leads per (mne, tst_grp_cd, Treat_Start_DT, Treat_End_DT) ---
 df_cohort = (
@@ -296,11 +317,17 @@ df_days = spark.range(0, 91).withColumnRenamed('id', 'vintage')
 df_scaffold = df_cohort.crossJoin(df_days)
 print(f"\nScaffold rows (should be cohort rows * 91): {df_scaffold.count():,}")
 
-# --- 6e: Daily success counts ---
-df_success_daily = (
-    df_vintages
+# --- 6e: Daily success counts per source ---
+df_success_primary = (
+    df_casper_approved
     .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
-    .agg(F.countDistinct('clnt_no').alias('success_daily'))
+    .agg(F.countDistinct('clnt_no').alias('success_daily_primary'))
+)
+
+df_success_secondary = (
+    df_scot_approved
+    .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
+    .agg(F.countDistinct('clnt_no').alias('success_daily_secondary'))
 )
 
 # --- 6f: Join daily successes onto scaffold ---
@@ -308,11 +335,12 @@ join_keys = ['mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage']
 
 df_scaffold_joined = (
     df_scaffold
-    .join(df_success_daily, on=join_keys, how='left')
-    .fillna({'success_daily': 0})
+    .join(df_success_primary,   on=join_keys, how='left')
+    .join(df_success_secondary, on=join_keys, how='left')
+    .fillna({'success_daily_primary': 0, 'success_daily_secondary': 0})
 )
 
-# --- 6g: Cumulative sum via Window ---
+# --- 6g: Cumulative sums via Window — separate per source ---
 w_vintage = (
     Window
     .partitionBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT')
@@ -322,7 +350,8 @@ w_vintage = (
 
 df_vintage = (
     df_scaffold_joined
-    .withColumn('success_cum', F.sum('success_daily').over(w_vintage))
+    .withColumn('success_cum_primary',   F.sum('success_daily_primary').over(w_vintage))
+    .withColumn('success_cum_secondary', F.sum('success_daily_secondary').over(w_vintage))
     .orderBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
 )
 
