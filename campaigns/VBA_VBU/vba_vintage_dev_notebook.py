@@ -22,14 +22,8 @@ if os.path.exists(pop_cache):
     print(f'Population loaded from cache: {df_pop.count():,} rows')
 else:
     sql = """
-    SELECT
-        CAST(tactic_id AS VARCHAR(50))           AS tactic_id,
-        clnt_no,
-        CAST(treatmt_strt_dt AS DATE)            AS Treat_Start_DT,
-        CAST(
-            COALESCE(treatmt_end_dt, treatmt_strt_dt) AS DATE
-        )                                        AS Treat_End_DT,
-        tst_grp_cd
+    SELECT tactic_id, clnt_no, treatmt_strt_dt AS Treat_Start_DT,
+           treatmt_end_dt AS Treat_End_DT, tst_grp_cd
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE treatmt_strt_dt >= DATE '2025-11-01'
       AND SUBSTR(tactic_id, 8, 3) = 'VBA'
@@ -67,18 +61,14 @@ if os.path.exists(casper_cache):
 else:
     sql = """
     WITH vba AS (
-        SELECT DISTINCT
-            CAST(E.tactic_id AS VARCHAR(50))              AS tactic_id,
-            E.clnt_no,
-            CAST(E.treatmt_strt_dt AS DATE)               AS Treat_Start_DT,
-            CAST(
-                COALESCE(E.treatmt_end_dt, E.treatmt_strt_dt) AS DATE
-            )                                             AS Treat_End_DT,
-            E.tst_grp_cd
-        FROM DG6V01.tactic_evnt_ip_ar_hist E
-        WHERE E.treatmt_strt_dt >= DATE '2025-11-01'
-          AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
-          AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
+        SELECT DISTINCT tactic_id, clnt_no,
+               treatmt_strt_dt AS Treat_Start_DT,
+               treatmt_end_dt AS Treat_End_DT,
+               tst_grp_cd
+        FROM DG6V01.tactic_evnt_ip_ar_hist
+        WHERE treatmt_strt_dt >= DATE '2025-11-01'
+          AND SUBSTR(tactic_id, 8, 3) = 'VBA'
+          AND SUBSTR(tactic_id, 8, 1) <> 'J'
     ),
     casper_events AS (
         SELECT
@@ -87,15 +77,15 @@ else:
             v.Treat_Start_DT,
             v.Treat_End_DT,
             v.tst_grp_cd,
-            CASE WHEN p.Status = 'A' THEN p.acct_no END      AS visa_acct_no,
-            CAST(p.app_rcv_dt AS DATE)                        AS visa_response_dt,
-            CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END       AS visa_app_approved,
+            p.acct_no                                         AS visa_acct_no,
+            p.app_rcv_dt                                      AS visa_response_dt,
+            1                                                 AS visa_app_approved,
             'Casper'                                          AS response_source,
             ROW_NUMBER() OVER (
                 PARTITION BY v.clnt_no, p.acct_no
                 ORDER BY
                     p.Cell_Code DESC NULLS LAST,
-                    CASE WHEN p.Status = 'A' THEN p.cr_lmt_off ELSE NULL END DESC NULLS LAST,
+                    p.cr_lmt_off DESC NULLS LAST,
                     p.app_rcv_dt
             ) AS row_num
         FROM vba v
