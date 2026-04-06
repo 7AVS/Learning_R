@@ -135,11 +135,31 @@ if os.path.exists(scot_cache):
     df_scot = spark.read.parquet(scot_cache)
     print(f'SCOT loaded from cache: {df_scot.count():,} rows')
 else:
-    # Load population from cache (needed for join)
+    # Load population from cache, or query if not cached yet
     pop_cache = f'{CACHE_DIR}/vba_population.parquet'
-    if not os.path.exists(pop_cache):
-        raise FileNotFoundError(f'Population cache not found at {pop_cache}. Run Cell 2 first.')
-    df_pop = spark.read.parquet(pop_cache)
+    if os.path.exists(pop_cache):
+        df_pop = spark.read.parquet(pop_cache)
+        print(f'Population loaded from cache: {df_pop.count():,} rows')
+    else:
+        print('Population cache not found — querying EDW...', flush=True)
+        pop_sql = """
+        SELECT tactic_id, clnt_no, treatmt_strt_dt AS Treat_Start_DT,
+               treatmt_end_dt AS Treat_End_DT, tst_grp_cd
+        FROM DG6V01.tactic_evnt_ip_ar_hist
+        WHERE treatmt_strt_dt >= DATE '2025-11-01'
+          AND SUBSTR(tactic_id, 8, 3) = 'VBA'
+          AND SUBSTR(tactic_id, 8, 1) <> 'J'
+        """
+        cursor = EDW.cursor()
+        cursor.execute(pop_sql)
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        cursor.close()
+        from pyspark.sql.types import StructType, StructField, StringType
+        schema = StructType([StructField(c, StringType(), True) for c in cols])
+        df_pop = spark.createDataFrame(rows, schema=schema)
+        df_pop.write.mode('overwrite').parquet(pop_cache)
+        print(f'Population: {df_pop.count():,} rows — cached')
 
     SCOT_HDFS = '/prod/sz/tsz/00222/data/CREDIT_APPLICATION_SNAPSHOT'
     tsys_col = 'creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid'
