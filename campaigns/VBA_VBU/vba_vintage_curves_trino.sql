@@ -4,8 +4,8 @@
 --
 -- Purpose:
 --   Daily vintage curves showing credit card application rates over a 0-90 day
---   window post-deployment, tracked SEPARATELY by data source so you can
---   compare signal quality between Casper and SCOT.
+--   window post-deployment. Casper and SCOT are UNIONED and deduplicated —
+--   each client counts once, attributed to whichever source approved first.
 --
 -- Success definition (from VBA SAS code):
 --   Primary (Casper — d3cv12a.appl_fact_dly):
@@ -15,10 +15,11 @@
 --   Secondary (SCOT — tsz_00222 joined to tactic population):
 --     productcategory = 'CREDIT_CARD', statuscode = 'FULFILLED'
 --
--- Two tiers — same metric, different sources:
---   PRIMARY   = Casper (d3cv12a.appl_fact_dly) — EDW application fact table
---   SECONDARY = SCOT (tsz_00222) — Visa SCOT response, joined to population
---   These are kept separate throughout. No UNION between them.
+-- Sources:
+--   Casper (d3cv12a.appl_fact_dly) — EDW application fact table
+--   SCOT (tsz_00222) — Visa SCOT response, joined to population
+--   Both UNIONED, deduped to earliest approved per client. Same logic in
+--   summary and vintage curves so volumes match.
 --
 -- Tables:
 --   DG6V01.tactic_evnt_ip_ar_hist — tactic population
@@ -94,13 +95,28 @@ scot_apps AS (
         ON vba.clnt_no = scot.clnt_no
     WHERE scot.visa_response_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
 ),
-responders_primary AS (
-    -- PRIMARY (Casper): approved applications only
-    SELECT DISTINCT clnt_no, tactic_id FROM casper_apps WHERE visa_app_approved = 1
+all_responses AS (
+    -- Union Casper + SCOT into one set
+    SELECT clnt_no, tactic_id, visa_app_approved, visa_response_dt, 'Casper' AS response_source
+    FROM casper_apps
+    UNION ALL
+    SELECT clnt_no, tactic_id, visa_app_approved, visa_response_dt, 'Scott' AS response_source
+    FROM scot_apps
 ),
-responders_secondary AS (
-    -- SECONDARY (SCOT): approved applications only
-    SELECT DISTINCT clnt_no, tactic_id FROM scot_apps WHERE visa_app_approved = 1
+success AS (
+    -- Dedup: one row per client — earliest approved response wins
+    SELECT *
+    FROM (
+        SELECT
+            clnt_no,
+            tactic_id,
+            visa_response_dt,
+            response_source,
+            ROW_NUMBER() OVER (PARTITION BY tactic_id, clnt_no ORDER BY visa_response_dt ASC) AS rn
+        FROM all_responses
+        WHERE visa_app_approved = 1
+    )
+    WHERE rn = 1
 )
 SELECT
     SUBSTR(b.tactic_id, 8, 3)                     AS MNE,
@@ -118,21 +134,16 @@ SELECT
         ELSE 'error'
     END                                            AS yearqtr,
     COUNT(DISTINCT b.clnt_no)                      AS leads,
-    COUNT(DISTINCT rp.clnt_no)                     AS primary_responders,
-    COUNT(DISTINCT rs.clnt_no)                     AS secondary_responders,
+    COUNT(DISTINCT s.clnt_no)                      AS successes_any,
+    COUNT(DISTINCT CASE WHEN s.response_source = 'Casper' THEN s.clnt_no END) AS successes_casper,
+    COUNT(DISTINCT CASE WHEN s.response_source = 'Scott'  THEN s.clnt_no END) AS successes_scott,
     CASE WHEN COUNT(DISTINCT b.clnt_no) = 0 THEN 0
-        ELSE CAST(COUNT(DISTINCT rp.clnt_no) AS DECIMAL(18,6))
+        ELSE CAST(COUNT(DISTINCT s.clnt_no) AS DECIMAL(18,6))
              / CAST(COUNT(DISTINCT b.clnt_no) AS DECIMAL(18,6))
-    END                                            AS primary_rate,
-    CASE WHEN COUNT(DISTINCT b.clnt_no) = 0 THEN 0
-        ELSE CAST(COUNT(DISTINCT rs.clnt_no) AS DECIMAL(18,6))
-             / CAST(COUNT(DISTINCT b.clnt_no) AS DECIMAL(18,6))
-    END                                            AS secondary_rate
+    END                                            AS response_rate
 FROM vba_pop b
-LEFT JOIN responders_primary rp
-    ON rp.clnt_no = b.clnt_no AND rp.tactic_id = b.tactic_id
-LEFT JOIN responders_secondary rs
-    ON rs.clnt_no = b.clnt_no AND rs.tactic_id = b.tactic_id
+LEFT JOIN success s
+    ON s.clnt_no = b.clnt_no AND s.tactic_id = b.tactic_id
 GROUP BY 1, 2, 3, 4
 ORDER BY 1, 2, 3, 4;
 
@@ -209,62 +220,48 @@ scot_apps AS (
         ON vba.clnt_no = scot.clnt_no
     WHERE scot.visa_response_dt BETWEEN vba.Treat_Start_DT AND vba.Treat_End_DT
 ),
-earliest_primary_by_client AS (
-    -- PRIMARY (Casper): earliest approved response per client
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        MIN(visa_response_dt)                      AS first_response_dt
+all_responses AS (
+    -- Union Casper + SCOT into one set with response_source label
+    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT,
+           visa_app_approved, visa_response_dt, 'Casper' AS response_source
     FROM casper_apps
-    WHERE visa_app_approved = 1
-    GROUP BY 1, 2, 3, 4
-),
-earliest_secondary_by_client AS (
-    -- SECONDARY (SCOT): earliest approved response per client
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        MIN(visa_response_dt)                      AS first_response_dt
+    UNION ALL
+    SELECT clnt_no, tactic_id, Treat_Start_DT, Treat_End_DT,
+           visa_app_approved, visa_response_dt, 'Scott' AS response_source
     FROM scot_apps
-    WHERE visa_app_approved = 1
-    GROUP BY 1, 2, 3, 4
 ),
-vintages_primary AS (
-    -- Vintage in days for PRIMARY (Casper) approved; keep 0..90
+success AS (
+    -- Dedup: one row per client — earliest approved response wins
+    SELECT *
+    FROM (
+        SELECT
+            clnt_no,
+            tactic_id,
+            Treat_Start_DT,
+            Treat_End_DT,
+            visa_response_dt,
+            response_source,
+            ROW_NUMBER() OVER (PARTITION BY tactic_id, clnt_no ORDER BY visa_response_dt ASC) AS rn
+        FROM all_responses
+        WHERE visa_app_approved = 1
+    )
+    WHERE rn = 1
+),
+vintages AS (
+    -- Vintage in days; clamp negatives to 0; keep 0..90
     SELECT
         clnt_no,
         tactic_id,
         Treat_Start_DT,
         Treat_End_DT,
         CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
+            WHEN visa_response_dt < Treat_Start_DT THEN 0
+            ELSE DATE_DIFF('day', Treat_Start_DT, visa_response_dt)
         END                                        AS vintage
-    FROM earliest_primary_by_client
+    FROM success
     WHERE CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
-        END BETWEEN 0 AND 90
-),
-vintages_secondary AS (
-    -- Vintage in days for SECONDARY (SCOT) approved; keep 0..90
-    SELECT
-        clnt_no,
-        tactic_id,
-        Treat_Start_DT,
-        Treat_End_DT,
-        CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
-        END                                        AS vintage
-    FROM earliest_secondary_by_client
-    WHERE CASE
-            WHEN first_response_dt < Treat_Start_DT THEN 0
-            ELSE DATE_DIFF('day', Treat_Start_DT, first_response_dt)
+            WHEN visa_response_dt < Treat_Start_DT THEN 0
+            ELSE DATE_DIFF('day', Treat_Start_DT, visa_response_dt)
         END BETWEEN 0 AND 90
 ),
 cohort AS (
@@ -276,26 +273,15 @@ cohort AS (
     FROM vba_pop b
     GROUP BY 1, 2, 3
 ),
-successes_primary AS (
-    -- Daily approved count from PRIMARY (Casper) per vintage day
+successes_daily AS (
+    -- Daily approved count per vintage day (deduped across sources)
     SELECT
         SUBSTR(v.tactic_id, 8, 3)                 AS mne,
         v.Treat_Start_DT,
         v.Treat_End_DT,
         v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS success_daily_primary
-    FROM vintages_primary v
-    GROUP BY 1, 2, 3, 4
-),
-successes_secondary AS (
-    -- Daily approved count from SECONDARY (SCOT) per vintage day
-    SELECT
-        SUBSTR(v.tactic_id, 8, 3)                 AS mne,
-        v.Treat_Start_DT,
-        v.Treat_End_DT,
-        v.vintage,
-        COUNT(DISTINCT v.clnt_no)                  AS success_daily_secondary
-    FROM vintages_secondary v
+        COUNT(DISTINCT v.clnt_no)                  AS success_daily
+    FROM vintages v
     GROUP BY 1, 2, 3, 4
 ),
 scaffold AS (
@@ -315,29 +301,18 @@ SELECT
     s.Treat_End_DT,
     s.vintage,
     s.leads,
-    COALESCE(p.success_daily_primary, 0)           AS success_daily_primary,
-    SUM(COALESCE(p.success_daily_primary, 0)) OVER (
+    COALESCE(d.success_daily, 0)                   AS success_daily,
+    SUM(COALESCE(d.success_daily, 0)) OVER (
         PARTITION BY s.mne, s.Treat_Start_DT, s.Treat_End_DT
         ORDER BY s.vintage
         ROWS UNBOUNDED PRECEDING
-    )                                              AS success_cum_primary,
-    COALESCE(sc.success_daily_secondary, 0)        AS success_daily_secondary,
-    SUM(COALESCE(sc.success_daily_secondary, 0)) OVER (
-        PARTITION BY s.mne, s.Treat_Start_DT, s.Treat_End_DT
-        ORDER BY s.vintage
-        ROWS UNBOUNDED PRECEDING
-    )                                              AS success_cum_secondary
+    )                                              AS success_cum
 FROM scaffold s
-LEFT JOIN successes_primary p
-    ON p.mne = s.mne
-    AND p.Treat_Start_DT = s.Treat_Start_DT
-    AND p.Treat_End_DT = s.Treat_End_DT
-    AND p.vintage = s.vintage
-LEFT JOIN successes_secondary sc
-    ON sc.mne = s.mne
-    AND sc.Treat_Start_DT = s.Treat_Start_DT
-    AND sc.Treat_End_DT = s.Treat_End_DT
-    AND sc.vintage = s.vintage
+LEFT JOIN successes_daily d
+    ON d.mne = s.mne
+    AND d.Treat_Start_DT = s.Treat_Start_DT
+    AND d.Treat_End_DT = s.Treat_End_DT
+    AND d.vintage = s.vintage
 ORDER BY s.mne, s.Treat_Start_DT, s.Treat_End_DT, s.vintage;
 
 
@@ -348,14 +323,10 @@ ORDER BY s.mne, s.Treat_Start_DT, s.Treat_End_DT, s.vintage;
 --
 -- 2. d3cv12a.appl_fact_dly may need catalog prefix in Starburst.
 --
--- 3. PRIMARY = Casper (d3cv12a.appl_fact_dly) — EDW application fact table.
---    SECONDARY = SCOT (tsz_00222) — Visa SCOT response joined to population.
---    Both are separate throughout — no UNION between them. The vintage curves
---    let you compare which source detects applications earlier or more completely.
+-- 3. Casper and SCOT are UNIONED and deduped — each client counts once,
+--    attributed to whichever source approved earliest. Summary and vintage
+--    curves use identical dedup logic so day-90 cumulative = summary total.
 --
 -- 4. The SCOT table (tsz_00222) uses long JSON-flattened column names.
 --    These are correct as written.
---
--- 5. Both vintage tiers filter visa_app_approved = 1 (approved only).
---    Overlap between sources is expected — a client can appear in both.
 -- ---------------------------------------------------------------------------
