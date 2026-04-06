@@ -1,169 +1,161 @@
 # %% [markdown]
 # # VBA Vintage Dev Notebook
 #
-# Dev-mode version of vba_vintage_notebook.py.
-# Queries the 3 source tables ONCE, caches to parquet, then all downstream
-# logic runs in PySpark so you can iterate without re-querying.
-#
-# Cells 2-4: EDW queries (run once, ~40 min total — skipped on cache hit)
-# Cells 5-6: Pure PySpark — reruns in seconds
-# Cell 7:    Export to CSV
+# Each cell is SELF-CONTAINED — run any cell independently.
+# Cells 2-4 query once and cache to parquet. Cells 5-7 load from cache.
+# No shared helper functions. No cell dependencies.
 
 # %%
-# Cell 0 — Imports and config
+# Cell 2 — Population (VBA tactic events)
+# Queries EDW, caches to parquet. Skip if cache exists.
 
-from pyspark.sql import functions as F, Window
-from pyspark.sql.types import (
-    StructType, StructField,
-    StringType, LongType, IntegerType, DateType, ShortType
-)
-import os
-import time
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType
+import os, time
 
 CACHE_DIR = './cache'
 os.makedirs(CACHE_DIR, exist_ok=True)
-print(f"Cache dir: {os.path.abspath(CACHE_DIR)}")
+pop_cache = f'{CACHE_DIR}/vba_population.parquet'
 
-# %%
-# Cell 1 — Helper functions
-
-
-def edw_query(sql, spark, desc=""):
-    """Run SQL via global EDW connection, return PySpark DataFrame."""
+if os.path.exists(pop_cache):
+    df_pop = spark.read.parquet(pop_cache)
+    print(f'Population loaded from cache: {df_pop.count():,} rows')
+else:
+    sql = """
+    SELECT
+        CAST(tactic_id AS VARCHAR(50))           AS tactic_id,
+        clnt_no,
+        CAST(treatmt_strt_dt AS DATE)            AS Treat_Start_DT,
+        CAST(
+            COALESCE(treatmt_end_dt, treatmt_strt_dt) AS DATE
+        )                                        AS Treat_End_DT,
+        tst_grp_cd
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE treatmt_strt_dt >= DATE '2025-11-01'
+      AND SUBSTR(tactic_id, 8, 3) = 'VBA'
+      AND SUBSTR(tactic_id, 8, 1) <> 'J'
+    """
     t0 = time.time()
-    if desc:
-        print(f"  [{desc}] executing...", end=" ", flush=True)
+    print('Querying population...', flush=True)
     cursor = EDW.cursor()
     cursor.execute(sql)
     rows = cursor.fetchall()
-
-    # Build schema from cursor.description (StringType fallback — safe for caching)
-    fields = []
-    for col_desc in cursor.description:
-        col_name = col_desc[0]
-        fields.append(StructField(col_name, StringType(), True))
-
+    cols = [d[0] for d in cursor.description]
     cursor.close()
-    elapsed = time.time() - t0
-    print(f"{len(rows):,} rows in {elapsed:.0f}s")
+    schema = StructType([StructField(c, StringType(), True) for c in cols])
+    df_pop = spark.createDataFrame(rows, schema=schema)
+    df_pop.write.mode('overwrite').parquet(pop_cache)
+    print(f'Population: {df_pop.count():,} rows in {time.time()-t0:.0f}s — cached')
 
-    schema = StructType(fields)
-    return spark.createDataFrame(rows, schema=schema)
-
-
-def load_or_query(name, sql, spark, desc=""):
-    """Load from parquet cache if available, otherwise query EDW and cache."""
-    path = f"{CACHE_DIR}/{name}.parquet"
-    if os.path.exists(path):
-        print(f"  [{desc or name}] Loaded from cache: {path}")
-        return spark.read.parquet(path)
-    df = edw_query(sql, spark, desc=desc)
-    df.write.mode("overwrite").parquet(path)
-    print(f"  [{desc or name}] Cached to: {path}")
-    return df
-
-# %%
-# Cell 2 — Query: Population (VBA tactic events)
-
-sql_population = """
-SELECT
-    CAST(tactic_id AS VARCHAR(50))           AS tactic_id,
-    clnt_no,
-    CAST(treatmt_strt_dt AS DATE)            AS Treat_Start_DT,
-    CAST(
-        COALESCE(treatmt_end_dt, treatmt_strt_dt) AS DATE
-    )                                        AS Treat_End_DT,
-    tst_grp_cd
-FROM DG6V01.tactic_evnt_ip_ar_hist
-WHERE treatmt_strt_dt >= DATE '2025-11-01'
-  AND SUBSTR(tactic_id, 8, 3) = 'VBA'
-  AND SUBSTR(tactic_id, 8, 1) <> 'J'
-"""
-
-df_pop = load_or_query('vba_population', sql_population, spark, 'Population')
-print(f"\nPopulation rows: {df_pop.count():,}")
 df_pop.show(5, truncate=False)
 
 # %%
-# Cell 3 — Query: Casper responses
-#
-# Full WITH clause included so the server-side join to population happens
-# in the EDW. The vba CTE mirrors Cell 2 exactly.
+# Cell 3 — Casper responses (approved only, matching reference success query)
+# Queries EDW with full WITH clause. Caches to parquet.
 
-sql_casper = """
-WITH vba AS (
-    SELECT DISTINCT
-        CAST(E.tactic_id AS VARCHAR(50))              AS tactic_id,
-        E.clnt_no,
-        CAST(E.treatmt_strt_dt AS DATE)               AS Treat_Start_DT,
-        CAST(
-            COALESCE(E.treatmt_end_dt, E.treatmt_strt_dt) AS DATE
-        )                                             AS Treat_End_DT,
-        E.tst_grp_cd
-    FROM DG6V01.tactic_evnt_ip_ar_hist E
-    WHERE E.treatmt_strt_dt >= DATE '2025-11-01'
-      AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
-      AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
-),
-casper_events AS (
-    SELECT
-        v.tactic_id,
-        v.clnt_no,
-        v.Treat_Start_DT,
-        v.Treat_End_DT,
-        v.tst_grp_cd,
-        CASE WHEN p.Status = 'A' THEN p.acct_no END      AS visa_acct_no,
-        CAST(p.app_rcv_dt AS DATE)                        AS visa_response_dt,
-        CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END       AS visa_app_approved,
-        'Casper'                                          AS response_source,
-        ROW_NUMBER() OVER (
-            PARTITION BY v.clnt_no, p.acct_no
-            ORDER BY
-                p.Cell_Code DESC NULLS LAST,
-                CASE WHEN p.Status = 'A' THEN p.cr_lmt_off ELSE NULL END DESC NULLS LAST,
-                p.app_rcv_dt
-        ) AS row_num
-    FROM vba v
-    INNER JOIN D3CV12A.appl_fact_dly p
-        ON v.clnt_no = p.bus_clnt_no
-    WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
-      AND p.status = 'A'
-      AND p.SRC_TSYS_ACCT_IND = 'Y'
-      AND p.PROD_APPRVD IN ('B', 'E')
-      AND (p.Cell_Code IS NULL OR p.Cell_Code <> 'PATACT')
-      AND p.CR_LMT_CHG_IND = 'N'
-      AND p.visa_prod_cd NOT IN ('CCL', 'BXX')
-      AND p.Cell_Code NOT IN ('GV0320')
-)
-SELECT tactic_id, clnt_no, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
-       visa_acct_no, visa_response_dt, visa_app_approved, response_source
-FROM casper_events
-WHERE row_num = 1
-"""
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType
+import os, time
 
-df_casper = load_or_query('casper_responses', sql_casper, spark, 'Casper')
-print(f"\nCasper rows: {df_casper.count():,}")
+CACHE_DIR = './cache'
+os.makedirs(CACHE_DIR, exist_ok=True)
+casper_cache = f'{CACHE_DIR}/casper_responses.parquet'
+
+if os.path.exists(casper_cache):
+    df_casper = spark.read.parquet(casper_cache)
+    print(f'Casper loaded from cache: {df_casper.count():,} rows')
+else:
+    sql = """
+    WITH vba AS (
+        SELECT DISTINCT
+            CAST(E.tactic_id AS VARCHAR(50))              AS tactic_id,
+            E.clnt_no,
+            CAST(E.treatmt_strt_dt AS DATE)               AS Treat_Start_DT,
+            CAST(
+                COALESCE(E.treatmt_end_dt, E.treatmt_strt_dt) AS DATE
+            )                                             AS Treat_End_DT,
+            E.tst_grp_cd
+        FROM DG6V01.tactic_evnt_ip_ar_hist E
+        WHERE E.treatmt_strt_dt >= DATE '2025-11-01'
+          AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
+          AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
+    ),
+    casper_events AS (
+        SELECT
+            v.tactic_id,
+            v.clnt_no,
+            v.Treat_Start_DT,
+            v.Treat_End_DT,
+            v.tst_grp_cd,
+            CASE WHEN p.Status = 'A' THEN p.acct_no END      AS visa_acct_no,
+            CAST(p.app_rcv_dt AS DATE)                        AS visa_response_dt,
+            CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END       AS visa_app_approved,
+            'Casper'                                          AS response_source,
+            ROW_NUMBER() OVER (
+                PARTITION BY v.clnt_no, p.acct_no
+                ORDER BY
+                    p.Cell_Code DESC NULLS LAST,
+                    CASE WHEN p.Status = 'A' THEN p.cr_lmt_off ELSE NULL END DESC NULLS LAST,
+                    p.app_rcv_dt
+            ) AS row_num
+        FROM vba v
+        INNER JOIN D3CV12A.appl_fact_dly p
+            ON v.clnt_no = p.bus_clnt_no
+        WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
+          AND p.status = 'A'
+          AND p.SRC_TSYS_ACCT_IND = 'Y'
+          AND p.PROD_APPRVD IN ('B', 'E')
+          AND (p.Cell_Code IS NULL OR p.Cell_Code <> 'PATACT')
+          AND p.CR_LMT_CHG_IND = 'N'
+          AND p.visa_prod_cd NOT IN ('CCL', 'BXX')
+          AND p.Cell_Code NOT IN ('GV0320')
+    )
+    SELECT tactic_id, clnt_no, Treat_Start_DT, Treat_End_DT, tst_grp_cd,
+           visa_acct_no, visa_response_dt, visa_app_approved, response_source
+    FROM casper_events
+    WHERE row_num = 1
+    """
+    t0 = time.time()
+    print('Querying Casper...', flush=True)
+    cursor = EDW.cursor()
+    cursor.execute(sql)
+    rows = cursor.fetchall()
+    cols = [d[0] for d in cursor.description]
+    cursor.close()
+    schema = StructType([StructField(c, StringType(), True) for c in cols])
+    df_casper = spark.createDataFrame(rows, schema=schema)
+    df_casper.write.mode('overwrite').parquet(casper_cache)
+    print(f'Casper: {df_casper.count():,} rows in {time.time()-t0:.0f}s — cached')
+
 df_casper.show(5, truncate=False)
 
 # %%
-# Cell 4 — Query: SCOT responses
-#
-# Full WITH clause included. vba CTE mirrors Cell 2 exactly.
-# GROUP BY happens server-side to match production query exactly.
+# Cell 4 — SCOT responses (FULFILLED only, from HDFS)
+# Reads parquet from HDFS, aggregates by clnt_no, joins to population.
+# Population loaded from cache — run Cell 2 first if cache is empty.
 
-# Read SCOT from HDFS (parquet) — only the 4 columns we need from the 971-column table
-SCOT_HDFS = '/prod/sz/tsz/00222/data/CREDIT_APPLICATION_SNAPSHOT'
-scot_cache = f"{CACHE_DIR}/scot_responses.parquet"
+from pyspark.sql import functions as F
+import os, time
+
+CACHE_DIR = './cache'
+os.makedirs(CACHE_DIR, exist_ok=True)
+scot_cache = f'{CACHE_DIR}/scot_responses.parquet'
 
 if os.path.exists(scot_cache):
-    print(f"  [SCOT] Loaded from cache: {scot_cache}")
     df_scot = spark.read.parquet(scot_cache)
+    print(f'SCOT loaded from cache: {df_scot.count():,} rows')
 else:
-    print(f"  [SCOT] Reading from HDFS: {SCOT_HDFS}")
-    t0 = time.time()
+    # Load population from cache (needed for join)
+    pop_cache = f'{CACHE_DIR}/vba_population.parquet'
+    if not os.path.exists(pop_cache):
+        raise FileNotFoundError(f'Population cache not found at {pop_cache}. Run Cell 2 first.')
+    df_pop = spark.read.parquet(pop_cache)
 
-    # Read only the columns we need
+    SCOT_HDFS = '/prod/sz/tsz/00222/data/CREDIT_APPLICATION_SNAPSHOT'
     tsys_col = 'creditapplication_borrowers_facilities_facilityborroweroptions_products_creditcarddetails_creditcardaccount_cardholders_tsysaccountid'
+
+    t0 = time.time()
+    print(f'Reading SCOT from HDFS: {SCOT_HDFS}', flush=True)
 
     df_scot_raw = (
         spark.read.parquet(SCOT_HDFS)
@@ -180,7 +172,6 @@ else:
     )
 
     # Aggregate by clnt_no ONLY (matching reference: GROUP BY 1, pre-filtered to FULFILLED)
-    # visa_acct_no: MAX with NULL handling (CASE WHEN IS NULL THEN NULL ELSE CAST AS INT)
     df_scot_agg = (
         df_scot_raw
         .groupBy('clnt_no')
@@ -205,28 +196,29 @@ else:
     )
 
     df_scot.write.mode('overwrite').parquet(scot_cache)
-    elapsed = time.time() - t0
-    print(f"  [SCOT] {df_scot.count():,} rows in {elapsed:.0f}s — cached to: {scot_cache}")
+    print(f'SCOT: {df_scot.count():,} rows in {time.time()-t0:.0f}s — cached')
 
-print(f"\nSCOT rows: {df_scot.count():,}")
 df_scot.show(5, truncate=False)
 
 # %%
 # Cell 5 — VBA Summary (pure PySpark)
-#
-# Union casper + scot, deduplicate to one approved row per (tactic_id, clnt_no),
-# left join to population, aggregate.
+# Loads all 3 sources from cache. No EDW needed.
 
-# --- 5a: Union responses ---
+from pyspark.sql import functions as F, Window
+import os
+
+CACHE_DIR = './cache'
+df_pop    = spark.read.parquet(f'{CACHE_DIR}/vba_population.parquet')
+df_casper = spark.read.parquet(f'{CACHE_DIR}/casper_responses.parquet')
+df_scot   = spark.read.parquet(f'{CACHE_DIR}/scot_responses.parquet')
+
+# Union responses
 df_responses = df_casper.unionByName(df_scot)
-
-# Sanity check: confirm both sources are present
-print("Response source counts:")
+print('Response source counts:')
 df_responses.groupBy('response_source').count().show()
 
-# --- 5b: Deduplicate — for approved clients, keep earliest response ---
+# Deduplicate — earliest approved per (tactic_id, clnt_no)
 w_dedup = Window.partitionBy('tactic_id', 'clnt_no').orderBy(F.col('visa_response_dt').asc())
-
 df_approved = (
     df_responses
     .filter(F.col('visa_app_approved') == 1)
@@ -234,13 +226,9 @@ df_approved = (
     .filter(F.col('rn') == 1)
     .drop('rn')
 )
+print(f'\nDeduped approved rows: {df_approved.count():,}')
 
-print(f"\nDeduped approved rows: {df_approved.count():,}")
-df_approved.show(5, truncate=False)
-
-# --- 5c: Left join population to deduped successes (matches production SQL) ---
-#   Production joins vba → success (earliest approved per client, one row max).
-#   This ensures a client approved in BOTH sources is attributed to the earliest only.
+# Summary
 df_summary = (
     df_pop
     .join(df_approved.select('tactic_id', 'clnt_no', 'visa_app_approved', 'response_source'),
@@ -264,13 +252,23 @@ df_summary = (
     .orderBy('tactic_id', 'tst_grp_cd')
 )
 
-print(f"\nSummary rows: {df_summary.count():,}")
+print(f'\nSummary rows: {df_summary.count():,}')
 df_summary.show(50, truncate=False)
 
 # %%
 # Cell 6 — Vintage Curves 0-90 days (pure PySpark)
+# Loads all 3 sources from cache. No EDW needed.
+# Three curves: any (deduped), primary (Casper), secondary (SCOT).
 
-# --- 6a: Casper — earliest approved per (clnt_no, tactic_id) ---
+from pyspark.sql import functions as F, Window
+import os
+
+CACHE_DIR = './cache'
+df_pop    = spark.read.parquet(f'{CACHE_DIR}/vba_population.parquet')
+df_casper = spark.read.parquet(f'{CACHE_DIR}/casper_responses.parquet')
+df_scot   = spark.read.parquet(f'{CACHE_DIR}/scot_responses.parquet')
+
+# --- Casper — earliest approved per (clnt_no, tactic_id) ---
 df_casper_approved = (
     df_casper
     .filter(F.col('visa_app_approved') == 1)
@@ -283,10 +281,9 @@ df_casper_approved = (
     )
     .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
 )
+print(f'Casper approved vintage rows (0-90d): {df_casper_approved.count():,}')
 
-print(f"Casper approved vintage rows (0-90d): {df_casper_approved.count():,}")
-
-# --- 6b: SCOT — earliest approved per (clnt_no, tactic_id) ---
+# --- SCOT — earliest approved per (clnt_no, tactic_id) ---
 df_scot_approved = (
     df_scot
     .filter(F.col('visa_app_approved') == 1)
@@ -299,21 +296,15 @@ df_scot_approved = (
     )
     .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
 )
+print(f'SCOT approved vintage rows (0-90d): {df_scot_approved.count():,}')
 
-print(f"SCOT approved vintage rows (0-90d): {df_scot_approved.count():,}")
+# --- Any — deduped across sources, earliest approved per client ---
+cols = ['clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'first_response_dt', 'mne', 'vintage']
+df_any_union = df_casper_approved.select(cols).unionByName(df_scot_approved.select(cols))
 
-# --- 6b2: Any — deduped across sources, earliest approved per client ---
-df_any_approved = (
-    df_casper_approved.select('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'first_response_dt', 'mne', 'vintage')
-    .unionByName(
-        df_scot_approved.select('clnt_no', 'tactic_id', 'Treat_Start_DT', 'Treat_End_DT', 'tst_grp_cd', 'first_response_dt', 'mne', 'vintage')
-    )
-)
-
-# Keep earliest per client — recompute vintage from the earliest across both sources
 w_any = Window.partitionBy('tactic_id', 'clnt_no').orderBy('first_response_dt')
 df_any_approved = (
-    df_any_approved
+    df_any_union
     .withColumn('rn', F.row_number().over(w_any))
     .filter(F.col('rn') == 1)
     .drop('rn')
@@ -323,49 +314,40 @@ df_any_approved = (
     )
     .filter((F.col('vintage') >= 0) & (F.col('vintage') <= 90))
 )
+print(f'Any (deduped) approved vintage rows (0-90d): {df_any_approved.count():,}')
 
-print(f"Any (deduped) approved vintage rows (0-90d): {df_any_approved.count():,}")
-
-# --- 6c: Cohort — leads per (mne, tst_grp_cd, Treat_Start_DT, Treat_End_DT) ---
+# --- Cohort ---
 df_cohort = (
     df_pop
     .withColumn('mne', F.substring('tactic_id', 8, 3))
     .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT')
     .agg(F.countDistinct('clnt_no').alias('leads'))
 )
-
-print(f"\nCohort rows: {df_cohort.count():,}")
+print(f'\nCohort rows: {df_cohort.count():,}')
 df_cohort.show(20, truncate=False)
 
-# --- 6d: Scaffold — cross join cohort with vintage days 0-90 ---
+# --- Scaffold (0-90) ---
 df_days = spark.range(0, 91).withColumnRenamed('id', 'vintage')
-
 df_scaffold = df_cohort.crossJoin(df_days)
-print(f"\nScaffold rows (should be cohort rows * 91): {df_scaffold.count():,}")
 
-# --- 6e: Daily success counts — per source + deduped any ---
-df_success_any = (
-    df_any_approved
-    .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
-    .agg(F.countDistinct('clnt_no').alias('success_daily_any'))
-)
-
-df_success_primary = (
-    df_casper_approved
-    .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
-    .agg(F.countDistinct('clnt_no').alias('success_daily_primary'))
-)
-
-df_success_secondary = (
-    df_scot_approved
-    .groupBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
-    .agg(F.countDistinct('clnt_no').alias('success_daily_secondary'))
-)
-
-# --- 6f: Join daily successes onto scaffold ---
+# --- Daily success counts ---
 join_keys = ['mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage']
 
-df_scaffold_joined = (
+df_success_any = (
+    df_any_approved
+    .groupBy(*join_keys).agg(F.countDistinct('clnt_no').alias('success_daily_any'))
+)
+df_success_primary = (
+    df_casper_approved
+    .groupBy(*join_keys).agg(F.countDistinct('clnt_no').alias('success_daily_primary'))
+)
+df_success_secondary = (
+    df_scot_approved
+    .groupBy(*join_keys).agg(F.countDistinct('clnt_no').alias('success_daily_secondary'))
+)
+
+# --- Join + cumulative ---
+df_joined = (
     df_scaffold
     .join(df_success_any,       on=join_keys, how='left')
     .join(df_success_primary,   on=join_keys, how='left')
@@ -373,8 +355,7 @@ df_scaffold_joined = (
     .fillna({'success_daily_any': 0, 'success_daily_primary': 0, 'success_daily_secondary': 0})
 )
 
-# --- 6g: Cumulative sums via Window ---
-w_vintage = (
+w = (
     Window
     .partitionBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT')
     .orderBy('vintage')
@@ -382,21 +363,21 @@ w_vintage = (
 )
 
 df_vintage = (
-    df_scaffold_joined
-    .withColumn('success_cum_any',       F.sum('success_daily_any').over(w_vintage))
-    .withColumn('success_cum_primary',   F.sum('success_daily_primary').over(w_vintage))
-    .withColumn('success_cum_secondary', F.sum('success_daily_secondary').over(w_vintage))
+    df_joined
+    .withColumn('success_cum_any',       F.sum('success_daily_any').over(w))
+    .withColumn('success_cum_primary',   F.sum('success_daily_primary').over(w))
+    .withColumn('success_cum_secondary', F.sum('success_daily_secondary').over(w))
     .orderBy('mne', 'tst_grp_cd', 'Treat_Start_DT', 'Treat_End_DT', 'vintage')
 )
 
-print(f"\nVintage curve rows: {df_vintage.count():,}")
+print(f'\nVintage curve rows: {df_vintage.count():,}')
 df_vintage.show(20, truncate=False)
 
 # %%
 # Cell 7 — Export to CSV
 
 df_summary.toPandas().to_csv('vba_vintage_summary.csv', index=False)
-print(f"Summary exported: vba_vintage_summary.csv ({df_summary.count()} rows)")
+print(f'Summary exported: vba_vintage_summary.csv ({df_summary.count()} rows)')
 
 df_vintage.toPandas().to_csv('vba_vintage_curves.csv', index=False)
-print(f"Vintage curves exported: vba_vintage_curves.csv ({df_vintage.count()} rows)")
+print(f'Vintage curves exported: vba_vintage_curves.csv ({df_vintage.count()} rows)')
