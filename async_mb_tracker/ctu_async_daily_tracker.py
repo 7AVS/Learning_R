@@ -30,7 +30,6 @@
 #
 # =============================================================================
 
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
@@ -45,11 +44,14 @@ CTU_PROMO_NAMES = [
     # Add promo tags here when received from Rajani
 ]
 
-spark = SparkSession.builder \
-    .appName("CTU Async MB Tracker") \
-    .master("yarn") \
-    .enableHiveSupport() \
-    .getOrCreate()
+# SparkSession is pre-initialized by Lumina as 'spark' — no builder needed.
+# If running outside Lumina (e.g. spark-submit), uncomment the block below:
+#
+# spark = SparkSession.builder \
+#     .appName("CTU Async MB Tracker") \
+#     .master("yarn") \
+#     .enableHiveSupport() \
+#     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
 
@@ -202,4 +204,4 @@ final.show(100, truncate=False)
 
 tactic_pop.unpersist()
 ga4_filtered.unpersist()
-spark.stop()
+# Don't call spark.stop() — Lumina manages the session lifecycle
