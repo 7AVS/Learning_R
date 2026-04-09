@@ -24,8 +24,7 @@
 -- Rajani post-launch. Update the IN list when received.
 --
 -- Tables (all accessible from EDW — Teradata/Starburst same system):
---   - DTZV01.TACTIC_EVNT_IP_AR_H60M — deployed population, test/control
---   - DG6V01.TACTIC_EVNT_IP_AR_HIST — historical tactic events (TBD — pending details)
+--   - DG6V01.TACTIC_EVNT_IP_AR_HIST — deployed population, test/control (full history)
 --   - edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce — GA4 banner events
 --
 -- Mobile-only filter (confirmed by CIDM for CTU):
@@ -66,7 +65,7 @@ SELECT
     TREATMT_END_DT,
     SUBSTR(tactic_decisn_vrb_info, 121, 30) AS channel_indicator,
     COUNT(DISTINCT CLNT_NO)       AS unique_clients
-FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
 WHERE
     SUBSTR(TACTIC_ID, 8, 3) = 'CTU'
     AND TREATMT_STRT_DT >= DATE '2026-04-01'
@@ -105,7 +104,7 @@ WITH tactic_pop AS (
         RPT_GRP_CD,
         TREATMT_STRT_DT,
         TREATMT_END_DT
-    FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE
         TACTIC_ID = '<<TACTIC_ID>>'
         AND SUBSTR(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
@@ -218,15 +217,90 @@ ORDER BY
 
 
 -- ---------------------------------------------------------------------------
+-- VALIDATION 1: Platform Check
+-- ---------------------------------------------------------------------------
+-- Verify which platforms the CTU promo tag fires on.
+-- If this promo name appears on web AND mobile, the production query
+-- needs a platform filter. If mobile-only, the promo name is sufficient.
+--
+-- Run this BEFORE trusting the production numbers.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    g.platform,
+    g.event_name,
+    COUNT(*)                          AS event_count,
+    COUNT(DISTINCT g.ep_srf_id2)     AS unique_users
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
+WHERE
+    g.year = '2026'
+    AND g.month IN ('04', '05')
+    AND g.it_item_name IN (
+        'PB_CHEQ_ALL_26_03_RBC_CTU_PDA_Product_Page'
+    )
+    AND g.ip_sf_campaign_mnemonic = 'CTU'
+    AND g.event_name IN ('view_promotion', 'select_promotion')
+GROUP BY
+    g.platform,
+    g.event_name
+ORDER BY event_count DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- VALIDATION 2: Join Key Check (ep_srf_id2 → CLNT_NO)
+-- ---------------------------------------------------------------------------
+-- Confirm the join between GA4 and tactic population actually works.
+-- Run after plugging in the tactic ID. Compare total GA4 events for
+-- CTU promo vs how many survive the join to tactic_pop.
+-- ---------------------------------------------------------------------------
+
+-- Step A: Total CTU banner events in GA4 (no join)
+SELECT
+    COUNT(*)                          AS total_events,
+    COUNT(DISTINCT ep_srf_id2)       AS unique_srf_ids
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE
+    year = '2026'
+    AND month IN ('04', '05')
+    AND it_item_name IN (
+        'PB_CHEQ_ALL_26_03_RBC_CTU_PDA_Product_Page'
+    )
+    AND ip_sf_campaign_mnemonic = 'CTU'
+    AND event_name IN ('view_promotion', 'select_promotion');
+
+-- Step B: How many of those match a tactic-deployed client
+-- Replace '<<TACTIC_ID>>' first
+SELECT
+    COUNT(*)                          AS matched_events,
+    COUNT(DISTINCT g.ep_srf_id2)     AS matched_users
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
+INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    ON CAST(g.ep_srf_id2 AS BIGINT) = t.CLNT_NO
+WHERE
+    t.TACTIC_ID = '<<TACTIC_ID>>'
+    AND SUBSTR(t.tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
+    AND g.year = '2026'
+    AND g.month IN ('04', '05')
+    AND g.it_item_name IN (
+        'PB_CHEQ_ALL_26_03_RBC_CTU_PDA_Product_Page'
+    )
+    AND g.ip_sf_campaign_mnemonic = 'CTU'
+    AND g.event_name IN ('view_promotion', 'select_promotion');
+
+-- If Step A shows events but Step B shows 0 matches → join key is wrong.
+-- Try user_id instead of ep_srf_id2 as fallback.
+
+
+-- ---------------------------------------------------------------------------
 -- POST-LAUNCH VALIDATION CHECKLIST
 -- ---------------------------------------------------------------------------
--- 1. Run discovery query → identify tactic ID for async deployment
--- 2. Replace '<<TACTIC_ID>>' in production query
--- 3. Run production query → check if results come back
--- 4. If banner_events CTE returns zero rows:
---    a. Check if promo names match (run ga4 query without join)
---    b. Check if ep_srf_id2 → CLNT_NO join produces matches
---    c. Try user_id instead of ep_srf_id2 as join key
--- 5. Control group should show zero/near-zero banner events
+-- 1. Run discovery query → identify tactic ID for CTU deployment
+-- 2. Run VALIDATION 1 (platform check) → confirm promo is mobile-only
+--    → If web events appear, add platform filter to production query
+-- 3. Replace '<<TACTIC_ID>>' everywhere
+-- 4. Run VALIDATION 2 (join key check) → confirm ep_srf_id2 → CLNT_NO works
+--    → If Step A > 0 but Step B = 0, try user_id as join key
+-- 5. Run production query → verify results
+-- 6. Control group should show zero/near-zero banner events
 --    (if not, flag as contamination)
 -- ---------------------------------------------------------------------------
