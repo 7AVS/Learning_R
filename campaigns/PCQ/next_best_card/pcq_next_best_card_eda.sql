@@ -94,7 +94,7 @@ ORDER BY
 
 -- ==========================================================================
 -- Q5: Card product distribution by test group (all waves combined).
--- Total, approved, approval rate, and share of group per product.
+-- Approved broken out by ASC category. Rates against total population per product.
 -- Expected output: ~14 rows (2 groups × 7 products).
 -- ==========================================================================
 SELECT
@@ -102,9 +102,13 @@ SELECT
     offer_prod_latest,
     offer_prod_latest_name,
     COUNT(*) AS total_clients,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY test_group_latest), 2) AS pct_of_group,
     SUM(app_approved) AS total_approved,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct,
-    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY test_group_latest), 2) AS pct_of_group
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
@@ -119,20 +123,23 @@ ORDER BY
 -- ==========================================================================
 -- Q6: Full detail dump — finest grain for Excel pivot.
 -- Run this last. All dimensions included for ad-hoc pivoting.
--- Approval aggregated into columns, not rows.
+-- Approved broken out by ASC category as columns.
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
     treatmt_end_dt,
-    asc_on_app_source,
     offer_prod_latest,
     offer_prod_latest_name,
     response_channel_grp,
     response_channel,
     COUNT(*) AS total_clients,
     SUM(app_approved) AS total_approved,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct,
     AVG(days_to_respond * 1.0) AS avg_days_to_respond,
     MIN(days_to_respond) AS min_days_to_respond,
     MAX(days_to_respond) AS max_days_to_respond
@@ -142,7 +149,6 @@ GROUP BY
     test_group_latest,
     treatmt_start_dt,
     treatmt_end_dt,
-    asc_on_app_source,
     offer_prod_latest,
     offer_prod_latest_name,
     response_channel_grp,
@@ -150,5 +156,4 @@ GROUP BY
 ORDER BY
     test_group_latest,
     treatmt_start_dt,
-    asc_on_app_source,
     total_clients DESC;
