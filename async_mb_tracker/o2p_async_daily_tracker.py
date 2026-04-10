@@ -39,6 +39,7 @@ from pyspark.storagelevel import StorageLevel
 # --- Config ---
 TACTIC_ID = "<<TACTIC_ID>>"
 TACTIC_EVNT_HIST_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
+TACTIC_YEARS = [2026]  # Partition filter — extend if campaign spans years
 GA4_ECOM_BASE = "/prod/sz/tsz/00198/data/ga4-ecommerce"
 GA4_MONTHS = ["04", "05", "06"]
 
@@ -63,9 +64,10 @@ spark.sparkContext.setLogLevel("WARN")
 # Discovery — run first to find TACTIC_ID, then update config above
 # =============================================================================
 
+tactic_paths = [f"{TACTIC_EVNT_HIST_BASE}EVNT_STRT_DT={y}*" for y in TACTIC_YEARS]
 raw_tactic = spark.read \
     .option("basePath", TACTIC_EVNT_HIST_BASE) \
-    .parquet(TACTIC_EVNT_HIST_BASE + "*")
+    .parquet(*tactic_paths)
 
 raw_tactic \
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3) == "O2P") \
