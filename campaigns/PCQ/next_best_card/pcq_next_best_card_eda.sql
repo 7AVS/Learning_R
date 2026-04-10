@@ -1,11 +1,41 @@
 -- PCQ Next Best Card Test — Exploratory Analysis
 -- Source: dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 -- Test groups: NG3_1ST (control — 1st recommended card) vs NG3_2ND (test — 2nd recommended card)
--- Purpose: Single dump at the finest useful grain. Pivot in Excel.
 
+
+-- ==========================================================================
+-- QUERY 1: Volume summary — test group × wave × ASC source × approval
+-- This is the compact overview: deployments, tracking window, conversions.
+-- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
+    treatmt_end_dt,
+    asc_on_app_source,
+    app_approved,
+    COUNT(*) AS clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    test_group_latest,
+    treatmt_start_dt,
+    treatmt_end_dt,
+    asc_on_app_source,
+    app_approved
+ORDER BY
+    test_group_latest,
+    treatmt_start_dt,
+    asc_on_app_source,
+    app_approved;
+
+
+-- ==========================================================================
+-- QUERY 2: Full detail dump — finest grain for Excel pivot
+-- ==========================================================================
+SELECT
+    test_group_latest,
+    treatmt_start_dt,
+    treatmt_end_dt,
     asc_on_app_source,
     app_approved,
     offer_prod_latest,
@@ -21,6 +51,7 @@ WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
     treatmt_start_dt,
+    treatmt_end_dt,
     asc_on_app_source,
     app_approved,
     offer_prod_latest,
