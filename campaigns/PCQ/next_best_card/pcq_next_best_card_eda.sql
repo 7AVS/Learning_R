@@ -111,18 +111,20 @@ ORDER BY
 -- ==========================================================================
 -- Q6: Full detail dump — finest grain for Excel pivot.
 -- Run this last. All dimensions included for ad-hoc pivoting.
+-- Approval aggregated into columns, not rows.
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
     treatmt_end_dt,
     asc_on_app_source,
-    app_approved,
     offer_prod_latest,
     offer_prod_latest_name,
     response_channel_grp,
     response_channel,
-    COUNT(*) AS clients,
+    COUNT(*) AS total_clients,
+    SUM(app_approved) AS total_approved,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct,
     AVG(days_to_respond * 1.0) AS avg_days_to_respond,
     MIN(days_to_respond) AS min_days_to_respond,
     MAX(days_to_respond) AS max_days_to_respond
@@ -133,7 +135,6 @@ GROUP BY
     treatmt_start_dt,
     treatmt_end_dt,
     asc_on_app_source,
-    app_approved,
     offer_prod_latest,
     offer_prod_latest_name,
     response_channel_grp,
@@ -142,5 +143,4 @@ ORDER BY
     test_group_latest,
     treatmt_start_dt,
     asc_on_app_source,
-    app_approved,
-    clients DESC;
+    total_clients DESC;
