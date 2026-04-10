@@ -1,0 +1,130 @@
+# Data Catalog — Cards Pod
+
+## Tables
+
+| Table | Schema File | Database | Grain | Description |
+|-------|-------------|----------|-------|-------------|
+| `dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp` | [cards_pcd_ongoing_decis_resp.md](cards_pcd_ongoing_decis_resp.md) | Teradata (EDW) | One row per account × tactic × response window | PCD (Product Change/Upgrade) campaign decisions and responses. 17M rows as of Mar 2026. |
+| `dw00_im.dl_mr_prod.cards_pli_decision_resp` | [cards_pli_decision_resp.md](cards_pli_decision_resp.md) | Teradata (EDW) | One row per parent tactic × account (non-unique) | PLI (Pre-Approved Limit Increase / PCL) campaign decisions and responses. 20.4M rows as of Mar 2026. |
+| `dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp` | [cards_tpa_pcq_decision_resp.md](cards_tpa_pcq_decision_resp.md) | Teradata (EDW) | One row per client × tactic × segment × treatment start (non-unique, ~200K dup rows) | TPA/PCQ (Third Party Acquisition / Credit Card Acquisition) campaign decisions and responses. 30.5M rows as of Mar 2026. |
+| `dw00_im.d3cv12a.dly_full_portfolio` | [dly_full_portfolio.md](dly_full_portfolio.md) | Teradata (EDW) | Daily account snapshot | Daily credit card portfolio table. Spend, balance, status, and attrition indicators per account per day. 64 columns. |
+| `edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce` | [ga4_ecommerce.md](ga4_ecommerce.md) | Trino (EDL) | One row per GA4 ecommerce event | GA4 ecommerce events. Contains funnel progress, item data, promotion tracking, ASC codes, and UTM parameters. Partitioned by year/month/day (varchar). |
+| `edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow` | [ga4_narrow.md](ga4_narrow.md) | Trino (EDL) | One row per GA4 event (narrow/session format) | GA4 session and page events. Contains campaign mnemonics, channel, page/screen data, device/geo detail, and user identifiers. Partitioned by year/month/day (varchar). |
+
+**Note:** The three campaign decision tables (PCD, PLI, TPA) are documented together in [cards_campaign_config.md](cards_campaign_config.md), which covers the full field taxonomy across all three — targeting, product, offer, channel, timing, hierarchy, customer context, response, digital/email, and call center.
+
+---
+
+## Validated Join Patterns
+
+### dly_full_portfolio → tactic event table (DTZV01.TACTIC_EVNT_IP_AR_H60M)
+```sql
+dly_full_portfolio.acct_no = CAST(tactic_evnt_ip_ar_h60m.tactic_evnt_id AS INTEGER)
+```
+Source: Maya's measurement code. Validated in production.
+
+### Campaign decision tables — shared join keys
+All three campaign tables (PCD, PLI, TPA) contain `acct_no` and `clnt_no`.
+- PCD: `acct_no decimal(14,0)`, `clnt_no decimal(14,0)` — both NOT NULL
+- PLI: `acct_no decimal(14,0)`, `clnt_no decimal(14,0)` — both NOT NULL
+- TPA: `acct_no integer`, `clnt_no integer` — both nullable (note type difference from PCD/PLI)
+- Portfolio: `acct_no decimal(13,0)`, `clnt_no decimal(13,0)` — precision differs; cast required
+
+**Warning:** TPA `acct_no` is `integer` vs `decimal(14,0)` in PCD/PLI. Explicit CAST needed for cross-table joins.
+
+### GA4 → campaign tables
+No validated join pattern yet. GA4 `ep_srf_id2` / `up_srf_id2_value` are candidate client identifiers, but linkage to `clnt_no` has not been confirmed.
+
+---
+
+## Validated Logic Fragments
+
+### PCQ / TPA — Success (Period-ASC application)
+```sql
+asc_on_app_source = 'Period-ASC' AND app_approved = 1
+```
+A completed and approved application that originated from an ASC (promotional) code. This is the primary PCQ conversion definition.
+
+### PLI / PCL — Model Score Sentinel Value
+```sql
+WHERE model_score > -999999
+```
+`model_score` min = -999,999 in production data. This is a sentinel for missing/unknown, not a real score. Always filter before using model_score in any analysis.
+
+### PLI — Decision Date Is Unusable
+`decision_dt` is 100% NULL across all 20.4M rows. Use `actual_strt_dt` (range: 2022-11-24 to 2026-03-05) as the campaign start date instead.
+
+### GA4 — Partition Filters (Required)
+```sql
+WHERE year = '2025' AND month = '01' AND day = '15'
+```
+Both GA4 tables partition on `year`, `month`, `day` as `varchar`. Always filter these columns to avoid full table scans.
+
+### PCD — DOR Field Anomaly
+`dor` (field #87 in PCD) returns values > 100% when treated as a percentage (observed: 286.9%). It is likely a count, not a binary flag. Do not treat as 0/1.
+
+### TACTIC_ID — MNE Position
+Positions 8–10 of `tactic_id` contain the campaign mnemonic (e.g., AUH, PCL, PCQ, IRI, IPC). Used for campaign-level filtering on tactic event tables.
+
+---
+
+## Field Dictionaries
+
+Full field lists with types and nullable flags are in the individual schema files:
+
+- [cards_pcd_ongoing_decis_resp.md](cards_pcd_ongoing_decis_resp.md) — 92 fields
+- [cards_pli_decision_resp.md](cards_pli_decision_resp.md) — 125 fields
+- [cards_tpa_pcq_decision_resp.md](cards_tpa_pcq_decision_resp.md) — 79 fields
+- [dly_full_portfolio.md](dly_full_portfolio.md) — 64 fields, with key field groups annotated
+- [ga4_ecommerce.md](ga4_ecommerce.md) — 133 fields
+- [ga4_narrow.md](ga4_narrow.md) — 102 fields
+- [cards_campaign_config.md](cards_campaign_config.md) — cross-table field taxonomy (targeting, offer, channel, response, etc.)
+
+---
+
+## EDA Findings Summary
+
+Findings from the Mar 2026 EDA run are in [cards_eda_findings.md](cards_eda_findings.md). Key takeaways:
+
+| Issue | Severity | Table | Action |
+|-------|----------|-------|--------|
+| ~200K+ duplicate rows on primary index | CRITICAL | TPA | Investigate before any measurement |
+| model_score min = -999,999 (sentinel) | CRITICAL | PLI | Filter `model_score > -999999` |
+| dor_pct = 286.9% (count, not flag) | CRITICAL | PCD | Do not use as binary flag |
+| decision_dt 100% NULL | MODERATE | PLI | Use actual_strt_dt instead |
+| 83 duplicate key pairs | MODERATE | PLI | Low risk; investigate |
+| 100% NULL columns: test_value, test_description | Low | PCD | Exclude from analysis |
+| 100% NULL columns: cellcode, newimm_seg, like_for_like_label, decision_dt | Low | PLI | Exclude from analysis |
+| 100% NULL columns: like_for_like_group, chnl_lu, chnl_ln, chnl_ec, offer_fee_waiver_months_latest | Low | TPA | Exclude from analysis |
+
+---
+
+## Tables in CLAUDE.md Not Yet Catalogued
+
+The following tables are referenced in project instructions but have no schema file in `/schemas/` yet:
+
+| Table | System | Notes |
+|-------|--------|-------|
+| `DTZV01.TACTIC_EVNT_IP_AR_H60M` | Teradata (EDW) | Tactic event history. Join key: `CAST(tactic_evnt_id AS INTEGER)` = portfolio `acct_no`. MNE at positions 8–10 of tactic_id. |
+| `DDWV01.EXT_CDP_CHNL_EVNT` | Teradata (EDW) | Channel events table. No schema documented. |
+| `DTZV01.VENDOR_FEEDBACK_MASTER` | Teradata (EDW) | Email vendor feedback. No schema documented. |
+| `DTZV01.VENDOR_FEEDBACK_EVENT` | Teradata (EDW) | Email vendor events. No schema documented. |
+| `DG6V01.CLNT_DERIV_DTA_HIST` | Segment (EDW) | Client derived data history. No schema documented. |
+
+---
+
+## TODOs — Known Gaps
+
+1. **GA4 catalog name in schema files is wrong.** Both `ga4_ecommerce.md` and `ga4_narrow.md` list the catalog as `ed10_im` (ED-ten). The correct catalog is `edl0_im` (EDL-zero). Do not fix the schema files blindly — confirm the correct value in production before updating.
+
+2. **TPA duplicate key root cause unknown.** ~200K rows have duplicate primary index `(clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt)`. Could be multiple offers per treatment period, re-targeting, or load issue. Must resolve before any TPA measurement.
+
+3. **No schema files for 5 tables in scope** — tactic event table, CDP channel events, vendor feedback (2 tables), client derived data. Add schemas as each is validated.
+
+4. **GA4 join to EDW not validated.** `ep_srf_id2` / `up_srf_id2_value` are candidate keys to `clnt_no` but the linkage is unconfirmed.
+
+5. **dly_full_portfolio grain and partition strategy not documented.** `me_dt` appears to be the partition/date key but this hasn't been confirmed with a query.
+
+6. **PLI demographic null rate (~87%) vs PCD (~3-4%) gap unexplained.** Possible enrichment join failure for PLI. Investigate before using PLI demographic fields in any segmentation.
+
+7. **No schema for `DTZV01.TACTIC_EVNT_IP_AR_H60M`.** This is the tactic event base used in CTU and O2P pipelines. Document field list and partition key (EVNT_STRT_DT confirmed as partition column from pipeline code).

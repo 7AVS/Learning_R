@@ -1,0 +1,267 @@
+# Cards Decision & Response — EDA Findings
+
+**Generated:** 2026-03-11
+**Source:** cards_eda_v2.py output (HTML report)
+**Tables:** dl_mr_prod (accessed via EDW/Trino)
+
+---
+
+## 1. Row Counts
+
+| Table | Rows |
+|-------|------|
+| PCD Ongoing | 17,076,178 |
+| PLI | 20,427,387 |
+| TPA PCQ | 30,489,940 |
+| **Total** | **67,993,505** |
+
+---
+
+## 2. Data Recency
+
+**PCD:**
+- response_start: 2022-12-01 to 2026-04-17
+- response_end: range in report
+- dt_prod_change: range in report
+- success_dt_1/2: range in report
+
+**PLI:**
+- decision_dt: None / None — **100% NULL, USELESS COLUMN**
+- actual_strt_dt: 2022-11-24 to 2026-03-05
+- dt_acct_open: 1972-12-07 to 2025-07-31
+
+**TPA:**
+- report_dt: 2023-07-27 to 2026-03-10
+- treatmt_start_dt: range in report
+- response_dt: range in report
+
+---
+
+## 3. Duplicate Key Analysis
+
+**PCD** (acct_no, clnt_no, tactic_id_parent, response_start, response_end):
+- rows_per_key=1, num_groups=17,076,178
+- **CLEAN — no duplicates. Primary index is unique.**
+
+**PLI** (parent_tactic_id, acct_no, clnt_no):
+- rows_per_key=1: 20,427,221 groups
+- rows_per_key=2: 83 groups
+- **MINOR — 83 duplicate key pairs (166 rows). Low risk but investigate.**
+
+**TPA** (clnt_no, tactic_id, target_seg, strtgy_seg_cd, treatmt_start_dt):
+- rows_per_key=1: 30,286,257
+- rows_per_key=2: 98,571
+- rows_per_key=3: 1,045
+- rows_per_key=4+: goes up to 10
+- **SIGNIFICANT — ~200K+ rows involved in duplicates. NEEDS INVESTIGATION.**
+- Possible causes: multiple offers per treatment period, re-targeting, data load issues.
+
+---
+
+## 4. NULL Analysis — 100% NULL Columns
+
+**PCD:** test_value, test_description
+
+**PLI:** cellcode, newimm_seg, like_for_like_label, decision_dt
+
+**TPA:** like_for_like_group, chnl_lu, chnl_ln, chnl_ec, offer_fee_waiver_months_latest
+
+These columns carry zero information. Exclude from any analysis.
+
+---
+
+## 5. NULL Analysis — High NULL Columns (>80%)
+
+**PCD:**
+- success_cd_1: 98.40%
+- nibt_expected_value and related nibt fields: ~98%
+- fulfillment_channel: ~98%
+- success_cd_2, success_dt_1, success_dt_2: ~98%
+
+**PLI:**
+- Demographic fields (credit_phase, life_stage, age_band, wallet_band, bi_clnt_seg, new_comer, ngen, ias): all ~87.30% null
+- limit_increase_amt: 82.60%
+- Response fields: ~82.50%
+- Mobile fields: ~56%
+
+**TPA:**
+- Response/application fields: ~97.90%
+- impression/clicked/mobile: ~97.70%
+- tactic_call: 97.40%
+
+---
+
+## 6. Key Categorical Distributions
+
+### PCD
+| Field | Top Value | % |
+|-------|-----------|---|
+| mnemonic | PCD-NBO | 100% (single campaign) |
+| product_at_decision | RVC | 24.28% |
+| relationship_mgmt | TEAM | 80.93% |
+| responder | 0.No Change | 98.03% |
+| act_ctl_seg | Action | 77.69% |
+| credit_phase | Emerging Prospects | 34.53% |
+| life_stage | Builders | 30.95% |
+| age_band | 25-34 | 26.81% |
+| wallet_band | RBC Exclusive | 46.16% |
+| ias | Mass Retail | 64.86% |
+| hsbc_ind | RBC Only | 94.38% |
+| invitation_to_upgrade | N | 95.65% |
+
+### PLI
+| Field | Top Value | % |
+|-------|-----------|---|
+| mnemonic | NBO-PCL | 100% (single campaign) |
+| increase_decrease | No Change | 82.52% |
+| product_current | IAV | 20.55% |
+| test | Not CPC/DNI | 88.59% |
+| usage_behaviour | Transactor | 63.13% |
+| spid_label | Mass Market | 51.77% |
+| hsbc_ind | RBC Only | 98.43% |
+| new_to_campaign | Not New | 88.01% |
+
+### TPA
+| Field | Top Value | % |
+|-------|-----------|---|
+| mnemonic | pcq | 100% (single campaign) |
+| target_seg | BAU | 88.92% |
+| act_ctl_seg | Action | 95.51% |
+| cmpgn_seg | NextGen-3 | 49.34% |
+| offer_prod_latest_group | Mass Market | 46.04% |
+| offer_prod_latest | IAV | 29.54% |
+| hsbc_ind | RBC Only | 97.14% |
+
+---
+
+## 7. Numeric Summaries
+
+### PCD
+| Field | Min | Max | Avg |
+|-------|-----|-----|-----|
+| nibt_expected_value | 175 | 729 | 465.75 |
+| offer_bonus_points | 6,000 | 35,000 | 21,096 |
+
+### PLI
+| Field | Min | Max | Avg |
+|-------|-----|-----|-----|
+| limit_increase_amt | 0 | 300,500 | 6,497.71 |
+| limit_decrease_amt | -40,000 | -100 | -8,726.65 |
+| cli_offer | 500 | 15,000 | 7,157.43 |
+| model_score | **-999,999** | 10 | 2.08 |
+
+> **WARNING:** PLI model_score min=-999999 is a SENTINEL VALUE, not a real score. Filter in analysis.
+
+### TPA
+| Field | Min | Max | Avg |
+|-------|-----|-----|-----|
+| offer_rate_latest | 1.75 | 5.00 | — |
+| offer_bonus_points_latest | 1,000 | 35,000 | 23,654 |
+| model_score | 0.00 | 1.00 | 0.17 |
+| expected_value | 0.00 | 874.00 | 52.66 |
+| times_targeted | 1 | 63 | 15.56 |
+
+---
+
+## 8. Response & Conversion Rates
+
+| Table | Metric | Rate |
+|-------|--------|------|
+| PCD | resp_any_pct | 2.00% |
+| PCD | resp_target_pct | 1.60% |
+| PLI | responder_cli_pct | 17.30% |
+| PLI | decisioned_acct | 100.00% |
+| TPA | app_completed_pct | 2.10% |
+| TPA | app_approved_pct | 1.00% |
+
+PLI has best conversion (17.3%). PCD and TPA very low (~2%).
+
+---
+
+## 9. Channel Deployment
+
+**PCD:** channel_deploy_cc Y=77.39%, channel_deploy_rd N=100% (never used)
+
+**PLI:** cc=100%, do=100%, in=100% (always on), rd=0% (never used)
+
+**TPA:** do=90.50%, em=65.20%, in=100%, mb=34.70%, iv=24.10%
+
+---
+
+## 10. OandO (Offers & Opportunities) Funnel
+
+| Table | oando% | actioned% | pending% | declined% | approved% |
+|-------|--------|-----------|----------|-----------|-----------|
+| PCD | 77.40 | 6.30 | — | — | — |
+| PLI | 100.00 | 20.50 | 9.20 | 4.70 | 15.60 |
+| TPA | 72.10 | 3.90 | — | — | 1.70 |
+
+PLI has 100% OandO and highest actioned rate. TPA lowest.
+
+---
+
+## 11. Email & Digital
+
+| Table | tactic_email% | top_disposition | olb% | mb% |
+|-------|--------------|-----------------|------|-----|
+| PCD | 56.40 | eMail Open 36.43% | 45.30 | 79.10 |
+| PLI | 58.30 | — | 5.70 | 30.00 |
+| TPA | 35.50 | eMail Open 19.56% | — | — |
+
+> **ANOMALY:** PCD dor_pct = 286.90% — exceeds 100%. Likely a count field, not a flag.
+
+---
+
+## 12. TPA Call Center (Genesis)
+
+| Metric | Rate |
+|--------|------|
+| tactic_call_pct | 2.60% |
+| contact_attempt_pct | 3.00% |
+
+---
+
+## 13. TPA Decision Timing
+
+| Year | % |
+|------|---|
+| 2022 | 27.87% |
+| 2023 | 22.04% |
+| 2024 | 21.01% |
+| 2025 | 24.74% |
+| 2026 | 4.34% (partial) |
+
+Monthly distribution roughly even at 7-10% each.
+
+---
+
+## 14. Issues & Action Items
+
+### CRITICAL
+1. **TPA duplicate keys** — ~200K+ rows with duplicate primary index. Investigate root cause: multiple offers per treatment period, re-targeting, or data load issues.
+2. **PLI model_score min = -999999** — sentinel/missing value coded as number. Filter model_score <= -999999 in any analysis.
+3. **PCD dor_pct = 286.90%** — exceeds 100%. Check if 'dor' is a count not a flag.
+
+### MODERATE
+4. **PLI decision_dt is 100% NULL** across all 20.4M rows. Confirm if deprecated or loaded elsewhere.
+5. **Multiple columns 100% null** — exclude from analysis, confirm if deprecated.
+6. **PLI 83 duplicate key pairs** — low priority but worth understanding.
+7. **High null rates on demographics in PLI (~87%) vs PCD (~3-4%)** — possible join enrichment issue.
+
+### LOW
+8. **All three tables have single mnemonic** (PCD-NBO, NBO-PCL, pcq). Campaign-specific tables, not general customer tables.
+9. **Response rates very low** (PCD 2%, TPA 1% approval). Normal for credit card offers but worth benchmarking.
+
+---
+
+## 15. Cross-Table Observations
+
+- All three tables share: oando fields, email fields, demographic fields (credit_phase, wallet_band, life_stage, bi_clnt_seg), digital fields (impression_olb, clicked_olb).
+- Common join keys: **acct_no, clnt_no** appear in all three tables.
+- PCD has best demographic coverage (~3-4% null). PLI has worst (~87% null). TPA varies.
+- Product overlap: IAV, CL2, RVC, ION appear across tables.
+- hsbc_ind: ~94-98% "RBC Only" across all tables.
+- Each table represents a different campaign type:
+  - **PCD** = Product Change/Upgrade offers
+  - **PLI** = Pre-approved Credit Limit Increases
+  - **TPA** = Third Party Acquisition (new card applications)
