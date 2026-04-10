@@ -86,14 +86,17 @@ ORDER BY
 
 -- ==========================================================================
 -- Q5: Card product distribution by test group (all waves combined).
--- What cards are being offered in control vs test?
+-- Total, approved, approval rate, and share of group per product.
 -- Expected output: ~14 rows (2 groups × 7 products).
 -- ==========================================================================
 SELECT
     test_group_latest,
     offer_prod_latest,
     offer_prod_latest_name,
-    COUNT(*) AS clients
+    COUNT(*) AS total_clients,
+    SUM(app_approved) AS total_approved,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY test_group_latest), 2) AS pct_of_group
 FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
@@ -102,7 +105,7 @@ GROUP BY
     offer_prod_latest_name
 ORDER BY
     test_group_latest,
-    clients DESC;
+    total_clients DESC;
 
 
 -- ==========================================================================
