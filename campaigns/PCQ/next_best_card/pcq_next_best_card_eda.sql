@@ -39,49 +39,57 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q3: Conversion by test group × ASC source category.
--- All waves combined. One row per group × ASC category.
--- Total clients, total approved, and approval rate in a single row.
--- Expected output: ~8 rows (2 groups × (3 ASC categories + 1 total)).
+-- Q3: Conversion summary — one row per test group.
+-- All waves combined. ASC categories as columns, not rows.
+-- Denominator = total population (including non-responders).
+-- Expected output: 2 rows.
 -- ==========================================================================
 SELECT
     test_group_latest,
-    asc_on_app_source,
     COUNT(*) AS total_clients,
+    SUM(CASE WHEN asc_on_app_source IS NOT NULL THEN 1 ELSE 0 END) AS total_responded,
     SUM(app_approved) AS total_approved,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_no_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_other_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
-    test_group_latest,
-    asc_on_app_source
+    test_group_latest
 ORDER BY
-    test_group_latest,
-    asc_on_app_source;
+    test_group_latest;
 
 
 -- ==========================================================================
 -- Q4: Same as Q3 but split by wave (treatmt_start_dt).
 -- Shows if conversion patterns differ between Jan and Feb deployments.
--- Expected output: ~16 rows (2 groups × 2 waves × (3 ASC + 1 total)).
+-- Expected output: 4 rows (2 groups × 2 waves).
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
-    asc_on_app_source,
     COUNT(*) AS total_clients,
+    SUM(CASE WHEN asc_on_app_source IS NOT NULL THEN 1 ELSE 0 END) AS total_responded,
     SUM(app_approved) AS total_approved,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_no_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_other_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
-    treatmt_start_dt,
-    asc_on_app_source
+    treatmt_start_dt
 ORDER BY
     test_group_latest,
-    treatmt_start_dt,
-    asc_on_app_source;
+    treatmt_start_dt;
 
 
 -- ==========================================================================
