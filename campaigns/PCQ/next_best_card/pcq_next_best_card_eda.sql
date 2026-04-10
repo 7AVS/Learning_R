@@ -226,18 +226,21 @@ FROM (
 
 
 -- ==========================================================================
--- Q10: Sanity check — approved clients with multiple credit card products.
--- Same client approved for more than one card?
--- Expected output: count of clients.
--- If overlap_count = 0, each client approved for exactly one product.
+-- Q10: Sanity check — approved clients with multiple approval rows.
+-- Any client approved more than once? Shows the detail so we can see
+-- if it's the same card, different card, same wave, different wave.
+-- Expected output: one row per multi-approved client.
+-- If empty, every approved client has exactly one approval.
 -- ==========================================================================
 SELECT
-    COUNT(*) AS overlap_count
-FROM (
-    SELECT clnt_no
-    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-      AND app_approved = 1
-    GROUP BY clnt_no
-    HAVING COUNT(DISTINCT offer_prod_latest) > 1
-) multi_product;
+    clnt_no,
+    COUNT(*) AS total_approvals,
+    COUNT(DISTINCT offer_prod_latest) AS distinct_products,
+    COUNT(DISTINCT treatmt_start_dt) AS distinct_waves,
+    COUNT(DISTINCT asc_on_app_source) AS distinct_asc
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND app_approved = 1
+GROUP BY clnt_no
+HAVING COUNT(*) > 1
+ORDER BY total_approvals DESC;
