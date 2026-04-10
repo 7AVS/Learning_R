@@ -157,3 +157,50 @@ ORDER BY
     test_group_latest,
     treatmt_start_dt,
     total_clients DESC;
+
+
+-- ==========================================================================
+-- Q7: Sanity check — client overlap across test groups.
+-- Are any clients in BOTH NG3_1ST and NG3_2ND?
+-- Expected output: 1 row. If overlap_count = 0, groups are clean.
+-- ==========================================================================
+SELECT
+    COUNT(*) AS overlap_count
+FROM (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest = 'NG3_1ST'
+    GROUP BY clnt_no
+) a
+INNER JOIN (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest = 'NG3_2ND'
+    GROUP BY clnt_no
+) b
+ON a.clnt_no = b.clnt_no;
+
+
+-- ==========================================================================
+-- Q8: Sanity check — approved clients appearing multiple times.
+-- Among approved clients (app_approved = 1), how many have more than one
+-- approval row? Shows if clients approved for multiple cards, across waves,
+-- or across ASC categories.
+-- Expected output: one row per client who approved more than once,
+-- with their counts per ASC category. If empty, all approvals are unique.
+-- ==========================================================================
+SELECT
+    clnt_no,
+    COUNT(*) AS total_approvals,
+    COUNT(DISTINCT asc_on_app_source) AS distinct_asc_categories,
+    COUNT(DISTINCT treatmt_start_dt) AS distinct_waves,
+    COUNT(DISTINCT offer_prod_latest) AS distinct_products,
+    SUM(CASE WHEN asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approvals_no_asc,
+    SUM(CASE WHEN asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approvals_other_asc,
+    SUM(CASE WHEN asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approvals_period_asc
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND app_approved = 1
+GROUP BY clnt_no
+HAVING COUNT(*) > 1
+ORDER BY total_approvals DESC;
