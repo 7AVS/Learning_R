@@ -1,5 +1,5 @@
 -- PCQ Next Best Card Test — Exploratory Analysis
--- Source: dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+-- Source: DL_MR_PROD.cards_tpa_pcq_decision_resp
 -- Test groups: NG3_1ST (control — 1st recommended card) vs NG3_2ND (test — 2nd recommended card)
 
 
@@ -12,7 +12,7 @@ SELECT
     treatmt_start_dt,
     treatmt_end_dt,
     COUNT(*) AS clients
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
@@ -30,7 +30,7 @@ ORDER BY
 SELECT
     test_group_latest,
     COUNT(*) AS total_clients
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest
@@ -50,7 +50,7 @@ SELECT
     COUNT(*) AS total_clients,
     SUM(app_approved) AS total_approved,
     ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
@@ -72,7 +72,7 @@ SELECT
     COUNT(*) AS total_clients,
     SUM(app_approved) AS total_approved,
     ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
@@ -97,7 +97,7 @@ SELECT
     SUM(app_approved) AS total_approved,
     ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct,
     ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY test_group_latest), 2) AS pct_of_group
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
@@ -128,7 +128,7 @@ SELECT
     AVG(days_to_respond * 1.0) AS avg_days_to_respond,
     MIN(days_to_respond) AS min_days_to_respond,
     MAX(days_to_respond) AS max_days_to_respond
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
