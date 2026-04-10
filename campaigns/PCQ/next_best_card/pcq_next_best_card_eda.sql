@@ -4,13 +4,71 @@
 
 
 -- ==========================================================================
--- QUERY 1: Volume summary — test group × wave × ASC source × approval
--- This is the compact overview: deployments, tracking window, conversions.
+-- Q1: How many deployment waves, and what is the treatment window?
+-- Expected output: small — one row per wave per group with start/end dates.
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
     treatmt_end_dt,
+    COUNT(*) AS clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    test_group_latest,
+    treatmt_start_dt,
+    treatmt_end_dt
+ORDER BY
+    treatmt_start_dt,
+    test_group_latest;
+
+
+-- ==========================================================================
+-- Q2: Total deployment volume by test group (all waves combined).
+-- Expected output: 2 rows — one per group.
+-- ==========================================================================
+SELECT
+    test_group_latest,
+    COUNT(*) AS total_clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    test_group_latest
+ORDER BY
+    test_group_latest;
+
+
+-- ==========================================================================
+-- Q3: Conversion by test group × ASC source category × approval status.
+-- All waves combined. This is the core answer: how does each group convert,
+-- and what does the ASC source distribution look like?
+-- Expected output: ~12 rows (2 groups × 3 ASC categories × 2 approval).
+-- ==========================================================================
+SELECT
+    test_group_latest,
+    asc_on_app_source,
+    app_approved,
+    COUNT(*) AS clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    test_group_latest,
+    asc_on_app_source,
+    app_approved
+ORDER BY
+    test_group_latest,
+    asc_on_app_source,
+    app_approved;
+
+
+-- ==========================================================================
+-- Q4: Same as Q3 but split by wave (treatmt_start_dt).
+-- Shows if conversion patterns differ between Jan and Feb deployments.
+-- Expected output: ~24 rows.
+-- ==========================================================================
+SELECT
+    test_group_latest,
+    treatmt_start_dt,
     asc_on_app_source,
     app_approved,
     COUNT(*) AS clients
@@ -19,7 +77,6 @@ WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
     treatmt_start_dt,
-    treatmt_end_dt,
     asc_on_app_source,
     app_approved
 ORDER BY
@@ -30,7 +87,29 @@ ORDER BY
 
 
 -- ==========================================================================
--- QUERY 2: Full detail dump — finest grain for Excel pivot
+-- Q5: Card product distribution by test group (all waves combined).
+-- What cards are being offered in control vs test?
+-- Expected output: ~14 rows (2 groups × 7 products).
+-- ==========================================================================
+SELECT
+    test_group_latest,
+    offer_prod_latest,
+    offer_prod_latest_name,
+    COUNT(*) AS clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    test_group_latest,
+    offer_prod_latest,
+    offer_prod_latest_name
+ORDER BY
+    test_group_latest,
+    clients DESC;
+
+
+-- ==========================================================================
+-- Q6: Full detail dump — finest grain for Excel pivot.
+-- Run this last. All dimensions included for ad-hoc pivoting.
 -- ==========================================================================
 SELECT
     test_group_latest,
