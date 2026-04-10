@@ -39,51 +39,49 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q3: Conversion by test group × ASC source category × approval status.
--- All waves combined. This is the core answer: how does each group convert,
--- and what does the ASC source distribution look like?
--- Expected output: ~12 rows (2 groups × 3 ASC categories × 2 approval).
+-- Q3: Conversion by test group × ASC source category.
+-- All waves combined. One row per group × ASC category.
+-- Total clients, total approved, and approval rate in a single row.
+-- Expected output: ~8 rows (2 groups × (3 ASC categories + 1 total)).
 -- ==========================================================================
 SELECT
     test_group_latest,
     asc_on_app_source,
-    app_approved,
-    COUNT(*) AS clients
+    COUNT(*) AS total_clients,
+    SUM(app_approved) AS total_approved,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
 FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
-    asc_on_app_source,
-    app_approved
+    asc_on_app_source
 ORDER BY
     test_group_latest,
-    asc_on_app_source,
-    app_approved;
+    asc_on_app_source;
 
 
 -- ==========================================================================
 -- Q4: Same as Q3 but split by wave (treatmt_start_dt).
 -- Shows if conversion patterns differ between Jan and Feb deployments.
--- Expected output: ~24 rows.
+-- Expected output: ~16 rows (2 groups × 2 waves × (3 ASC + 1 total)).
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
     asc_on_app_source,
-    app_approved,
-    COUNT(*) AS clients
+    COUNT(*) AS total_clients,
+    SUM(app_approved) AS total_approved,
+    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS approval_rate_pct
 FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
     treatmt_start_dt,
-    asc_on_app_source,
-    app_approved
+    asc_on_app_source
 ORDER BY
     test_group_latest,
     treatmt_start_dt,
-    asc_on_app_source,
-    app_approved;
+    asc_on_app_source;
 
 
 -- ==========================================================================
