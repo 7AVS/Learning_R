@@ -182,25 +182,62 @@ ON a.clnt_no = b.clnt_no;
 
 
 -- ==========================================================================
--- Q8: Sanity check — approved clients appearing multiple times.
--- Among approved clients (app_approved = 1), how many have more than one
--- approval row? Shows if clients approved for multiple cards, across waves,
--- or across ASC categories.
--- Expected output: one row per client who approved more than once,
--- with their counts per ASC category. If empty, all approvals are unique.
+-- Q8: Sanity check — approved clients across BOTH waves.
+-- Same client approved in Jan AND Feb deployment?
+-- Expected output: 1 row. If overlap_count = 0, no cross-wave approvals.
 -- ==========================================================================
 SELECT
-    clnt_no,
-    COUNT(*) AS total_approvals,
-    COUNT(DISTINCT asc_on_app_source) AS distinct_asc_categories,
-    COUNT(DISTINCT treatmt_start_dt) AS distinct_waves,
-    COUNT(DISTINCT offer_prod_latest) AS distinct_products,
-    SUM(CASE WHEN asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approvals_no_asc,
-    SUM(CASE WHEN asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approvals_other_asc,
-    SUM(CASE WHEN asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approvals_period_asc
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-  AND app_approved = 1
-GROUP BY clnt_no
-HAVING COUNT(*) > 1
-ORDER BY total_approvals DESC;
+    COUNT(*) AS overlap_count
+FROM (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+      AND treatmt_start_dt = DATE '2025-01-09'
+    GROUP BY clnt_no
+) jan
+INNER JOIN (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+      AND treatmt_start_dt = DATE '2025-02-06'
+    GROUP BY clnt_no
+) feb
+ON jan.clnt_no = feb.clnt_no;
+
+
+-- ==========================================================================
+-- Q9: Sanity check — approved clients across multiple ASC categories.
+-- Same client approved through more than one ASC source?
+-- Expected output: count of clients + breakdown.
+-- If overlap_count = 0, each client approved through only one ASC source.
+-- ==========================================================================
+SELECT
+    COUNT(*) AS overlap_count
+FROM (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+    GROUP BY clnt_no
+    HAVING COUNT(DISTINCT asc_on_app_source) > 1
+) multi_asc;
+
+
+-- ==========================================================================
+-- Q10: Sanity check — approved clients with multiple credit card products.
+-- Same client approved for more than one card?
+-- Expected output: count of clients.
+-- If overlap_count = 0, each client approved for exactly one product.
+-- ==========================================================================
+SELECT
+    COUNT(*) AS overlap_count
+FROM (
+    SELECT clnt_no
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+    GROUP BY clnt_no
+    HAVING COUNT(DISTINCT offer_prod_latest) > 1
+) multi_product;
