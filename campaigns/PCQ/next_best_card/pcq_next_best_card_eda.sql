@@ -390,27 +390,28 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q14: Sanity check — how many cards per account?
--- Shows distinct member_num (cards) per account for approved clients.
--- If most accounts have 1 card, the pre-aggregation is clean.
+-- Q14: Sanity check — portfolio row distribution per account × me_dt.
+-- How many raw rows exist per acct_no × me_dt? Higher = finer grain
+-- (cards, transactions, etc). Tells us the pre-aggregation is necessary.
 -- ==========================================================================
 SELECT
-    cards_per_account,
-    COUNT(*) AS account_count
+    rows_per_acct_month,
+    COUNT(*) AS occurrences
 FROM (
     SELECT
-        r.acct_no,
-        COUNT(DISTINCT p.member_num) AS cards_per_account
+        p.acct_no,
+        p.me_dt,
+        COUNT(*) AS rows_per_acct_month
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
         ON p.acct_no = r.acct_no
         AND p.me_dt >= r.treatmt_start_dt
     WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
       AND r.app_approved = 1
-    GROUP BY r.acct_no
-) card_check
-GROUP BY cards_per_account
-ORDER BY cards_per_account;
+    GROUP BY p.acct_no, p.me_dt
+) grain_dist
+GROUP BY rows_per_acct_month
+ORDER BY rows_per_acct_month;
 
 
 -- ==========================================================================
