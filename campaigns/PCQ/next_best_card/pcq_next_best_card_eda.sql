@@ -328,3 +328,40 @@ ORDER BY
     approved_accounts DESC;
 
 
+-- ==========================================================================
+-- Q13: Balance/spend curves — daily metrics by day since treatment.
+-- One row per day × test group × wave × ASC source × product.
+-- Pivot in Excel to see any combination of curves.
+-- day_since_treatment normalizes Jan and Feb waves onto the same x-axis.
+-- ==========================================================================
+SELECT
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.me_dt - r.treatmt_start_dt AS day_since_treatment,
+    COUNT(DISTINCT r.acct_no) AS accounts_reporting,
+    AVG(p.bal_current) AS avg_balance,
+    SUM(p.net_prch_amt_dly) AS total_daily_purchases
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = r.acct_no
+    AND p.me_dt >= r.treatmt_start_dt
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
+GROUP BY
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.me_dt - r.treatmt_start_dt
+ORDER BY
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    day_since_treatment;
+
+
