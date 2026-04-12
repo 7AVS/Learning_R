@@ -270,7 +270,8 @@ SELECT
     MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
     MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
     MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
-    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff
+    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
+    MIN(CASE WHEN p.status <> 'OPEN' THEN p.me_dt END) - r.treatmt_start_dt AS days_to_status_change
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
     ON p.acct_no = r.acct_no
