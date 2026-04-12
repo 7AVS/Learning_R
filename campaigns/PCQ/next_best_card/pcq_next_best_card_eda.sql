@@ -264,7 +264,13 @@ SELECT
     AVG(p.bal_current) AS avg_balance,
     MAX(p.bal_current) AS max_balance,
     SUM(p.net_prch_amt_dly) AS total_net_purchases,
-    MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS vol_attrition
+    MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
+    MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
+    MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
+    MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
+    MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
+    MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
+    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
     ON p.acct_no = r.acct_no
@@ -299,7 +305,13 @@ SELECT
     AVG(p.bal_current) AS avg_balance,
     SUM(p.net_prch_amt_dly) AS total_net_purchases,
     SUM(p.net_prch_amt_dly) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account,
-    COUNT(DISTINCT CASE WHEN p.status = 'VOL' THEN r.acct_no END) AS accounts_vol_attrition
+    COUNT(DISTINCT CASE WHEN p.status = 'BKPT' THEN r.acct_no END) AS accts_bkpt,
+    COUNT(DISTINCT CASE WHEN p.status = 'COLL' THEN r.acct_no END) AS accts_coll,
+    COUNT(DISTINCT CASE WHEN p.status = 'FRD' THEN r.acct_no END) AS accts_frd,
+    COUNT(DISTINCT CASE WHEN p.status = 'INV' THEN r.acct_no END) AS accts_inv,
+    COUNT(DISTINCT CASE WHEN p.status = 'OPEN' THEN r.acct_no END) AS accts_open,
+    COUNT(DISTINCT CASE WHEN p.status = 'VOL' THEN r.acct_no END) AS accts_vol,
+    COUNT(DISTINCT CASE WHEN p.status = 'WOFF' THEN r.acct_no END) AS accts_woff
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
     ON p.acct_no = r.acct_no
