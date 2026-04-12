@@ -94,7 +94,7 @@ ORDER BY
 
 -- ==========================================================================
 -- Q5: Card product distribution by test group (all waves combined).
--- Approved broken out by ASC category. Rates against total population per product.
+-- Approved broken out by ASC category. No percentages.
 -- Expected output: ~14 rows (2 groups × 7 products).
 -- ==========================================================================
 SELECT
@@ -102,13 +102,10 @@ SELECT
     offer_prod_latest,
     offer_prod_latest_name,
     COUNT(*) AS total_clients,
-    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY test_group_latest), 2) AS pct_of_group,
     SUM(app_approved) AS total_approved,
     SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
     SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
@@ -244,3 +241,74 @@ WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY clnt_no
 HAVING COUNT(*) > 1
 ORDER BY total_approvals DESC;
+
+
+-- ==========================================================================
+-- Q11: Portfolio join — account-level detail for approved clients.
+-- One row per approved account. Avg balance, total purchases, data coverage.
+-- LEFT JOIN so we see approved accounts with no portfolio data.
+-- Post-treatment only: me_dt >= treatmt_start_dt.
+-- ==========================================================================
+SELECT
+    r.test_group_latest,
+    r.clnt_no,
+    r.acct_no,
+    r.treatmt_start_dt,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    r.asc_on_app_source,
+    r.response_dt,
+    COUNT(p.me_dt) AS days_with_data,
+    MIN(p.me_dt) AS first_portfolio_dt,
+    MAX(p.me_dt) AS last_portfolio_dt,
+    AVG(p.bal_current) AS avg_balance,
+    MAX(p.bal_current) AS max_balance,
+    SUM(p.net_prch_amt_dly) AS total_net_purchases,
+    SUM(p.net_prch_amt_mtd) AS total_net_purchases_mtd
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = r.acct_no
+    AND p.me_dt >= r.treatmt_start_dt
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
+GROUP BY
+    r.test_group_latest,
+    r.clnt_no,
+    r.acct_no,
+    r.treatmt_start_dt,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    r.asc_on_app_source,
+    r.response_dt
+ORDER BY
+    r.test_group_latest,
+    r.offer_prod_latest,
+    total_net_purchases DESC;
+
+
+-- ==========================================================================
+-- Q12: Portfolio summary — test group × product for approved clients.
+-- Rolls up Q11. This is the Phil slide view.
+-- ==========================================================================
+SELECT
+    r.test_group_latest,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    COUNT(DISTINCT r.acct_no) AS approved_accounts,
+    COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END) AS accounts_with_portfolio,
+    AVG(p.bal_current) AS avg_balance,
+    SUM(p.net_prch_amt_dly) AS total_net_purchases,
+    SUM(p.net_prch_amt_dly) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = r.acct_no
+    AND p.me_dt >= r.treatmt_start_dt
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
+GROUP BY
+    r.test_group_latest,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name
+ORDER BY
+    r.test_group_latest,
+    approved_accounts DESC;
