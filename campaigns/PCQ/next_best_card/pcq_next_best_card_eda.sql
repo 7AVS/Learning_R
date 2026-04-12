@@ -245,9 +245,8 @@ ORDER BY total_approvals DESC;
 
 -- ==========================================================================
 -- Q11: Portfolio join — account-level detail for approved clients.
--- One row per approved account. Avg balance, total purchases, data coverage.
--- LEFT JOIN so we see approved accounts with no portfolio data.
--- Post-treatment only: me_dt >= treatmt_start_dt.
+-- Pre-aggregates portfolio to account × me_dt to avoid card/transaction
+-- level inflation. One row per approved account.
 -- ==========================================================================
 SELECT
     r.test_group_latest,
@@ -258,12 +257,12 @@ SELECT
     r.offer_prod_latest_name,
     r.asc_on_app_source,
     r.response_dt,
-    COUNT(p.me_dt) AS days_with_data,
+    COUNT(p.me_dt) AS months_with_data,
     MIN(p.me_dt) AS first_portfolio_dt,
     MAX(p.me_dt) AS last_portfolio_dt,
     AVG(p.bal_current) AS avg_balance,
     MAX(p.bal_current) AS max_balance,
-    SUM(p.net_prch_amt_dly) AS total_net_purchases,
+    SUM(p.net_prch_amt_mtd) AS total_net_purchases,
     MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
     MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
     MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
@@ -273,7 +272,16 @@ SELECT
     MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
     MIN(CASE WHEN p.status <> 'OPEN' THEN p.me_dt END) - r.treatmt_start_dt AS days_to_status_change
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+LEFT JOIN (
+    SELECT
+        acct_no,
+        me_dt,
+        SUM(bal_current) AS bal_current,
+        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd,
+        MAX(status) AS status
+    FROM D3CV12A.DLY_FULL_PORTFOLIO
+    GROUP BY acct_no, me_dt
+) p
     ON p.acct_no = r.acct_no
     AND p.me_dt >= r.treatmt_start_dt
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
@@ -295,7 +303,7 @@ ORDER BY
 
 -- ==========================================================================
 -- Q12: Portfolio summary — test group × product for approved clients.
--- Rolls up Q11. This is the Phil slide view.
+-- Rolls up Q11. Pre-aggregated portfolio.
 -- ==========================================================================
 SELECT
     r.test_group_latest,
@@ -304,8 +312,8 @@ SELECT
     COUNT(DISTINCT r.acct_no) AS approved_accounts,
     COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END) AS accounts_with_portfolio,
     AVG(p.bal_current) AS avg_balance,
-    SUM(p.net_prch_amt_dly) AS total_net_purchases,
-    SUM(p.net_prch_amt_dly) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account,
+    SUM(p.net_prch_amt_mtd) AS total_net_purchases,
+    SUM(p.net_prch_amt_mtd) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account,
     COUNT(DISTINCT CASE WHEN p.status = 'BKPT' THEN r.acct_no END) AS accts_bkpt,
     COUNT(DISTINCT CASE WHEN p.status = 'COLL' THEN r.acct_no END) AS accts_coll,
     COUNT(DISTINCT CASE WHEN p.status = 'FRD' THEN r.acct_no END) AS accts_frd,
@@ -314,7 +322,16 @@ SELECT
     COUNT(DISTINCT CASE WHEN p.status = 'VOL' THEN r.acct_no END) AS accts_vol,
     COUNT(DISTINCT CASE WHEN p.status = 'WOFF' THEN r.acct_no END) AS accts_woff
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+LEFT JOIN (
+    SELECT
+        acct_no,
+        me_dt,
+        SUM(bal_current) AS bal_current,
+        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd,
+        MAX(status) AS status
+    FROM D3CV12A.DLY_FULL_PORTFOLIO
+    GROUP BY acct_no, me_dt
+) p
     ON p.acct_no = r.acct_no
     AND p.me_dt >= r.treatmt_start_dt
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
@@ -330,7 +347,7 @@ ORDER BY
 
 -- ==========================================================================
 -- Q13: Balance/spend curves — monthly metrics by me_dt.
--- One row per month × test group × wave × ASC source × product.
+-- Pre-aggregated portfolio to account × me_dt.
 -- Pivot in Excel to see any combination of curves.
 -- ==========================================================================
 SELECT
@@ -344,7 +361,15 @@ SELECT
     AVG(p.bal_current) AS avg_balance,
     SUM(p.net_prch_amt_mtd) AS total_purchases_mtd
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+INNER JOIN (
+    SELECT
+        acct_no,
+        me_dt,
+        SUM(bal_current) AS bal_current,
+        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd
+    FROM D3CV12A.DLY_FULL_PORTFOLIO
+    GROUP BY acct_no, me_dt
+) p
     ON p.acct_no = r.acct_no
     AND p.me_dt >= r.treatmt_start_dt
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
@@ -365,35 +390,32 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q14: Sanity check — portfolio table grain.
--- Are there multiple rows per acct_no × me_dt? If so, the table is at
--- card level (member_num), not account level, and our aggregates are wrong.
--- Expected output: 1 row. If max_rows_per_day > 1, we have a problem.
+-- Q14: Sanity check — how many cards per account?
+-- Shows distinct member_num (cards) per account for approved clients.
+-- If most accounts have 1 card, the pre-aggregation is clean.
 -- ==========================================================================
 SELECT
-    MAX(row_count) AS max_rows_per_day,
-    AVG(row_count * 1.0) AS avg_rows_per_day,
-    SUM(CASE WHEN row_count > 1 THEN 1 ELSE 0 END) AS accounts_with_dupes,
-    COUNT(*) AS total_account_days
+    cards_per_account,
+    COUNT(*) AS account_count
 FROM (
     SELECT
-        p.acct_no,
-        p.me_dt,
-        COUNT(*) AS row_count
+        r.acct_no,
+        COUNT(DISTINCT p.member_num) AS cards_per_account
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
         ON p.acct_no = r.acct_no
         AND p.me_dt >= r.treatmt_start_dt
     WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
       AND r.app_approved = 1
-    GROUP BY p.acct_no, p.me_dt
-) grain_check;
+    GROUP BY r.acct_no
+) card_check
+GROUP BY cards_per_account
+ORDER BY cards_per_account;
 
 
 -- ==========================================================================
 -- Q15: Sanity check — portfolio product vs PCQ offered product.
 -- Does visa_prod_cd from the portfolio match offer_prod_latest from PCQ?
--- Shows the mapping so we know if what was offered = what's on the card.
 -- ==========================================================================
 SELECT
     r.offer_prod_latest,
