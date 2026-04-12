@@ -264,10 +264,7 @@ SELECT
     AVG(p.bal_current) AS avg_balance,
     MAX(p.bal_current) AS max_balance,
     SUM(p.net_prch_amt_dly) AS total_net_purchases,
-    MAX(p.cd_closed) AS cd_closed,
-    MAX(p.cd_chrgoff) AS cd_chrgoff,
-    MAX(p.acct_cls_dt) AS acct_cls_dt,
-    MAX(p.status) AS latest_status
+    MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS vol_attrition
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
     ON p.acct_no = r.acct_no
@@ -302,8 +299,7 @@ SELECT
     AVG(p.bal_current) AS avg_balance,
     SUM(p.net_prch_amt_dly) AS total_net_purchases,
     SUM(p.net_prch_amt_dly) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account,
-    SUM(CASE WHEN p.acct_cls_dt IS NOT NULL THEN 1 ELSE 0 END) AS accounts_closed,
-    SUM(CASE WHEN p.cd_chrgoff IS NOT NULL AND p.cd_chrgoff <> '' THEN 1 ELSE 0 END) AS accounts_chargedoff
+    COUNT(DISTINCT CASE WHEN p.status = 'VOL' THEN r.acct_no END) AS accounts_vol_attrition
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
     ON p.acct_no = r.acct_no
@@ -319,26 +315,3 @@ ORDER BY
     approved_accounts DESC;
 
 
--- ==========================================================================
--- Q13: Discovery — what values do the attrition fields take?
--- Run this before trusting cd_closed, cd_chrgoff, status in Q11/Q12.
--- Shows all distinct values and their counts for approved accounts
--- joined to portfolio.
--- ==========================================================================
-SELECT
-    p.cd_closed,
-    p.cd_chrgoff,
-    p.status,
-    COUNT(*) AS row_count
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-    ON p.acct_no = r.acct_no
-    AND p.me_dt >= r.treatmt_start_dt
-WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-  AND r.app_approved = 1
-GROUP BY
-    p.cd_closed,
-    p.cd_chrgoff,
-    p.status
-ORDER BY
-    row_count DESC;
