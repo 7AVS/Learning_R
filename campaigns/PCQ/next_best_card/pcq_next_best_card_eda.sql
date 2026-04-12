@@ -365,3 +365,52 @@ ORDER BY
     day_since_treatment;
 
 
+-- ==========================================================================
+-- Q14: Sanity check — portfolio table grain.
+-- Are there multiple rows per acct_no × me_dt? If so, the table is at
+-- card level (member_num), not account level, and our aggregates are wrong.
+-- Expected output: 1 row. If max_rows_per_day > 1, we have a problem.
+-- ==========================================================================
+SELECT
+    MAX(row_count) AS max_rows_per_day,
+    AVG(row_count * 1.0) AS avg_rows_per_day,
+    SUM(CASE WHEN row_count > 1 THEN 1 ELSE 0 END) AS accounts_with_dupes,
+    COUNT(*) AS total_account_days
+FROM (
+    SELECT
+        p.acct_no,
+        p.me_dt,
+        COUNT(*) AS row_count
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r.acct_no
+        AND p.me_dt >= r.treatmt_start_dt
+    WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND r.app_approved = 1
+    GROUP BY p.acct_no, p.me_dt
+) grain_check;
+
+
+-- ==========================================================================
+-- Q15: Sanity check — portfolio product vs PCQ offered product.
+-- Does visa_prod_cd from the portfolio match offer_prod_latest from PCQ?
+-- Shows the mapping so we know if what was offered = what's on the card.
+-- ==========================================================================
+SELECT
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.visa_prod_cd,
+    COUNT(DISTINCT r.acct_no) AS accounts
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = r.acct_no
+    AND p.me_dt >= r.treatmt_start_dt
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
+GROUP BY
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.visa_prod_cd
+ORDER BY
+    r.offer_prod_latest,
+    accounts DESC;
