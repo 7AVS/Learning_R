@@ -245,8 +245,9 @@ ORDER BY total_approvals DESC;
 
 -- ==========================================================================
 -- Q11: Portfolio join — account-level detail for approved clients.
--- Pre-aggregates portfolio to account × me_dt to avoid card/transaction
--- level inflation. One row per approved account.
+-- Uses dt_record_ext as the daily date. Post-treatment only.
+-- Latest balance/status from row with MAX(dt_record_ext).
+-- Total purchases = SUM of net_prch_amt_dly across all post-treatment rows.
 -- ==========================================================================
 SELECT
     r.test_group_latest,
@@ -257,83 +258,134 @@ SELECT
     r.offer_prod_latest_name,
     r.asc_on_app_source,
     r.response_dt,
-    COUNT(p.me_dt) AS months_with_data,
-    MIN(p.me_dt) AS first_portfolio_dt,
-    MAX(p.me_dt) AS last_portfolio_dt,
-    AVG(p.bal_current) AS avg_balance,
-    MAX(p.bal_current) AS max_balance,
-    SUM(p.net_prch_amt_mtd) AS total_net_purchases,
-    MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
-    MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
-    MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
-    MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
-    MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
-    MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
-    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
-    MIN(CASE WHEN p.status <> 'OPEN' THEN p.me_dt END) - r.treatmt_start_dt AS days_to_status_change
+    pa.months_with_activity,
+    pa.first_extract_dt,
+    pa.last_extract_dt,
+    pl.latest_balance,
+    pl.latest_status,
+    pa.total_net_purchases,
+    pa.total_net_purchases / NULLIFZERO(pa.months_with_activity) AS avg_monthly_purchases,
+    pa.st_bkpt,
+    pa.st_coll,
+    pa.st_frd,
+    pa.st_inv,
+    pa.st_open,
+    pa.st_vol,
+    pa.st_woff,
+    pa.first_non_open_dt - r.treatmt_start_dt AS days_to_status_change
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN (
+    -- Aggregates per account across all post-treatment rows
     SELECT
-        acct_no,
-        me_dt,
-        SUM(bal_current) AS bal_current,
-        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd,
-        MAX(status) AS status
-    FROM D3CV12A.DLY_FULL_PORTFOLIO
-    GROUP BY acct_no, me_dt
-) p
-    ON p.acct_no = r.acct_no
-    AND p.me_dt >= r.treatmt_start_dt
+        r2.acct_no,
+        MIN(p.dt_record_ext) AS first_extract_dt,
+        MAX(p.dt_record_ext) AS last_extract_dt,
+        COUNT(DISTINCT p.me_dt) AS months_with_activity,
+        SUM(p.net_prch_amt_dly) AS total_net_purchases,
+        MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
+        MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
+        MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
+        MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
+        MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
+        MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
+        MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
+        MIN(CASE WHEN p.status <> 'OPEN' THEN p.dt_record_ext END) AS first_non_open_dt
+    FROM (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r2.acct_no
+        AND p.dt_record_ext >= r2.treatmt_start_dt
+    GROUP BY r2.acct_no
+) pa ON pa.acct_no = r.acct_no
+LEFT JOIN (
+    -- Latest row per account
+    SELECT
+        p.acct_no,
+        p.bal_current AS latest_balance,
+        p.status AS latest_status
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
+) pl ON pl.acct_no = r.acct_no
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
   AND r.app_approved = 1
-GROUP BY
-    r.test_group_latest,
-    r.clnt_no,
-    r.acct_no,
-    r.treatmt_start_dt,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name,
-    r.asc_on_app_source,
-    r.response_dt
 ORDER BY
     r.test_group_latest,
     r.offer_prod_latest,
-    total_net_purchases DESC;
+    pa.total_net_purchases DESC;
 
 
 -- ==========================================================================
 -- Q12: Portfolio summary — test group × product for approved clients.
--- Rolls up Q11. Pre-aggregated portfolio.
+-- Rolls up Q11 aggregates to test_group × product level.
 -- ==========================================================================
 SELECT
     r.test_group_latest,
     r.offer_prod_latest,
     r.offer_prod_latest_name,
     COUNT(DISTINCT r.acct_no) AS approved_accounts,
-    COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END) AS accounts_with_portfolio,
-    AVG(p.bal_current) AS avg_balance,
-    SUM(p.net_prch_amt_mtd) AS total_net_purchases,
-    SUM(p.net_prch_amt_mtd) / NULLIFZERO(COUNT(DISTINCT CASE WHEN p.acct_no IS NOT NULL THEN r.acct_no END)) AS avg_purchases_per_account,
-    COUNT(DISTINCT CASE WHEN p.status = 'BKPT' THEN r.acct_no END) AS accts_bkpt,
-    COUNT(DISTINCT CASE WHEN p.status = 'COLL' THEN r.acct_no END) AS accts_coll,
-    COUNT(DISTINCT CASE WHEN p.status = 'FRD' THEN r.acct_no END) AS accts_frd,
-    COUNT(DISTINCT CASE WHEN p.status = 'INV' THEN r.acct_no END) AS accts_inv,
-    COUNT(DISTINCT CASE WHEN p.status = 'OPEN' THEN r.acct_no END) AS accts_open,
-    COUNT(DISTINCT CASE WHEN p.status = 'VOL' THEN r.acct_no END) AS accts_vol,
-    COUNT(DISTINCT CASE WHEN p.status = 'WOFF' THEN r.acct_no END) AS accts_woff
+    COUNT(DISTINCT pa.acct_no) AS accounts_with_activity,
+    AVG(pl.latest_balance) AS avg_latest_balance,
+    SUM(pa.total_net_purchases) AS total_net_purchases,
+    SUM(pa.total_net_purchases) / NULLIFZERO(COUNT(DISTINCT pa.acct_no)) AS avg_purchases_per_account,
+    AVG(pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)) AS avg_monthly_purchases_per_account,
+    SUM(pa.st_bkpt) AS accts_bkpt,
+    SUM(pa.st_coll) AS accts_coll,
+    SUM(pa.st_frd) AS accts_frd,
+    SUM(pa.st_inv) AS accts_inv,
+    SUM(pa.st_open) AS accts_open,
+    SUM(pa.st_vol) AS accts_vol,
+    SUM(pa.st_woff) AS accts_woff
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN (
     SELECT
-        acct_no,
-        me_dt,
-        SUM(bal_current) AS bal_current,
-        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd,
-        MAX(status) AS status
-    FROM D3CV12A.DLY_FULL_PORTFOLIO
-    GROUP BY acct_no, me_dt
-) p
-    ON p.acct_no = r.acct_no
-    AND p.me_dt >= r.treatmt_start_dt
+        r2.acct_no,
+        COUNT(DISTINCT p.me_dt) AS months_with_activity,
+        SUM(p.net_prch_amt_dly) AS total_net_purchases,
+        MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
+        MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
+        MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
+        MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
+        MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
+        MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
+        MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff
+    FROM (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r2.acct_no
+        AND p.dt_record_ext >= r2.treatmt_start_dt
+    GROUP BY r2.acct_no
+) pa ON pa.acct_no = r.acct_no
+LEFT JOIN (
+    SELECT
+        p.acct_no,
+        p.bal_current AS latest_balance
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
+) pl ON pl.acct_no = r.acct_no
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
   AND r.app_approved = 1
 GROUP BY
@@ -346,9 +398,10 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q13: Balance/spend curves — monthly metrics by me_dt.
--- Pre-aggregated portfolio to account × me_dt.
--- Pivot in Excel to see any combination of curves.
+-- Q13: Balance/spend curves — monthly points.
+-- For each account × me_dt, pick the row with MAX(dt_record_ext) to get
+-- the month-end position. Then aggregate across accounts.
+-- Pivot in Excel to see curves by group × wave × ASC × product.
 -- ==========================================================================
 SELECT
     r.test_group_latest,
@@ -356,22 +409,29 @@ SELECT
     r.asc_on_app_source,
     r.offer_prod_latest,
     r.offer_prod_latest_name,
-    p.me_dt,
+    monthly.me_dt,
     COUNT(DISTINCT r.acct_no) AS accounts_reporting,
-    AVG(p.bal_current) AS avg_balance,
-    SUM(p.net_prch_amt_mtd) AS total_purchases_mtd
+    AVG(monthly.bal_current) AS avg_balance,
+    SUM(monthly.net_prch_amt_mtd) AS total_purchases_mtd
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 INNER JOIN (
+    -- One row per account × me_dt: the last dt_record_ext in that month
     SELECT
-        acct_no,
-        me_dt,
-        SUM(bal_current) AS bal_current,
-        SUM(net_prch_amt_mtd) AS net_prch_amt_mtd
-    FROM D3CV12A.DLY_FULL_PORTFOLIO
-    GROUP BY acct_no, me_dt
-) p
-    ON p.acct_no = r.acct_no
-    AND p.me_dt >= r.treatmt_start_dt
+        p.acct_no,
+        p.me_dt,
+        p.dt_record_ext,
+        p.bal_current,
+        p.net_prch_amt_mtd
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt ORDER BY p.dt_record_ext DESC) = 1
+) monthly ON monthly.acct_no = r.acct_no
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
   AND r.app_approved = 1
 GROUP BY
@@ -380,13 +440,13 @@ GROUP BY
     r.asc_on_app_source,
     r.offer_prod_latest,
     r.offer_prod_latest_name,
-    p.me_dt
+    monthly.me_dt
 ORDER BY
     r.test_group_latest,
     r.treatmt_start_dt,
     r.asc_on_app_source,
     r.offer_prod_latest,
-    p.me_dt;
+    monthly.me_dt;
 
 
 -- ==========================================================================
