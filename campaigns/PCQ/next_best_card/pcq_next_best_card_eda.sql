@@ -525,3 +525,28 @@ ORDER BY
     r.asc_on_app_source,
     r.offer_prod_latest,
     accounts DESC;
+
+
+-- ==========================================================================
+-- Q16b: Validate asc_on_app_source label against raw ACQ_STRATEGY_CODE vs
+-- ASC_ON_APP comparison. Expected to collapse to three diagonal cells:
+--   raw_null      × NO ASC
+--   raw_match     × Period-ASC
+--   raw_mismatch  × Other ASC
+-- Any off-diagonal cell = label is derived differently than we assume.
+-- ==========================================================================
+SELECT
+    CASE
+        WHEN asc_on_app IS NULL THEN 'raw_null'
+        WHEN acq_strategy_code = asc_on_app THEN 'raw_match'
+        ELSE 'raw_mismatch'
+    END AS raw_comparison,
+    asc_on_app_source,
+    COUNT(*) AS n_rows,
+    COUNT(DISTINCT clnt_no) AS clients,
+    COUNT(DISTINCT acct_no) AS accounts
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND app_approved = 1
+GROUP BY 1, 2
+ORDER BY 1, 2;
