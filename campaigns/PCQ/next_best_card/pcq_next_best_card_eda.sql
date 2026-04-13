@@ -1,165 +1,463 @@
--- PCQ Next Best Card Test — Exploratory Analysis
--- Source: DL_MR_PROD.cards_tpa_pcq_decision_resp
--- Test groups: NG3_1ST (control — 1st recommended card) vs NG3_2ND (test — 2nd recommended card)
+-- ============================================================================
+-- PCQ Next Best Card Test — Analytical File
+-- ============================================================================
+-- Source tables:
+--   DL_MR_PROD.cards_tpa_pcq_decision_resp    (Teradata — PCQ campaign side)
+--   D3CV12A.DLY_FULL_PORTFOLIO                (Teradata — daily portfolio events)
+--
+-- Test groups:
+--   NG3_1ST  = control, 1st recommended card
+--   NG3_2ND  = test,    2nd recommended card
+--
+-- Purpose:
+--   Answer: does recommending the 2nd-best card produce materially different
+--   conversion, spend, balance, fee, and loyalty outcomes vs the 1st-best?
+--
+-- File structure (run top to bottom, or jump by section):
+--
+--   SECTION A — CONVERSION SUMMARY
+--     Q1  Rollup: deployed → approved by test_group × wave × product × ASC
+--
+--   SECTION B — MASTER ANALYTICAL (account grain) — THE EXCEL FILE
+--     Q2  Per-account enriched dataset. All flags, balances, fees, classifications.
+--         This is the main deliverable. Pivot in Excel for every question.
+--
+--   SECTION C — MONTHLY CURVES (me_dt grain)
+--     Q3  Monthly balance/spend/fees/loyalty curves, sliced by classification.
+--         Use for cohort curves and time-series charts.
+--
+--   SECTION D — VALIDATION APPENDIX (sanity checks, kept for audit)
+--     V1  Client overlap across test groups
+--     V2  Approved clients across both waves
+--     V3  Approved clients across multiple ASC categories
+--     V4  Approved clients with multiple approval rows
+--     V5  Portfolio row distribution per acct × me_dt (grain check)
+--     V6  Offer product vs portfolio visa_prod_cd cross-tab (all ASCs)
+--     V7  Same cross-tab split by asc_on_app_source
+--     V8  asc_on_app_source label validation (raw ACQ_STRATEGY_CODE vs ASC_ON_APP)
+--     V9  Sample accounts per classification quadrant
+--     V10 Portfolio timelines for those sample accounts
+--
+-- Key findings from validation (as of 2026-04-13):
+--   • Period-ASC match rate ≈ 90%, not 100% as originally assumed. The ~10%
+--     gap is real fulfillment drift, not a query bug — mismatches scatter
+--     across many visa codes with no clean 1:1 taxonomy mapping.
+--   • IAV (~85% match) and IOP (~87%) drive ~64% of all Period-ASC mismatches.
+--     MCP is a separate anomaly (~3% match on NG3_1ST, small volume).
+--   • Reclass (product change on same acct_no over time) affects ~3% of accounts.
+--   • For clean measurement, filter Q2 to booking_status='match' + Period-ASC.
+--     For richer analysis, use booking_status + lifetime_status together.
+-- ============================================================================
 
 
--- ==========================================================================
--- Q1: How many deployment waves, and what is the treatment window?
--- Expected output: small — one row per wave per group with start/end dates.
--- ==========================================================================
-SELECT
-    test_group_latest,
-    treatmt_start_dt,
-    treatmt_end_dt,
-    COUNT(*) AS clients
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-GROUP BY
-    test_group_latest,
-    treatmt_start_dt,
-    treatmt_end_dt
-ORDER BY
-    treatmt_start_dt,
-    test_group_latest;
 
-
--- ==========================================================================
--- Q2: Total deployment volume by test group (all waves combined).
--- Expected output: 2 rows — one per group.
--- ==========================================================================
-SELECT
-    test_group_latest,
-    COUNT(*) AS total_clients
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-GROUP BY
-    test_group_latest
-ORDER BY
-    test_group_latest;
-
-
--- ==========================================================================
--- Q3: Conversion summary — one row per test group.
--- All waves combined. ASC categories as columns, not rows.
--- Denominator = total population (including non-responders).
--- Expected output: 2 rows.
--- ==========================================================================
-SELECT
-    test_group_latest,
-    COUNT(*) AS total_clients,
-    SUM(CASE WHEN asc_on_app_source IS NOT NULL THEN 1 ELSE 0 END) AS total_responded,
-    SUM(app_approved) AS total_approved,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_no_asc_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_other_asc_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-GROUP BY
-    test_group_latest
-ORDER BY
-    test_group_latest;
-
+-- ============================================================================
+-- SECTION A — CONVERSION SUMMARY
+-- ============================================================================
 
 -- ==========================================================================
--- Q4: Same as Q3 but split by wave (treatmt_start_dt).
--- Shows if conversion patterns differ between Jan and Feb deployments.
--- Expected output: 4 rows (2 groups × 2 waves).
+-- Q1: Conversion rollup.
+-- One row per test_group × wave × offered product. Columns include:
+--   deployed          — total clients sent the offer
+--   responded         — clients with a non-null asc_on_app_source
+--   approved_*        — approvals split by ASC category (three buckets)
+--   rate_*            — percentages against the full deployed denominator
+-- Denominator is always the deployed population (not responders only), so
+-- rates comparable across groups. Pivot in Excel by any dimension.
 -- ==========================================================================
 SELECT
     test_group_latest,
     treatmt_start_dt,
-    COUNT(*) AS total_clients,
-    SUM(CASE WHEN asc_on_app_source IS NOT NULL THEN 1 ELSE 0 END) AS total_responded,
-    SUM(app_approved) AS total_approved,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_no_asc_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_other_asc_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-GROUP BY
-    test_group_latest,
-    treatmt_start_dt
-ORDER BY
-    test_group_latest,
-    treatmt_start_dt;
-
-
--- ==========================================================================
--- Q5: Card product distribution by test group (all waves combined).
--- Approved broken out by ASC category. No percentages.
--- Expected output: ~14 rows (2 groups × 7 products).
--- ==========================================================================
-SELECT
-    test_group_latest,
     offer_prod_latest,
     offer_prod_latest_name,
-    COUNT(*) AS total_clients,
-    SUM(app_approved) AS total_approved,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc
+    COUNT(*)                                                                   AS deployed,
+    SUM(CASE WHEN asc_on_app_source IS NOT NULL THEN 1 ELSE 0 END)             AS responded,
+    SUM(app_approved)                                                          AS approved_total,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC'  THEN 1 ELSE 0 END) AS approved_other_asc,
+    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC'     THEN 1 ELSE 0 END) AS approved_no_asc,
+    ROUND(100.0 * SUM(app_approved) / NULLIFZERO(COUNT(*)), 2)                 AS rate_approved_total_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2) AS rate_period_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC'  THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2) AS rate_other_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC'     THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2) AS rate_no_asc_pct
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     test_group_latest,
+    treatmt_start_dt,
     offer_prod_latest,
     offer_prod_latest_name
 ORDER BY
     test_group_latest,
-    total_clients DESC;
+    treatmt_start_dt,
+    offer_prod_latest;
 
 
+
+-- ============================================================================
+-- SECTION B — MASTER ANALYTICAL (account grain)
+-- ============================================================================
+
 -- ==========================================================================
--- Q6: Full detail dump — finest grain for Excel pivot.
--- Run this last. All dimensions included for ad-hoc pivoting.
--- Approved broken out by ASC category as columns.
+-- Q2: Full per-account enriched dataset.
+-- One row per approved NG3_1ST/NG3_2ND account. Includes all ASCs so the
+-- reader can filter in Excel. The "true measurement" slice is typically:
+--   asc_on_app_source = 'Period-ASC' AND booking_status = 'match'
+--     AND lifetime_status = 'stable'
+-- That gives clean TPA conversions on their offered product with no reclass.
+--
+-- Column groups:
+--   Identity         test_group, clnt_no, acct_no
+--   Offer side       offer_prod, asc_on_app_source, treatmt_start_dt, response_dt
+--   Account timing   acct_open_dt, acct_cls_dt, days_offer_to_open,
+--                    account_existed_pre_offer flag, first/last extract dates,
+--                    months_with_activity
+--   Classification   booked_visa_prod_cd (anchor = earliest post-offer row)
+--                    latest_visa_prod_cd, n_distinct_visa
+--                    booking_status  = match / mismatch vs offer_prod_latest
+--                    lifetime_status = stable / reclassed (n_distinct_visa > 1)
+--   Balances         latest_balance, latest_avg_daily_bal_mtd,
+--                    total_net_purchases, avg_monthly_purchases
+--   Fees             annual_fee_latest (list),  annual_fee_last_dt,
+--                    ever_charged_annual_fee, total_fees_charged (revenue),
+--                    months_with_fees (incidence)
+--   Loyalty          latest_loyalty_balance (point-in-time),
+--                    max_loyalty_balance (peak accumulation)
+--   Risk             ever_overlimit, latest_overlimit_cd,
+--                    ever_past_due, latest_past_due_cd
+--   Status lifecycle latest_status, st_{bkpt,coll,frd,inv,open,vol,woff},
+--                    first_non_open_dt, days_to_status_change
+--
+-- Anchor rule for booked_visa_prod_cd: earliest dt_record_ext on/after
+-- treatmt_start_dt. At monthly grain this equals the acct_open_dt row.
+--
+-- Fee aggregation: NET_ALL_FEES_AMT_MTD resets each month, so total_fees_charged
+-- sums the MAX per me_dt across all months (= the end-of-month running total).
+--
+-- Risk flags: cd_curr_ovrlmt / cd_curr_pst_due are treated as non-trivial
+-- whenever the value is not NULL, 'N', '0', or empty. If the encoding turns
+-- out to differ (e.g., days-past-due integers), adjust the CASE here.
 -- ==========================================================================
+WITH tpa_base AS (
+    -- One row per approved acct_no; collapses multi-wave duplicates.
+    SELECT
+        acct_no,
+        MIN(treatmt_start_dt)     AS treatmt_start_dt,
+        MAX(clnt_no)              AS clnt_no,
+        MAX(test_group_latest)    AS test_group_latest,
+        MAX(offer_prod_latest)    AS offer_prod_latest,
+        MAX(offer_prod_latest_name) AS offer_prod_latest_name,
+        MAX(asc_on_app_source)    AS asc_on_app_source,
+        MAX(response_dt)          AS response_dt
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+    GROUP BY acct_no
+),
+pw AS (
+    -- Every post-offer portfolio row for the target accounts.
+    SELECT
+        r.acct_no,
+        p.dt_record_ext,
+        p.me_dt,
+        p.visa_prod_cd,
+        p.acct_open_dt,
+        p.acct_cls_dt,
+        p.status,
+        p.bal_current,
+        p.accum_dly_bal_mtd,
+        p.net_prch_amt_dly,
+        p.net_prch_amt_mtd,
+        p.lylty_bal_amt,
+        p.lst_ann_fee_chrg_amt,
+        p.lst_ann_fee_dt,
+        p.net_all_fees_amt_mtd,
+        p.cd_curr_ovrlmt,
+        p.cd_curr_pst_due
+    FROM tpa_base r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no       = r.acct_no
+        AND p.dt_record_ext >= r.treatmt_start_dt
+),
+monthly_fees AS (
+    -- MTD fees reset each month. Max per me_dt = that month's total fees.
+    SELECT
+        acct_no,
+        me_dt,
+        MAX(net_all_fees_amt_mtd) AS month_fee_total
+    FROM pw
+    GROUP BY acct_no, me_dt
+),
+fees_agg AS (
+    SELECT
+        acct_no,
+        SUM(month_fee_total)                                    AS total_fees_charged,
+        SUM(CASE WHEN month_fee_total > 0 THEN 1 ELSE 0 END)    AS months_with_fees
+    FROM monthly_fees
+    GROUP BY acct_no
+),
+per_account AS (
+    -- Account-level window aggregates over all post-offer rows.
+    SELECT
+        acct_no,
+        MIN(dt_record_ext)            AS first_extract_dt,
+        MAX(dt_record_ext)            AS last_extract_dt,
+        MAX(acct_open_dt)             AS acct_open_dt,
+        MAX(acct_cls_dt)              AS acct_cls_dt,
+        COUNT(DISTINCT me_dt)         AS months_with_activity,
+        COUNT(DISTINCT visa_prod_cd)  AS n_distinct_visa,
+        SUM(net_prch_amt_dly)         AS total_net_purchases,
+        MAX(lylty_bal_amt)            AS max_loyalty_balance,
+        -- Account status ever-exposure flags (1 = touched at any row in window)
+        MAX(CASE WHEN status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
+        MAX(CASE WHEN status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
+        MAX(CASE WHEN status = 'FRD'  THEN 1 ELSE 0 END) AS st_frd,
+        MAX(CASE WHEN status = 'INV'  THEN 1 ELSE 0 END) AS st_inv,
+        MAX(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
+        MAX(CASE WHEN status = 'VOL'  THEN 1 ELSE 0 END) AS st_vol,
+        MAX(CASE WHEN status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
+        MIN(CASE WHEN status <> 'OPEN' THEN dt_record_ext END) AS first_non_open_dt,
+        -- Risk ever-exposure flags
+        MAX(CASE WHEN cd_curr_ovrlmt IS NOT NULL
+                  AND cd_curr_ovrlmt NOT IN ('', 'N', '0')
+                 THEN 1 ELSE 0 END) AS ever_overlimit,
+        MAX(CASE WHEN cd_curr_pst_due IS NOT NULL
+                  AND cd_curr_pst_due NOT IN ('', 'N', '0')
+                 THEN 1 ELSE 0 END) AS ever_past_due
+    FROM pw
+    GROUP BY acct_no
+),
+booked AS (
+    -- Anchor: visa_prod_cd at the earliest post-offer row = booked product.
+    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
+    FROM pw
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
+),
+latest AS (
+    -- Point-in-time values from the most recent row in window.
+    SELECT
+        acct_no,
+        visa_prod_cd         AS latest_visa_prod_cd,
+        bal_current          AS latest_balance,
+        accum_dly_bal_mtd    AS latest_avg_daily_bal_mtd,
+        status               AS latest_status,
+        cd_curr_ovrlmt       AS latest_overlimit_cd,
+        cd_curr_pst_due      AS latest_past_due_cd,
+        lylty_bal_amt        AS latest_loyalty_balance,
+        lst_ann_fee_chrg_amt AS annual_fee_latest,
+        lst_ann_fee_dt       AS annual_fee_last_dt
+    FROM pw
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext DESC) = 1
+)
 SELECT
-    test_group_latest,
-    treatmt_start_dt,
-    treatmt_end_dt,
-    offer_prod_latest,
-    offer_prod_latest_name,
-    response_channel_grp,
-    response_channel,
-    COUNT(*) AS total_clients,
-    SUM(app_approved) AS total_approved,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'NO ASC' THEN 1 ELSE 0 END) AS approved_no_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Other ASC' THEN 1 ELSE 0 END) AS approved_other_asc,
-    SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
-    ROUND(100.0 * SUM(app_approved) / COUNT(*), 2) AS rate_total_pct,
-    ROUND(100.0 * SUM(CASE WHEN app_approved = 1 AND asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) / COUNT(*), 2) AS rate_period_asc_pct,
-    AVG(days_to_respond * 1.0) AS avg_days_to_respond,
-    MIN(days_to_respond) AS min_days_to_respond,
-    MAX(days_to_respond) AS max_days_to_respond
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-GROUP BY
-    test_group_latest,
-    treatmt_start_dt,
-    treatmt_end_dt,
-    offer_prod_latest,
-    offer_prod_latest_name,
-    response_channel_grp,
-    response_channel
+    -- === Identity ===
+    r.test_group_latest,
+    r.clnt_no,
+    r.acct_no,
+
+    -- === Offer side ===
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    r.asc_on_app_source,
+    r.treatmt_start_dt,
+    r.response_dt,
+
+    -- === Account timing ===
+    pa.acct_open_dt,
+    pa.acct_cls_dt,
+    pa.acct_open_dt - r.treatmt_start_dt                          AS days_offer_to_open,
+    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END AS account_existed_pre_offer,
+    pa.first_extract_dt,
+    pa.last_extract_dt,
+    pa.months_with_activity,
+
+    -- === Classification ===
+    bk.booked_visa_prod_cd,
+    lt.latest_visa_prod_cd,
+    pa.n_distinct_visa,
+    CASE WHEN bk.booked_visa_prod_cd = r.offer_prod_latest
+         THEN 'match' ELSE 'mismatch' END                         AS booking_status,
+    CASE WHEN pa.n_distinct_visa > 1
+         THEN 'reclassed' ELSE 'stable' END                       AS lifetime_status,
+
+    -- === Balances ===
+    lt.latest_balance,
+    lt.latest_avg_daily_bal_mtd,
+    pa.total_net_purchases,
+    pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)  AS avg_monthly_purchases,
+
+    -- === Fees ===
+    lt.annual_fee_latest,
+    lt.annual_fee_last_dt,
+    CASE WHEN lt.annual_fee_latest > 0 THEN 1 ELSE 0 END          AS ever_charged_annual_fee,
+    fa.total_fees_charged,
+    fa.months_with_fees,
+
+    -- === Loyalty ===
+    lt.latest_loyalty_balance,
+    pa.max_loyalty_balance,
+
+    -- === Risk ===
+    pa.ever_overlimit,
+    lt.latest_overlimit_cd,
+    pa.ever_past_due,
+    lt.latest_past_due_cd,
+
+    -- === Status lifecycle ===
+    lt.latest_status,
+    pa.st_bkpt, pa.st_coll, pa.st_frd, pa.st_inv, pa.st_open, pa.st_vol, pa.st_woff,
+    pa.first_non_open_dt,
+    pa.first_non_open_dt - r.treatmt_start_dt                     AS days_to_status_change
+
+FROM tpa_base r
+LEFT JOIN per_account pa ON pa.acct_no = r.acct_no
+LEFT JOIN fees_agg    fa ON fa.acct_no = r.acct_no
+LEFT JOIN booked      bk ON bk.acct_no = r.acct_no
+LEFT JOIN latest      lt ON lt.acct_no = r.acct_no
 ORDER BY
-    test_group_latest,
-    treatmt_start_dt,
-    total_clients DESC;
+    r.test_group_latest,
+    r.offer_prod_latest,
+    pa.total_net_purchases DESC;
+
+
+
+-- ============================================================================
+-- SECTION C — MONTHLY CURVES (me_dt grain)
+-- ============================================================================
+
+-- ==========================================================================
+-- Q3: Balance/spend/fees/loyalty curves by me_dt, sliced by classification.
+-- One row per test_group × product × ASC × booking_status × lifetime_status × me_dt.
+-- Also emits months_since_open so cohort curves (month 1, 2, 3...) can be
+-- built alongside calendar-time curves. Picks the row with the latest
+-- dt_record_ext within each acct × me_dt to get the month-end snapshot.
+--
+-- Classification flags are re-derived here (same logic as Q2) so Q3 stays
+-- self-contained — no dependency on running Q2 first.
+-- ==========================================================================
+WITH tpa_base AS (
+    SELECT
+        acct_no,
+        MIN(treatmt_start_dt)       AS treatmt_start_dt,
+        MAX(test_group_latest)      AS test_group_latest,
+        MAX(offer_prod_latest)      AS offer_prod_latest,
+        MAX(offer_prod_latest_name) AS offer_prod_latest_name,
+        MAX(asc_on_app_source)      AS asc_on_app_source
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+    GROUP BY acct_no
+),
+pw AS (
+    SELECT
+        r.acct_no,
+        r.offer_prod_latest,
+        p.dt_record_ext,
+        p.me_dt,
+        p.visa_prod_cd,
+        p.acct_open_dt,
+        p.bal_current,
+        p.net_prch_amt_mtd,
+        p.net_all_fees_amt_mtd,
+        p.lylty_bal_amt
+    FROM tpa_base r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no       = r.acct_no
+        AND p.dt_record_ext >= r.treatmt_start_dt
+),
+booked AS (
+    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
+    FROM pw
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
+),
+acct_flags AS (
+    SELECT
+        bk.acct_no,
+        CASE WHEN bk.booked_visa_prod_cd = tb.offer_prod_latest
+             THEN 'match' ELSE 'mismatch' END AS booking_status,
+        CASE WHEN cnt.n_distinct_visa > 1
+             THEN 'reclassed' ELSE 'stable' END AS lifetime_status
+    FROM booked bk
+    INNER JOIN (
+        SELECT acct_no, COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
+        FROM pw GROUP BY acct_no
+    ) cnt ON cnt.acct_no = bk.acct_no
+    INNER JOIN tpa_base tb ON tb.acct_no = bk.acct_no
+),
+month_end AS (
+    -- One row per acct × me_dt: the latest dt_record_ext snapshot.
+    SELECT
+        acct_no,
+        me_dt,
+        acct_open_dt,
+        bal_current,
+        net_prch_amt_mtd,
+        net_all_fees_amt_mtd,
+        lylty_bal_amt
+    FROM pw
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt ORDER BY dt_record_ext DESC) = 1
+)
+SELECT
+    tb.test_group_latest,
+    tb.offer_prod_latest,
+    tb.offer_prod_latest_name,
+    tb.asc_on_app_source,
+    af.booking_status,
+    af.lifetime_status,
+    me.me_dt,
+    -- Cohort month: monthly grain, so month arithmetic on me_dt vs acct_open_dt
+    -- is exact. Feb-2025 opener at me_dt=Feb 2025 → 0, at me_dt=Mar 2025 → 1, etc.
+    (EXTRACT(YEAR FROM me.me_dt)        - EXTRACT(YEAR FROM me.acct_open_dt)) * 12
+    + (EXTRACT(MONTH FROM me.me_dt)     - EXTRACT(MONTH FROM me.acct_open_dt))
+                                                                        AS months_since_open,
+    COUNT(DISTINCT me.acct_no)                                          AS accounts_reporting,
+    -- Balances
+    AVG(me.bal_current)                                                 AS avg_balance,
+    SUM(me.bal_current)                                                 AS sum_balance,
+    -- Spend
+    AVG(me.net_prch_amt_mtd)                                            AS avg_purchases_mtd,
+    SUM(me.net_prch_amt_mtd)                                            AS sum_purchases_mtd,
+    -- Fees
+    AVG(me.net_all_fees_amt_mtd)                                        AS avg_fees_mtd,
+    SUM(me.net_all_fees_amt_mtd)                                        AS sum_fees_mtd,
+    -- Loyalty
+    AVG(me.lylty_bal_amt)                                               AS avg_loyalty_balance,
+    SUM(me.lylty_bal_amt)                                               AS sum_loyalty_balance
+FROM month_end me
+INNER JOIN tpa_base  tb ON tb.acct_no = me.acct_no
+INNER JOIN acct_flags af ON af.acct_no = me.acct_no
+GROUP BY
+    tb.test_group_latest,
+    tb.offer_prod_latest,
+    tb.offer_prod_latest_name,
+    tb.asc_on_app_source,
+    af.booking_status,
+    af.lifetime_status,
+    me.me_dt,
+    me.acct_open_dt
+ORDER BY
+    tb.test_group_latest,
+    tb.offer_prod_latest,
+    tb.asc_on_app_source,
+    af.booking_status,
+    af.lifetime_status,
+    me.me_dt;
+
+
+
+-- ============================================================================
+-- SECTION D — VALIDATION APPENDIX
+-- ============================================================================
+-- These are sanity checks run during investigation. They don't feed the
+-- analytical file but are kept for audit and re-validation if the data
+-- refreshes. Each is independent and safe to run in isolation.
+-- ============================================================================
 
 
 -- ==========================================================================
--- Q7: Sanity check — client overlap across test groups.
+-- V1: Client overlap across test groups.
 -- Are any clients in BOTH NG3_1ST and NG3_2ND?
--- Expected output: 1 row. If overlap_count = 0, groups are clean.
+-- If overlap_count = 0, groups are clean.
 -- ==========================================================================
 SELECT
     COUNT(*) AS overlap_count
@@ -179,9 +477,9 @@ ON a.clnt_no = b.clnt_no;
 
 
 -- ==========================================================================
--- Q8: Sanity check — approved clients across BOTH waves.
+-- V2: Approved clients across BOTH waves.
 -- Same client approved in Jan AND Feb deployment?
--- Expected output: 1 row. If overlap_count = 0, no cross-wave approvals.
+-- If overlap_count = 0, no cross-wave approvals.
 -- ==========================================================================
 SELECT
     COUNT(*) AS overlap_count
@@ -205,10 +503,9 @@ ON jan.clnt_no = feb.clnt_no;
 
 
 -- ==========================================================================
--- Q9: Sanity check — approved clients across multiple ASC categories.
+-- V3: Approved clients across multiple ASC categories.
 -- Same client approved through more than one ASC source?
--- Expected output: count of clients + breakdown.
--- If overlap_count = 0, each client approved through only one ASC source.
+-- If overlap_count = 0, each approved client has exactly one ASC source.
 -- ==========================================================================
 SELECT
     COUNT(*) AS overlap_count
@@ -223,17 +520,14 @@ FROM (
 
 
 -- ==========================================================================
--- Q10: Sanity check — approved clients with multiple approval rows.
--- Any client approved more than once? Shows the detail so we can see
--- if it's the same card, different card, same wave, different wave.
--- Expected output: one row per multi-approved client.
--- If empty, every approved client has exactly one approval.
+-- V4: Approved clients with multiple approval rows.
+-- If empty, every approved client has exactly one approval row.
 -- ==========================================================================
 SELECT
     clnt_no,
-    COUNT(*) AS total_approvals,
+    COUNT(*)                          AS total_approvals,
     COUNT(DISTINCT offer_prod_latest) AS distinct_products,
-    COUNT(DISTINCT treatmt_start_dt) AS distinct_waves,
+    COUNT(DISTINCT treatmt_start_dt)  AS distinct_waves,
     COUNT(DISTINCT asc_on_app_source) AS distinct_asc
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
@@ -244,215 +538,9 @@ ORDER BY total_approvals DESC;
 
 
 -- ==========================================================================
--- Q11: Portfolio join — account-level detail for approved clients.
--- Uses dt_record_ext as the daily date. Post-treatment only.
--- Latest balance/status from row with MAX(dt_record_ext).
--- Total purchases = SUM of net_prch_amt_dly across all post-treatment rows.
--- ==========================================================================
-SELECT
-    r.test_group_latest,
-    r.clnt_no,
-    r.acct_no,
-    r.treatmt_start_dt,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name,
-    r.asc_on_app_source,
-    r.response_dt,
-    pa.months_with_activity,
-    pa.first_extract_dt,
-    pa.last_extract_dt,
-    pl.latest_balance,
-    pl.latest_status,
-    pa.total_net_purchases,
-    pa.total_net_purchases / NULLIFZERO(pa.months_with_activity) AS avg_monthly_purchases,
-    pa.st_bkpt,
-    pa.st_coll,
-    pa.st_frd,
-    pa.st_inv,
-    pa.st_open,
-    pa.st_vol,
-    pa.st_woff,
-    pa.first_non_open_dt - r.treatmt_start_dt AS days_to_status_change
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-LEFT JOIN (
-    -- Aggregates per account across all post-treatment rows
-    SELECT
-        r2.acct_no,
-        MIN(p.dt_record_ext) AS first_extract_dt,
-        MAX(p.dt_record_ext) AS last_extract_dt,
-        COUNT(DISTINCT p.me_dt) AS months_with_activity,
-        SUM(p.net_prch_amt_dly) AS total_net_purchases,
-        MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
-        MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
-        MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
-        MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
-        MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
-        MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
-        MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
-        MIN(CASE WHEN p.status <> 'OPEN' THEN p.dt_record_ext END) AS first_non_open_dt
-    FROM (
-        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-          AND app_approved = 1
-        GROUP BY acct_no
-    ) r2
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-        ON p.acct_no = r2.acct_no
-        AND p.dt_record_ext >= r2.treatmt_start_dt
-    GROUP BY r2.acct_no
-) pa ON pa.acct_no = r.acct_no
-LEFT JOIN (
-    -- Latest row per account
-    SELECT
-        p.acct_no,
-        p.bal_current AS latest_balance,
-        p.status AS latest_status
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN (
-        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-          AND app_approved = 1
-        GROUP BY acct_no
-    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
-) pl ON pl.acct_no = r.acct_no
-WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-  AND r.app_approved = 1
-ORDER BY
-    r.test_group_latest,
-    r.offer_prod_latest,
-    pa.total_net_purchases DESC;
-
-
--- ==========================================================================
--- Q12: Portfolio summary — test group × product for approved clients.
--- Rolls up Q11 aggregates to test_group × product level.
--- ==========================================================================
-SELECT
-    r.test_group_latest,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name,
-    COUNT(DISTINCT r.acct_no) AS approved_accounts,
-    COUNT(DISTINCT pa.acct_no) AS accounts_with_activity,
-    AVG(pl.latest_balance) AS avg_latest_balance,
-    SUM(pa.total_net_purchases) AS total_net_purchases,
-    SUM(pa.total_net_purchases) / NULLIFZERO(COUNT(DISTINCT pa.acct_no)) AS avg_purchases_per_account,
-    AVG(pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)) AS avg_monthly_purchases_per_account,
-    SUM(pa.st_bkpt) AS accts_bkpt,
-    SUM(pa.st_coll) AS accts_coll,
-    SUM(pa.st_frd) AS accts_frd,
-    SUM(pa.st_inv) AS accts_inv,
-    SUM(pa.st_open) AS accts_open,
-    SUM(pa.st_vol) AS accts_vol,
-    SUM(pa.st_woff) AS accts_woff
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-LEFT JOIN (
-    SELECT
-        r2.acct_no,
-        COUNT(DISTINCT p.me_dt) AS months_with_activity,
-        SUM(p.net_prch_amt_dly) AS total_net_purchases,
-        MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
-        MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
-        MAX(CASE WHEN p.status = 'FRD' THEN 1 ELSE 0 END) AS st_frd,
-        MAX(CASE WHEN p.status = 'INV' THEN 1 ELSE 0 END) AS st_inv,
-        MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
-        MAX(CASE WHEN p.status = 'VOL' THEN 1 ELSE 0 END) AS st_vol,
-        MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff
-    FROM (
-        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-          AND app_approved = 1
-        GROUP BY acct_no
-    ) r2
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-        ON p.acct_no = r2.acct_no
-        AND p.dt_record_ext >= r2.treatmt_start_dt
-    GROUP BY r2.acct_no
-) pa ON pa.acct_no = r.acct_no
-LEFT JOIN (
-    SELECT
-        p.acct_no,
-        p.bal_current AS latest_balance
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN (
-        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-          AND app_approved = 1
-        GROUP BY acct_no
-    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
-) pl ON pl.acct_no = r.acct_no
-WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-  AND r.app_approved = 1
-GROUP BY
-    r.test_group_latest,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name
-ORDER BY
-    r.test_group_latest,
-    approved_accounts DESC;
-
-
--- ==========================================================================
--- Q13: Balance/spend curves — monthly points.
--- For each account × me_dt, pick the row with MAX(dt_record_ext) to get
--- the month-end position. Then aggregate across accounts.
--- Pivot in Excel to see curves by group × wave × ASC × product.
--- ==========================================================================
-SELECT
-    r.test_group_latest,
-    r.treatmt_start_dt,
-    r.asc_on_app_source,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name,
-    monthly.me_dt,
-    COUNT(DISTINCT r.acct_no) AS accounts_reporting,
-    AVG(monthly.bal_current) AS avg_balance,
-    SUM(monthly.net_prch_amt_mtd) AS total_purchases_mtd
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-INNER JOIN (
-    -- One row per account × me_dt: the last dt_record_ext in that month
-    SELECT
-        p.acct_no,
-        p.me_dt,
-        p.dt_record_ext,
-        p.bal_current,
-        p.net_prch_amt_mtd
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN (
-        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-          AND app_approved = 1
-        GROUP BY acct_no
-    ) r2 ON r2.acct_no = p.acct_no AND p.dt_record_ext >= r2.treatmt_start_dt
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt ORDER BY p.dt_record_ext DESC) = 1
-) monthly ON monthly.acct_no = r.acct_no
-WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-  AND r.app_approved = 1
-GROUP BY
-    r.test_group_latest,
-    r.treatmt_start_dt,
-    r.asc_on_app_source,
-    r.offer_prod_latest,
-    r.offer_prod_latest_name,
-    monthly.me_dt
-ORDER BY
-    r.test_group_latest,
-    r.treatmt_start_dt,
-    r.asc_on_app_source,
-    r.offer_prod_latest,
-    monthly.me_dt;
-
-
--- ==========================================================================
--- Q14: Sanity check — portfolio row distribution per account × me_dt.
--- How many raw rows exist per acct_no × me_dt? Higher = finer grain
--- (cards, transactions, etc). Tells us the pre-aggregation is necessary.
+-- V5: Portfolio row distribution per account × me_dt.
+-- Distribution of rows-per-acct-per-month in the post-offer window.
+-- Max ≈ 31 confirmed acct_no is account-grain (one card per acct per day).
 -- ==========================================================================
 SELECT
     rows_per_acct_month,
@@ -475,8 +563,8 @@ ORDER BY rows_per_acct_month;
 
 
 -- ==========================================================================
--- Q15: Sanity check — portfolio product vs PCQ offered product.
--- Does visa_prod_cd from the portfolio match offer_prod_latest from PCQ?
+-- V6: Offer product vs portfolio visa_prod_cd cross-tab (pooled across ASCs).
+-- Superseded by V7 (split by ASC). Kept for historical reference.
 -- ==========================================================================
 SELECT
     r.offer_prod_latest,
@@ -499,10 +587,12 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q16: Q15 split by ASC category.
--- Period-ASC should show near-100% diagonal match (true PCQ conversions
--- can only receive the offered product). Mismatches should live in
--- 'Other ASC' and 'NO ASC' where the customer applied via a non-PCQ path.
+-- V7: V6 split by asc_on_app_source.
+-- Period-ASC block should have the dominant diagonal (booked = offered).
+-- Other ASC / NO ASC blocks are organic and expected to scatter.
+-- Note: this does NOT anchor at the booking row (unlike Q2), so reclassed
+-- accounts contribute to multiple cells. Use Q2's booking_status for the
+-- anchored version.
 -- ==========================================================================
 SELECT
     r.asc_on_app_source,
@@ -528,7 +618,7 @@ ORDER BY
 
 
 -- ==========================================================================
--- Q16b: Validate asc_on_app_source label against raw ACQ_STRATEGY_CODE vs
+-- V8: Validate asc_on_app_source label against raw ACQ_STRATEGY_CODE vs
 -- ASC_ON_APP comparison. Expected to collapse to three diagonal cells:
 --   raw_null      × NO ASC
 --   raw_match     × Period-ASC
@@ -542,9 +632,9 @@ SELECT
         ELSE 'raw_mismatch'
     END AS raw_comparison,
     asc_on_app_source,
-    COUNT(*) AS n_rows,
-    COUNT(DISTINCT clnt_no) AS clients,
-    COUNT(DISTINCT acct_no) AS accounts
+    COUNT(*)                  AS n_rows,
+    COUNT(DISTINCT clnt_no)   AS clients,
+    COUNT(DISTINCT acct_no)   AS accounts
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
 WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
   AND app_approved = 1
@@ -553,75 +643,9 @@ ORDER BY 1, 2;
 
 
 -- ==========================================================================
--- Q17: Booked product validation + reclass detection (Period-ASC only).
--- Anchors visa_prod_cd at earliest portfolio row on/after treatmt_start_dt
--- for each approved Period-ASC account (this row IS the new-account event
--- for TPA bookings, confirmed by manual inspection). Two outputs in one:
---   booking_status = does anchored visa_prod_cd match offer_prod_latest?
---   lifetime_status = did visa_prod_cd ever change on the same acct_no post-offer?
--- Expected: nearly all accounts fall into (match, stable). (match, reclassed)
--- is the enrichment finding — customers who took the offer and were later
--- reclassified. (mismatch, *) should be near zero — any volume there is a red flag.
--- ==========================================================================
-WITH approved_period_asc AS (
-    SELECT
-        clnt_no,
-        acct_no,
-        offer_prod_latest,
-        offer_prod_latest_name,
-        treatmt_start_dt,
-        test_group_latest
-    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-      AND app_approved = 1
-      AND asc_on_app_source = 'Period-ASC'
-),
-portfolio_post_offer AS (
-    SELECT
-        r.acct_no,
-        r.offer_prod_latest,
-        r.test_group_latest,
-        p.dt_record_ext,
-        p.visa_prod_cd
-    FROM approved_period_asc r
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-        ON p.acct_no = r.acct_no
-        AND p.dt_record_ext >= r.treatmt_start_dt
-),
-booked AS (
-    SELECT
-        acct_no,
-        offer_prod_latest,
-        test_group_latest,
-        visa_prod_cd AS booked_visa_prod_cd
-    FROM portfolio_post_offer
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
-),
-lifetime AS (
-    SELECT
-        acct_no,
-        COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
-    FROM portfolio_post_offer
-    GROUP BY acct_no
-)
-SELECT
-    b.test_group_latest,
-    b.offer_prod_latest,
-    CASE WHEN b.booked_visa_prod_cd = b.offer_prod_latest
-         THEN 'match' ELSE 'mismatch' END AS booking_status,
-    CASE WHEN l.n_distinct_visa > 1
-         THEN 'reclassed' ELSE 'stable' END AS lifetime_status,
-    COUNT(DISTINCT b.acct_no) AS accounts
-FROM booked b
-INNER JOIN lifetime l ON l.acct_no = b.acct_no
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 3, 4;
-
-
--- ==========================================================================
--- Q18: Sample accounts per (booking_status × lifetime_status) quadrant.
+-- V9: Sample accounts per (booking_status × lifetime_status) quadrant.
 -- Returns 2 accounts per quadrant (8 total) with TPA-side details.
--- Pair with Q19 to see the portfolio-side timeline for the same accounts.
+-- Pair with V10 to see the portfolio-side timeline for the same accounts.
 -- ==========================================================================
 WITH approved_period_asc AS (
     SELECT
@@ -680,10 +704,10 @@ ORDER BY booking_status, lifetime_status, acct_no;
 
 
 -- ==========================================================================
--- Q19: Full portfolio timeline for the same sample accounts used in Q18.
+-- V10: Full portfolio timeline for the same sample accounts used in V9.
 -- Self-contained — re-runs the classification CTE to pick the same 8 accounts,
 -- then dumps every post-offer portfolio row for each, ordered chronologically.
--- Run Q18 and Q19 together, compare the two result tabs side by side.
+-- Run V9 and V10 together, compare the two result tabs side by side.
 -- ==========================================================================
 WITH approved_period_asc AS (
     SELECT clnt_no, acct_no, offer_prod_latest, treatmt_start_dt, test_group_latest
