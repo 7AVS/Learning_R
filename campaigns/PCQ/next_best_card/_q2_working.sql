@@ -1,10 +1,11 @@
 -- ============================================================================
--- Q2 — two-volatile-table version. Eliminates spool error.
+-- Q2 + Q1 SUMMARY — two-volatile-table version.
 --
--- HOW TO RUN: highlight ALL THREE STATEMENTS below and run them together.
+-- HOW TO RUN: highlight ALL FOUR STATEMENTS below and run them together.
 --   1. CREATE VOLATILE TABLE pcq_accts       (tiny — ~6k accounts)
 --   2. CREATE VOLATILE TABLE pcq_pw          (filtered portfolio slice)
---   3. SELECT ... FROM ... (final analytical output)
+--   3. SELECT ... (Q2 account-level analytical output)
+--   4. SELECT ... (Q1 summary — full deployed denominator + all numerators)
 --
 -- Why this works:
 --   • pcq_accts is indexed on acct_no, so Teradata distributes the join by
@@ -180,3 +181,77 @@ ORDER BY
     r.test_group_latest,
     r.offer_prod_latest,
     pa.total_net_purchases DESC;
+
+
+-- ============================================================================
+-- Step 4 — Q1 SUMMARY
+-- Grain: test_group × wave × offered product.
+-- Denominator = full deployed population (NO app_approved filter).
+-- Numerators = nested conversion definitions, each a stricter subset:
+--   approved_any              = app_approved = 1
+--   approved_period_asc       = ... AND Period-ASC
+--   approved_period_asc_match = ... AND booked = offered
+--   approved_clean            = ... AND match AND stable (the purest signal)
+-- Rates are all computed against the same deployed denominator so you can
+-- compare group lift at any conversion definition.
+-- ============================================================================
+SELECT
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    COUNT(*)                                                                    AS deployed,
+
+    -- Raw counts
+    SUM(r.app_approved)                                                         AS approved_any,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
+             THEN 1 ELSE 0 END)                                                 AS approved_period_asc,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Other ASC'
+             THEN 1 ELSE 0 END)                                                 AS approved_other_asc,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'NO ASC'
+             THEN 1 ELSE 0 END)                                                 AS approved_no_asc,
+    SUM(CASE WHEN r.app_approved = 1
+              AND r.asc_on_app_source = 'Period-ASC'
+              AND cls.booked_visa_prod_cd = r.offer_prod_latest
+             THEN 1 ELSE 0 END)                                                 AS approved_period_asc_match,
+    SUM(CASE WHEN r.app_approved = 1
+              AND r.asc_on_app_source = 'Period-ASC'
+              AND cls.booked_visa_prod_cd = r.offer_prod_latest
+              AND cls.n_uniq_visa = 1
+             THEN 1 ELSE 0 END)                                                 AS approved_clean,
+
+    -- Rates (numerator / deployed)
+    ROUND(100.0 * SUM(r.app_approved) / NULLIFZERO(COUNT(*)), 2)                AS rate_approved_any_pct,
+    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
+                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_period_asc_pct,
+    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1
+                            AND r.asc_on_app_source = 'Period-ASC'
+                            AND cls.booked_visa_prod_cd = r.offer_prod_latest
+                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_period_asc_match_pct,
+    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1
+                            AND r.asc_on_app_source = 'Period-ASC'
+                            AND cls.booked_visa_prod_cd = r.offer_prod_latest
+                            AND cls.n_uniq_visa = 1
+                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_clean_pct
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+LEFT JOIN (
+    -- Classification flags from the volatile portfolio slice (approved only).
+    -- LEFT JOIN means non-approved rows get NULLs here and fall out of the
+    -- classification-filtered numerators automatically.
+    SELECT
+        acct_no,
+        MAX(CASE WHEN rn_first = 1 THEN visa_prod_cd END) AS booked_visa_prod_cd,
+        COUNT(DISTINCT visa_prod_cd)                      AS n_uniq_visa
+    FROM pcq_pw
+    GROUP BY acct_no
+) cls ON cls.acct_no = r.acct_no
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+GROUP BY
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name
+ORDER BY
+    r.test_group_latest,
+    r.treatmt_start_dt,
+    r.offer_prod_latest;
