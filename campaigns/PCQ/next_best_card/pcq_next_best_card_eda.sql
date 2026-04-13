@@ -233,8 +233,9 @@ booked AS (
     FROM pw
     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
 ),
-latest AS (
+latest_snap AS (
     -- Point-in-time values from the most recent row in window.
+    -- (CTE named 'latest_snap' not 'latest' — LATEST is a Teradata reserved keyword.)
     SELECT
         acct_no,
         visa_prod_cd         AS latest_visa_prod_cd,
@@ -313,7 +314,7 @@ FROM tpa_base r
 LEFT JOIN per_account pa ON pa.acct_no = r.acct_no
 LEFT JOIN fees_agg    fa ON fa.acct_no = r.acct_no
 LEFT JOIN booked      bk ON bk.acct_no = r.acct_no
-LEFT JOIN latest      lt ON lt.acct_no = r.acct_no
+LEFT JOIN latest_snap lt ON lt.acct_no = r.acct_no
 ORDER BY
     r.test_group_latest,
     r.offer_prod_latest,
