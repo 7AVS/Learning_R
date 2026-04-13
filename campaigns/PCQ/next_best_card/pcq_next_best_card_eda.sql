@@ -113,19 +113,19 @@ ORDER BY
 --                    account_existed_pre_offer flag, first/last extract dates,
 --                    months_with_activity
 --   Classification   booked_visa_prod_cd (anchor = earliest post-offer row)
---                    latest_visa_prod_cd, n_distinct_visa
+--                    last_visa_prod_cd, n_distinct_visa
 --                    booking_status  = match / mismatch vs offer_prod_latest
 --                    lifetime_status = stable / reclassed (n_distinct_visa > 1)
---   Balances         latest_balance, latest_avg_daily_bal_mtd,
+--   Balances         last_balance, last_avg_daily_bal_mtd,
 --                    total_net_purchases, avg_monthly_purchases
---   Fees             annual_fee_latest (list),  annual_fee_last_dt,
+--   Fees             annual_fee_last (list),  annual_fee_last_dt,
 --                    ever_charged_annual_fee, total_fees_charged (revenue),
 --                    months_with_fees (incidence)
---   Loyalty          latest_loyalty_balance (point-in-time),
+--   Loyalty          last_loyalty_balance (point-in-time),
 --                    max_loyalty_balance (peak accumulation)
---   Risk             ever_overlimit, latest_overlimit_cd,
---                    ever_past_due, latest_past_due_cd
---   Status lifecycle latest_status, st_{bkpt,coll,frd,inv,open,vol,woff},
+--   Risk             ever_overlimit, last_overlimit_cd,
+--                    ever_past_due, last_past_due_cd
+--   Status lifecycle last_status, st_{bkpt,coll,frd,inv,open,vol,woff},
 --                    first_non_open_dt, days_to_status_change
 --
 -- Anchor rule for booked_visa_prod_cd: earliest dt_record_ext on/after
@@ -233,19 +233,19 @@ booked AS (
     FROM pw
     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
 ),
-latest_snap AS (
+last_snap AS (
     -- Point-in-time values from the most recent row in window.
-    -- (CTE named 'latest_snap' not 'latest' — LATEST is a Teradata reserved keyword.)
+    -- (CTE named 'last_snap' not 'latest' — LATEST is a Teradata reserved keyword.)
     SELECT
         acct_no,
-        visa_prod_cd         AS latest_visa_prod_cd,
-        bal_current          AS latest_balance,
-        accum_dly_bal_mtd    AS latest_avg_daily_bal_mtd,
-        status               AS latest_status,
-        cd_curr_ovrlmt       AS latest_overlimit_cd,
-        cd_curr_pst_due      AS latest_past_due_cd,
-        lylty_bal_amt        AS latest_loyalty_balance,
-        lst_ann_fee_chrg_amt AS annual_fee_latest,
+        visa_prod_cd         AS last_visa_prod_cd,
+        bal_current          AS last_balance,
+        accum_dly_bal_mtd    AS last_avg_daily_bal_mtd,
+        status               AS last_status,
+        cd_curr_ovrlmt       AS last_overlimit_cd,
+        cd_curr_pst_due      AS last_past_due_cd,
+        lylty_bal_amt        AS last_loyalty_balance,
+        lst_ann_fee_chrg_amt AS annual_fee_last,
         lst_ann_fee_dt       AS annual_fee_last_dt
     FROM pw
     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext DESC) = 1
@@ -266,15 +266,15 @@ SELECT
     -- === Account timing ===
     pa.acct_open_dt,
     pa.acct_cls_dt,
-    pa.acct_open_dt - r.treatmt_start_dt                          AS days_offer_to_open,
-    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END AS account_existed_pre_offer,
+    CAST(pa.acct_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE) AS days_offer_to_open,
+    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END  AS account_existed_pre_offer,
     pa.first_extract_dt,
     pa.last_extract_dt,
     pa.months_with_activity,
 
     -- === Classification ===
     bk.booked_visa_prod_cd,
-    lt.latest_visa_prod_cd,
+    lt.last_visa_prod_cd,
     pa.n_distinct_visa,
     CASE WHEN bk.booked_visa_prod_cd = r.offer_prod_latest
          THEN 'match' ELSE 'mismatch' END                         AS booking_status,
@@ -282,39 +282,39 @@ SELECT
          THEN 'reclassed' ELSE 'stable' END                       AS lifetime_status,
 
     -- === Balances ===
-    lt.latest_balance,
-    lt.latest_avg_daily_bal_mtd,
+    lt.last_balance,
+    lt.last_avg_daily_bal_mtd,
     pa.total_net_purchases,
     pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)  AS avg_monthly_purchases,
 
     -- === Fees ===
-    lt.annual_fee_latest,
+    lt.annual_fee_last,
     lt.annual_fee_last_dt,
-    CASE WHEN lt.annual_fee_latest > 0 THEN 1 ELSE 0 END          AS ever_charged_annual_fee,
+    CASE WHEN lt.annual_fee_last > 0 THEN 1 ELSE 0 END          AS ever_charged_annual_fee,
     fa.total_fees_charged,
     fa.months_with_fees,
 
     -- === Loyalty ===
-    lt.latest_loyalty_balance,
+    lt.last_loyalty_balance,
     pa.max_loyalty_balance,
 
     -- === Risk ===
     pa.ever_overlimit,
-    lt.latest_overlimit_cd,
+    lt.last_overlimit_cd,
     pa.ever_past_due,
-    lt.latest_past_due_cd,
+    lt.last_past_due_cd,
 
     -- === Status lifecycle ===
-    lt.latest_status,
+    lt.last_status,
     pa.st_bkpt, pa.st_coll, pa.st_frd, pa.st_inv, pa.st_open, pa.st_vol, pa.st_woff,
     pa.first_non_open_dt,
-    pa.first_non_open_dt - r.treatmt_start_dt                     AS days_to_status_change
+    CAST(pa.first_non_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE) AS days_to_status_change
 
 FROM tpa_base r
 LEFT JOIN per_account pa ON pa.acct_no = r.acct_no
 LEFT JOIN fees_agg    fa ON fa.acct_no = r.acct_no
 LEFT JOIN booked      bk ON bk.acct_no = r.acct_no
-LEFT JOIN latest_snap lt ON lt.acct_no = r.acct_no
+LEFT JOIN last_snap lt ON lt.acct_no = r.acct_no
 ORDER BY
     r.test_group_latest,
     r.offer_prod_latest,
