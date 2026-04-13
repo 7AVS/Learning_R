@@ -138,118 +138,6 @@ ORDER BY
 -- whenever the value is not NULL, 'N', '0', or empty. If the encoding turns
 -- out to differ (e.g., days-past-due integers), adjust the CASE here.
 -- ==========================================================================
-WITH tpa_base AS (
-    -- One row per approved acct_no; collapses multi-wave duplicates.
-    SELECT
-        acct_no,
-        MIN(treatmt_start_dt)     AS treatmt_start_dt,
-        MAX(clnt_no)              AS clnt_no,
-        MAX(test_group_latest)    AS test_group_latest,
-        MAX(offer_prod_latest)    AS offer_prod_latest,
-        MAX(offer_prod_latest_name) AS offer_prod_latest_name,
-        MAX(asc_on_app_source)    AS asc_on_app_source,
-        MAX(response_dt)          AS response_dt
-    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-      AND app_approved = 1
-    GROUP BY acct_no
-),
-pw AS (
-    -- Every post-offer portfolio row for the target accounts.
-    SELECT
-        r.acct_no,
-        p.dt_record_ext,
-        p.me_dt,
-        p.visa_prod_cd,
-        p.acct_open_dt,
-        p.acct_cls_dt,
-        p.status AS acct_status,
-        p.bal_current,
-        p.accum_dly_bal_mtd,
-        p.net_prch_amt_dly,
-        p.net_prch_amt_mtd,
-        p.lylty_bal_amt,
-        p.lst_ann_fee_chrg_amt,
-        p.lst_ann_fee_dt,
-        p.net_all_fees_amt_mtd,
-        p.cd_curr_ovrlmt,
-        p.cd_curr_pst_due
-    FROM tpa_base r
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-        ON p.acct_no       = r.acct_no
-        AND p.dt_record_ext >= r.treatmt_start_dt
-),
-monthly_fees AS (
-    -- MTD fees reset each month. Max per me_dt = that month's total fees.
-    SELECT
-        acct_no,
-        me_dt,
-        MAX(net_all_fees_amt_mtd) AS month_fee_total
-    FROM pw
-    GROUP BY acct_no, me_dt
-),
-fees_agg AS (
-    SELECT
-        acct_no,
-        SUM(month_fee_total)                                    AS total_fees_charged,
-        SUM(CASE WHEN month_fee_total > 0 THEN 1 ELSE 0 END)    AS months_with_fees
-    FROM monthly_fees
-    GROUP BY acct_no
-),
-per_account AS (
-    -- Account-level window aggregates over all post-offer rows.
-    SELECT
-        acct_no,
-        MIN(dt_record_ext)            AS first_extract_dt,
-        MAX(dt_record_ext)            AS last_extract_dt,
-        MAX(acct_open_dt)             AS acct_open_dt,
-        MAX(acct_cls_dt)              AS acct_cls_dt,
-        COUNT(DISTINCT me_dt)         AS months_with_activity,
-        COUNT(DISTINCT visa_prod_cd)  AS n_distinct_visa,
-        SUM(net_prch_amt_dly)         AS total_net_purchases,
-        MAX(lylty_bal_amt)            AS max_loyalty_balance,
-        -- Account status ever-exposure flags (1 = touched at any row in window)
-        MAX(CASE WHEN acct_status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
-        MAX(CASE WHEN acct_status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
-        MAX(CASE WHEN acct_status = 'FRD'  THEN 1 ELSE 0 END) AS st_frd,
-        MAX(CASE WHEN acct_status = 'INV'  THEN 1 ELSE 0 END) AS st_inv,
-        MAX(CASE WHEN acct_status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
-        MAX(CASE WHEN acct_status = 'VOL'  THEN 1 ELSE 0 END) AS st_vol,
-        MAX(CASE WHEN acct_status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
-        MIN(CASE WHEN acct_status <> 'OPEN' THEN dt_record_ext END) AS first_non_open_dt,
-        -- Risk ever-exposure flags
-        MAX(CASE WHEN cd_curr_ovrlmt IS NOT NULL
-                  AND cd_curr_ovrlmt NOT IN ('', 'N', '0')
-                 THEN 1 ELSE 0 END) AS ever_overlimit,
-        MAX(CASE WHEN cd_curr_pst_due IS NOT NULL
-                  AND cd_curr_pst_due NOT IN ('', 'N', '0')
-                 THEN 1 ELSE 0 END) AS ever_past_due
-    FROM pw
-    GROUP BY acct_no
-),
-booked AS (
-    -- Anchor: visa_prod_cd at the earliest post-offer row = booked product.
-    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
-    FROM pw
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
-),
-last_snap AS (
-    -- Point-in-time values from the most recent row in window.
-    -- (CTE named 'last_snap' not 'latest' — LATEST is a Teradata reserved keyword.)
-    SELECT
-        acct_no,
-        visa_prod_cd         AS last_visa_prod_cd,
-        bal_current          AS last_balance,
-        accum_dly_bal_mtd    AS last_avg_daily_bal_mtd,
-        acct_status          AS last_status,
-        cd_curr_ovrlmt       AS last_overlimit_cd,
-        cd_curr_pst_due      AS last_past_due_cd,
-        lylty_bal_amt        AS last_loyalty_balance,
-        lst_ann_fee_chrg_amt AS annual_fee_last,
-        lst_ann_fee_dt       AS annual_fee_last_dt
-    FROM pw
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext DESC) = 1
-)
 SELECT
     -- === Identity ===
     r.test_group_latest,
@@ -266,55 +154,160 @@ SELECT
     -- === Account timing ===
     pa.acct_open_dt,
     pa.acct_cls_dt,
-    CAST(pa.acct_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE) AS days_offer_to_open,
-    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END  AS account_existed_pre_offer,
+    CAST(pa.acct_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE)          AS days_offer_to_open,
+    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END           AS account_existed_pre_offer,
     pa.first_extract_dt,
     pa.last_extract_dt,
     pa.months_with_activity,
 
     -- === Classification ===
     bk.booked_visa_prod_cd,
-    lt.last_visa_prod_cd,
+    ls.last_visa_prod_cd,
     pa.n_distinct_visa,
     CASE WHEN bk.booked_visa_prod_cd = r.offer_prod_latest
-         THEN 'match' ELSE 'mismatch' END                         AS booking_status,
+         THEN 'match' ELSE 'mismatch' END                                      AS booking_status,
     CASE WHEN pa.n_distinct_visa > 1
-         THEN 'reclassed' ELSE 'stable' END                       AS lifetime_status,
+         THEN 'reclassed' ELSE 'stable' END                                    AS lifetime_status,
 
     -- === Balances ===
-    lt.last_balance,
-    lt.last_avg_daily_bal_mtd,
+    ls.last_balance,
+    ls.last_avg_daily_bal_mtd,
     pa.total_net_purchases,
-    pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)  AS avg_monthly_purchases,
+    pa.total_net_purchases / NULLIFZERO(pa.months_with_activity)               AS avg_monthly_purchases,
 
     -- === Fees ===
-    lt.annual_fee_last,
-    lt.annual_fee_last_dt,
-    CASE WHEN lt.annual_fee_last > 0 THEN 1 ELSE 0 END          AS ever_charged_annual_fee,
+    ls.annual_fee_last,
+    ls.annual_fee_last_dt,
+    CASE WHEN ls.annual_fee_last > 0 THEN 1 ELSE 0 END                         AS ever_charged_annual_fee,
     fa.total_fees_charged,
     fa.months_with_fees,
 
     -- === Loyalty ===
-    lt.last_loyalty_balance,
+    ls.last_loyalty_balance,
     pa.max_loyalty_balance,
 
     -- === Risk ===
     pa.ever_overlimit,
-    lt.last_overlimit_cd,
+    ls.last_overlimit_cd,
     pa.ever_past_due,
-    lt.last_past_due_cd,
+    ls.last_past_due_cd,
 
     -- === Status lifecycle ===
-    lt.last_status,
+    ls.last_status,
     pa.st_bkpt, pa.st_coll, pa.st_frd, pa.st_inv, pa.st_open, pa.st_vol, pa.st_woff,
     pa.first_non_open_dt,
-    CAST(pa.first_non_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE) AS days_to_status_change
+    CAST(pa.first_non_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE)      AS days_to_status_change
 
-FROM tpa_base r
-LEFT JOIN per_account pa ON pa.acct_no = r.acct_no
-LEFT JOIN fees_agg    fa ON fa.acct_no = r.acct_no
-LEFT JOIN booked      bk ON bk.acct_no = r.acct_no
-LEFT JOIN last_snap lt ON lt.acct_no = r.acct_no
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+
+-- ---- Per-account aggregates over the post-offer window ----
+LEFT JOIN (
+    SELECT
+        r2.acct_no,
+        MIN(p.dt_record_ext)            AS first_extract_dt,
+        MAX(p.dt_record_ext)            AS last_extract_dt,
+        MAX(p.acct_open_dt)             AS acct_open_dt,
+        MAX(p.acct_cls_dt)              AS acct_cls_dt,
+        COUNT(DISTINCT p.me_dt)         AS months_with_activity,
+        COUNT(DISTINCT p.visa_prod_cd)  AS n_distinct_visa,
+        SUM(p.net_prch_amt_dly)         AS total_net_purchases,
+        MAX(p.lylty_bal_amt)            AS max_loyalty_balance,
+        MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END) AS st_bkpt,
+        MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END) AS st_coll,
+        MAX(CASE WHEN p.status = 'FRD'  THEN 1 ELSE 0 END) AS st_frd,
+        MAX(CASE WHEN p.status = 'INV'  THEN 1 ELSE 0 END) AS st_inv,
+        MAX(CASE WHEN p.status = 'OPEN' THEN 1 ELSE 0 END) AS st_open,
+        MAX(CASE WHEN p.status = 'VOL'  THEN 1 ELSE 0 END) AS st_vol,
+        MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END) AS st_woff,
+        MIN(CASE WHEN p.status <> 'OPEN' THEN p.dt_record_ext END) AS first_non_open_dt,
+        MAX(CASE WHEN p.cd_curr_ovrlmt IS NOT NULL
+                  AND p.cd_curr_ovrlmt NOT IN ('', 'N', '0')
+                 THEN 1 ELSE 0 END) AS ever_overlimit,
+        MAX(CASE WHEN p.cd_curr_pst_due IS NOT NULL
+                  AND p.cd_curr_pst_due NOT IN ('', 'N', '0')
+                 THEN 1 ELSE 0 END) AS ever_past_due
+    FROM (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no       = r2.acct_no
+        AND p.dt_record_ext >= r2.treatmt_start_dt
+    GROUP BY r2.acct_no
+) pa ON pa.acct_no = r.acct_no
+
+-- ---- Latest-row snapshot: point-in-time values from the most recent row ----
+LEFT JOIN (
+    SELECT
+        p.acct_no,
+        p.visa_prod_cd         AS last_visa_prod_cd,
+        p.bal_current          AS last_balance,
+        p.accum_dly_bal_mtd    AS last_avg_daily_bal_mtd,
+        p.status               AS last_status,
+        p.cd_curr_ovrlmt       AS last_overlimit_cd,
+        p.cd_curr_pst_due      AS last_past_due_cd,
+        p.lylty_bal_amt        AS last_loyalty_balance,
+        p.lst_ann_fee_chrg_amt AS annual_fee_last,
+        p.lst_ann_fee_dt       AS annual_fee_last_dt
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2 ON r2.acct_no = p.acct_no
+         AND p.dt_record_ext >= r2.treatmt_start_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
+) ls ON ls.acct_no = r.acct_no
+
+-- ---- Booked-row anchor: visa_prod_cd at the earliest post-offer row ----
+LEFT JOIN (
+    SELECT
+        p.acct_no,
+        p.visa_prod_cd AS booked_visa_prod_cd
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN (
+        SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+          AND app_approved = 1
+        GROUP BY acct_no
+    ) r2 ON r2.acct_no = p.acct_no
+         AND p.dt_record_ext >= r2.treatmt_start_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext ASC) = 1
+) bk ON bk.acct_no = r.acct_no
+
+-- ---- Fee aggregation: sum of end-of-month totals across the window ----
+LEFT JOIN (
+    SELECT
+        mf.acct_no,
+        SUM(mf.month_fee_total)                                   AS total_fees_charged,
+        SUM(CASE WHEN mf.month_fee_total > 0 THEN 1 ELSE 0 END)   AS months_with_fees
+    FROM (
+        SELECT
+            p.acct_no,
+            p.me_dt,
+            MAX(p.net_all_fees_amt_mtd) AS month_fee_total
+        FROM D3CV12A.DLY_FULL_PORTFOLIO p
+        INNER JOIN (
+            SELECT acct_no, MIN(treatmt_start_dt) AS treatmt_start_dt
+            FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+            WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+              AND app_approved = 1
+            GROUP BY acct_no
+        ) r2 ON r2.acct_no = p.acct_no
+             AND p.dt_record_ext >= r2.treatmt_start_dt
+        GROUP BY p.acct_no, p.me_dt
+    ) mf
+    GROUP BY mf.acct_no
+) fa ON fa.acct_no = r.acct_no
+
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
 ORDER BY
     r.test_group_latest,
     r.offer_prod_latest,
