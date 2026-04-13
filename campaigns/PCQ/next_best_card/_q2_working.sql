@@ -230,11 +230,18 @@ SELECT
     AVG(CASE WHEN r.app_approved = 1 THEN cls.max_loyalty_balance END) AS avg_max_loyalty,
     AVG(CASE WHEN r.app_approved = 1 THEN cls.last_loyalty_balance END) AS avg_last_loyalty,
 
-    -- Risk incidence counts in this ASC bucket
+    -- Risk incidence (ever-flags) counts in this ASC bucket
     SUM(CASE WHEN r.app_approved = 1 AND cls.ever_overlimit = 1 THEN 1 ELSE 0 END) AS cnt_ever_overlimit,
     SUM(CASE WHEN r.app_approved = 1 AND cls.ever_past_due  = 1 THEN 1 ELSE 0 END) AS cnt_ever_past_due,
-    SUM(CASE WHEN r.app_approved = 1 AND cls.st_woff = 1 THEN 1 ELSE 0 END)        AS cnt_writeoff,
-    SUM(CASE WHEN r.app_approved = 1 AND cls.st_bkpt = 1 THEN 1 ELSE 0 END)        AS cnt_bankruptcy
+
+    -- Account lifecycle status counts (how many approved accts ever hit each state)
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_bkpt = 1 THEN 1 ELSE 0 END)        AS cnt_st_bkpt,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_coll = 1 THEN 1 ELSE 0 END)        AS cnt_st_coll,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_frd  = 1 THEN 1 ELSE 0 END)        AS cnt_st_frd,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_inv  = 1 THEN 1 ELSE 0 END)        AS cnt_st_inv,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_open = 1 THEN 1 ELSE 0 END)        AS cnt_st_open,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_vol  = 1 THEN 1 ELSE 0 END)        AS cnt_st_vol,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_woff = 1 THEN 1 ELSE 0 END)        AS cnt_st_woff
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 
 -- Deployed denominator: total count per (group × wave × product), regardless of ASC.
@@ -264,8 +271,13 @@ LEFT JOIN (
         a.last_loyalty_balance,
         a.ever_overlimit,
         a.ever_past_due,
-        a.st_woff,
         a.st_bkpt,
+        a.st_coll,
+        a.st_frd,
+        a.st_inv,
+        a.st_open,
+        a.st_vol,
+        a.st_woff,
         COALESCE(f.total_fees_charged, 0) AS total_fees_charged
     FROM (
         SELECT
@@ -281,8 +293,13 @@ LEFT JOIN (
             MAX(CASE WHEN cd_curr_pst_due IS NOT NULL
                       AND cd_curr_pst_due NOT IN ('', 'N', '0')
                      THEN 1 ELSE 0 END)                             AS ever_past_due,
-            MAX(CASE WHEN acct_status = 'WOFF' THEN 1 ELSE 0 END)   AS st_woff,
-            MAX(CASE WHEN acct_status = 'BKPT' THEN 1 ELSE 0 END)   AS st_bkpt
+            MAX(CASE WHEN acct_status = 'BKPT' THEN 1 ELSE 0 END)   AS st_bkpt,
+            MAX(CASE WHEN acct_status = 'COLL' THEN 1 ELSE 0 END)   AS st_coll,
+            MAX(CASE WHEN acct_status = 'FRD'  THEN 1 ELSE 0 END)   AS st_frd,
+            MAX(CASE WHEN acct_status = 'INV'  THEN 1 ELSE 0 END)   AS st_inv,
+            MAX(CASE WHEN acct_status = 'OPEN' THEN 1 ELSE 0 END)   AS st_open,
+            MAX(CASE WHEN acct_status = 'VOL'  THEN 1 ELSE 0 END)   AS st_vol,
+            MAX(CASE WHEN acct_status = 'WOFF' THEN 1 ELSE 0 END)   AS st_woff
         FROM pcq_pw
         GROUP BY acct_no
     ) a
