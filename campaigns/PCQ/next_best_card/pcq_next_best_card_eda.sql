@@ -496,3 +496,32 @@ GROUP BY
 ORDER BY
     r.offer_prod_latest,
     accounts DESC;
+
+
+-- ==========================================================================
+-- Q16: Q15 split by ASC category.
+-- Period-ASC should show near-100% diagonal match (true PCQ conversions
+-- can only receive the offered product). Mismatches should live in
+-- 'Other ASC' and 'NO ASC' where the customer applied via a non-PCQ path.
+-- ==========================================================================
+SELECT
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.visa_prod_cd,
+    COUNT(DISTINCT r.acct_no) AS accounts
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = r.acct_no
+    AND p.me_dt >= r.treatmt_start_dt
+WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+  AND r.app_approved = 1
+GROUP BY
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    r.offer_prod_latest_name,
+    p.visa_prod_cd
+ORDER BY
+    r.asc_on_app_source,
+    r.offer_prod_latest,
+    accounts DESC;
