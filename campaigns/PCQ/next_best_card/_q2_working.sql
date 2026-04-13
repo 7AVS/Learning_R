@@ -215,8 +215,7 @@ SELECT
     -- Same value repeats across the 3-4 ASC rows within a (group × wave × product).
     grp_tot.deployed,
 
-    -- Counts within this (group × wave × product × asc) row
-    COUNT(*)                                                          AS rows_in_bucket,
+    -- Approved count within this ASC bucket
     SUM(r.app_approved)                                               AS approved,
 
     -- $ rollups over approved accounts in this ASC bucket
