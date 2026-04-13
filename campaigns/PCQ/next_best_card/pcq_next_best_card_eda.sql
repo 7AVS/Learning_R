@@ -616,3 +616,128 @@ FROM booked b
 INNER JOIN lifetime l ON l.acct_no = b.acct_no
 GROUP BY 1, 2, 3, 4
 ORDER BY 1, 2, 3, 4;
+
+
+-- ==========================================================================
+-- Q18: Sample accounts per (booking_status × lifetime_status) quadrant.
+-- Returns 2 accounts per quadrant (8 total) with TPA-side details.
+-- Pair with Q19 to see the portfolio-side timeline for the same accounts.
+-- ==========================================================================
+WITH approved_period_asc AS (
+    SELECT
+        clnt_no, acct_no,
+        offer_prod_latest, offer_prod_latest_name,
+        treatmt_start_dt, test_group_latest,
+        acq_strategy_code, asc_on_app, asc_on_app_source
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+      AND asc_on_app_source = 'Period-ASC'
+),
+pp AS (
+    SELECT r.acct_no, p.dt_record_ext, p.visa_prod_cd
+    FROM approved_period_asc r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r.acct_no
+        AND p.dt_record_ext >= r.treatmt_start_dt
+),
+booked AS (
+    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
+    FROM pp
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
+),
+lifetime AS (
+    SELECT acct_no, COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
+    FROM pp GROUP BY acct_no
+),
+classified AS (
+    SELECT
+        r.clnt_no, r.acct_no, r.test_group_latest,
+        r.offer_prod_latest, r.offer_prod_latest_name, r.treatmt_start_dt,
+        r.acq_strategy_code, r.asc_on_app, r.asc_on_app_source,
+        b.booked_visa_prod_cd, l.n_distinct_visa,
+        CASE WHEN b.booked_visa_prod_cd = r.offer_prod_latest
+             THEN 'match' ELSE 'mismatch' END AS booking_status,
+        CASE WHEN l.n_distinct_visa > 1
+             THEN 'reclassed' ELSE 'stable' END AS lifetime_status
+    FROM approved_period_asc r
+    INNER JOIN booked b ON b.acct_no = r.acct_no
+    INNER JOIN lifetime l ON l.acct_no = r.acct_no
+)
+SELECT
+    booking_status, lifetime_status,
+    test_group_latest, clnt_no, acct_no,
+    offer_prod_latest, offer_prod_latest_name,
+    booked_visa_prod_cd, n_distinct_visa,
+    treatmt_start_dt,
+    acq_strategy_code, asc_on_app, asc_on_app_source
+FROM classified
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY booking_status, lifetime_status
+    ORDER BY acct_no
+) <= 2
+ORDER BY booking_status, lifetime_status, acct_no;
+
+
+-- ==========================================================================
+-- Q19: Full portfolio timeline for the same sample accounts used in Q18.
+-- Self-contained — re-runs the classification CTE to pick the same 8 accounts,
+-- then dumps every post-offer portfolio row for each, ordered chronologically.
+-- Run Q18 and Q19 together, compare the two result tabs side by side.
+-- ==========================================================================
+WITH approved_period_asc AS (
+    SELECT clnt_no, acct_no, offer_prod_latest, treatmt_start_dt, test_group_latest
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+      AND asc_on_app_source = 'Period-ASC'
+),
+pp AS (
+    SELECT r.acct_no, p.dt_record_ext, p.visa_prod_cd
+    FROM approved_period_asc r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r.acct_no
+        AND p.dt_record_ext >= r.treatmt_start_dt
+),
+booked AS (
+    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
+    FROM pp
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
+),
+lifetime AS (
+    SELECT acct_no, COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
+    FROM pp GROUP BY acct_no
+),
+classified AS (
+    SELECT
+        r.acct_no, r.offer_prod_latest, r.treatmt_start_dt,
+        CASE WHEN b.booked_visa_prod_cd = r.offer_prod_latest
+             THEN 'match' ELSE 'mismatch' END AS booking_status,
+        CASE WHEN l.n_distinct_visa > 1
+             THEN 'reclassed' ELSE 'stable' END AS lifetime_status
+    FROM approved_period_asc r
+    INNER JOIN booked b ON b.acct_no = r.acct_no
+    INNER JOIN lifetime l ON l.acct_no = r.acct_no
+),
+samples AS (
+    SELECT acct_no, offer_prod_latest, booking_status, lifetime_status, treatmt_start_dt
+    FROM classified
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY booking_status, lifetime_status
+        ORDER BY acct_no
+    ) <= 2
+)
+SELECT
+    s.booking_status,
+    s.lifetime_status,
+    s.offer_prod_latest,
+    s.acct_no,
+    s.treatmt_start_dt,
+    p.dt_record_ext,
+    p.me_dt,
+    p.visa_prod_cd
+FROM samples s
+INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON p.acct_no = s.acct_no
+    AND p.dt_record_ext >= s.treatmt_start_dt
+ORDER BY s.booking_status, s.lifetime_status, s.acct_no, p.dt_record_ext;
