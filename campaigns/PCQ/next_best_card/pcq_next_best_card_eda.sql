@@ -550,3 +550,69 @@ WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
   AND app_approved = 1
 GROUP BY 1, 2
 ORDER BY 1, 2;
+
+
+-- ==========================================================================
+-- Q17: Booked product validation + reclass detection (Period-ASC only).
+-- Anchors visa_prod_cd at earliest portfolio row on/after treatmt_start_dt
+-- for each approved Period-ASC account (this row IS the new-account event
+-- for TPA bookings, confirmed by manual inspection). Two outputs in one:
+--   booking_status = does anchored visa_prod_cd match offer_prod_latest?
+--   lifetime_status = did visa_prod_cd ever change on the same acct_no post-offer?
+-- Expected: nearly all accounts fall into (match, stable). (match, reclassed)
+-- is the enrichment finding — customers who took the offer and were later
+-- reclassified. (mismatch, *) should be near zero — any volume there is a red flag.
+-- ==========================================================================
+WITH approved_period_asc AS (
+    SELECT
+        clnt_no,
+        acct_no,
+        offer_prod_latest,
+        offer_prod_latest_name,
+        treatmt_start_dt,
+        test_group_latest
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND app_approved = 1
+      AND asc_on_app_source = 'Period-ASC'
+),
+portfolio_post_offer AS (
+    SELECT
+        r.acct_no,
+        r.offer_prod_latest,
+        r.test_group_latest,
+        p.dt_record_ext,
+        p.visa_prod_cd
+    FROM approved_period_asc r
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+        ON p.acct_no = r.acct_no
+        AND p.dt_record_ext >= r.treatmt_start_dt
+),
+booked AS (
+    SELECT
+        acct_no,
+        offer_prod_latest,
+        test_group_latest,
+        visa_prod_cd AS booked_visa_prod_cd
+    FROM portfolio_post_offer
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
+),
+lifetime AS (
+    SELECT
+        acct_no,
+        COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
+    FROM portfolio_post_offer
+    GROUP BY acct_no
+)
+SELECT
+    b.test_group_latest,
+    b.offer_prod_latest,
+    CASE WHEN b.booked_visa_prod_cd = b.offer_prod_latest
+         THEN 'match' ELSE 'mismatch' END AS booking_status,
+    CASE WHEN l.n_distinct_visa > 1
+         THEN 'reclassed' ELSE 'stable' END AS lifetime_status,
+    COUNT(DISTINCT b.acct_no) AS accounts
+FROM booked b
+INNER JOIN lifetime l ON l.acct_no = b.acct_no
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
