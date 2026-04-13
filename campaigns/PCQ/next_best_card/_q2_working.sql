@@ -77,7 +77,6 @@ SELECT
     pa.acct_open_dt,
     pa.acct_cls_dt,
     CAST(pa.acct_open_dt AS DATE) - CAST(r.treatmt_start_dt AS DATE)       AS days_offer_to_open,
-    CASE WHEN pa.acct_open_dt < r.treatmt_start_dt THEN 1 ELSE 0 END        AS account_existed_pre_offer,
     pa.first_extract_dt,
     pa.last_extract_dt,
     pa.months_with_activity,
@@ -210,89 +209,55 @@ SELECT
     r.treatmt_start_dt,
     r.offer_prod_latest,
     r.offer_prod_latest_name,
+    COALESCE(r.asc_on_app_source, 'No response')                      AS asc_category,
 
-    -- ============ LAYER 1: FUNNEL COUNTS ============
-    COUNT(*)                                                                    AS deployed,
-    SUM(r.app_approved)                                                         AS approved_any,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-             THEN 1 ELSE 0 END)                                                 AS approved_period_asc,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Other ASC'
-             THEN 1 ELSE 0 END)                                                 AS approved_other_asc,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'NO ASC'
-             THEN 1 ELSE 0 END)                                                 AS approved_no_asc,
-    SUM(CASE WHEN r.app_approved = 1
-              AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-             THEN 1 ELSE 0 END)                                                 AS approved_period_asc_match,
-    SUM(CASE WHEN r.app_approved = 1
-              AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1
-             THEN 1 ELSE 0 END)                                                 AS approved_clean,
+    -- Deployed (denominator) is the count for the whole bucket before ASC split.
+    -- Same value repeats across the 3-4 ASC rows within a (group × wave × product).
+    grp_tot.deployed,
 
-    -- ============ LAYER 2: FUNNEL RATES (/deployed) ============
-    ROUND(100.0 * SUM(r.app_approved) / NULLIFZERO(COUNT(*)), 2)                AS rate_approved_any_pct,
-    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_period_asc_pct,
-    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1
-                            AND r.asc_on_app_source = 'Period-ASC'
-                            AND cls.booked_visa_prod_cd = r.offer_prod_latest
-                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_period_asc_match_pct,
-    ROUND(100.0 * SUM(CASE WHEN r.app_approved = 1
-                            AND r.asc_on_app_source = 'Period-ASC'
-                            AND cls.booked_visa_prod_cd = r.offer_prod_latest
-                            AND cls.n_uniq_visa = 1
-                           THEN 1 ELSE 0 END) / NULLIFZERO(COUNT(*)), 2)        AS rate_clean_pct,
+    -- Counts within this (group × wave × product × asc) row
+    COUNT(*)                                                          AS rows_in_bucket,
+    SUM(r.app_approved)                                               AS approved,
 
-    -- ============ LAYER 3a: $ ROLLUPS — Period-ASC population ============
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.total_net_purchases END) AS pasc_sum_total_purchases,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.total_net_purchases END) AS pasc_avg_total_purchases,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.last_balance END)        AS pasc_sum_last_balance,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.last_balance END)        AS pasc_avg_last_balance,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.last_avg_daily_bal END)  AS pasc_avg_last_avg_daily_bal,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.total_fees_charged END)  AS pasc_sum_total_fees,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.total_fees_charged END)  AS pasc_avg_total_fees,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.max_loyalty_balance END) AS pasc_sum_max_loyalty,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.max_loyalty_balance END) AS pasc_avg_max_loyalty,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN cls.last_loyalty_balance END) AS pasc_avg_last_loyalty,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' AND cls.ever_overlimit = 1 THEN 1 ELSE 0 END) AS pasc_cnt_ever_overlimit,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' AND cls.ever_past_due  = 1 THEN 1 ELSE 0 END) AS pasc_cnt_ever_past_due,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' AND cls.st_woff = 1 THEN 1 ELSE 0 END)        AS pasc_cnt_writeoff,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' AND cls.st_bkpt = 1 THEN 1 ELSE 0 END)        AS pasc_cnt_bankruptcy,
+    -- $ rollups over approved accounts in this ASC bucket
+    SUM(CASE WHEN r.app_approved = 1 THEN cls.total_net_purchases END) AS sum_total_purchases,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.total_net_purchases END) AS avg_total_purchases,
+    SUM(CASE WHEN r.app_approved = 1 THEN cls.last_balance END)        AS sum_last_balance,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.last_balance END)        AS avg_last_balance,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.last_avg_daily_bal END)  AS avg_last_avg_daily_bal,
+    SUM(CASE WHEN r.app_approved = 1 THEN cls.total_fees_charged END)  AS sum_total_fees,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.total_fees_charged END)  AS avg_total_fees,
+    SUM(CASE WHEN r.app_approved = 1 THEN cls.max_loyalty_balance END) AS sum_max_loyalty,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.max_loyalty_balance END) AS avg_max_loyalty,
+    AVG(CASE WHEN r.app_approved = 1 THEN cls.last_loyalty_balance END) AS avg_last_loyalty,
 
-    -- ============ LAYER 3b: $ ROLLUPS — CLEAN population (match + stable) ============
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.total_net_purchases END) AS clean_sum_total_purchases,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.total_net_purchases END) AS clean_avg_total_purchases,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.last_balance END)        AS clean_sum_last_balance,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.last_balance END)        AS clean_avg_last_balance,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.last_avg_daily_bal END)  AS clean_avg_last_avg_daily_bal,
-    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.total_fees_charged END)  AS clean_sum_total_fees,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.total_fees_charged END)  AS clean_avg_total_fees,
-    AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND cls.booked_visa_prod_cd = r.offer_prod_latest
-              AND cls.n_uniq_visa = 1 THEN cls.max_loyalty_balance END) AS clean_avg_max_loyalty
+    -- Risk incidence counts in this ASC bucket
+    SUM(CASE WHEN r.app_approved = 1 AND cls.ever_overlimit = 1 THEN 1 ELSE 0 END) AS cnt_ever_overlimit,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.ever_past_due  = 1 THEN 1 ELSE 0 END) AS cnt_ever_past_due,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_woff = 1 THEN 1 ELSE 0 END)        AS cnt_writeoff,
+    SUM(CASE WHEN r.app_approved = 1 AND cls.st_bkpt = 1 THEN 1 ELSE 0 END)        AS cnt_bankruptcy
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+
+-- Deployed denominator: total count per (group × wave × product), regardless of ASC.
+-- Joined in so it appears as a column repeated across each ASC row of the same bucket.
 LEFT JOIN (
-    -- Per-account classification + $ rollup metrics from pcq_pw.
-    -- LEFT JOIN so non-approved rows get NULLs and fall out of filtered SUM/AVGs.
+    SELECT
+        test_group_latest,
+        treatmt_start_dt,
+        offer_prod_latest,
+        COUNT(*) AS deployed
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+    GROUP BY test_group_latest, treatmt_start_dt, offer_prod_latest
+) grp_tot
+    ON grp_tot.test_group_latest = r.test_group_latest
+    AND grp_tot.treatmt_start_dt = r.treatmt_start_dt
+    AND grp_tot.offer_prod_latest = r.offer_prod_latest
+
+-- Per-account $ metrics from pcq_pw (LEFT JOIN — non-approved rows get NULLs)
+LEFT JOIN (
     SELECT
         a.acct_no,
-        a.booked_visa_prod_cd,
-        a.n_uniq_visa,
         a.total_net_purchases,
         a.last_balance,
         a.last_avg_daily_bal,
@@ -306,8 +271,6 @@ LEFT JOIN (
     FROM (
         SELECT
             acct_no,
-            MAX(CASE WHEN rn_first = 1 THEN visa_prod_cd END)       AS booked_visa_prod_cd,
-            COUNT(DISTINCT visa_prod_cd)                            AS n_uniq_visa,
             SUM(net_prch_amt_dly)                                   AS total_net_purchases,
             MAX(CASE WHEN rn_last = 1 THEN bal_current END)         AS last_balance,
             MAX(CASE WHEN rn_last = 1 THEN accum_dly_bal_mtd END)   AS last_avg_daily_bal,
@@ -325,9 +288,7 @@ LEFT JOIN (
         GROUP BY acct_no
     ) a
     LEFT JOIN (
-        SELECT
-            acct_no,
-            SUM(month_fee_total) AS total_fees_charged
+        SELECT acct_no, SUM(month_fee_total) AS total_fees_charged
         FROM (
             SELECT acct_no, me_dt, MAX(net_all_fees_amt_mtd) AS month_fee_total
             FROM pcq_pw
@@ -336,13 +297,17 @@ LEFT JOIN (
         GROUP BY acct_no
     ) f ON f.acct_no = a.acct_no
 ) cls ON cls.acct_no = r.acct_no
+
 WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
 GROUP BY
     r.test_group_latest,
     r.treatmt_start_dt,
     r.offer_prod_latest,
-    r.offer_prod_latest_name
+    r.offer_prod_latest_name,
+    COALESCE(r.asc_on_app_source, 'No response'),
+    grp_tot.deployed
 ORDER BY
     r.test_group_latest,
     r.treatmt_start_dt,
-    r.offer_prod_latest;
+    r.offer_prod_latest,
+    asc_category;
