@@ -413,40 +413,36 @@ LEFT JOIN (
     GROUP BY acct_no
 ) fa ON fa.acct_no = r.acct_no
 
--- Cross-sell per-client rollup
+-- Cross-sell per-client rollup (no correlated subqueries — fees are
+-- pre-aggregated in a separate derived table and joined by acct_no).
 LEFT JOIN (
     SELECT
         cx_acct.clnt_no,
-        COUNT(DISTINCT cx_acct.acct_no)     AS n_cross_accts,
-        SUM(cx_acct.total_net_purchases)    AS sum_total_purchases,
-        AVG(cx_acct.total_net_purchases)    AS avg_total_purchases,
-        SUM(cx_acct.last_balance)           AS sum_last_balance,
-        AVG(cx_acct.last_balance)           AS avg_last_balance,
-        SUM(cx_acct.total_fees_charged)     AS sum_total_fees_charged,
-        AVG(cx_acct.total_fees_charged)     AS avg_total_fees_charged,
-        AVG(cx_acct.max_loyalty_balance)    AS avg_max_loyalty,
-        MAX(cx_acct.ever_overlimit)         AS any_ever_overlimit,
-        MAX(cx_acct.ever_past_due)          AS any_ever_past_due,
-        MAX(cx_acct.st_bkpt)                AS any_bkpt,
-        MAX(cx_acct.st_coll)                AS any_coll,
-        MAX(cx_acct.st_frd)                 AS any_frd,
-        MAX(cx_acct.st_inv)                 AS any_inv,
-        MAX(cx_acct.st_open)                AS any_open,
-        MAX(cx_acct.st_vol)                 AS any_vol,
-        MAX(cx_acct.st_woff)                AS any_woff
+        COUNT(DISTINCT cx_acct.acct_no)              AS n_cross_accts,
+        SUM(cx_acct.total_net_purchases)             AS sum_total_purchases,
+        AVG(cx_acct.total_net_purchases)             AS avg_total_purchases,
+        SUM(cx_acct.last_balance)                    AS sum_last_balance,
+        AVG(cx_acct.last_balance)                    AS avg_last_balance,
+        SUM(COALESCE(cx_fees.total_fees_charged,0))  AS sum_total_fees_charged,
+        AVG(COALESCE(cx_fees.total_fees_charged,0))  AS avg_total_fees_charged,
+        AVG(cx_acct.max_loyalty_balance)             AS avg_max_loyalty,
+        MAX(cx_acct.ever_overlimit)                  AS any_ever_overlimit,
+        MAX(cx_acct.ever_past_due)                   AS any_ever_past_due,
+        MAX(cx_acct.st_bkpt)                         AS any_bkpt,
+        MAX(cx_acct.st_coll)                         AS any_coll,
+        MAX(cx_acct.st_frd)                          AS any_frd,
+        MAX(cx_acct.st_inv)                          AS any_inv,
+        MAX(cx_acct.st_open)                         AS any_open,
+        MAX(cx_acct.st_vol)                          AS any_vol,
+        MAX(cx_acct.st_woff)                         AS any_woff
     FROM (
+        -- Per-acct cross-sell aggregates (no fees here)
         SELECT
             acct_no,
             MAX(clnt_no)                                            AS clnt_no,
             SUM(net_prch_amt_dly)                                   AS total_net_purchases,
             MAX(CASE WHEN rn_last = 1 THEN bal_current END)         AS last_balance,
             MAX(lylty_bal_amt)                                      AS max_loyalty_balance,
-            COALESCE((SELECT SUM(mf) FROM (
-                SELECT me_dt, MAX(net_all_fees_amt_mtd) AS mf
-                FROM pcq_cross cx_inner
-                WHERE cx_inner.acct_no = pcq_cross.acct_no
-                GROUP BY me_dt
-            ) fee_sub), 0)                                          AS total_fees_charged,
             MAX(CASE WHEN cd_curr_ovrlmt IS NOT NULL
                       AND cd_curr_ovrlmt NOT IN ('', 'N', '0')
                      THEN 1 ELSE 0 END)                             AS ever_overlimit,
@@ -463,6 +459,21 @@ LEFT JOIN (
         FROM pcq_cross
         GROUP BY acct_no
     ) cx_acct
+    LEFT JOIN (
+        -- Per-acct cross-sell fees: sum end-of-month MTD across months
+        SELECT
+            mf.acct_no,
+            SUM(mf.month_fee_total) AS total_fees_charged
+        FROM (
+            SELECT
+                acct_no,
+                me_dt,
+                MAX(net_all_fees_amt_mtd) AS month_fee_total
+            FROM pcq_cross
+            GROUP BY acct_no, me_dt
+        ) mf
+        GROUP BY mf.acct_no
+    ) cx_fees ON cx_fees.acct_no = cx_acct.acct_no
     GROUP BY cx_acct.clnt_no
 ) cx ON cx.clnt_no = r.clnt_no
 
