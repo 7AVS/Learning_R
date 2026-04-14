@@ -299,6 +299,13 @@ SELECT
 
     -- ============ pasc_* — Period-ASC approved ============
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS pasc_approved,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
+              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+             THEN 1 ELSE 0 END) AS pasc_approved_match,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
+              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND pa.n_uniq_visa = 1
+             THEN 1 ELSE 0 END) AS pasc_approved_clean,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN pa.total_net_purchases END) AS pasc_sum_total_purchases,
     AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN pa.total_net_purchases END) AS pasc_avg_total_purchases,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN pa.last_balance END)        AS pasc_sum_last_balance,
@@ -320,6 +327,13 @@ SELECT
 
     -- ============ other_* — Other ASC + NO ASC approved ============
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN 1 ELSE 0 END) AS other_approved,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC')
+              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+             THEN 1 ELSE 0 END) AS other_approved_match,
+    SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC')
+              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND pa.n_uniq_visa = 1
+             THEN 1 ELSE 0 END) AS other_approved_clean,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN pa.total_net_purchases END) AS other_sum_total_purchases,
     AVG(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN pa.total_net_purchases END) AS other_avg_total_purchases,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN pa.last_balance END)        AS other_sum_last_balance,
@@ -378,6 +392,8 @@ LEFT JOIN (
 LEFT JOIN (
     SELECT
         acct_no,
+        MAX(CASE WHEN rn_first = 1 THEN visa_prod_cd END)       AS booked_visa_prod_cd,
+        COUNT(DISTINCT visa_prod_cd)                            AS n_uniq_visa,
         SUM(net_prch_amt_dly)                                   AS total_net_purchases,
         MAX(CASE WHEN rn_last = 1 THEN bal_current END)         AS last_balance,
         MAX(CASE WHEN rn_last = 1 THEN accum_dly_bal_mtd END)   AS last_avg_daily_bal,
