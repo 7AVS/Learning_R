@@ -127,6 +127,8 @@ SELECT
     -- === Offer side ===
     r.offer_prod_latest,
     r.offer_prod_latest_name,
+    r.product_applied,
+    r.product_applied_name,
     r.asc_on_app_source,
     r.treatmt_start_dt,
     r.treatmt_end_dt,
@@ -141,10 +143,12 @@ SELECT
     pa.months_with_activity,
 
     -- === Classification (in-campaign account) ===
+    -- Primary: product_applied (from TPA) vs offer_prod_latest.
+    -- Secondary cross-check: booked_visa_prod_cd / last_visa_prod_cd from portfolio.
     pa.booked_visa_prod_cd,
     pa.last_visa_prod_cd,
     pa.n_uniq_visa,
-    CASE WHEN pa.booked_visa_prod_cd = r.offer_prod_latest
+    CASE WHEN r.product_applied = r.offer_prod_latest
          THEN 'match' ELSE 'mismatch' END                                   AS booking_status,
     CASE WHEN pa.n_uniq_visa > 1
          THEN 'reclassed' ELSE 'stable' END                                 AS lifetime_status,
@@ -300,10 +304,10 @@ SELECT
     -- ============ pasc_* — Period-ASC approved ============
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS pasc_approved,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND r.product_applied = r.offer_prod_latest
              THEN 1 ELSE 0 END) AS pasc_approved_match,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC'
-              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND r.product_applied = r.offer_prod_latest
               AND pa.n_uniq_visa = 1
              THEN 1 ELSE 0 END) AS pasc_approved_clean,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source = 'Period-ASC' THEN pa.total_net_purchases END) AS pasc_sum_total_purchases,
@@ -328,10 +332,10 @@ SELECT
     -- ============ other_* — Other ASC + NO ASC approved ============
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN 1 ELSE 0 END) AS other_approved,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC')
-              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND r.product_applied = r.offer_prod_latest
              THEN 1 ELSE 0 END) AS other_approved_match,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC')
-              AND pa.booked_visa_prod_cd = r.offer_prod_latest
+              AND r.product_applied = r.offer_prod_latest
               AND pa.n_uniq_visa = 1
              THEN 1 ELSE 0 END) AS other_approved_clean,
     SUM(CASE WHEN r.app_approved = 1 AND r.asc_on_app_source IN ('Other ASC','NO ASC') THEN pa.total_net_purchases END) AS other_sum_total_purchases,

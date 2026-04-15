@@ -71,6 +71,8 @@ SELECT
     r.acct_no,
     r.offer_prod_latest,
     r.offer_prod_latest_name,
+    r.product_applied,
+    r.product_applied_name,
     r.asc_on_app_source,
     r.treatmt_start_dt,
     r.response_dt,
@@ -80,10 +82,13 @@ SELECT
     pa.first_extract_dt,
     pa.last_extract_dt,
     pa.months_with_activity,
+    -- Primary classification now uses product_applied from the TPA table.
+    -- booked_visa_prod_cd and last_visa_prod_cd from the portfolio stay as
+    -- secondary cross-check columns.
     pa.booked_visa_prod_cd,
     pa.last_visa_prod_cd,
     pa.n_uniq_visa,
-    CASE WHEN pa.booked_visa_prod_cd = r.offer_prod_latest
+    CASE WHEN r.product_applied = r.offer_prod_latest
          THEN 'match' ELSE 'mismatch' END                                   AS booking_status,
     CASE WHEN pa.n_uniq_visa > 1
          THEN 'reclassed' ELSE 'stable' END                                 AS lifetime_status,
