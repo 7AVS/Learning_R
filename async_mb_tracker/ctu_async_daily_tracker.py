@@ -123,6 +123,11 @@ pop_summary = tactic_pop \
 print(f"Mobile-deployed clients: {tactic_pop.count():,}")
 pop_summary.show(truncate=False)
 
+# Export tactic client IDs
+tactic_pop.select("RAW_EVNT_ID", "CLNT_NO").distinct() \
+    .toPandas().to_csv("/tmp/ctu_tactic_ids.csv", index=False)
+print("Tactic IDs saved: /tmp/ctu_tactic_ids.csv")
+
 
 # =============================================================================
 # GA4 ecommerce — CTU banner events
@@ -144,6 +149,11 @@ ga4_filtered = spark.read \
         F.col("ep_srf_id2").cast("string").alias("srf_id2_str"),
     ) \
     .persist(StorageLevel.MEMORY_AND_DISK)
+
+# Export GA4 client IDs
+ga4_filtered.select("ep_srf_id2").filter(F.col("ep_srf_id2").isNotNull()) \
+    .distinct().toPandas().to_csv("/tmp/ctu_ga4_ids.csv", index=False)
+print(f"GA4 ep_srf_id2 saved: /tmp/ctu_ga4_ids.csv")
 
 
 # =============================================================================
