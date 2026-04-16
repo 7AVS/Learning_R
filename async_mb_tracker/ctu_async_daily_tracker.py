@@ -118,7 +118,6 @@ ga4_filtered = spark.read \
     .parquet(*ga4_paths) \
     .filter(
         F.col("it_item_name").isin(CTU_PROMO_NAMES) &
-        (F.col("ip_sf_campaign_mnemonic") == "CTU") &
         F.col("event_name").isin("view_promotion", "select_promotion")
     ) \
     .select(
@@ -197,7 +196,31 @@ final = daily_metrics.join(
 
 final.show(100, truncate=False)
 
-# To export: df = final.toPandas(); df.to_excel("ctu_daily_tracker.xlsx", index=False)
+# --- Excel + HTML output ---
+df = final.toPandas()
+total_mobile = tactic_pop.select("CLNT_NO").distinct().count()
+
+xlsx_path = "/tmp/ctu_daily_tracker.xlsx"
+df.to_excel(xlsx_path, index=False, engine="openpyxl")
+print(f"Excel saved: {xlsx_path}")
+
+html_path = "/tmp/ctu_daily_tracker.html"
+table_html = df.to_html(index=False, border=0, classes="t")
+with open(html_path, "w", encoding="utf-8") as f:
+    f.write(f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>CTU Daily Tracker</title>
+<style>
+  body {{ font-family: Arial; margin: 30px; }}
+  .t {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+  .t th {{ background: #003366; color: #fff; padding: 8px 12px; border: 1px solid #ccc; text-align: left; }}
+  .t td {{ padding: 7px 12px; border: 1px solid #ddd; }}
+  .t tr:nth-child(even) td {{ background: #f4f7fb; }}
+</style></head><body>
+<h2>CTU Async Banner — Daily Tracker</h2>
+<p>Mobile-deployed clients: <strong>{total_mobile:,}</strong></p>
+{table_html}
+</body></html>""")
+print(f"HTML saved: {html_path}")
 
 
 # =============================================================================
