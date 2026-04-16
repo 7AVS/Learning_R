@@ -91,12 +91,25 @@ raw_tactic \
 # Tactic population — mobile-only CTU clients
 # =============================================================================
 
-tactic_pop = raw_tactic \
+tactic_pop_raw = raw_tactic \
     .filter(
         (F.col("TACTIC_ID") == TACTIC_ID) &
         F.substring(F.col("TACTIC_DECISN_VRB_INFO"), 121, 30).contains("MB")
-    ) \
+    )
+
+# Show ALL columns available in tactic parquet for this CTU record
+print("=== ALL TACTIC COLUMNS — sample CTU mobile row ===")
+sample_row = tactic_pop_raw.limit(1).collect()[0]
+for c in sorted(tactic_pop_raw.columns):
+    v = sample_row[c]
+    if v is not None and str(v).strip() != "":
+        print(f"  {c} = [{v}]")
+
+# Keep raw TACTIC_EVNT_ID alongside the transformed version for debugging
+tactic_pop = tactic_pop_raw \
     .select(
+        F.col("TACTIC_EVNT_ID").alias("RAW_EVNT_ID"),
+        F.trim(F.col("TACTIC_EVNT_ID")).alias("TRIMMED_EVNT_ID"),
         F.regexp_replace(F.trim(F.col("TACTIC_EVNT_ID")), "^0+", "").alias("CLNT_NO"),
         F.trim(F.col("TST_GRP_CD")).alias("TST_GRP_CD"),
         F.trim(F.col("RPT_GRP_CD")).alias("RPT_GRP_CD"),
@@ -137,8 +150,8 @@ ga4_filtered = spark.read \
 # STEP 1: Validate tactic side — what do CLNT_NO values look like?
 # =============================================================================
 
-print("=== TACTIC: sample CLNT_NO values ===")
-tactic_pop.select("CLNT_NO").distinct().show(10, truncate=False)
+print("=== TACTIC: RAW vs TRIMMED vs CLNT_NO (after zero strip) ===")
+tactic_pop.select("RAW_EVNT_ID", "TRIMMED_EVNT_ID", "CLNT_NO").distinct().show(10, truncate=False)
 print("CLNT_NO length distribution:")
 tactic_pop.select(F.length("CLNT_NO").alias("len")) \
     .groupBy("len").count().orderBy("len").show()
@@ -167,25 +180,51 @@ ga4_filtered.groupBy("platform", "event_name") \
 
 
 # =============================================================================
-# STEP 3: Join test — ep_srf_id2 (cast to long, avoids string mismatch)
+# STEP 3: Join tests — try every combination to find what matches
 # =============================================================================
 
-tactic_longs = tactic_pop.select(
-    F.col("CLNT_NO").cast("long").alias("join_key")
-).filter(F.col("join_key").isNotNull()).distinct()
+ga4_keys = ga4_filtered.filter(F.col("ep_srf_id2").isNotNull()) \
+    .select(F.col("ep_srf_id2").cast("string").alias("ga4_key")).distinct()
+ga4_n = ga4_keys.count()
 
-ga4_longs = ga4_filtered.filter(F.col("ep_srf_id2").isNotNull()).select(
-    F.col("ep_srf_id2").cast("long").alias("join_key")
-).filter(F.col("join_key").isNotNull()).distinct()
+# Test A: ep_srf_id2 vs CLNT_NO (zero-stripped)
+tac_a = tactic_pop.select(F.col("CLNT_NO").alias("tac_key")).distinct()
+match_a = ga4_keys.join(tac_a, ga4_keys["ga4_key"] == tac_a["tac_key"]).count()
 
-tac_n = tactic_longs.count()
-ga4_n = ga4_longs.count()
-ep_match = ga4_longs.join(tactic_longs, "join_key").count()
+# Test B: ep_srf_id2 vs TRIMMED_EVNT_ID (trimmed, zeros kept)
+tac_b = tactic_pop.select(F.col("TRIMMED_EVNT_ID").alias("tac_key")).distinct()
+match_b = ga4_keys.join(tac_b, ga4_keys["ga4_key"] == tac_b["tac_key"]).count()
 
-print(f"=== JOIN TEST: ep_srf_id2 (as long) ===")
-print(f"Tactic distinct clients:    {tac_n:,}")
-print(f"GA4 distinct ep_srf_id2:    {ga4_n:,}")
-print(f"Matched:                    {ep_match:,}")
+# Test C: ep_srf_id2 vs RAW_EVNT_ID (completely raw)
+tac_c = tactic_pop.select(F.col("RAW_EVNT_ID").cast("string").alias("tac_key")).distinct()
+match_c = ga4_keys.join(tac_c, ga4_keys["ga4_key"] == tac_c["tac_key"]).count()
+
+# Test D: both cast to long (handles type mismatches)
+ga4_longs = ga4_keys.select(F.col("ga4_key").cast("long").alias("lk")).filter(F.col("lk").isNotNull()).distinct()
+tac_longs = tactic_pop.select(F.col("CLNT_NO").cast("long").alias("lk")).filter(F.col("lk").isNotNull()).distinct()
+match_d = ga4_longs.join(tac_longs, "lk").count()
+
+# Test E: ep_srf_id2 vs RAW_EVNT_ID both cast to long
+tac_raw_longs = tactic_pop.select(F.col("RAW_EVNT_ID").cast("long").alias("lk")).filter(F.col("lk").isNotNull()).distinct()
+match_e = ga4_longs.join(tac_raw_longs, "lk").count()
+
+print(f"=== JOIN TESTS: GA4 distinct ep_srf_id2 = {ga4_n:,} ===")
+print(f"A) ep_srf_id2 str  vs CLNT_NO (zero-stripped str):  {match_a:,}")
+print(f"B) ep_srf_id2 str  vs TRIMMED_EVNT_ID (str):        {match_b:,}")
+print(f"C) ep_srf_id2 str  vs RAW_EVNT_ID (str):            {match_c:,}")
+print(f"D) ep_srf_id2 long vs CLNT_NO long:                 {match_d:,}")
+print(f"E) ep_srf_id2 long vs RAW_EVNT_ID long:             {match_e:,}")
+print()
+if max(match_a, match_b, match_c, match_d, match_e) > 0:
+    best = max([(match_a,"A"),(match_b,"B"),(match_c,"C"),(match_d,"D"),(match_e,"E")])[1]
+    print(f"Best match: Test {best}")
+else:
+    print("ALL ZERO — ep_srf_id2 values do not exist in TACTIC_EVNT_ID in any form.")
+    print("Printing data type info:")
+    print(f"  ep_srf_id2 spark type: {ga4_filtered.schema['ep_srf_id2'].dataType}")
+    print(f"  TACTIC_EVNT_ID spark type: {tactic_pop_raw.schema['TACTIC_EVNT_ID'].dataType}")
+
+ep_match = match_d  # for Step 4 fallback logic
 
 
 # =============================================================================
