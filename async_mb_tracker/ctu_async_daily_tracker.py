@@ -38,7 +38,7 @@ TACTIC_ID = "<<TACTIC_ID>>"
 TACTIC_EVNT_HIST_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
 TACTIC_YEARS = [2026]  # Partition filter — extend if campaign spans years
 GA4_ECOM_BASE = "/prod/sz/tsz/00198/data/ga4-ecommerce"
-GA4_MONTHS = ["04", "05", "06"]
+GA4_START_MONTH = "04"  # Campaign started April — reads all months from here forward
 
 CTU_PROMO_NAMES = [
     "PB_CHEQ_ALL_26_03_RBC_CTU_PDA_Product_Page",
@@ -111,12 +111,13 @@ pop_summary.show(truncate=False)
 # GA4 ecommerce — CTU banner events
 # =============================================================================
 
-ga4_paths = [f"{GA4_ECOM_BASE}/YEAR=2026/Month={m}/*" for m in GA4_MONTHS]
+ga4_paths = [f"{GA4_ECOM_BASE}/YEAR=2026/Month=*/*"]
 
 ga4_filtered = spark.read \
     .option("basePath", GA4_ECOM_BASE) \
     .parquet(*ga4_paths) \
     .filter(
+        (F.col("Month") >= GA4_START_MONTH) &
         F.col("it_item_name").isin(CTU_PROMO_NAMES) &
         F.col("event_name").isin("view_promotion", "select_promotion")
     ) \
@@ -196,6 +197,7 @@ if ep_match == 0:
         .option("basePath", GA4_ECOM_BASE) \
         .parquet(*ga4_paths) \
         .filter(
+            (F.col("Month") >= GA4_START_MONTH) &
             F.col("it_item_name").isin(CTU_PROMO_NAMES) &
             F.col("event_name").isin("view_promotion", "select_promotion")
         ) \
