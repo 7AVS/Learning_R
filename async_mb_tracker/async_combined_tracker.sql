@@ -3,6 +3,38 @@
 -- =============================================================================
 -- Jira: NBA-12268
 -- Run in: Starburst
+--
+-- EMAIL DRAFT (validation alignment):
+-- -----------------------------------------------------------------
+-- Subject: Async banner tracker — validating our numbers
+--
+-- Hi [Name],
+--
+-- I've been building a daily tracker for the CTU and O2P async
+-- banners on my end and wanted to compare notes. I'm seeing some
+-- differences in our numbers and think it would be worth aligning
+-- so we're both working from the same baseline.
+--
+-- For O2P, my population counts are coming in higher than yours —
+-- I'm getting 804,552 total decisioned leads and 520,649 mobile,
+-- vs the 764,310 and 439,000 in your report. Could be a filter
+-- I'm not applying or one you are — either way, worth reconciling.
+--
+-- For CTU, the total populations are closer but I'm also seeing
+-- gaps on the view/click counts.
+--
+-- I'd like to get us to a point where we're reporting from the
+-- same logic. Happy to do the legwork on this — if you're open to
+-- sharing your query I can do the comparison myself and flag where
+-- the differences are. Otherwise I can send you mine and you can
+-- take a look on your end, whichever is easier for you.
+--
+-- I'll attach my results and SQL so you have full visibility
+-- either way.
+--
+-- Thanks,
+-- Andre
+-- -----------------------------------------------------------------
 -- =============================================================================
 
 
