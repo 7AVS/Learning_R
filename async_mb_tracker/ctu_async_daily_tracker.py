@@ -232,6 +232,51 @@ print(f"\nJoin key: {JOIN_COL}")
 
 
 # =============================================================================
+# STEP 4B: If both keys failed — search ALL GA4 columns for CLNT_NO
+# =============================================================================
+
+if JOIN_COL is None:
+    from pyspark.sql.types import StringType, LongType, IntegerType, DoubleType
+
+    sample_clnt = [r.CLNT_NO for r in tactic_pop.select("CLNT_NO").limit(5).collect()]
+    print(f"Sample CLNT_NO from tactic: {sample_clnt}")
+
+    ga4_full = spark.read \
+        .option("basePath", GA4_ECOM_BASE) \
+        .parquet(*ga4_paths) \
+        .filter(
+            (F.col("Month") >= GA4_START_MONTH) &
+            F.col("it_item_name").isin(CTU_PROMO_NAMES) &
+            F.col("event_name").isin("view_promotion", "select_promotion")
+        )
+
+    print(f"\nGA4 columns ({len(ga4_full.columns)} total):")
+    for c in sorted(ga4_full.columns):
+        print(f"  {c}")
+
+    print("\nSample full GA4 row (populated fields only):")
+    row = ga4_full.limit(1).collect()[0]
+    for c in sorted(ga4_full.columns):
+        v = row[c]
+        if v is not None and str(v).strip() != "":
+            print(f"  {c} = {v}")
+
+    print("\n=== Searching GA4 columns for CLNT_NO matches ===")
+    str_cols = [f.name for f in ga4_full.schema.fields
+                if isinstance(f.dataType, (StringType, LongType, IntegerType, DoubleType))]
+
+    for col_name in str_cols:
+        hits = ga4_full.filter(
+            F.col(col_name).cast("string").isin(sample_clnt)
+        ).count()
+        if hits > 0:
+            print(f"  MATCH: {col_name} has {hits} rows matching sample CLNT_NO")
+
+    print("\nIf no MATCH found, the GA4 table may use a different ID system.")
+    print("A crosswalk table (SRF_ID → CLNT_NO) would be needed.")
+
+
+# =============================================================================
 # STEP 5: Daily metrics (only runs if join key resolved)
 # =============================================================================
 
