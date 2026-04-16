@@ -66,6 +66,10 @@ raw_tactic = spark.read \
     .option("basePath", TACTIC_EVNT_HIST_BASE) \
     .parquet(*tactic_paths)
 
+# Show all available columns — check if CLNT_NO exists directly
+print(f"Tactic columns ({len(raw_tactic.columns)}):")
+print(sorted(raw_tactic.columns))
+
 raw_tactic \
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3) == "CTU") \
     .filter(F.to_date(F.col("TREATMT_STRT_DT")) >= "2026-04-01") \
