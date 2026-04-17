@@ -332,19 +332,24 @@ ORDER BY
 
 
 -- Step 1: one row per approved account with the fields we need for grouping.
+-- ASC collapsed here: Period-ASC = Offered Card, everything else = Alternate Card.
+-- This flows through to both outputs — no re-categorization needed in Excel.
 CREATE VOLATILE TABLE pcq_curve_base AS (
     SELECT
         r.acct_no,
         r.test_group_latest,
         r.offer_prod_latest,
         r.offer_prod_latest_name,
-        r.asc_on_app_source,
+        CASE WHEN r.asc_on_app_source = 'Period-ASC' THEN 'Offered Card'
+             ELSE 'Alternate Card' END                     AS card_type,
         MIN(r.treatmt_start_dt) AS treatmt_start_dt
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
       AND r.app_approved = 1
     GROUP BY r.acct_no, r.test_group_latest, r.offer_prod_latest,
-             r.offer_prod_latest_name, r.asc_on_app_source
+             r.offer_prod_latest_name,
+             CASE WHEN r.asc_on_app_source = 'Period-ASC' THEN 'Offered Card'
+                  ELSE 'Alternate Card' END
 ) WITH DATA
   PRIMARY INDEX (acct_no)
   ON COMMIT PRESERVE ROWS;
@@ -377,11 +382,11 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
 
 
 -- Step 3A: OUTPUT A — Product-level curves.
--- Grain: test_group × asc_source × visa_prod_cd × months_since_open.
+-- Grain: test_group × card_type × visa_prod_cd × months_since_open.
 -- Use this to compare spending curves by card product.
 SELECT
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.visa_prod_cd,
     pw.months_since_open,
     COUNT(DISTINCT pw.acct_no)                                              AS accounts,
@@ -409,23 +414,23 @@ INNER JOIN pcq_curve_base cb
     ON cb.acct_no = pw.acct_no
 GROUP BY
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.visa_prod_cd,
     pw.months_since_open
 ORDER BY
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.visa_prod_cd,
     pw.months_since_open;
 
 
 -- Step 3B: OUTPUT B — Group-level curves.
--- Grain: test_group × asc_source × months_since_open.
+-- Grain: test_group × card_type × months_since_open.
 -- Aggregated directly from account data — no averaging of averages.
 -- Use this for the top-line test vs. control comparison.
 SELECT
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.months_since_open,
     COUNT(DISTINCT pw.acct_no)                                              AS accounts,
     AVG(pw.net_prch_amt_mtd)                                                AS avg_purchases_mtd,
@@ -451,11 +456,11 @@ INNER JOIN pcq_curve_base cb
     ON cb.acct_no = pw.acct_no
 GROUP BY
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.months_since_open
 ORDER BY
     cb.test_group_latest,
-    cb.asc_on_app_source,
+    cb.card_type,
     pw.months_since_open;
 
 
