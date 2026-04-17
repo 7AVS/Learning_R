@@ -319,14 +319,15 @@ ORDER BY
 -- ============================================================================
 
 -- ==========================================================================
--- Q3: Monthly purchase + balance curves since account opening.
+-- Q3: Monthly purchase + balance vintage curves since account opening.
 --
--- Spool-friendly: two-step volatile table approach.
--- Grain: test_group × offer_prod × asc_source × visa_prod_cd × me_dt
+-- Spool-friendly: three-step volatile table approach.
+-- Grain: test_group × offer_prod × asc_source × visa_prod_cd × months_since_open
 --
--- HOW TO RUN: highlight BOTH statements and run together.
+-- HOW TO RUN: highlight ALL THREE statements and run together.
 --   1. CREATE VOLATILE TABLE pcq_curve_base  (one row per approved account)
---   2. SELECT ... (monthly curves)
+--   2. CREATE VOLATILE TABLE pcq_curve_pw    (month-end portfolio slice, ~6k accts only)
+--   3. SELECT ... (monthly + cumulative curves)
 -- ==========================================================================
 
 
@@ -349,75 +350,82 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
   ON COMMIT PRESERVE ROWS;
 
 
--- Step 2: month-end snapshot curves.
--- One pass against DLY_FULL_PORTFOLIO. QUALIFY picks the last row per acct × me_dt.
--- Cumulative purchases = running sum of net_prch_amt_mtd per account over months.
+-- Step 2: month-end portfolio slice for those accounts only.
+-- Joins to pcq_curve_base FIRST so Teradata only reads ~6k accounts.
+-- Deduplicates to one row per acct × me_dt (latest dt_record_ext).
+-- Computes months_since_open and cumulative purchases here.
+CREATE VOLATILE TABLE pcq_curve_pw AS (
+    SELECT
+        p.acct_no,
+        p.me_dt,
+        p.visa_prod_cd,
+        (EXTRACT(YEAR FROM p.me_dt)  - EXTRACT(YEAR FROM p.acct_open_dt)) * 12
+        + (EXTRACT(MONTH FROM p.me_dt) - EXTRACT(MONTH FROM p.acct_open_dt))   AS months_since_open,
+        p.bal_current,
+        p.net_prch_amt_mtd,
+        p.net_all_fees_amt_mtd,
+        p.lylty_bal_amt
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN pcq_curve_base cb
+        ON cb.acct_no = p.acct_no
+        AND p.dt_record_ext >= cb.treatmt_start_dt
+    WHERE p.dt_record_ext >= DATE '2025-01-01'
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt ORDER BY p.dt_record_ext DESC) = 1
+) WITH DATA
+  PRIMARY INDEX (acct_no)
+  ON COMMIT PRESERVE ROWS;
+
+
+-- Step 3: vintage curves.
+-- avg/sum for monthly + cumulative purchases, balance, fees, loyalty.
+-- Cumulative = running sum per account over months_since_open.
 SELECT
     cb.test_group_latest,
     cb.offer_prod_latest,
     cb.offer_prod_latest_name,
     cb.asc_on_app_source,
-    p.visa_prod_cd,
-    p.me_dt,
-    (EXTRACT(YEAR FROM p.me_dt)  - EXTRACT(YEAR FROM p.acct_open_dt)) * 12
-    + (EXTRACT(MONTH FROM p.me_dt) - EXTRACT(MONTH FROM p.acct_open_dt))   AS months_since_open,
-    COUNT(DISTINCT p.acct_no)                                               AS accounts,
-    AVG(p.bal_current)                                                      AS avg_balance,
-    SUM(p.bal_current)                                                      AS sum_balance,
-    AVG(p.net_prch_amt_mtd)                                                 AS avg_purchases_mtd,
-    SUM(p.net_prch_amt_mtd)                                                 AS sum_purchases_mtd,
-    AVG(p.cumul_purchases)                                                  AS avg_cumul_purchases,
-    SUM(p.cumul_purchases)                                                  AS sum_cumul_purchases,
-    AVG(p.net_all_fees_amt_mtd)                                             AS avg_fees_mtd,
-    SUM(p.net_all_fees_amt_mtd)                                             AS sum_fees_mtd,
-    AVG(p.lylty_bal_amt)                                                    AS avg_loyalty,
-    SUM(p.lylty_bal_amt)                                                    AS sum_loyalty
+    pw.visa_prod_cd,
+    pw.months_since_open,
+    COUNT(DISTINCT pw.acct_no)                                              AS accounts,
+    AVG(pw.net_prch_amt_mtd)                                                AS avg_purchases_mtd,
+    SUM(pw.net_prch_amt_mtd)                                                AS sum_purchases_mtd,
+    AVG(pw.cumul_purchases)                                                 AS avg_cumul_purchases,
+    SUM(pw.cumul_purchases)                                                 AS sum_cumul_purchases,
+    AVG(pw.bal_current)                                                     AS avg_balance,
+    SUM(pw.bal_current)                                                     AS sum_balance,
+    AVG(pw.net_all_fees_amt_mtd)                                            AS avg_fees_mtd,
+    SUM(pw.net_all_fees_amt_mtd)                                            AS sum_fees_mtd,
+    AVG(pw.lylty_bal_amt)                                                   AS avg_loyalty,
+    SUM(pw.lylty_bal_amt)                                                   AS sum_loyalty
 FROM (
     SELECT
         acct_no,
-        dt_record_ext,
         me_dt,
         visa_prod_cd,
-        acct_open_dt,
+        months_since_open,
         bal_current,
         net_prch_amt_mtd,
         net_all_fees_amt_mtd,
         lylty_bal_amt,
-        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY me_dt
+        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
                                      ROWS UNBOUNDED PRECEDING)              AS cumul_purchases
-    FROM (
-        SELECT
-            acct_no,
-            dt_record_ext,
-            me_dt,
-            visa_prod_cd,
-            acct_open_dt,
-            bal_current,
-            net_prch_amt_mtd,
-            net_all_fees_amt_mtd,
-            lylty_bal_amt
-        FROM D3CV12A.DLY_FULL_PORTFOLIO
-        WHERE dt_record_ext >= DATE '2025-01-01'
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt ORDER BY dt_record_ext DESC) = 1
-    ) deduped
-) p
+    FROM pcq_curve_pw
+) pw
 INNER JOIN pcq_curve_base cb
-    ON cb.acct_no = p.acct_no
-    AND p.dt_record_ext >= cb.treatmt_start_dt
+    ON cb.acct_no = pw.acct_no
 GROUP BY
     cb.test_group_latest,
     cb.offer_prod_latest,
     cb.offer_prod_latest_name,
     cb.asc_on_app_source,
-    p.visa_prod_cd,
-    p.me_dt,
-    p.acct_open_dt
+    pw.visa_prod_cd,
+    pw.months_since_open
 ORDER BY
     cb.test_group_latest,
     cb.offer_prod_latest,
     cb.asc_on_app_source,
-    p.visa_prod_cd,
-    p.me_dt;
+    pw.visa_prod_cd,
+    pw.months_since_open;
 
 
 
