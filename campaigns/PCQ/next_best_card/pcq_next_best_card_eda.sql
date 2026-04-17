@@ -356,28 +356,45 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
   ON COMMIT PRESERVE ROWS;
 
 
--- Step 2: month-end portfolio slice for those accounts only.
+-- Step 2: portfolio slice — one row per acct × me_dt.
 -- Joins to pcq_curve_base FIRST so Teradata only reads ~6k accounts.
--- Deduplicates to one row per acct × me_dt (latest dt_record_ext).
--- Computes months_since_open and cumulative purchases here.
+-- Purchases: SUM(net_prch_amt_dly) per month — same logic as Q2.
+-- Balance/fees/loyalty: month-end snapshot (last dt_record_ext row).
+-- This ensures cumulative purchases here match Q2's total_net_purchases.
 DROP TABLE pcq_curve_pw;
 CREATE VOLATILE TABLE pcq_curve_pw AS (
     SELECT
         p.acct_no,
         p.me_dt,
-        p.visa_prod_cd,
-        (EXTRACT(YEAR FROM p.me_dt)  - EXTRACT(YEAR FROM p.acct_open_dt)) * 12
-        + (EXTRACT(MONTH FROM p.me_dt) - EXTRACT(MONTH FROM p.acct_open_dt))   AS months_since_open,
-        p.bal_current,
-        p.net_prch_amt_mtd,
-        p.net_all_fees_amt_mtd,
-        p.lylty_bal_amt
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN pcq_curve_base cb
-        ON cb.acct_no = p.acct_no
-        AND p.dt_record_ext >= cb.treatmt_start_dt
-    WHERE p.dt_record_ext >= DATE '2025-01-01'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt ORDER BY p.dt_record_ext DESC) = 1
+        MAX(CASE WHEN p.rn_me = 1 THEN p.visa_prod_cd END)                 AS visa_prod_cd,
+        MAX(CASE WHEN p.rn_me = 1 THEN
+            (EXTRACT(YEAR FROM p.me_dt)  - EXTRACT(YEAR FROM p.acct_open_dt)) * 12
+            + (EXTRACT(MONTH FROM p.me_dt) - EXTRACT(MONTH FROM p.acct_open_dt))
+        END)                                                                AS months_since_open,
+        MAX(CASE WHEN p.rn_me = 1 THEN p.bal_current END)                  AS bal_current,
+        SUM(p.net_prch_amt_dly)                                             AS net_prch_mtd,
+        MAX(CASE WHEN p.rn_me = 1 THEN p.net_all_fees_amt_mtd END)         AS net_all_fees_amt_mtd,
+        MAX(CASE WHEN p.rn_me = 1 THEN p.lylty_bal_amt END)                AS lylty_bal_amt
+    FROM (
+        SELECT
+            p.acct_no,
+            p.me_dt,
+            p.dt_record_ext,
+            p.visa_prod_cd,
+            p.acct_open_dt,
+            p.bal_current,
+            p.net_prch_amt_dly,
+            p.net_all_fees_amt_mtd,
+            p.lylty_bal_amt,
+            ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt
+                               ORDER BY p.dt_record_ext DESC)              AS rn_me
+        FROM D3CV12A.DLY_FULL_PORTFOLIO p
+        INNER JOIN pcq_curve_base cb
+            ON cb.acct_no = p.acct_no
+            AND p.dt_record_ext >= cb.treatmt_start_dt
+        WHERE p.dt_record_ext >= DATE '2025-01-01'
+    ) p
+    GROUP BY p.acct_no, p.me_dt
 ) WITH DATA
   PRIMARY INDEX (acct_no)
   ON COMMIT PRESERVE ROWS;
@@ -392,8 +409,8 @@ SELECT
     pw.visa_prod_cd,
     pw.months_since_open,
     COUNT(DISTINCT pw.acct_no)                                              AS accounts,
-    AVG(pw.net_prch_amt_mtd)                                                AS avg_purchases_mtd,
-    SUM(pw.net_prch_amt_mtd)                                                AS sum_purchases_mtd,
+    AVG(pw.net_prch_mtd)                                                    AS avg_purchases_mtd,
+    SUM(pw.net_prch_mtd)                                                    AS sum_purchases_mtd,
     AVG(pw.cumul_purchases)                                                 AS avg_cumul_purchases,
     SUM(pw.cumul_purchases)                                                 AS sum_cumul_purchases,
     AVG(pw.bal_current)                                                     AS avg_balance,
@@ -405,11 +422,11 @@ FROM (
         visa_prod_cd,
         months_since_open,
         bal_current,
-        net_prch_amt_mtd,
+        net_prch_mtd,
         net_all_fees_amt_mtd,
         lylty_bal_amt,
-        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
-                                     ROWS UNBOUNDED PRECEDING)              AS cumul_purchases
+        SUM(net_prch_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
+                                 ROWS UNBOUNDED PRECEDING)                  AS cumul_purchases
     FROM pcq_curve_pw
 ) pw
 INNER JOIN pcq_curve_base cb
@@ -435,8 +452,8 @@ SELECT
     cb.card_type,
     pw.months_since_open,
     COUNT(DISTINCT pw.acct_no)                                              AS accounts,
-    AVG(pw.net_prch_amt_mtd)                                                AS avg_purchases_mtd,
-    SUM(pw.net_prch_amt_mtd)                                                AS sum_purchases_mtd,
+    AVG(pw.net_prch_mtd)                                                    AS avg_purchases_mtd,
+    SUM(pw.net_prch_mtd)                                                    AS sum_purchases_mtd,
     AVG(pw.cumul_purchases)                                                 AS avg_cumul_purchases,
     SUM(pw.cumul_purchases)                                                 AS sum_cumul_purchases,
     AVG(pw.bal_current)                                                     AS avg_balance,
@@ -447,11 +464,11 @@ FROM (
         acct_no,
         months_since_open,
         bal_current,
-        net_prch_amt_mtd,
+        net_prch_mtd,
         net_all_fees_amt_mtd,
         lylty_bal_amt,
-        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
-                                     ROWS UNBOUNDED PRECEDING)              AS cumul_purchases
+        SUM(net_prch_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
+                                 ROWS UNBOUNDED PRECEDING)                  AS cumul_purchases
     FROM pcq_curve_pw
 ) pw
 INNER JOIN pcq_curve_base cb
