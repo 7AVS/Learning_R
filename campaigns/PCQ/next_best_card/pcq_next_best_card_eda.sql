@@ -357,14 +357,16 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
 
 
 -- Step 2: portfolio slice — one row per acct × me_dt.
--- Joins to pcq_curve_base FIRST so Teradata only reads ~6k accounts.
+-- Carries test_group_latest and card_type from pcq_curve_base so Step 3
+-- reads from this table alone — no re-join needed.
 -- Purchases: SUM(net_prch_amt_dly) per month — same logic as Q2.
 -- Balance/fees/loyalty: month-end snapshot (last dt_record_ext row).
--- This ensures cumulative purchases here match Q2's total_net_purchases.
 DROP TABLE pcq_curve_pw;
 CREATE VOLATILE TABLE pcq_curve_pw AS (
     SELECT
         p.acct_no,
+        p.test_group_latest,
+        p.card_type,
         p.me_dt,
         MAX(CASE WHEN p.rn_me = 1 THEN p.visa_prod_cd END)                 AS visa_prod_cd,
         MAX(CASE WHEN p.rn_me = 1 THEN
@@ -378,6 +380,8 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
     FROM (
         SELECT
             p.acct_no,
+            cb.test_group_latest,
+            cb.card_type,
             p.me_dt,
             p.dt_record_ext,
             p.visa_prod_cd,
@@ -395,7 +399,7 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
         WHERE p.dt_record_ext >= DATE '2025-01-01'
           AND p.acct_open_dt IS NOT NULL
     ) p
-    GROUP BY p.acct_no, p.me_dt
+    GROUP BY p.acct_no, p.test_group_latest, p.card_type, p.me_dt
 ) WITH DATA
   PRIMARY INDEX (acct_no)
   ON COMMIT PRESERVE ROWS;
@@ -404,7 +408,7 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
 -- Step 3A: OUTPUT A — Product-level curves.
 -- Grain: test_group × card_type × visa_prod_cd × months_since_open.
 -- card_type: Offered Card / Alternate Card / All.
--- Cumulative = running sum of sum_purchases_mtd (always increases).
+-- No joins — reads directly from pcq_curve_pw.
 SELECT
     test_group_latest,
     card_type,
@@ -423,37 +427,35 @@ SELECT
 FROM (
     -- Offered / Alternate
     SELECT
-        cb.test_group_latest,
-        cb.card_type,
-        pw.visa_prod_cd,
-        pw.months_since_open,
-        COUNT(DISTINCT pw.acct_no)          AS accounts,
-        AVG(pw.net_prch_mtd)                AS avg_purchases_mtd,
-        SUM(pw.net_prch_mtd)                AS sum_purchases_mtd,
-        AVG(pw.bal_current)                 AS avg_balance,
-        AVG(pw.net_all_fees_amt_mtd)        AS avg_fees_mtd,
-        AVG(pw.lylty_bal_amt)               AS avg_loyalty
-    FROM pcq_curve_pw pw
-    INNER JOIN pcq_curve_base cb ON cb.acct_no = pw.acct_no
-    GROUP BY cb.test_group_latest, cb.card_type, pw.visa_prod_cd, pw.months_since_open
+        test_group_latest,
+        card_type,
+        visa_prod_cd,
+        months_since_open,
+        COUNT(DISTINCT acct_no)             AS accounts,
+        AVG(net_prch_mtd)                   AS avg_purchases_mtd,
+        SUM(net_prch_mtd)                   AS sum_purchases_mtd,
+        AVG(bal_current)                    AS avg_balance,
+        AVG(net_all_fees_amt_mtd)           AS avg_fees_mtd,
+        AVG(lylty_bal_amt)                  AS avg_loyalty
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, card_type, visa_prod_cd, months_since_open
 
     UNION ALL
 
-    -- All (both card types combined)
+    -- All approved accounts (no card_type split)
     SELECT
-        cb.test_group_latest,
+        test_group_latest,
         'All'                               AS card_type,
-        pw.visa_prod_cd,
-        pw.months_since_open,
-        COUNT(DISTINCT pw.acct_no)          AS accounts,
-        AVG(pw.net_prch_mtd)                AS avg_purchases_mtd,
-        SUM(pw.net_prch_mtd)                AS sum_purchases_mtd,
-        AVG(pw.bal_current)                 AS avg_balance,
-        AVG(pw.net_all_fees_amt_mtd)        AS avg_fees_mtd,
-        AVG(pw.lylty_bal_amt)               AS avg_loyalty
-    FROM pcq_curve_pw pw
-    INNER JOIN pcq_curve_base cb ON cb.acct_no = pw.acct_no
-    GROUP BY cb.test_group_latest, pw.visa_prod_cd, pw.months_since_open
+        visa_prod_cd,
+        months_since_open,
+        COUNT(DISTINCT acct_no)             AS accounts,
+        AVG(net_prch_mtd)                   AS avg_purchases_mtd,
+        SUM(net_prch_mtd)                   AS sum_purchases_mtd,
+        AVG(bal_current)                    AS avg_balance,
+        AVG(net_all_fees_amt_mtd)           AS avg_fees_mtd,
+        AVG(lylty_bal_amt)                  AS avg_loyalty
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, visa_prod_cd, months_since_open
 ) combined
 ORDER BY 1, 2, 3, 4;
 
@@ -461,7 +463,7 @@ ORDER BY 1, 2, 3, 4;
 -- Step 3B: OUTPUT B — Group-level curves.
 -- Grain: test_group × card_type × months_since_open.
 -- card_type: Offered Card / Alternate Card / All.
--- Cumulative = running sum of sum_purchases_mtd (always increases).
+-- No joins — reads directly from pcq_curve_pw.
 SELECT
     test_group_latest,
     card_type,
@@ -479,35 +481,33 @@ SELECT
 FROM (
     -- Offered / Alternate
     SELECT
-        cb.test_group_latest,
-        cb.card_type,
-        pw.months_since_open,
-        COUNT(DISTINCT pw.acct_no)          AS accounts,
-        AVG(pw.net_prch_mtd)                AS avg_purchases_mtd,
-        SUM(pw.net_prch_mtd)                AS sum_purchases_mtd,
-        AVG(pw.bal_current)                 AS avg_balance,
-        AVG(pw.net_all_fees_amt_mtd)        AS avg_fees_mtd,
-        AVG(pw.lylty_bal_amt)               AS avg_loyalty
-    FROM pcq_curve_pw pw
-    INNER JOIN pcq_curve_base cb ON cb.acct_no = pw.acct_no
-    GROUP BY cb.test_group_latest, cb.card_type, pw.months_since_open
+        test_group_latest,
+        card_type,
+        months_since_open,
+        COUNT(DISTINCT acct_no)             AS accounts,
+        AVG(net_prch_mtd)                   AS avg_purchases_mtd,
+        SUM(net_prch_mtd)                   AS sum_purchases_mtd,
+        AVG(bal_current)                    AS avg_balance,
+        AVG(net_all_fees_amt_mtd)           AS avg_fees_mtd,
+        AVG(lylty_bal_amt)                  AS avg_loyalty
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, card_type, months_since_open
 
     UNION ALL
 
-    -- All (both card types combined)
+    -- All approved accounts (no card_type split)
     SELECT
-        cb.test_group_latest,
+        test_group_latest,
         'All'                               AS card_type,
-        pw.months_since_open,
-        COUNT(DISTINCT pw.acct_no)          AS accounts,
-        AVG(pw.net_prch_mtd)                AS avg_purchases_mtd,
-        SUM(pw.net_prch_mtd)                AS sum_purchases_mtd,
-        AVG(pw.bal_current)                 AS avg_balance,
-        AVG(pw.net_all_fees_amt_mtd)        AS avg_fees_mtd,
-        AVG(pw.lylty_bal_amt)               AS avg_loyalty
-    FROM pcq_curve_pw pw
-    INNER JOIN pcq_curve_base cb ON cb.acct_no = pw.acct_no
-    GROUP BY cb.test_group_latest, pw.months_since_open
+        months_since_open,
+        COUNT(DISTINCT acct_no)             AS accounts,
+        AVG(net_prch_mtd)                   AS avg_purchases_mtd,
+        SUM(net_prch_mtd)                   AS sum_purchases_mtd,
+        AVG(bal_current)                    AS avg_balance,
+        AVG(net_all_fees_amt_mtd)           AS avg_fees_mtd,
+        AVG(lylty_bal_amt)                  AS avg_loyalty
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, months_since_open
 ) combined
 ORDER BY 1, 2, 3;
 
