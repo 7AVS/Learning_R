@@ -351,6 +351,7 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
 
 -- Step 2: month-end snapshot curves.
 -- One pass against DLY_FULL_PORTFOLIO. QUALIFY picks the last row per acct × me_dt.
+-- Cumulative purchases = running sum of net_prch_amt_mtd per account over months.
 SELECT
     cb.test_group_latest,
     cb.offer_prod_latest,
@@ -365,6 +366,8 @@ SELECT
     SUM(p.bal_current)                                                      AS sum_balance,
     AVG(p.net_prch_amt_mtd)                                                 AS avg_purchases_mtd,
     SUM(p.net_prch_amt_mtd)                                                 AS sum_purchases_mtd,
+    AVG(p.cumul_purchases)                                                  AS avg_cumul_purchases,
+    SUM(p.cumul_purchases)                                                  AS sum_cumul_purchases,
     AVG(p.net_all_fees_amt_mtd)                                             AS avg_fees_mtd,
     SUM(p.net_all_fees_amt_mtd)                                             AS sum_fees_mtd,
     AVG(p.lylty_bal_amt)                                                    AS avg_loyalty,
@@ -379,10 +382,24 @@ FROM (
         bal_current,
         net_prch_amt_mtd,
         net_all_fees_amt_mtd,
-        lylty_bal_amt
-    FROM D3CV12A.DLY_FULL_PORTFOLIO
-    WHERE dt_record_ext >= DATE '2025-01-01'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt ORDER BY dt_record_ext DESC) = 1
+        lylty_bal_amt,
+        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY me_dt
+                                     ROWS UNBOUNDED PRECEDING)              AS cumul_purchases
+    FROM (
+        SELECT
+            acct_no,
+            dt_record_ext,
+            me_dt,
+            visa_prod_cd,
+            acct_open_dt,
+            bal_current,
+            net_prch_amt_mtd,
+            net_all_fees_amt_mtd,
+            lylty_bal_amt
+        FROM D3CV12A.DLY_FULL_PORTFOLIO
+        WHERE dt_record_ext >= DATE '2025-01-01'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt ORDER BY dt_record_ext DESC) = 1
+    ) deduped
 ) p
 INNER JOIN pcq_curve_base cb
     ON cb.acct_no = p.acct_no
