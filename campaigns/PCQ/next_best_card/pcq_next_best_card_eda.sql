@@ -334,6 +334,7 @@ ORDER BY
 -- Step 1: one row per approved account with the fields we need for grouping.
 -- ASC collapsed here: Period-ASC = Offered Card, everything else = Alternate Card.
 -- This flows through to both outputs — no re-categorization needed in Excel.
+DROP TABLE pcq_curve_base;
 CREATE VOLATILE TABLE pcq_curve_base AS (
     SELECT
         r.acct_no,
@@ -359,6 +360,7 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
 -- Joins to pcq_curve_base FIRST so Teradata only reads ~6k accounts.
 -- Deduplicates to one row per acct × me_dt (latest dt_record_ext).
 -- Computes months_since_open and cumulative purchases here.
+DROP TABLE pcq_curve_pw;
 CREATE VOLATILE TABLE pcq_curve_pw AS (
     SELECT
         p.acct_no,
