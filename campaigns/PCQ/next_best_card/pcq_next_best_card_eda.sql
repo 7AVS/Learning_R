@@ -376,13 +376,11 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
   ON COMMIT PRESERVE ROWS;
 
 
--- Step 3: vintage curves.
--- avg/sum for monthly + cumulative purchases, balance, fees, loyalty.
--- Cumulative = running sum per account over months_since_open.
+-- Step 3A: OUTPUT A — Product-level curves.
+-- Grain: test_group × asc_source × visa_prod_cd × months_since_open.
+-- Use this to compare spending curves by card product.
 SELECT
     cb.test_group_latest,
-    cb.offer_prod_latest,
-    cb.offer_prod_latest_name,
     cb.asc_on_app_source,
     pw.visa_prod_cd,
     pw.months_since_open,
@@ -392,15 +390,11 @@ SELECT
     AVG(pw.cumul_purchases)                                                 AS avg_cumul_purchases,
     SUM(pw.cumul_purchases)                                                 AS sum_cumul_purchases,
     AVG(pw.bal_current)                                                     AS avg_balance,
-    SUM(pw.bal_current)                                                     AS sum_balance,
     AVG(pw.net_all_fees_amt_mtd)                                            AS avg_fees_mtd,
-    SUM(pw.net_all_fees_amt_mtd)                                            AS sum_fees_mtd,
-    AVG(pw.lylty_bal_amt)                                                   AS avg_loyalty,
-    SUM(pw.lylty_bal_amt)                                                   AS sum_loyalty
+    AVG(pw.lylty_bal_amt)                                                   AS avg_loyalty
 FROM (
     SELECT
         acct_no,
-        me_dt,
         visa_prod_cd,
         months_since_open,
         bal_current,
@@ -415,16 +409,53 @@ INNER JOIN pcq_curve_base cb
     ON cb.acct_no = pw.acct_no
 GROUP BY
     cb.test_group_latest,
-    cb.offer_prod_latest,
-    cb.offer_prod_latest_name,
     cb.asc_on_app_source,
     pw.visa_prod_cd,
     pw.months_since_open
 ORDER BY
     cb.test_group_latest,
-    cb.offer_prod_latest,
     cb.asc_on_app_source,
     pw.visa_prod_cd,
+    pw.months_since_open;
+
+
+-- Step 3B: OUTPUT B — Group-level curves.
+-- Grain: test_group × asc_source × months_since_open.
+-- Aggregated directly from account data — no averaging of averages.
+-- Use this for the top-line test vs. control comparison.
+SELECT
+    cb.test_group_latest,
+    cb.asc_on_app_source,
+    pw.months_since_open,
+    COUNT(DISTINCT pw.acct_no)                                              AS accounts,
+    AVG(pw.net_prch_amt_mtd)                                                AS avg_purchases_mtd,
+    SUM(pw.net_prch_amt_mtd)                                                AS sum_purchases_mtd,
+    AVG(pw.cumul_purchases)                                                 AS avg_cumul_purchases,
+    SUM(pw.cumul_purchases)                                                 AS sum_cumul_purchases,
+    AVG(pw.bal_current)                                                     AS avg_balance,
+    AVG(pw.net_all_fees_amt_mtd)                                            AS avg_fees_mtd,
+    AVG(pw.lylty_bal_amt)                                                   AS avg_loyalty
+FROM (
+    SELECT
+        acct_no,
+        months_since_open,
+        bal_current,
+        net_prch_amt_mtd,
+        net_all_fees_amt_mtd,
+        lylty_bal_amt,
+        SUM(net_prch_amt_mtd) OVER (PARTITION BY acct_no ORDER BY months_since_open
+                                     ROWS UNBOUNDED PRECEDING)              AS cumul_purchases
+    FROM pcq_curve_pw
+) pw
+INNER JOIN pcq_curve_base cb
+    ON cb.acct_no = pw.acct_no
+GROUP BY
+    cb.test_group_latest,
+    cb.asc_on_app_source,
+    pw.months_since_open
+ORDER BY
+    cb.test_group_latest,
+    cb.asc_on_app_source,
     pw.months_since_open;
 
 
