@@ -315,127 +315,92 @@ ORDER BY
 
 
 
--- ============================================================================
 -- SECTION C — MONTHLY CURVES (me_dt grain)
 -- ============================================================================
 
 -- ==========================================================================
--- Q3: Balance/spend/fees/loyalty curves by me_dt, sliced by classification.
--- One row per test_group × product × ASC × booking_status × lifetime_status × me_dt.
--- Also emits months_since_open so cohort curves (month 1, 2, 3...) can be
--- built alongside calendar-time curves. Picks the row with the latest
--- dt_record_ext within each acct × me_dt to get the month-end snapshot.
+-- Q3: Monthly purchase + balance curves since account opening.
 --
--- Classification flags are re-derived here (same logic as Q2) so Q3 stays
--- self-contained — no dependency on running Q2 first.
+-- Spool-friendly: two-step volatile table approach.
+-- Grain: test_group × offer_prod × asc_source × visa_prod_cd × me_dt
+--
+-- HOW TO RUN: highlight BOTH statements and run together.
+--   1. CREATE VOLATILE TABLE pcq_curve_base  (one row per approved account)
+--   2. SELECT ... (monthly curves)
 -- ==========================================================================
-WITH tpa_base AS (
-    SELECT
-        acct_no,
-        MIN(treatmt_start_dt)       AS treatmt_start_dt,
-        MAX(test_group_latest)      AS test_group_latest,
-        MAX(offer_prod_latest)      AS offer_prod_latest,
-        MAX(offer_prod_latest_name) AS offer_prod_latest_name,
-        MAX(asc_on_app_source)      AS asc_on_app_source
-    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
-    WHERE test_group_latest IN ('NG3_1ST', 'NG3_2ND')
-      AND app_approved = 1
-    GROUP BY acct_no
-),
-pw AS (
+
+
+-- Step 1: one row per approved account with the fields we need for grouping.
+CREATE VOLATILE TABLE pcq_curve_base AS (
     SELECT
         r.acct_no,
+        r.test_group_latest,
         r.offer_prod_latest,
-        p.dt_record_ext,
-        p.me_dt,
-        p.visa_prod_cd,
-        p.acct_open_dt,
-        p.bal_current,
-        p.net_prch_amt_mtd,
-        p.net_all_fees_amt_mtd,
-        p.lylty_bal_amt
-    FROM tpa_base r
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
-        ON p.acct_no       = r.acct_no
-        AND p.dt_record_ext >= r.treatmt_start_dt
-),
-booked AS (
-    SELECT acct_no, visa_prod_cd AS booked_visa_prod_cd
-    FROM pw
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext) = 1
-),
-acct_flags AS (
-    SELECT
-        bk.acct_no,
-        CASE WHEN bk.booked_visa_prod_cd = tb.offer_prod_latest
-             THEN 'match' ELSE 'mismatch' END AS booking_status,
-        CASE WHEN cnt.n_distinct_visa > 1
-             THEN 'reclassed' ELSE 'stable' END AS lifetime_status
-    FROM booked bk
-    INNER JOIN (
-        SELECT acct_no, COUNT(DISTINCT visa_prod_cd) AS n_distinct_visa
-        FROM pw GROUP BY acct_no
-    ) cnt ON cnt.acct_no = bk.acct_no
-    INNER JOIN tpa_base tb ON tb.acct_no = bk.acct_no
-),
-month_end AS (
-    -- One row per acct × me_dt: the latest dt_record_ext snapshot.
+        r.offer_prod_latest_name,
+        r.asc_on_app_source,
+        MIN(r.treatmt_start_dt) AS treatmt_start_dt
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+    WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
+      AND r.app_approved = 1
+    GROUP BY r.acct_no, r.test_group_latest, r.offer_prod_latest,
+             r.offer_prod_latest_name, r.asc_on_app_source
+) WITH DATA
+  PRIMARY INDEX (acct_no)
+  ON COMMIT PRESERVE ROWS;
+
+
+-- Step 2: month-end snapshot curves.
+-- One pass against DLY_FULL_PORTFOLIO. QUALIFY picks the last row per acct × me_dt.
+SELECT
+    cb.test_group_latest,
+    cb.offer_prod_latest,
+    cb.offer_prod_latest_name,
+    cb.asc_on_app_source,
+    p.visa_prod_cd,
+    p.me_dt,
+    (EXTRACT(YEAR FROM p.me_dt)  - EXTRACT(YEAR FROM p.acct_open_dt)) * 12
+    + (EXTRACT(MONTH FROM p.me_dt) - EXTRACT(MONTH FROM p.acct_open_dt))   AS months_since_open,
+    COUNT(DISTINCT p.acct_no)                                               AS accounts,
+    AVG(p.bal_current)                                                      AS avg_balance,
+    SUM(p.bal_current)                                                      AS sum_balance,
+    AVG(p.net_prch_amt_mtd)                                                 AS avg_purchases_mtd,
+    SUM(p.net_prch_amt_mtd)                                                 AS sum_purchases_mtd,
+    AVG(p.net_all_fees_amt_mtd)                                             AS avg_fees_mtd,
+    SUM(p.net_all_fees_amt_mtd)                                             AS sum_fees_mtd,
+    AVG(p.lylty_bal_amt)                                                    AS avg_loyalty,
+    SUM(p.lylty_bal_amt)                                                    AS sum_loyalty
+FROM (
     SELECT
         acct_no,
+        dt_record_ext,
         me_dt,
+        visa_prod_cd,
         acct_open_dt,
         bal_current,
         net_prch_amt_mtd,
         net_all_fees_amt_mtd,
         lylty_bal_amt
-    FROM pw
+    FROM D3CV12A.DLY_FULL_PORTFOLIO
+    WHERE dt_record_ext >= DATE '2025-01-01'
     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt ORDER BY dt_record_ext DESC) = 1
-)
-SELECT
-    tb.test_group_latest,
-    tb.offer_prod_latest,
-    tb.offer_prod_latest_name,
-    tb.asc_on_app_source,
-    af.booking_status,
-    af.lifetime_status,
-    me.me_dt,
-    -- Cohort month: monthly grain, so month arithmetic on me_dt vs acct_open_dt
-    -- is exact. Feb-2025 opener at me_dt=Feb 2025 → 0, at me_dt=Mar 2025 → 1, etc.
-    (EXTRACT(YEAR FROM me.me_dt)        - EXTRACT(YEAR FROM me.acct_open_dt)) * 12
-    + (EXTRACT(MONTH FROM me.me_dt)     - EXTRACT(MONTH FROM me.acct_open_dt))
-                                                                        AS months_since_open,
-    COUNT(DISTINCT me.acct_no)                                          AS accounts_reporting,
-    -- Balances
-    AVG(me.bal_current)                                                 AS avg_balance,
-    SUM(me.bal_current)                                                 AS sum_balance,
-    -- Spend
-    AVG(me.net_prch_amt_mtd)                                            AS avg_purchases_mtd,
-    SUM(me.net_prch_amt_mtd)                                            AS sum_purchases_mtd,
-    -- Fees
-    AVG(me.net_all_fees_amt_mtd)                                        AS avg_fees_mtd,
-    SUM(me.net_all_fees_amt_mtd)                                        AS sum_fees_mtd,
-    -- Loyalty
-    AVG(me.lylty_bal_amt)                                               AS avg_loyalty_balance,
-    SUM(me.lylty_bal_amt)                                               AS sum_loyalty_balance
-FROM month_end me
-INNER JOIN tpa_base  tb ON tb.acct_no = me.acct_no
-INNER JOIN acct_flags af ON af.acct_no = me.acct_no
+) p
+INNER JOIN pcq_curve_base cb
+    ON cb.acct_no = p.acct_no
+    AND p.dt_record_ext >= cb.treatmt_start_dt
 GROUP BY
-    tb.test_group_latest,
-    tb.offer_prod_latest,
-    tb.offer_prod_latest_name,
-    tb.asc_on_app_source,
-    af.booking_status,
-    af.lifetime_status,
-    me.me_dt,
-    me.acct_open_dt
+    cb.test_group_latest,
+    cb.offer_prod_latest,
+    cb.offer_prod_latest_name,
+    cb.asc_on_app_source,
+    p.visa_prod_cd,
+    p.me_dt,
+    p.acct_open_dt
 ORDER BY
-    tb.test_group_latest,
-    tb.offer_prod_latest,
-    tb.asc_on_app_source,
-    af.booking_status,
-    af.lifetime_status,
-    me.me_dt;
+    cb.test_group_latest,
+    cb.offer_prod_latest,
+    cb.asc_on_app_source,
+    p.visa_prod_cd,
+    p.me_dt;
 
 
 

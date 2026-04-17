@@ -45,12 +45,14 @@ SELECT
     b.total_population,
     b.mobile_population,
     COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'view_promotion' THEN b.up_srf_id2_value END)   AS view_users,
-    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion' THEN b.up_srf_id2_value END) AS click_users
+    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion' THEN b.up_srf_id2_value END) AS click_users,
+    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion' AND lower(b.it_creative_name) NOT LIKE 'n_no%' THEN b.up_srf_id2_value END) AS click_p_users,
+    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion' AND lower(b.it_creative_name) LIKE 'n_no%' THEN b.up_srf_id2_value END)     AS click_n_users
 FROM
     (
     -- CTU banner events
     SELECT
-        event_date, event_name, up_srf_id2_value,
+        event_date, event_name, up_srf_id2_value, it_creative_name,
         'CTU' AS campaign,
         (SELECT COUNT(DISTINCT CLNT_NO) FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
          WHERE TACTIC_ID = '2026098CTU')                                                           AS total_population,
@@ -70,7 +72,7 @@ FROM
 
     -- O2P banner events
     SELECT
-        event_date, event_name, up_srf_id2_value,
+        event_date, event_name, up_srf_id2_value, it_creative_name,
         'O2P' AS campaign,
         (SELECT COUNT(DISTINCT CLNT_NO) FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
          WHERE TACTIC_ID = '202609902P')                                                           AS total_population,
@@ -100,12 +102,18 @@ SELECT
     COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'view_promotion'
                         THEN b.up_srf_id2_value END)                                               AS unique_view_users,
     COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion'
-                        THEN b.up_srf_id2_value END)                                               AS unique_click_users
+                        THEN b.up_srf_id2_value END)                                               AS unique_click_users,
+    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion'
+                         AND lower(b.it_creative_name) NOT LIKE 'n_no%'
+                        THEN b.up_srf_id2_value END)                                               AS unique_click_p_users,
+    COUNT(DISTINCT CASE WHEN lower(b.event_name) = 'select_promotion'
+                         AND lower(b.it_creative_name) LIKE 'n_no%'
+                        THEN b.up_srf_id2_value END)                                               AS unique_click_n_users
 FROM
     (
     -- CTU
     SELECT
-        event_date, event_name, up_srf_id2_value,
+        event_date, event_name, up_srf_id2_value, it_creative_name,
         'CTU' AS campaign,
         (SELECT COUNT(DISTINCT CLNT_NO) FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
          WHERE TACTIC_ID = '2026098CTU')                                                           AS total_population,
@@ -125,7 +133,7 @@ FROM
 
     -- O2P
     SELECT
-        event_date, event_name, up_srf_id2_value,
+        event_date, event_name, up_srf_id2_value, it_creative_name,
         'O2P' AS campaign,
         (SELECT COUNT(DISTINCT CLNT_NO) FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
          WHERE TACTIC_ID = '202609902P')                                                           AS total_population,
