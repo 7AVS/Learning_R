@@ -393,6 +393,7 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
             ON cb.acct_no = p.acct_no
             AND p.dt_record_ext >= cb.treatmt_start_dt
         WHERE p.dt_record_ext >= DATE '2025-01-01'
+          AND p.acct_open_dt IS NOT NULL
     ) p
     GROUP BY p.acct_no, p.me_dt
 ) WITH DATA
