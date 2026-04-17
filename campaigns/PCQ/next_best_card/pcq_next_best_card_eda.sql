@@ -341,16 +341,16 @@ CREATE VOLATILE TABLE pcq_curve_base AS (
         r.test_group_latest,
         r.offer_prod_latest,
         r.offer_prod_latest_name,
-        CASE WHEN r.asc_on_app_source = 'Period-ASC' THEN 'Offered Card'
-             ELSE 'Alternate Card' END                     AS card_type,
+        CASE WHEN r.asc_on_app_source = 'NO ASC' THEN 'Alternate Card'
+             ELSE 'Offered Card' END                       AS card_type,
         MIN(r.treatmt_start_dt) AS treatmt_start_dt
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     WHERE r.test_group_latest IN ('NG3_1ST', 'NG3_2ND')
       AND r.app_approved = 1
     GROUP BY r.acct_no, r.test_group_latest, r.offer_prod_latest,
              r.offer_prod_latest_name,
-             CASE WHEN r.asc_on_app_source = 'Period-ASC' THEN 'Offered Card'
-                  ELSE 'Alternate Card' END
+             CASE WHEN r.asc_on_app_source = 'NO ASC' THEN 'Alternate Card'
+                  ELSE 'Offered Card' END
 ) WITH DATA
   PRIMARY INDEX (acct_no)
   ON COMMIT PRESERVE ROWS;
