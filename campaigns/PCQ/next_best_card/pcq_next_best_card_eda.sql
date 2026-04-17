@@ -408,6 +408,8 @@ CREATE VOLATILE TABLE pcq_curve_pw AS (
 -- Step 3A: OUTPUT A — Product-level curves.
 -- Grain: test_group × card_type × visa_prod_cd × months_since_open.
 -- card_type: Offered Card / Alternate Card / All.
+-- cumul_per_account denominator = rolling unique accounts (all accounts
+-- that have ever appeared up to that month, not just the current month).
 SELECT
     c.test_group_latest,
     c.card_type,
@@ -417,7 +419,7 @@ SELECT
     c.avg_purchases_mtd,
     c.avg_balance,
     c.cumul_purchases,
-    c.cumul_purchases / NULLIFZERO(c.accounts)                              AS cumul_per_account
+    c.cumul_purchases / NULLIFZERO(t.total_accounts)                        AS cumul_per_account
 FROM (
     SELECT
         test_group_latest,
@@ -432,7 +434,6 @@ FROM (
             ORDER BY months_since_open
             ROWS UNBOUNDED PRECEDING)                                       AS cumul_purchases
     FROM (
-        -- Offered / Alternate
         SELECT
             test_group_latest,
             card_type,
@@ -447,7 +448,6 @@ FROM (
 
         UNION ALL
 
-        -- All approved accounts (no card_type split)
         SELECT
             test_group_latest,
             'All'                           AS card_type,
@@ -461,12 +461,29 @@ FROM (
         GROUP BY test_group_latest, visa_prod_cd, months_since_open
     ) base
 ) c
+INNER JOIN (
+    -- Total unique accounts per group × card_type × product
+    SELECT test_group_latest, card_type, visa_prod_cd,
+           COUNT(DISTINCT acct_no) AS total_accounts
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, card_type, visa_prod_cd
+
+    UNION ALL
+
+    SELECT test_group_latest, 'All', visa_prod_cd,
+           COUNT(DISTINCT acct_no) AS total_accounts
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, visa_prod_cd
+) t ON t.test_group_latest = c.test_group_latest
+   AND t.card_type = c.card_type
+   AND t.visa_prod_cd = c.visa_prod_cd
 ORDER BY 1, 2, 3, 4;
 
 
 -- Step 3B: OUTPUT B — Group-level curves.
 -- Grain: test_group × card_type × months_since_open.
 -- card_type: Offered Card / Alternate Card / All.
+-- cumul_per_account denominator = total unique accounts across all months.
 SELECT
     c.test_group_latest,
     c.card_type,
@@ -475,7 +492,7 @@ SELECT
     c.avg_purchases_mtd,
     c.avg_balance,
     c.cumul_purchases,
-    c.cumul_purchases / NULLIFZERO(c.accounts)                              AS cumul_per_account
+    c.cumul_purchases / NULLIFZERO(t.total_accounts)                        AS cumul_per_account
 FROM (
     SELECT
         test_group_latest,
@@ -489,7 +506,6 @@ FROM (
             ORDER BY months_since_open
             ROWS UNBOUNDED PRECEDING)                                       AS cumul_purchases
     FROM (
-        -- Offered / Alternate
         SELECT
             test_group_latest,
             card_type,
@@ -503,7 +519,6 @@ FROM (
 
         UNION ALL
 
-        -- All approved accounts (no card_type split)
         SELECT
             test_group_latest,
             'All'                           AS card_type,
@@ -516,6 +531,21 @@ FROM (
         GROUP BY test_group_latest, months_since_open
     ) base
 ) c
+INNER JOIN (
+    -- Total unique accounts per group × card_type
+    SELECT test_group_latest, card_type,
+           COUNT(DISTINCT acct_no) AS total_accounts
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest, card_type
+
+    UNION ALL
+
+    SELECT test_group_latest, 'All',
+           COUNT(DISTINCT acct_no) AS total_accounts
+    FROM pcq_curve_pw
+    GROUP BY test_group_latest
+) t ON t.test_group_latest = c.test_group_latest
+   AND t.card_type = c.card_type
 ORDER BY 1, 2, 3;
 
 
