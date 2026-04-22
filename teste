@@ -1,8 +1,10 @@
 # ------------------------------------------------------------
-# Cell 1 — VBA Vintage Summary (Casper-only, no EDL)
+# Cell 1 — VBA Vintage Summary  (NO EDL variant)
 #
-# Self-contained SQL — aggregates in SQL, returns small result.
-# Scott / EDL snapshot source removed.
+# Same output schema as the official query so results can be
+# joined / diffed side-by-side on (tactic_id, tst_grp_cd).
+# Scott / EDL snapshot source removed; successes_scott and
+# rate_scott are preserved as 0 for schema parity.
 # ------------------------------------------------------------
 
 sql_summary = """
@@ -36,6 +38,7 @@ casper AS (
       AND p.CR_LMT_CHG_IND = 'N'
       AND p.visa_prod_cd NOT IN ('CCL','BXX')
 ),
+-- NOTE: Scott CTE removed. responses now sources from casper only.
 responses AS (
     SELECT
         tactic_id,
@@ -69,15 +72,14 @@ aggregated AS (
     SELECT
         v.tactic_id,
         v.tst_grp_cd,
-        MIN(v.Treat_Start_DT)                                              AS treat_start_dt,
-        COUNT(DISTINCT v.clnt_no)                                          AS leads,
-        COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1
-                            THEN s.clnt_no END)                            AS successes,
-        ROUND(
-            COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1
-                                THEN s.clnt_no END) * 100.0
-            / NULLIF(COUNT(DISTINCT v.clnt_no), 0)
-        , 2)                                                               AS rate
+        MIN(v.Treat_Start_DT)                                                                                                                         AS treat_start_dt,
+        COUNT(DISTINCT v.clnt_no)                                                                                                                     AS leads,
+        COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 THEN s.clnt_no END)                                                                          AS successes_any,
+        COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 AND s.response_source = 'Casper' THEN s.clnt_no END)                                         AS successes_casper,
+        COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 AND s.response_source = 'Scott'  THEN s.clnt_no END)                                         AS successes_scott,
+        ROUND(COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 THEN s.clnt_no END) * 100.0 / NULLIF(COUNT(DISTINCT v.clnt_no), 0), 2)                 AS rate_any,
+        ROUND(COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 AND s.response_source = 'Casper' THEN s.clnt_no END) * 100.0 / NULLIF(COUNT(DISTINCT v.clnt_no), 0), 2) AS rate_casper,
+        ROUND(COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1 AND s.response_source = 'Scott'  THEN s.clnt_no END) * 100.0 / NULLIF(COUNT(DISTINCT v.clnt_no), 0), 2) AS rate_scott
     FROM vba v
     LEFT JOIN success s
       ON v.tactic_id = s.tactic_id
