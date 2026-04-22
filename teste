@@ -1,95 +1,90 @@
--- ============================================================
--- EDL Impact Diagnostic  —  5-day window
--- ------------------------------------------------------------
--- Purpose:  quantify success volume WITH vs WITHOUT the EDL
---           (Scott) source on a pure-conversion basis.
--- Notes:
---   * No tactic_id / campaign attribution — pure success only
---   * Same dedup rule as production (earliest response per clnt_no wins)
---   * Output: one aggregated row, no row-level detail
---   * Adjust the date window below before running
--- ============================================================
+# ------------------------------------------------------------
+# Cell 1 — VBA Vintage Summary (Casper-only, no EDL)
+#
+# Self-contained SQL — aggregates in SQL, returns small result.
+# Scott / EDL snapshot source removed.
+# ------------------------------------------------------------
 
-WITH casper AS (
+sql_summary = """
+WITH vba AS (
+    SELECT DISTINCT
+        CAST(E.tactic_id AS VARCHAR(50))                    AS tactic_id,
+        E.clnt_no,
+        E.treatmt_strt_dt                                   AS Treat_Start_DT,
+        COALESCE(E.treatmt_end_dt, E.treatmt_strt_dt)       AS Treat_End_DT,
+        E.tst_grp_cd
+    FROM DG6V01.tactic_evnt_ip_ar_hist E
+    WHERE E.treatmt_strt_dt BETWEEN DATE '2025-08-01' AND DATE '2025-12-01'
+      AND SUBSTR(E.tactic_id, 8, 3) = 'VBA'
+      AND SUBSTR(E.tactic_id, 8, 1) <> 'J'
+),
+casper AS (
     SELECT
-        p.bus_clnt_no                AS clnt_no,
-        CAST(p.app_rcv_dt AS DATE)   AS visa_response_dt,
-        'Casper'                     AS response_source
-    FROM D3CV12A.appl_fact_dly p
-    WHERE p.app_rcv_dt BETWEEN DATE '2025-10-01' AND DATE '2025-10-05'
-      AND p.Status         = 'A'
-      AND p.PROD_APPRVD    IN ('B','E')
+        v.tactic_id,
+        v.clnt_no,
+        CASE WHEN p.Status = 'A' THEN p.acct_no END         AS visa_acct_no,
+        CASE WHEN p.Status = 'A' THEN 1 ELSE 0 END          AS visa_app_approved,
+        CAST(p.app_rcv_dt AS DATE)                          AS visa_response_dt,
+        'Casper'                                            AS response_source
+    FROM vba v
+    JOIN D3CV12A.appl_fact_dly p
+      ON v.clnt_no = p.bus_clnt_no
+    WHERE p.app_rcv_dt BETWEEN v.Treat_Start_DT AND v.Treat_End_DT
+      AND p.Status IN ('A','D','O')
+      AND p.PROD_APPRVD IN ('B','E')
       AND (p.Cell_Code IS NULL OR p.Cell_Code NOT IN ('PATACT','GV0320'))
       AND p.CR_LMT_CHG_IND = 'N'
-      AND p.visa_prod_cd  NOT IN ('CCL','BXX')
+      AND p.visa_prod_cd NOT IN ('CCL','BXX')
 ),
-scot AS (
-    SELECT
-        CAST(s.creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
-        CAST(s.creditapplication_createddatetime AS DATE)                 AS visa_response_dt,
-        'Scott'                                                           AS response_source
-    FROM ed10_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot s
-    WHERE s.creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory = 'CREDIT_CARD'
-      AND s.creditapplication_creditapplicationstatuscode = 'FULFILLED'
-      AND CAST(s.creditapplication_createddatetime AS DATE)
-          BETWEEN DATE '2025-10-01' AND DATE '2025-10-05'
-),
--- Union both sources, then dedup the same way production does
 responses AS (
-    SELECT clnt_no, visa_response_dt, response_source FROM casper
-    UNION ALL
-    SELECT clnt_no, visa_response_dt, response_source FROM scot
-),
-deduped AS (
     SELECT
+        tactic_id,
         clnt_no,
-        response_source,
-        ROW_NUMBER() OVER (
-            PARTITION BY clnt_no
-            ORDER BY visa_response_dt ASC
-        ) AS rn
-    FROM responses
+        visa_acct_no,
+        visa_app_approved,
+        CAST(visa_response_dt AS DATE)                       AS visa_response_dt,
+        response_source
+    FROM casper
 ),
-winners AS (                       -- one row per clnt_no after dedup
-    SELECT clnt_no, response_source
-    FROM deduped
+success AS (
+    SELECT *
+    FROM (
+        SELECT
+            tactic_id,
+            clnt_no,
+            visa_acct_no,
+            visa_app_approved,
+            visa_response_dt,
+            response_source,
+            ROW_NUMBER() OVER (
+                PARTITION BY tactic_id, clnt_no
+                ORDER BY visa_response_dt ASC
+            ) AS rn
+        FROM responses
+        WHERE visa_app_approved = 1
+    ) t
     WHERE rn = 1
+),
+aggregated AS (
+    SELECT
+        v.tactic_id,
+        v.tst_grp_cd,
+        MIN(v.Treat_Start_DT)                                              AS treat_start_dt,
+        COUNT(DISTINCT v.clnt_no)                                          AS leads,
+        COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1
+                            THEN s.clnt_no END)                            AS successes,
+        ROUND(
+            COUNT(DISTINCT CASE WHEN s.visa_app_approved = 1
+                                THEN s.clnt_no END) * 100.0
+            / NULLIF(COUNT(DISTINCT v.clnt_no), 0)
+        , 2)                                                               AS rate
+    FROM vba v
+    LEFT JOIN success s
+      ON v.tactic_id = s.tactic_id
+     AND v.clnt_no   = s.clnt_no
+    GROUP BY v.tactic_id, v.tst_grp_cd
 )
-SELECT
-    -------------------------------------------------------------
-    -- Raw per-source volumes (pre-dedup)
-    -------------------------------------------------------------
-    (SELECT COUNT(DISTINCT clnt_no) FROM casper)                               AS casper_clients,
-    (SELECT COUNT(DISTINCT clnt_no) FROM scot)                                 AS scott_clients,
-    (SELECT COUNT(DISTINCT c.clnt_no)
-       FROM casper c
-       INNER JOIN scot s ON s.clnt_no = c.clnt_no)                             AS overlap_clients,
-
-    -------------------------------------------------------------
-    -- Scenario A  —  WITHOUT EDL  (Casper only)
-    -------------------------------------------------------------
-    (SELECT COUNT(DISTINCT clnt_no) FROM casper)                               AS successes_without_edl,
-
-    -------------------------------------------------------------
-    -- Scenario B  —  WITH EDL  (Casper ∪ Scott, deduped)
-    -------------------------------------------------------------
-    COUNT(DISTINCT clnt_no)                                                    AS successes_with_edl,
-
-    -------------------------------------------------------------
-    -- Net impact of removing EDL
-    -------------------------------------------------------------
-    COUNT(DISTINCT clnt_no)
-      - (SELECT COUNT(DISTINCT clnt_no) FROM casper)                           AS edl_uplift_abs,
-    ROUND(
-        (COUNT(DISTINCT clnt_no) - (SELECT COUNT(DISTINCT clnt_no) FROM casper))
-        * 100.0
-        / NULLIF((SELECT COUNT(DISTINCT clnt_no) FROM casper), 0)
-    , 2)                                                                       AS edl_uplift_pct,
-
-    -------------------------------------------------------------
-    -- Dedup attribution (who "won" when both sources had the client)
-    -------------------------------------------------------------
-    SUM(CASE WHEN response_source = 'Casper' THEN 1 ELSE 0 END)                AS attributed_to_casper,
-    SUM(CASE WHEN response_source = 'Scott'  THEN 1 ELSE 0 END)                AS attributed_to_scott
-FROM winners
-;
+SELECT *
+FROM aggregated
+ORDER BY tactic_id, tst_grp_cd
+"""
