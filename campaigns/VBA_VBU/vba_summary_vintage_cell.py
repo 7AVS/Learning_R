@@ -3,7 +3,10 @@
 import pandas as pd
 from pathlib import Path
 
-OUT  = Path("/home/jovyan/Cards/VBA")
+DATA = Path("/home/jovyan/Cards/VBA/data")     # parquet inputs (in-memory DFs may also come from cells above)
+OUT  = Path("/home/jovyan/Cards/VBA/output")   # CSV outputs
+OUT.mkdir(parents=True, exist_ok=True)
+
 keys = ["treatmt_strt_dt", "tst_grp_cd"]
 
 # Tactic: VBA only
@@ -81,16 +84,24 @@ print("\nVintage day-90 T/C:")
 print(v_tc.to_string(index=False, formatters=fmt))
 
 
-# === Cell 3: UCP-enriched analytical dataset ===============================
-# All VBA participants + response signal + product code + UCP fields.
-# Drives propensity / decision-tree / segmentation work downstream.
-# Set RESPONDERS_ONLY = True to keep only in-window responders (smaller file).
+# === Cell 3: VBA population (HDFS) + UCP enrichment, saved to HDFS =========
+# RUN THIS CELL ON THE YARN-SPARK KERNEL (not the local Jupyter pandas kernel).
+# Reads tactic events and UCP from HDFS, joins in Spark, writes enriched
+# parquet to /user/427966379/ for download into the local Jupyter env.
+#
+# Response signal (Casper/SCOT) is NOT joined here — that data is in the
+# local pandas kernel. Join it after downloading the enriched parquet.
 
 from pyspark.sql import functions as F
 
-UCP_PATH        = "/prod/sz/tsz/00172/data/ucp4"
-UCP_PARTITION   = "2026-01-31"
-RESPONDERS_ONLY = False
+TACTIC_BASE   = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
+UCP_BASE      = "/prod/sz/tsz/00172/data/ucp4"
+UCP_PARTITION = "2026-01-31"
+OUT_HDFS      = "/user/427966379/vba_enriched.parquet"
+
+YEARS         = ["2025", "2026"]
+TARGET_MNES   = ["VBA"]            # add "VBU" if you want both campaigns
+START_DT      = "2025-08-01"
 
 ucp_fields = [
     # Income / wealth
@@ -98,8 +109,7 @@ ucp_fields = [
     # Current Visa card holdings (upgrade headroom)
     "CC_VISA_ALL_TOT_IND", "CC_VISA_CLSIC_TOT_IND", "CC_VISA_CLSIC_RWD_TOT_IND",
     "CC_VISA_GOLD_PRFR_TOT_IND", "CC_VISA_INF_TOT_IND", "CC_VISA_IAV_TOT_IND",
-    # RBC product depth — *_TOT_CNT is product count within category:
-    # T=Transactional, I=Investment, B=Borrower, C=Cards
+    # RBC product depth (T=Transactional, I=Investment, B=Borrower, C=Cards)
     "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
     "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
     # Tenure
@@ -113,27 +123,31 @@ ucp_fields = [
     "REL_TP_SEG_CD",
 ]
 
-# Base: all participants + response signal (NaN for non-responders)
-resp_cols = ["clnt_no", "treatmt_strt_dt", "visa_response_dt", "visa_app_approved",
-             "visa_acct_no", "card_code", "card_type_code", "src", "day"]
-base = t.merge(client[resp_cols], on=["clnt_no", "treatmt_strt_dt"], how="left")
-base["responded"] = base["visa_response_dt"].notna().astype(int)
+# 1. Tactic events from HDFS — VBA participants only
+tactic_paths = [f"{TACTIC_BASE}EVNT_STRT_DT={y}*" for y in YEARS]
+tactic_sdf = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
+    .filter(F.substring(F.col("TACTIC_ID"), 8, 3).isin(TARGET_MNES))
+    .filter(F.col("TREATMT_STRT_DT") >= F.lit(START_DT))
+    .withColumn("MNE",        F.substring(F.col("TACTIC_ID"), 8, 3))
+    .withColumn("CLNT_NO",    F.regexp_replace(F.trim(F.col("TACTIC_EVNT_ID")), "^0+", ""))
+    .withColumn("TST_GRP_CD", F.trim(F.col("TST_GRP_CD")))
+    .select("CLNT_NO", "TACTIC_ID", "MNE", "TST_GRP_CD",
+            "TREATMT_STRT_DT", "TREATMT_END_DT", "TACTIC_CELL_CD",
+            "TACTIC_DECISN_VRB_INFO")
+    .distinct())
 
-if RESPONDERS_ONLY:
-    base = base[base["responded"] == 1].copy()
+# 2. UCP partition from HDFS
+ucp_sdf = (spark.read.parquet(f"{UCP_BASE}/MONTH_END_DATE={UCP_PARTITION}")
+    .select("CLNT_NO", *ucp_fields))
 
-# Pull UCP partition (full read; merge in pandas does the filtering)
-ucp_pdf = (spark.read.parquet(f"{UCP_PATH}/MONTH_END_DATE={UCP_PARTITION}")
-              .select(F.col("CLNT_NO").alias("clnt_no"),
-                      *[F.col(c).alias(f"UCP_{c}") for c in ucp_fields])
-              .toPandas())
+# 3. Left-join in Spark — keeps participants even if UCP doesn't have them
+enriched = tactic_sdf.join(ucp_sdf, on="CLNT_NO", how="left")
 
-vba_enriched = base.merge(ucp_pdf, on="clnt_no", how="left")
-vba_enriched.to_parquet(OUT / "vba_enriched.parquet", index=False, compression="zstd")
+# 4. Write to HDFS user folder
+enriched.write.mode("overwrite").parquet(OUT_HDFS)
 
-n   = len(vba_enriched)
-rsp = int(vba_enriched["responded"].sum())
-ucp = int(vba_enriched["UCP_INCOME_AFTER_TAX_RNG"].notna().sum())
-print(f"VBA enriched: {n:,} rows × {len(vba_enriched.columns)} cols")
-print(f"  responders: {rsp:,}  |  non-responders: {n - rsp:,}")
-print(f"  UCP matched: {ucp:,} of {n:,}")
+n_total = enriched.count()
+n_ucp   = enriched.filter(F.col("INCOME_AFTER_TAX_RNG").isNotNull()).count()
+print(f"VBA enriched -> {OUT_HDFS}")
+print(f"  rows:        {n_total:,}")
+print(f"  UCP matched: {n_ucp:,} of {n_total:,}")
