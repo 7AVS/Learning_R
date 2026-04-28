@@ -101,14 +101,17 @@ ucp_fields = [
     # Current Visa card holdings (upgrade headroom)
     "CC_VISA_ALL_TOT_IND", "CC_VISA_CLSIC_TOT_IND", "CC_VISA_CLSIC_RWD_TOT_IND",
     "CC_VISA_GOLD_PRFR_TOT_IND", "CC_VISA_INF_TOT_IND", "CC_VISA_IAV_TOT_IND",
-    # Tenure / relationship depth
-    "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
-    # Activity / spend
-    "T_TOT_CNT", "C_TOT_CNT",
+    # RBC product depth — *_TOT_CNT is product count within category:
+    # T=Transactional, I=Investment, B=Borrower, C=Cards
+    "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
+    "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
+    # Tenure
+    "TENURE_RBC_YEARS",
     # Credit eligibility
     "CREDIT_SCORE_RNG", "DLQY_IND",
-    # OFI footprint
-    "OFI_C_PROD_CNT", "OFI_T_PROD_CNT",
+    # OFI footprint by category (M=mutual fund, L=lending, C=cards, I=investment, T=transactional)
+    "OFI_M_PROD_CNT", "OFI_L_PROD_CNT", "OFI_C_PROD_CNT",
+    "OFI_I_PROD_CNT", "OFI_T_PROD_CNT",
     # Targeting context
     "REL_TP_SEG_CD",
 ]
