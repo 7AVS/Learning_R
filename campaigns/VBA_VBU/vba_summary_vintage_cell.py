@@ -79,3 +79,58 @@ print("Summary T/C:")
 print(s_tc.to_string(index=False, formatters=fmt))
 print("\nVintage day-90 T/C:")
 print(v_tc.to_string(index=False, formatters=fmt))
+
+
+# === Cell 3: UCP enrichment of VBA participants =============================
+# Builds a per-participant analytical dataset:
+#   t (all VBA participants)  +  in-window response signal from client  +
+#   UCP demographic/behavioral fields curated for a business credit card upgrade.
+# Reads UCP partition from HDFS, filters to VBA clients only, merges in pandas.
+# Output: vba_enriched.parquet
+#
+# Spark is pre-initialized on Lumina (no builder/stop needed).
+
+from pyspark.sql import functions as F
+
+UCP_PATH      = "/prod/sz/tsz/00172/data/ucp4"
+UCP_PARTITION = "2026-01-31"   # latest known partition; align to VBA start as needed
+
+ucp_fields = [
+    # Income / wealth
+    "INCOME_AFTER_TAX_RNG", "PROF_TOT_ANNUAL", "PROF_SEG_CD",
+    # Current Visa card holdings (upgrade headroom)
+    "CC_VISA_ALL_TOT_IND", "CC_VISA_CLSIC_TOT_IND", "CC_VISA_CLSIC_RWD_TOT_IND",
+    "CC_VISA_GOLD_PRFR_TOT_IND", "CC_VISA_INF_TOT_IND", "CC_VISA_IAV_TOT_IND",
+    # Tenure / relationship depth
+    "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
+    # Activity / spend
+    "T_TOT_CNT", "C_TOT_CNT",
+    # Credit eligibility
+    "CREDIT_SCORE_RNG", "DLQY_IND",
+    # OFI footprint
+    "OFI_C_PROD_CNT", "OFI_T_PROD_CNT",
+    # Targeting context
+    "REL_TP_SEG_CD",
+]
+
+# 1. VBA base + responder flag
+resp_signal = client[["clnt_no", "treatmt_strt_dt", "visa_response_dt",
+                      "visa_app_approved", "visa_acct_no", "day"]]
+vba_full = t.merge(resp_signal, on=["clnt_no", "treatmt_strt_dt"], how="left")
+vba_full["responded"] = vba_full["visa_response_dt"].notna().astype(int)
+
+# 2. Pull the UCP partition, filtered to VBA clients only
+client_ids = vba_full["clnt_no"].drop_duplicates().tolist()
+ucp_sdf = (spark.read.parquet(f"{UCP_PATH}/MONTH_END_DATE={UCP_PARTITION}")
+                 .select(F.col("CLNT_NO").alias("clnt_no"),
+                         *[F.col(c).alias(f"UCP_{c}") for c in ucp_fields])
+                 .filter(F.col("clnt_no").isin(client_ids)))
+ucp_pdf = ucp_sdf.toPandas()
+
+# 3. Merge UCP onto VBA base
+vba_enriched = vba_full.merge(ucp_pdf, on="clnt_no", how="left")
+vba_enriched.to_parquet(OUT / "vba_enriched.parquet", index=False, compression="zstd")
+
+print(f"VBA enriched: {len(vba_enriched):,} rows × {len(vba_enriched.columns)} cols")
+print(f"UCP coverage: {vba_enriched['UCP_INCOME_AFTER_TAX_RNG'].notna().mean():.1%} of participants matched in UCP")
+print(vba_enriched.head().to_string())
