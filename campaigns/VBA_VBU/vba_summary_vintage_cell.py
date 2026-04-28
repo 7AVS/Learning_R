@@ -4,14 +4,11 @@ import pandas as pd
 from pathlib import Path
 
 OUT  = Path("/home/jovyan/Cards/VBA")
-keys = ["fiscal_qtr", "tst_grp_cd"]
+keys = ["treatmt_strt_dt", "tst_grp_cd"]
 
-# Tactic: VBA only + fiscal quarter
+# Tactic: VBA only
 t = vba_df[vba_df["tactic_id"].str[7:10] == "VBA"].copy()
 t["treatmt_strt_dt"] = pd.to_datetime(t["treatmt_strt_dt"])
-t["fiscal_qtr"] = t["treatmt_strt_dt"].apply(
-    lambda d: f"FY{d.year + (1 if d.month >= 11 else 0)}Q{(((d.month - 11) % 12) // 3) + 1}"
-)
 leads = t.groupby(keys).size()
 
 # Responses: Casper > SCOT, earliest first
