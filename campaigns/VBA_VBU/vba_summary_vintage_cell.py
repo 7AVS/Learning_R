@@ -49,30 +49,29 @@ v.to_csv(OUT / "vba_vintage_curve.csv", index=False)
 
 
 # === Cell 2: Test/Control aggregated views (for day-90 validation) ===========
-# Reads CSVs from Cell 1. tst_grp_cd rolled up: C -> Control, T -> Test, else Other.
+# Uses s and v from Cell 1 in memory (re-run Cell 1 first if schema changed).
+# tst_grp_cd rolled up: C -> Control, T -> Test, else Other.
 # Same column structure in both outputs — day-90 vintage row should equal the
 # summary row for the matching (treatmt_strt_dt, tc) cohort. Printed only.
-
-s_csv = pd.read_csv(OUT / "vba_summary.csv")
-v_csv = pd.read_csv(OUT / "vba_vintage_curve.csv")
 
 def tc(code):
     c = str(code)[:1].upper()
     return "Control" if c == "C" else "Test" if c == "T" else "Other"
 
-s_csv["tc"] = s_csv["tst_grp_cd"].apply(tc)
-v_csv["tc"] = v_csv["tst_grp_cd"].apply(tc)
-
 agg_keys = ["treatmt_strt_dt", "tc"]
 metrics  = ["client_any", "acct_any"]
 
-s_tc = s_csv.groupby(agg_keys)[["leads"] + metrics].sum().reset_index()
+s_flat = s.reset_index()
+s_flat["tc"] = s_flat["tst_grp_cd"].apply(tc)
+s_tc = s_flat.groupby(agg_keys)[["leads"] + metrics].sum().reset_index()
+
+v_flat = v.copy()
+v_flat["tc"] = v_flat["tst_grp_cd"].apply(tc)
+v90 = v_flat[v_flat["day"] == 90].rename(columns={"client_cum": "client_any", "acct_cum": "acct_any"})
+v_tc = v90.groupby(agg_keys)[["leads"] + metrics].sum().reset_index()
+
 for col in metrics:
     s_tc[col + "_rate"] = s_tc[col] / s_tc["leads"]
-
-v90 = v_csv[v_csv["day"] == 90].rename(columns={"client_cum": "client_any", "acct_cum": "acct_any"})
-v_tc = v90.groupby(agg_keys)[["leads"] + metrics].sum().reset_index()
-for col in metrics:
     v_tc[col + "_rate"] = v_tc[col] / v_tc["leads"]
 
 fmt = {c: "{:.2%}".format for c in s_tc.columns if c.endswith("_rate")}
