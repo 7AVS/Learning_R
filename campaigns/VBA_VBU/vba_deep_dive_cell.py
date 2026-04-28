@@ -199,6 +199,11 @@ print(f"Q2 master:           {len(vba_master):,} rows × {len(vba_master.columns
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col, trim
 
+# Disable auto-broadcast for the join below. The vba_clients side gets too
+# large to broadcast for big VBA campaigns and triggers driver OOM. Sort-merge
+# join is slightly slower on small data but doesn't blow up the driver.
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+
 # --- pread helper (from developer's best-practices notebook) ---
 def pread(path, partition_key, partition_value=""):
     full_path = str(path) + str(partition_key) + "=" + str(partition_value) + "*"
