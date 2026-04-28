@@ -216,13 +216,18 @@ ucp_fields = [
     "REL_TP_SEG_CD",
 ]
 
-# Identify VBA clients + the month-end of each treatment
+# Identify VBA clients + the month-end of each treatment.
+# UCP partitions only exist up to the previous month-end (no current-month
+# partition until that month closes), so cap MONTH_END_DATE at last_day(today - 1 month).
+# For an April treatment with today = April 28, the cap maps it to March 31.
 tactic_paths = [f"{TACTIC_BASE}EVNT_STRT_DT={y}*" for y in YEARS]
 vba_clients = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3).isin(TARGET_MNES))
     .filter(F.col("TREATMT_STRT_DT") >= F.lit(START_DT))
     .withColumn("CLNT_NO",        F.regexp_replace(F.trim(F.col("TACTIC_EVNT_ID")), "^0+", ""))
-    .withColumn("MONTH_END_DATE", F.last_day("TREATMT_STRT_DT"))
+    .withColumn("MONTH_END_DATE",
+                F.least(F.last_day("TREATMT_STRT_DT"),
+                        F.last_day(F.add_months(F.current_date(), -1))))
     .select("CLNT_NO", "MONTH_END_DATE")
     .distinct())
 
@@ -250,7 +255,10 @@ vba_master = pd.read_parquet(DATA / "vba_master.parquet")
 ucp_slice  = pd.read_parquet(DATA / "vba_ucp_slice.parquet")
 
 vba_master["treatmt_strt_dt"] = pd.to_datetime(vba_master["treatmt_strt_dt"])
-vba_master["month_end_date"]  = vba_master["treatmt_strt_dt"] + pd.offsets.MonthEnd(0)
+# UCP cap: latest available partition is last_day(today - 1 month). Current-month
+# treatments get clamped to the previous month-end so the join key matches Cell 3b.
+ucp_ceiling = pd.Timestamp.today().normalize().replace(day=1) - pd.Timedelta(days=1)
+vba_master["month_end_date"]  = (vba_master["treatmt_strt_dt"] + pd.offsets.MonthEnd(0)).clip(upper=ucp_ceiling)
 ucp_slice.columns = [c.lower() for c in ucp_slice.columns]
 ucp_slice["month_end_date"] = pd.to_datetime(ucp_slice["month_end_date"])
 ucp_slice = ucp_slice.rename(columns={c: f"ucp_{c}" for c in ucp_slice.columns
