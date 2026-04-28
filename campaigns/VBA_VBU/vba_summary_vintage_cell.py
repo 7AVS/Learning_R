@@ -86,31 +86,31 @@ print(v_tc.to_string(index=False, formatters=fmt))
 
 # === Cell 3: VBA population (HDFS) + UCP enrichment, saved to HDFS =========
 # RUN THIS CELL ON THE YARN-SPARK KERNEL (not the local Jupyter pandas kernel).
-# Reads tactic events and UCP from HDFS, joins in Spark, writes enriched
-# parquet to /user/427966379/ for download into the local Jupyter env.
+# Reads tactic events and UCP from HDFS, aligns each client to the UCP snapshot
+# from the month-end of THEIR OWN treatmt_strt_dt (so a Sept treatment gets the
+# Sept-30 UCP, a Dec treatment gets Dec-31, etc.), joins, writes enriched parquet
+# to /user/427966379/ for download.
 #
-# Response signal (Casper/SCOT) is NOT joined here — that data is in the
-# local pandas kernel. Join it after downloading the enriched parquet.
+# Response signal (Casper/SCOT) is NOT joined here — that data is in the local
+# pandas kernel. Join it after downloading the enriched parquet.
 
 from pyspark.sql import functions as F
 
-TACTIC_BASE   = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
-UCP_BASE      = "/prod/sz/tsz/00172/data/ucp4"
-UCP_PARTITION = "2026-01-31"
-OUT_HDFS      = "/user/427966379/vba_enriched.parquet"
+TACTIC_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
+UCP_BASE    = "/prod/sz/tsz/00172/data/ucp4"
+OUT_HDFS    = "/user/427966379/vba_enriched.parquet"
 
-YEARS         = ["2025", "2026"]
-TARGET_MNES   = ["VBA"]            # add "VBU" if you want both campaigns
-START_DT      = "2025-08-01"
+YEARS       = ["2025", "2026"]
+TARGET_MNES = ["VBA"]            # add "VBU" for both campaigns
+START_DT    = "2025-08-01"
 
 ucp_fields = [
     # Income / wealth
     "INCOME_AFTER_TAX_RNG", "PROF_TOT_ANNUAL", "PROF_SEG_CD",
-    # Current Visa card holdings (upgrade headroom)
-    "CC_VISA_ALL_TOT_IND", "CC_VISA_CLSIC_TOT_IND", "CC_VISA_CLSIC_RWD_TOT_IND",
-    "CC_VISA_GOLD_PRFR_TOT_IND", "CC_VISA_INF_TOT_IND", "CC_VISA_IAV_TOT_IND",
-    # RBC product depth (T=Transactional, I=Investment, B=Borrower, C=Cards)
-    "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
+    # RBC product depth — Visa/credit-card holdings deliberately excluded
+    # to avoid leakage with the campaign outcome
+    # (T=Transactional, I=Investment, B=Borrower)
+    "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
     "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
     # Tenure
     "TENURE_RBC_YEARS",
@@ -123,25 +123,30 @@ ucp_fields = [
     "REL_TP_SEG_CD",
 ]
 
-# 1. Tactic events from HDFS — VBA participants only
+# 1. Tactic events — VBA participants + month-end derived from treatmt_strt_dt
 tactic_paths = [f"{TACTIC_BASE}EVNT_STRT_DT={y}*" for y in YEARS]
 tactic_sdf = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3).isin(TARGET_MNES))
     .filter(F.col("TREATMT_STRT_DT") >= F.lit(START_DT))
-    .withColumn("MNE",        F.substring(F.col("TACTIC_ID"), 8, 3))
-    .withColumn("CLNT_NO",    F.regexp_replace(F.trim(F.col("TACTIC_EVNT_ID")), "^0+", ""))
-    .withColumn("TST_GRP_CD", F.trim(F.col("TST_GRP_CD")))
+    .withColumn("MNE",            F.substring(F.col("TACTIC_ID"), 8, 3))
+    .withColumn("CLNT_NO",        F.regexp_replace(F.trim(F.col("TACTIC_EVNT_ID")), "^0+", ""))
+    .withColumn("TST_GRP_CD",     F.trim(F.col("TST_GRP_CD")))
+    .withColumn("MONTH_END_DATE", F.last_day("TREATMT_STRT_DT"))
     .select("CLNT_NO", "TACTIC_ID", "MNE", "TST_GRP_CD",
             "TREATMT_STRT_DT", "TREATMT_END_DT", "TACTIC_CELL_CD",
-            "TACTIC_DECISN_VRB_INFO")
+            "TACTIC_DECISN_VRB_INFO", "MONTH_END_DATE")
     .distinct())
 
-# 2. UCP partition from HDFS
-ucp_sdf = (spark.read.parquet(f"{UCP_BASE}/MONTH_END_DATE={UCP_PARTITION}")
-    .select("CLNT_NO", *ucp_fields))
+# 2. Find which UCP partitions we actually need, read just those
+month_ends = sorted(row["MONTH_END_DATE"].strftime("%Y-%m-%d")
+                    for row in tactic_sdf.select("MONTH_END_DATE").distinct().collect())
+ucp_paths  = [f"{UCP_BASE}/MONTH_END_DATE={me}" for me in month_ends]
+ucp_sdf    = (spark.read.option("basePath", UCP_BASE).parquet(*ucp_paths)
+              .select("CLNT_NO", "MONTH_END_DATE", *ucp_fields)
+              .withColumn("MONTH_END_DATE", F.col("MONTH_END_DATE").cast("date")))
 
-# 3. Left-join in Spark — keeps participants even if UCP doesn't have them
-enriched = tactic_sdf.join(ucp_sdf, on="CLNT_NO", how="left")
+# 3. Left-join on (CLNT_NO, MONTH_END_DATE) — each client gets THEIR month's UCP
+enriched = tactic_sdf.join(ucp_sdf, on=["CLNT_NO", "MONTH_END_DATE"], how="left")
 
 # 4. Write to HDFS user folder
 enriched.write.mode("overwrite").parquet(OUT_HDFS)
@@ -151,3 +156,4 @@ n_ucp   = enriched.filter(F.col("INCOME_AFTER_TAX_RNG").isNotNull()).count()
 print(f"VBA enriched -> {OUT_HDFS}")
 print(f"  rows:        {n_total:,}")
 print(f"  UCP matched: {n_ucp:,} of {n_total:,}")
+print(f"  month-ends:  {month_ends}")
