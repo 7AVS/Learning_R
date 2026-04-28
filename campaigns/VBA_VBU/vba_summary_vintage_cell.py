@@ -84,22 +84,102 @@ print("\nVintage day-90 T/C:")
 print(v_tc.to_string(index=False, formatters=fmt))
 
 
-# === Cell 3a: Curated VBA outcomes (LOCAL pandas + EDW) ====================
-# Source of truth for the deep dive: NBA curated table that already has tactic +
-# channel + email + Casper-style application response pre-joined. Filter to VBA
-# only (RBOL is a parallel campaign track in the same table — out of scope).
+# === Cell 3a: VBA EDA — Q1 conversion rollup + Q2 master analytical file ===
+# Mirrors the PCQ EDA structure (pcq_next_best_card_eda.sql).
+# Q1: deployed → started → completed → approved/declined funnel, sliced by
+#     test_group × wave × visa_offer_prod × visa_osc_on_app bucket.
+# Q2: per-client master file with derived fields for the tree / segmentation work.
+# Filters: mnc='VBA' (RBOL track excluded), treatmt_strt_dt >= 2025-08-01.
 
-vba_outcomes_sql = """
-SELECT *
+DATA.mkdir(parents=True, exist_ok=True)
+
+# --- Q1: conversion rollup ---
+vba_q1_sql = """
+SELECT
+    test_group,
+    wave,
+    visa_offer_prod,
+    COALESCE(visa_osc_on_app, 'NO_OSC')   AS osc_bucket,
+    COUNT(*)                              AS deployed,
+    SUM(visa_app_started)                 AS started,
+    SUM(visa_app_completed)               AS completed,
+    SUM(visa_app_approved)                AS approved,
+    SUM(visa_app_declined)                AS declined,
+    SUM(gross_response)                   AS gross_response,
+    SUM(net_response)                     AS net_response
+FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
+WHERE mnc = 'VBA'
+  AND treatmt_strt_dt >= DATE '2025-08-01'
+GROUP BY test_group, wave, visa_offer_prod, COALESCE(visa_osc_on_app, 'NO_OSC')
+ORDER BY test_group, wave, visa_offer_prod, osc_bucket
+"""
+vba_q1 = pd.read_sql_query(vba_q1_sql, con=EDW)
+vba_q1.to_csv(OUT / "vba_q1_conversion_rollup.csv", index=False)
+print(f"Q1 conversion rollup: {len(vba_q1):,} rows -> output/vba_q1_conversion_rollup.csv")
+
+
+# --- Q2: per-client master file ---
+vba_q2_sql = """
+SELECT
+    -- Identity / treatment
+    clnt_no, tactic_id, wave, segment,
+    test_group, tst_grp_cd, control,
+    treatmt_strt_dt, treatmt_end_dt, treatmt_mn,
+
+    -- Targeting / model
+    decile, score, nibt, model, rate,
+
+    -- Channel
+    channel,
+    chnl_dm, chnl_do, chnl_em, chnl_im, chnl_rd,
+    chnl_iu, chnl_in, chnl_om, chnl_iv, chnl_zz,
+    csr_interactions, gu,
+
+    -- Email engagement
+    email_creative_id, email_disposition, email_status,
+
+    -- O&O actions / call center
+    oando, oando_actioned, oando_pending, oando_declined, oando_approved,
+    tactic_call, cntct_atmpt_gnsis, call_ans_gnsis, agt_gnsis, rpc_gnsis,
+
+    -- Generic response
+    gross_response, net_response, response_dt, prod_acq, cr_lmt,
+
+    -- VBA conversion track
+    visa_offer_prod, visa_offer_test, visa_fee, visa_onoff, visa_acct_no,
+    visa_app_started, visa_app_completed, visa_app_approved, visa_app_declined,
+    visa_date_app_dec, visa_response_dt, visa_osc_on_app,
+    visa_prod_acq, visa_cr_lmt, visa_response_channel,
+
+    -- Other flags
+    hsbc_ind, vba_tpa_rank, tpa_ita_indicator, hsbc_indicator, vba_ita_rank,
+
+    -- Derived: days from treatment to events
+    (CAST(visa_response_dt  AS DATE) - CAST(treatmt_strt_dt AS DATE)) AS days_to_response,
+    (CAST(visa_date_app_dec AS DATE) - CAST(treatmt_strt_dt AS DATE)) AS days_to_app_decision,
+
+    -- Derived: in-window flag (90-day measurement window)
+    CASE WHEN visa_response_dt BETWEEN treatmt_strt_dt AND treatmt_strt_dt + 90
+         THEN 1 ELSE 0 END AS responded_in_window,
+
+    -- Derived: OSC bucket (raw for now — refine to Period/Other/None once we know the campaign codes)
+    COALESCE(visa_osc_on_app, 'NO_OSC') AS osc_bucket,
+
+    -- Derived: booking status (offered product vs product they actually acquired)
+    CASE
+        WHEN visa_app_approved = 1 AND visa_offer_prod = visa_prod_acq  THEN 'match'
+        WHEN visa_app_approved = 1 AND visa_offer_prod <> visa_prod_acq THEN 'mismatch'
+        WHEN visa_app_approved = 1                                       THEN 'unknown'
+        ELSE NULL
+    END AS booking_status
+
 FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
 WHERE mnc = 'VBA'
   AND treatmt_strt_dt >= DATE '2025-08-01'
 """
-
-vba_outcomes = pd.read_sql_query(vba_outcomes_sql, con=EDW)
-DATA.mkdir(parents=True, exist_ok=True)
-vba_outcomes.to_parquet(DATA / "vba_outcomes.parquet", index=False, compression="zstd")
-print(f"VBA outcomes: {len(vba_outcomes):,} rows × {len(vba_outcomes.columns)} cols")
+vba_master = pd.read_sql_query(vba_q2_sql, con=EDW)
+vba_master.to_parquet(DATA / "vba_master.parquet", index=False, compression="zstd")
+print(f"Q2 master:           {len(vba_master):,} rows × {len(vba_master.columns)} cols -> data/vba_master.parquet")
 
 
 # === Cell 3b: UCP slice (YARN-SPARK + HDFS) ================================
@@ -163,20 +243,20 @@ print(f"  month-ends: {month_ends}")
 
 
 # === Cell 3c: Final enriched dataset (LOCAL pandas) ========================
-# After downloading vba_ucp_slice.parquet into data/, join curated VBA outcomes
+# After downloading vba_ucp_slice.parquet into data/, join the Q2 master file
 # to UCP on (clnt_no, month_end_date) to produce the deep-dive dataset.
 
-vba_outcomes = pd.read_parquet(DATA / "vba_outcomes.parquet")
-ucp_slice    = pd.read_parquet(DATA / "vba_ucp_slice.parquet")
+vba_master = pd.read_parquet(DATA / "vba_master.parquet")
+ucp_slice  = pd.read_parquet(DATA / "vba_ucp_slice.parquet")
 
-vba_outcomes["treatmt_strt_dt"] = pd.to_datetime(vba_outcomes["treatmt_strt_dt"])
-vba_outcomes["month_end_date"]  = vba_outcomes["treatmt_strt_dt"] + pd.offsets.MonthEnd(0)
+vba_master["treatmt_strt_dt"] = pd.to_datetime(vba_master["treatmt_strt_dt"])
+vba_master["month_end_date"]  = vba_master["treatmt_strt_dt"] + pd.offsets.MonthEnd(0)
 ucp_slice.columns = [c.lower() for c in ucp_slice.columns]
 ucp_slice["month_end_date"] = pd.to_datetime(ucp_slice["month_end_date"])
 ucp_slice = ucp_slice.rename(columns={c: f"ucp_{c}" for c in ucp_slice.columns
                                        if c not in ("clnt_no", "month_end_date")})
 
-vba_enriched = vba_outcomes.merge(ucp_slice, on=["clnt_no", "month_end_date"], how="left")
+vba_enriched = vba_master.merge(ucp_slice, on=["clnt_no", "month_end_date"], how="left")
 vba_enriched.to_parquet(DATA / "vba_enriched.parquet", index=False, compression="zstd")
 
 n_total = len(vba_enriched)
