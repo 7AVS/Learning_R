@@ -180,18 +180,24 @@ print(f"Q2 master:           {len(vba_master):,} rows × {len(vba_master.columns
 
 # === Cell 3b: UCP-business slice (YARN-SPARK + HDFS) =======================
 # RUN ON YARN-SPARK KERNEL.
-# Pattern matches the developer's best-practices notebook:
-#   - pread() helper for partition wildcards
-#   - CLNT_TYP = 'Business' filter (UCP4 is one table, not two — Personal vs
-#     Business is a column filter, not a separate dataset)
-#   - last_day(today - 1 month) ceiling on MONTH_END_DATE so April treatments
-#     join to the March 31 partition (no current-month UCP partition exists yet)
-# Identifies VBA clients + their month-ends from tactic events HDFS, then
-# pulls UCP-business per-client per-month-end. Saves a thin slice to
-# /user/427966379/ for download into the local data/ folder.
+# Reads UCP-BUSINESS (a separate table from the unified ucp4) per the field
+# prefix `tsz_00172_data_ucp4_business.*` shown on the developer schema.
+# Likely HDFS path: /prod/sz/tsz/00172/data/ucp4_business/. Verify on first run.
+#
+# Pipeline:
+#   1. Identify VBA participants from tactic events HDFS (SUBSTR(TACTIC_ID,8,3)='VBA').
+#   2. Compute MONTH_END_DATE per client = last_day(treatmt_strt_dt), clamped at
+#      last_day(today - 1 month) so current-month treatments fall back to the
+#      previous month's partition (UCP partitions don't exist for open months).
+#   3. Read just the needed UCP-business month-end partitions.
+#   4. CLNT_TYP = 'Business' filter (defensive — should be all-Business already).
+#   5. Inner-join on (CLNT_NO, MONTH_END_DATE).
+#   6. Save thin slice to /user/427966379/ for download to local data/.
+#
+# Curated 91-field list per campaigns/VBA_VBU/schemas/ucp_business_curated_fields.md
 
 from pyspark.sql import functions as F
-from pyspark.sql.functions import col, trim   # used by the CLNT_TYP filter
+from pyspark.sql.functions import col, trim
 
 # --- pread helper (from developer's best-practices notebook) ---
 def pread(path, partition_key, partition_value=""):
@@ -199,33 +205,87 @@ def pread(path, partition_key, partition_value=""):
     return spark.read.option("basePath", path).parquet(full_path)
 
 TACTIC_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
-UCP_PATH    = "/prod/sz/tsz/00172/data/ucp4/"
+UCP_B_PATH  = "/prod/sz/tsz/00172/data/ucp4_business/"
 UCP_KEY     = "MONTH_END_DATE"
-OUT_HDFS    = "/user/427966379/vba_ucp_slice.parquet"
+OUT_HDFS    = "/user/427966379/vba_ucp_business_slice.parquet"
 
 YEARS       = ["2025", "2026"]
 TARGET_MNES = ["VBA"]
 START_DT    = "2025-08-01"
 
-ucp_fields = [
-    # Income / wealth
-    "INCOME_AFTER_TAX_RNG", "PROF_TOT_ANNUAL", "PROF_SEG_CD",
-    # RBC product depth — Visa/credit-card holdings excluded (leakage)
-    # (T=Transactional, I=Investment, B=Borrower)
-    "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
-    "ACTV_PROD_CNT", "MULTI_PROD_RBT_TOT_IND",
-    # Tenure
-    "TENURE_RBC_YEARS",
-    # Credit eligibility
-    "CREDIT_SCORE_RNG", "DLQY_IND",
-    # OFI footprint (M=mutual fund, L=lending, C=cards, I=investment, T=transactional)
-    "OFI_M_PROD_CNT", "OFI_L_PROD_CNT", "OFI_C_PROD_CNT",
-    "OFI_I_PROD_CNT", "OFI_T_PROD_CNT",
-    # Targeting context
-    "REL_TP_SEG_CD",
+# Curated UCP-business fields (91 total per the schema doc, grouped here)
+ucp_fields_client_info = [
+    "clnt_typ", "clnt_no", "active_email_ind", "dlqy_ind",
+    "dt_opened", "lang_seg_cd", "non_rsdt_tax_cd", "post_cd",
+]
+ucp_fields_account = [
+    "onlin_bnkg_enrlmnt_dt", "tenure_rbc_rng", "tenure_rbc_years",
+    "entitlement_cd", "fsa_cd", "gu_no_seg_cd", "reln_mg_unit_no",
+    "srvc_cnt", "digital_trans_ind", "mobile_auth_ind",
+    "mobile_trans_ind", "olb_auth_ind",
+]
+ucp_fields_eligibility = [
+    "olb_enrolled_ind", "cpc_ent_eligible", "cpc_dm_eligible",
+    "cpc_tm_eligible", "cpc_olb_eligible", "myadvisor_status",
+]
+ucp_fields_product = [
+    "actv_prod_cnt", "actv_prod_srvc_cnt", "opn_prod_cnt",
+    "bpol_ind", "mnthly_pac_amt", "rel_tp_seg_cd",
+]
+ucp_fields_transactions = [
+    # Authentication / total counts
+    "ac_trans_cnt",
+    "atm_auth_cnt", "atm_trans_cnt", "atm_trans_ind",
+    "branch_auth_cnt", "branch_trans_cnt", "branch_trans_ind",
+    "ivr_auth_cnt", "ivr_trans_cnt",
+    "mobile_auth_cnt", "mobile_auth_nqb_cnt", "mobile_trans_cnt",
+    "olb_auth_cnt", "olb_trans_cnt",
+    # Account transfer
+    "ac_trans_acct_transfer_cnt",
+    "atm_trans_acct_transfer_cnt",
+    "ivr_trans_acct_transfer_cnt",
+    "mobile_trans_acct_transfer_amt", "mobile_trans_acct_transfer_cnt",
+    "olb_trans_acct_transfer_amt", "olb_trans_acct_transfer_cnt",
+    # Bill payment
+    "ac_trans_bill_pymnt_cnt",
+    "atm_trans_bill_pymnt_cnt",
+    "ivr_trans_bill_pymnt_amt", "ivr_trans_bill_pymnt_cnt",
+    "mobile_trans_bill_pymnt_amt", "mobile_trans_bill_pymnt_cnt",
+    "olb_trans_bill_pymnt_amt", "olb_trans_bill_pymnt_cnt",
+    # E-transfer / IMT / TPP (digital channels only)
+    "mobile_trans_etransfer_amt", "mobile_trans_etransfer_cnt",
+    "mobile_trans_imt_cnt",
+    "mobile_trans_tpp_amt", "mobile_trans_tpp_cnt",
+    "olb_trans_etransfer_amt", "olb_trans_etransfer_cnt",
+    "olb_trans_imt_cnt",
+    "olb_trans_tpp_amt", "olb_trans_tpp_cnt",
+    # NMI FS (prefix meaning not documented — verify with data steward)
+    "nmi_fs_act_cls_cnt", "nmi_fs_act_opn_cnt", "nmi_fs_act_opn_cls_cnt",
+    "nmi_fs_dep_cnt", "nmi_fs_wl_cnt",
+]
+ucp_fields_misc = [
+    "trans_memo_bp_cnt", "trans_memo_tpp_cnt",
+    "ac_trans_ccpmt_cnt", "atm_trans_ccpmt_cnt",
+    "atm_trans_dep_amt", "atm_trans_dep_cnt",
+    "atm_trans_wl_amt", "atm_trans_wl_cnt",
+    "branch_trans_trvls_chq_cnt", "calendar_appt_cnt",
+]
+ucp_fields_call_center = [
+    "ivr_trans_ccpmt_cnt",
+    "mobile_trans_mobile_ccpmt_amt", "mobile_trans_mobile_ccpmt_cnt",
+    "mobile_trans_mobile_chq_dep_cnt",
+    "olb_trans_olb_ccpmt_amt", "olb_trans_olb_ccpmt_cnt",
+]
+ucp_fields_segmentation = [
+    "bus_seg", "bsc",
+    # month_end_date is the partition key — joined separately, not pulled as a feature
 ]
 
-# Identify VBA clients + the month-end of each treatment, capped at last full month
+UCP_FIELDS = (ucp_fields_client_info + ucp_fields_account + ucp_fields_eligibility +
+              ucp_fields_product + ucp_fields_transactions + ucp_fields_misc +
+              ucp_fields_call_center + ucp_fields_segmentation)
+
+# 1. Identify VBA participants from tactic events HDFS, with month-end clamp
 tactic_paths = [f"{TACTIC_BASE}EVNT_STRT_DT={y}*" for y in YEARS]
 vba_clients = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3).isin(TARGET_MNES))
@@ -237,22 +297,22 @@ vba_clients = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .select("CLNT_NO", "MONTH_END_DATE")
     .distinct())
 
-# Discover which UCP month-end partitions we actually need
+# 2. Discover which UCP-business month-end partitions we need
 month_ends = sorted(row["MONTH_END_DATE"].strftime("%Y-%m-%d")
                     for row in vba_clients.select("MONTH_END_DATE").distinct().collect())
-ucp_paths  = [f"{UCP_PATH}{UCP_KEY}={me}" for me in month_ends]
+ucp_paths  = [f"{UCP_B_PATH}{UCP_KEY}={me}" for me in month_ends]
 
-# Read UCP for those month-ends, filter to BUSINESS clients only, then inner-join
-# to vba_clients on (CLNT_NO, MONTH_END_DATE) so we keep only VBA participants.
-ucp_slice = (spark.read.option("basePath", UCP_PATH).parquet(*ucp_paths)
+# 3. Read UCP-business for those month-ends + filter Business + inner-join to participants
+ucp_slice = (spark.read.option("basePath", UCP_B_PATH).parquet(*ucp_paths)
     .filter(trim(col("CLNT_TYP")) == "Business")
-    .select("CLNT_NO", UCP_KEY, *ucp_fields)
+    .select(UCP_KEY, *UCP_FIELDS)
     .withColumn(UCP_KEY, F.col(UCP_KEY).cast("date"))
-    .join(vba_clients, on=["CLNT_NO", UCP_KEY], how="inner"))
+    .join(vba_clients, on=["clnt_no", UCP_KEY], how="inner"))
 
 ucp_slice.write.mode("overwrite").parquet(OUT_HDFS)
 print(f"UCP-business slice -> {OUT_HDFS}")
 print(f"  rows:       {ucp_slice.count():,}")
+print(f"  fields:     {len(UCP_FIELDS)} (target 91; transaction metrics partial — see schema doc)")
 print(f"  month-ends: {month_ends}")
 
 
