@@ -90,8 +90,15 @@ print(v_tc.to_string(index=False, formatters=fmt))
 #     test_group × wave × visa_offer_prod × visa_osc_on_app bucket.
 # Q2: per-client master file with derived fields for the tree / segmentation work.
 # Filters: mnc='VBA' (RBOL track excluded), treatmt_strt_dt >= 2025-08-01.
+# Requires: an EDW cursor in the variable `EDW` (set up in your notebook header).
 
+import pandas as pd
+from pathlib import Path
+
+DATA = Path("/home/jovyan/Cards/VBA/data")
+OUT  = Path("/home/jovyan/Cards/VBA/output")
 DATA.mkdir(parents=True, exist_ok=True)
+OUT.mkdir(parents=True, exist_ok=True)
 
 # --- Q1: conversion rollup ---
 vba_q1_sql = """
@@ -250,6 +257,11 @@ print(f"  month-ends: {month_ends}")
 # === Cell 3c: Final enriched dataset (LOCAL pandas) ========================
 # After downloading vba_ucp_slice.parquet into data/, join the Q2 master file
 # to UCP on (clnt_no, month_end_date) to produce the deep-dive dataset.
+
+import pandas as pd
+from pathlib import Path
+
+DATA = Path("/home/jovyan/Cards/VBA/data")
 
 vba_master = pd.read_parquet(DATA / "vba_master.parquet")
 ucp_slice  = pd.read_parquet(DATA / "vba_ucp_slice.parquet")
