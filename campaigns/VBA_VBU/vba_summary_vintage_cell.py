@@ -56,10 +56,10 @@ v.to_csv(OUT / "vba_vintage_curve.csv", index=False)
 
 
 # === Cell 2: Test/Control aggregated views (for day-90 validation) ===========
-# Reads the CSVs written above so this cell can run independently.
-# tst_grp_cd is rolled up by first letter: C -> Control, T -> Test, else Other.
-# Both outputs share the same columns, so the day-90 vintage row should equal
-# the summary row for the matching (treatmt_strt_dt, tc) cohort.
+# Reads the CSVs from Cell 1. Rolls up tst_grp_cd by first letter:
+# C -> Control, T -> Test, else Other. Printed only — no disk save.
+# At day 90 the vintage client_resp_* should equal the summary client_resp_*
+# for the matching (treatmt_strt_dt, tc) cohort.
 
 s_csv = pd.read_csv(OUT / "vba_summary.csv")
 v_csv = pd.read_csv(OUT / "vba_vintage_curve.csv")
@@ -72,20 +72,28 @@ s_csv["tc"] = s_csv["tst_grp_cd"].apply(tc)
 v_csv["tc"] = v_csv["tst_grp_cd"].apply(tc)
 
 agg_keys = ["treatmt_strt_dt", "tc"]
-val_cols = ["leads", "client_resp_any", "client_resp_primary", "client_resp_secondary"]
 
-# Summary aggregated by T/C
-s_tc = s_csv.groupby(agg_keys)[val_cols].sum().reset_index()
-s_tc.to_csv(OUT / "vba_summary_tc.csv", index=False)
+summary_metrics = [
+    "client_resp_any", "client_resp_primary", "client_resp_secondary",
+    "client_appr_any", "client_appr_primary", "client_appr_secondary",
+    "acct_appr_any",   "acct_appr_primary",   "acct_appr_secondary",
+]
+vintage_metrics = ["client_resp_any", "client_resp_primary", "client_resp_secondary"]
 
-# Vintage at day=90 aggregated by T/C — column names aligned to summary
+# Summary T/C — counts + rates for client and account
+s_tc = s_csv.groupby(agg_keys)[["leads"] + summary_metrics].sum().reset_index()
+for col in summary_metrics:
+    s_tc[col + "_rate"] = s_tc[col] / s_tc["leads"]
+
+# Vintage at day=90 — column names aligned to summary for direct comparison
 v90 = v_csv[v_csv["day"] == 90].rename(columns={
     "resp_any_cum":       "client_resp_any",
     "resp_primary_cum":   "client_resp_primary",
     "resp_secondary_cum": "client_resp_secondary",
 })
-v_tc = v90.groupby(agg_keys)[val_cols].sum().reset_index()
-v_tc.to_csv(OUT / "vba_vintage_day90_tc.csv", index=False)
+v_tc = v90.groupby(agg_keys)[["leads"] + vintage_metrics].sum().reset_index()
+for col in vintage_metrics:
+    v_tc[col + "_rate"] = v_tc[col] / v_tc["leads"]
 
 print("Summary T/C:")
 print(s_tc.to_string(index=False))
