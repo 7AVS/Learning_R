@@ -81,19 +81,16 @@ print("\nVintage day-90 T/C:")
 print(v_tc.to_string(index=False, formatters=fmt))
 
 
-# === Cell 3: UCP enrichment of VBA participants =============================
-# Builds a per-participant analytical dataset:
-#   t (all VBA participants)  +  in-window response signal from client  +
-#   UCP demographic/behavioral fields curated for a business credit card upgrade.
-# Reads UCP partition from HDFS, filters to VBA clients only, merges in pandas.
-# Output: vba_enriched.parquet
-#
-# Spark is pre-initialized on Lumina (no builder/stop needed).
+# === Cell 3: UCP-enriched analytical dataset ===============================
+# All VBA participants + response signal + product code + UCP fields.
+# Drives propensity / decision-tree / segmentation work downstream.
+# Set RESPONDERS_ONLY = True to keep only in-window responders (smaller file).
 
 from pyspark.sql import functions as F
 
-UCP_PATH      = "/prod/sz/tsz/00172/data/ucp4"
-UCP_PARTITION = "2026-01-31"   # latest known partition; align to VBA start as needed
+UCP_PATH        = "/prod/sz/tsz/00172/data/ucp4"
+UCP_PARTITION   = "2026-01-31"
+RESPONDERS_ONLY = False
 
 ucp_fields = [
     # Income / wealth
@@ -109,31 +106,34 @@ ucp_fields = [
     "TENURE_RBC_YEARS",
     # Credit eligibility
     "CREDIT_SCORE_RNG", "DLQY_IND",
-    # OFI footprint by category (M=mutual fund, L=lending, C=cards, I=investment, T=transactional)
+    # OFI footprint (M=mutual fund, L=lending, C=cards, I=investment, T=transactional)
     "OFI_M_PROD_CNT", "OFI_L_PROD_CNT", "OFI_C_PROD_CNT",
     "OFI_I_PROD_CNT", "OFI_T_PROD_CNT",
     # Targeting context
     "REL_TP_SEG_CD",
 ]
 
-# 1. VBA base + responder flag
-resp_signal = client[["clnt_no", "treatmt_strt_dt", "visa_response_dt",
-                      "visa_app_approved", "visa_acct_no", "day"]]
-vba_full = t.merge(resp_signal, on=["clnt_no", "treatmt_strt_dt"], how="left")
-vba_full["responded"] = vba_full["visa_response_dt"].notna().astype(int)
+# Base: all participants + response signal (NaN for non-responders)
+resp_cols = ["clnt_no", "treatmt_strt_dt", "visa_response_dt", "visa_app_approved",
+             "visa_acct_no", "card_code", "card_type_code", "src", "day"]
+base = t.merge(client[resp_cols], on=["clnt_no", "treatmt_strt_dt"], how="left")
+base["responded"] = base["visa_response_dt"].notna().astype(int)
 
-# 2. Pull the UCP partition, filtered to VBA clients only
-client_ids = vba_full["clnt_no"].drop_duplicates().tolist()
-ucp_sdf = (spark.read.parquet(f"{UCP_PATH}/MONTH_END_DATE={UCP_PARTITION}")
-                 .select(F.col("CLNT_NO").alias("clnt_no"),
-                         *[F.col(c).alias(f"UCP_{c}") for c in ucp_fields])
-                 .filter(F.col("clnt_no").isin(client_ids)))
-ucp_pdf = ucp_sdf.toPandas()
+if RESPONDERS_ONLY:
+    base = base[base["responded"] == 1].copy()
 
-# 3. Merge UCP onto VBA base
-vba_enriched = vba_full.merge(ucp_pdf, on="clnt_no", how="left")
+# Pull UCP partition (full read; merge in pandas does the filtering)
+ucp_pdf = (spark.read.parquet(f"{UCP_PATH}/MONTH_END_DATE={UCP_PARTITION}")
+              .select(F.col("CLNT_NO").alias("clnt_no"),
+                      *[F.col(c).alias(f"UCP_{c}") for c in ucp_fields])
+              .toPandas())
+
+vba_enriched = base.merge(ucp_pdf, on="clnt_no", how="left")
 vba_enriched.to_parquet(OUT / "vba_enriched.parquet", index=False, compression="zstd")
 
-print(f"VBA enriched: {len(vba_enriched):,} rows × {len(vba_enriched.columns)} cols")
-print(f"UCP coverage: {vba_enriched['UCP_INCOME_AFTER_TAX_RNG'].notna().mean():.1%} of participants matched in UCP")
-print(vba_enriched.head().to_string())
+n   = len(vba_enriched)
+rsp = int(vba_enriched["responded"].sum())
+ucp = int(vba_enriched["UCP_INCOME_AFTER_TAX_RNG"].notna().sum())
+print(f"VBA enriched: {n:,} rows × {len(vba_enriched.columns)} cols")
+print(f"  responders: {rsp:,}  |  non-responders: {n - rsp:,}")
+print(f"  UCP matched: {ucp:,} of {n:,}")
