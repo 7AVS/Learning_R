@@ -32,7 +32,7 @@ SELECT
 
     -- SRM eyeball (% of cohort that's Action). Swap for chi-square once expected ratio is known.
     ROUND(100.0 * SUM(CASE WHEN control = 'Action' THEN 1 ELSE 0 END)
-                / NULLIFZERO(COUNT(*)), 2)                  AS action_pct,
+                / NULLIF(COUNT(*), 0), 2)                   AS action_pct,
 
     -- Conversion volumes (overall)
     SUM(COALESCE(gross_response, 0))                        AS gross,
