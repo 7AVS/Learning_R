@@ -9,6 +9,15 @@ workstream built off raw Casper + SCOT extracts. Do not mix the two — these
 files answer different questions and report through different paths.
 
 ──────────────────────────────────────────────────────────────────────────
+Workflow:
+──────────────────────────────────────────────────────────────────────────
+
+Each insight is delivered as its OWN Excel that contains both (a) the SQL
+that produced it and (b) the output rows. Atomic, auditable, reproducible.
+Excel is the local "repo" until a proper one is available. Do NOT roll
+multiple insights into a single mega-aggregated output.
+
+──────────────────────────────────────────────────────────────────────────
 Analytical roadmap (in order of build):
 ──────────────────────────────────────────────────────────────────────────
 
@@ -22,45 +31,45 @@ Analytical roadmap (in order of build):
    Q2: per-client master with derived fields (days_to_response,
        responded_in_window, osc_bucket, booking_status).
 
-3. Offer vs acquired product breakdown                         [TODO]
-   visa_offer_prod vs visa_prod_acq cross-tab.
-   Match / mismatch / unknown distribution per cohort.
-   Tells us whether the offer landed on the offered product
-   or the client picked something else.
+3. UCP-business enrichment                                     [scaffolded below]
+   UCP4 is ONE table at /prod/sz/tsz/00172/data/ucp4/ partitioned by
+   MONTH_END_DATE. "Personal" vs "Business" is a CLNT_TYP filter on
+   the same table — NOT a separate dataset. For VBA the filter is
+   trim(col("CLNT_TYP")) == "Business". Pattern: per-month-end alignment
+   + last_day(today - 1 month) ceiling clamp. Pull EVERYONE in the
+   campaign (responders + non-responders) — narrowing happens at
+   slicing time. Daily variant exists at .../ucp4_daily/ (RUN_DATE
+   key) but isn't needed for client-grain enrichment.
 
-4. TPA vs ITA breakdown                                        [TODO]
-   Already a slicing dimension via test_group + tpa_ita_indicator.
-   Apply to every angle: deployment volume, conversion, offer-vs-
-   acquired, etc. Also examine vba_tpa_rank / vba_ita_rank.
-
-5. UCP-business enrichment                                     [path TBD]
-   *** UCP-business is a different table than the personal-client
-       UCP at /prod/sz/tsz/00172/data/ucp4/. Path needs to be
-       confirmed before this section can run. ***
-   Once known: per-month-end alignment + last_day(today - 1 month)
-   ceiling clamp (same pattern as the old UCP cells).
-
-6. Decision tree input                                         [TODO]
+4. Decision tree input                                         [TODO]
    Combines (master Q2) + (UCP-business) + (portfolio enrichment
-   from item 7). Target variable open: response Y/N (propensity)
-   vs card chosen (booking_status) vs approval given response.
+   from item 6). Target variable to be picked AFTER the enriched
+   dataset is built so we can see the data first; candidates:
+   response Y/N, booking_status (offer vs acquired), approval
+   conditional on response.
 
-7. Balance / spending enrichment                               [TODO]
+5. Slicing queries — each saved as its own Excel:             [TODO]
+   • Offer vs acquired product breakdown (visa_offer_prod vs
+     visa_prod_acq; match / mismatch / unknown). Includes both
+     TPA and non-TPA so we see whether mismatch happens outside
+     the TPA path too.
+   • WestJet product performance (specific product slice).
+   • TPA vs ITA breakdown applied to every angle.
+   (More to be added as questions arise — one Excel per question.)
+
+6. Balance / spending enrichment                               [TODO]
    Mirror PCQ Q2 pattern (pcq_next_best_card_eda.sql Q2):
    join DLY_FULL_PORTFOLIO post-treatment for bal_current,
    accum_dly_bal_mtd, lst_ann_fee_chrg_amt, net_prch_amt_dly.
 
-8. Voluntary attrition                                         [TODO]
+7. Voluntary attrition                                         [TODO]
    PCQ Q2 status flags (BKPT/COLL/FRD/INV/OPEN/VOL/WOFF) — filter
    to VOL for voluntary churn signal.
 
-9. Silos overlay                                               [TODO]
-   Definition pending — flagged as future scope.
-
 ──────────────────────────────────────────────────────────────────────────
-Cells below cover items 2 (Q1+Q2) and the original UCP-personal scaffolding
-that was a placeholder pre-discovery of the UCP-business path. Both will
-need updating once the UCP-business path is confirmed.
+Cells below cover item 2 (Q1 + Q2) and a UCP scaffolding placeholder
+pointing at the personal-UCP path. The placeholder will be retargeted
+at the UCP-business path once confirmed.
 """
 
 
@@ -169,21 +178,29 @@ vba_master.to_parquet(DATA / "vba_master.parquet", index=False, compression="zst
 print(f"Q2 master:           {len(vba_master):,} rows × {len(vba_master.columns)} cols -> data/vba_master.parquet")
 
 
-# === Cell 3b: UCP slice (YARN-SPARK + HDFS) ================================
+# === Cell 3b: UCP-business slice (YARN-SPARK + HDFS) =======================
 # RUN ON YARN-SPARK KERNEL.
+# Pattern matches the developer's best-practices notebook:
+#   - pread() helper for partition wildcards
+#   - CLNT_TYP = 'Business' filter (UCP4 is one table, not two — Personal vs
+#     Business is a column filter, not a separate dataset)
+#   - last_day(today - 1 month) ceiling on MONTH_END_DATE so April treatments
+#     join to the March 31 partition (no current-month UCP partition exists yet)
 # Identifies VBA clients + their month-ends from tactic events HDFS, then
-# pulls UCP per-client per-month-end. Saves a thin slice to /user/427966379/
-# for download into the local data/ folder.
-#
-# *** TODO: this currently points at the personal-client UCP (tsz_00172/ucp4).
-#     For VBA (business credit card upgrade) the right table is the
-#     UCP-BUSINESS one — path TBD. Update UCP_BASE and ucp_fields once the
-#     business UCP location and schema are confirmed. ***
+# pulls UCP-business per-client per-month-end. Saves a thin slice to
+# /user/427966379/ for download into the local data/ folder.
 
 from pyspark.sql import functions as F
+from pyspark.sql.functions import col, trim   # used by the CLNT_TYP filter
+
+# --- pread helper (from developer's best-practices notebook) ---
+def pread(path, partition_key, partition_value=""):
+    full_path = str(path) + str(partition_key) + "=" + str(partition_value) + "*"
+    return spark.read.option("basePath", path).parquet(full_path)
 
 TACTIC_BASE = "/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/"
-UCP_BASE    = "/prod/sz/tsz/00172/data/ucp4"   # personal UCP — replace with business UCP path
+UCP_PATH    = "/prod/sz/tsz/00172/data/ucp4/"
+UCP_KEY     = "MONTH_END_DATE"
 OUT_HDFS    = "/user/427966379/vba_ucp_slice.parquet"
 
 YEARS       = ["2025", "2026"]
@@ -208,10 +225,7 @@ ucp_fields = [
     "REL_TP_SEG_CD",
 ]
 
-# Identify VBA clients + the month-end of each treatment.
-# UCP partitions only exist up to the previous month-end (no current-month
-# partition until that month closes), so cap MONTH_END_DATE at last_day(today - 1 month).
-# For an April treatment with today = April 28, the cap maps it to March 31.
+# Identify VBA clients + the month-end of each treatment, capped at last full month
 tactic_paths = [f"{TACTIC_BASE}EVNT_STRT_DT={y}*" for y in YEARS]
 vba_clients = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .filter(F.substring(F.col("TACTIC_ID"), 8, 3).isin(TARGET_MNES))
@@ -223,18 +237,21 @@ vba_clients = (spark.read.option("basePath", TACTIC_BASE).parquet(*tactic_paths)
     .select("CLNT_NO", "MONTH_END_DATE")
     .distinct())
 
+# Discover which UCP month-end partitions we actually need
 month_ends = sorted(row["MONTH_END_DATE"].strftime("%Y-%m-%d")
                     for row in vba_clients.select("MONTH_END_DATE").distinct().collect())
-ucp_paths  = [f"{UCP_BASE}/MONTH_END_DATE={me}" for me in month_ends]
+ucp_paths  = [f"{UCP_PATH}{UCP_KEY}={me}" for me in month_ends]
 
-# Read UCP for those month-ends, inner-join to keep only VBA-relevant clients
-ucp_slice = (spark.read.option("basePath", UCP_BASE).parquet(*ucp_paths)
-    .select("CLNT_NO", "MONTH_END_DATE", *ucp_fields)
-    .withColumn("MONTH_END_DATE", F.col("MONTH_END_DATE").cast("date"))
-    .join(vba_clients, on=["CLNT_NO", "MONTH_END_DATE"], how="inner"))
+# Read UCP for those month-ends, filter to BUSINESS clients only, then inner-join
+# to vba_clients on (CLNT_NO, MONTH_END_DATE) so we keep only VBA participants.
+ucp_slice = (spark.read.option("basePath", UCP_PATH).parquet(*ucp_paths)
+    .filter(trim(col("CLNT_TYP")) == "Business")
+    .select("CLNT_NO", UCP_KEY, *ucp_fields)
+    .withColumn(UCP_KEY, F.col(UCP_KEY).cast("date"))
+    .join(vba_clients, on=["CLNT_NO", UCP_KEY], how="inner"))
 
 ucp_slice.write.mode("overwrite").parquet(OUT_HDFS)
-print(f"UCP slice -> {OUT_HDFS}")
+print(f"UCP-business slice -> {OUT_HDFS}")
 print(f"  rows:       {ucp_slice.count():,}")
 print(f"  month-ends: {month_ends}")
 
