@@ -28,25 +28,21 @@ def window(resp):
 client = window(r.drop_duplicates("clnt_no"))
 acct   = window(r.dropna(subset=["visa_acct_no"]).drop_duplicates(["clnt_no", "visa_acct_no"]))
 
-# Summary
+# Summary (counts only)
 s = pd.DataFrame({
     "leads":       leads,
     "client_resp": client.groupby(keys).size(),
     "client_appr": client[client["visa_app_approved"] == 1].groupby(keys).size(),
     "acct_appr":   acct.groupby(keys).size(),
 }).fillna(0).astype(int)
-s["client_resp_rate"] = s["client_resp"] / s["leads"]
-s["client_appr_rate"] = s["client_appr"] / s["leads"]
-s["acct_appr_rate"]   = s["acct_appr"]   / s["leads"]
 s.reset_index().to_csv(OUT / "vba_summary.csv", index=False)
-print(s)
 
-# Vintage 0..90 — client-level cumulative response rate
+# Vintage curve: one row per (cohort, day) for day in 0..90
 daily = client.groupby(keys + ["day"]).size().rename("resp")
 v = (leads.reset_index(name="leads")
        .merge(pd.DataFrame({"day": range(91)}), how="cross")
        .merge(daily.reset_index(), on=keys + ["day"], how="left"))
 v["resp"] = v["resp"].fillna(0).astype(int)
 v = v.sort_values(keys + ["day"])
-v["resp_rate"] = v.groupby(keys)["resp"].cumsum() / v["leads"]
+v["resp_cum"] = v.groupby(keys)["resp"].cumsum()
 v.to_csv(OUT / "vba_vintage_curve.csv", index=False)
