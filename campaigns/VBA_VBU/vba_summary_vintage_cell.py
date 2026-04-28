@@ -53,3 +53,41 @@ v = v.sort_values(keys + ["day"]).reset_index(drop=True)
 for col in ["resp_any", "resp_primary", "resp_secondary"]:
     v[col + "_cum"] = v.groupby(keys)[col].cumsum()
 v.to_csv(OUT / "vba_vintage_curve.csv", index=False)
+
+
+# === Cell 2: Test/Control aggregated views (for day-90 validation) ===========
+# Reads the CSVs written above so this cell can run independently.
+# tst_grp_cd is rolled up by first letter: C -> Control, T -> Test, else Other.
+# Both outputs share the same columns, so the day-90 vintage row should equal
+# the summary row for the matching (treatmt_strt_dt, tc) cohort.
+
+s_csv = pd.read_csv(OUT / "vba_summary.csv")
+v_csv = pd.read_csv(OUT / "vba_vintage_curve.csv")
+
+def tc(code):
+    c = str(code)[:1].upper()
+    return "Control" if c == "C" else "Test" if c == "T" else "Other"
+
+s_csv["tc"] = s_csv["tst_grp_cd"].apply(tc)
+v_csv["tc"] = v_csv["tst_grp_cd"].apply(tc)
+
+agg_keys = ["treatmt_strt_dt", "tc"]
+val_cols = ["leads", "client_resp_any", "client_resp_primary", "client_resp_secondary"]
+
+# Summary aggregated by T/C
+s_tc = s_csv.groupby(agg_keys)[val_cols].sum().reset_index()
+s_tc.to_csv(OUT / "vba_summary_tc.csv", index=False)
+
+# Vintage at day=90 aggregated by T/C — column names aligned to summary
+v90 = v_csv[v_csv["day"] == 90].rename(columns={
+    "resp_any_cum":       "client_resp_any",
+    "resp_primary_cum":   "client_resp_primary",
+    "resp_secondary_cum": "client_resp_secondary",
+})
+v_tc = v90.groupby(agg_keys)[val_cols].sum().reset_index()
+v_tc.to_csv(OUT / "vba_vintage_day90_tc.csv", index=False)
+
+print("Summary T/C:")
+print(s_tc.to_string(index=False))
+print("\nVintage day-90 T/C:")
+print(v_tc.to_string(index=False))
