@@ -76,7 +76,7 @@ at the UCP-business path once confirmed.
 # === Cell 3a: VBA EDA — Q1 conversion rollup + Q2 master analytical file ===
 # Mirrors the PCQ EDA structure (pcq_next_best_card_eda.sql).
 # Q1: deployed → started → completed → approved/declined funnel, sliced by
-#     test_group × wave × visa_offer_prod × visa_osc_on_app bucket.
+#     test_group × wave × visa_offer_prod × visa_asc_on_app bucket.
 # Q2: per-client master file with derived fields for the tree / segmentation work.
 # Filters: mnc='VBA' (RBOL track excluded), treatmt_strt_dt >= 2025-08-01.
 # Requires: an EDW cursor in the variable `EDW` (set up in your notebook header).
@@ -95,7 +95,6 @@ SELECT
     test_group,
     wave,
     visa_offer_prod,
-    COALESCE(visa_osc_on_app, 'NO_OSC')   AS osc_bucket,
     COUNT(*)                              AS deployed,
     SUM(visa_app_started)                 AS started,
     SUM(visa_app_completed)               AS completed,
@@ -106,8 +105,8 @@ SELECT
 FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
 WHERE mnc = 'VBA'
   AND treatmt_strt_dt >= DATE '2025-08-01'
-GROUP BY test_group, wave, visa_offer_prod, COALESCE(visa_osc_on_app, 'NO_OSC')
-ORDER BY test_group, wave, visa_offer_prod, osc_bucket
+GROUP BY test_group, wave, visa_offer_prod
+ORDER BY test_group, wave, visa_offer_prod
 """
 vba_q1 = pd.read_sql_query(vba_q1_sql, con=EDW)
 vba_q1.to_csv(OUT / "vba_q1_conversion_rollup.csv", index=False)
@@ -144,7 +143,7 @@ SELECT
     -- VBA conversion track
     visa_offer_prod, visa_offer_test, visa_fee, visa_onoff, visa_acct_no,
     visa_app_started, visa_app_completed, visa_app_approved, visa_app_declined,
-    visa_date_app_dec, visa_response_dt, visa_osc_on_app,
+    visa_date_app_dec, visa_response_dt,
     visa_prod_acq, visa_cr_lmt, visa_response_channel,
 
     -- Other flags
@@ -157,9 +156,6 @@ SELECT
     -- Derived: in-window flag (90-day measurement window)
     CASE WHEN visa_response_dt BETWEEN treatmt_strt_dt AND treatmt_strt_dt + 90
          THEN 1 ELSE 0 END AS responded_in_window,
-
-    -- Derived: OSC bucket (raw for now — refine to Period/Other/None once we know the campaign codes)
-    COALESCE(visa_osc_on_app, 'NO_OSC') AS osc_bucket,
 
     -- Derived: booking status (offered product vs product they actually acquired)
     CASE
