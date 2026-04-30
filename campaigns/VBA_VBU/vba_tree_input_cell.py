@@ -187,21 +187,55 @@ print(f"\nUCP-business: {len(ucp):,} rows | "
       f"{ucp['clnt_no'].nunique():,} unique clients")
 
 
-# ============================================================================
-# 4. Merge → one analytical row per (clnt_no, acct_no)
-# ============================================================================
+# === 4. Merge → one analytical row per (clnt_no, acct_no) ==================
+n0 = len(vba_curated)
 tree_input = vba_curated.merge(vba_portfolio, on='acct_no',  how='left')
+n1 = len(tree_input)
 tree_input = tree_input.merge(ucp,            on='clnt_no',  how='left')
+n2 = len(tree_input)
 
-# Snapshot maturity — how mature each portfolio event is relative to treatment / response
+print(f"\nMerge step row counts (looking for unintended expansion):")
+print(f"  curated only          : {n0:>10,}")
+print(f"  + portfolio (acct_no) : {n1:>10,}  delta={n1 - n0:+,}")
+print(f"  + ucp     (clnt_no)   : {n2:>10,}  delta={n2 - n1:+,}")
+
 for c in ['last_event_dt', 'treatmt_strt_dt', 'visa_response_dt']:
     tree_input[c] = pd.to_datetime(tree_input[c], errors='coerce')
 tree_input['days_post_treatment'] = (tree_input['last_event_dt'] - tree_input['treatmt_strt_dt']).dt.days
 tree_input['days_post_response']  = (tree_input['last_event_dt'] - tree_input['visa_response_dt']).dt.days
 
-print(f"\nFinal analytical file: {len(tree_input):,} rows × {tree_input.shape[1]} columns")
-print("Target class balance (visa_app_approved):")
+
+# === 4b. Sanity checks =====================================================
+print(f"\n--- Sanity ---")
+print(f"vba_curated  : {len(vba_curated):>10,} rows | "
+      f"clnt={vba_curated['clnt_no'].nunique():>7,} | "
+      f"acct={vba_curated['acct_no'].nunique():>7,} | "
+      f"(clnt,acct)={vba_curated[['clnt_no','acct_no']].drop_duplicates().shape[0]:>7,}")
+print(f"vba_portfolio: {len(vba_portfolio):>10,} rows | "
+      f"acct={vba_portfolio['acct_no'].nunique():>7,}")
+print(f"ucp          : {len(ucp):>10,} rows | "
+      f"clnt={ucp['clnt_no'].nunique():>7,}")
+print(f"tree_input   : {len(tree_input):>10,} rows | "
+      f"clnt={tree_input['clnt_no'].nunique():>7,} | "
+      f"acct={tree_input['acct_no'].nunique():>7,} | "
+      f"(clnt,acct)={tree_input[['clnt_no','acct_no']].drop_duplicates().shape[0]:>7,}")
+
+dup_curated = vba_curated.groupby(['clnt_no', 'acct_no']).size()
+dup_ucp     = ucp.groupby('clnt_no').size()
+print(f"\nMulti-row keys (potential merge expansion sources):")
+print(f"  curated (clnt,acct) with >1 row : {(dup_curated > 1).sum():,} pairs (max={dup_curated.max()})")
+print(f"  ucp clnt_no with >1 row         : {(dup_ucp > 1).sum():,} clients (max={dup_ucp.max()})")
+
+print(f"\nNulls on key fields:")
+for col in ['clnt_no', 'acct_no', 'gross_response', 'visa_app_approved',
+            'last_event_dt', 'total_purch_post', 'days_post_treatment']:
+    if col in tree_input.columns:
+        print(f"  {col:22s}: {tree_input[col].isna().sum():>7,}")
+
+print(f"\nApproval split (visa_app_approved):")
 print(tree_input['visa_app_approved'].value_counts(dropna=False))
+
+print(f"\nFinal analytical file: {len(tree_input):,} rows × {tree_input.shape[1]} columns")
 
 
 # ============================================================================
