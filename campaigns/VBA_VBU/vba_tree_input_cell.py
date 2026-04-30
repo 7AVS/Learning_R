@@ -154,7 +154,7 @@ ranked AS (
         p.lst_ann_fee_chrg_amt,
         p.net_prch_amt_dly,
         p.status,
-        ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) AS rn_last
     FROM dw00_im.d3cv12a.dly_full_portfolio p
     INNER JOIN cohort c
         ON c.acct_no = p.acct_no
@@ -164,14 +164,15 @@ ranked AS (
 )
 SELECT
     acct_no,
-    dt_record_ext        AS post_event_dt,
-    bal_current          AS post_bal,
-    accum_dly_bal_mtd    AS post_dly_bal_mtd,
-    lst_ann_fee_chrg_amt AS post_last_ann_fee,
-    net_prch_amt_dly     AS post_purch_latest,
-    status               AS post_status
+    MAX(CASE WHEN rn_last = 1 THEN dt_record_ext END)        AS last_event_dt,
+    MAX(CASE WHEN rn_last = 1 THEN bal_current END)          AS last_bal,
+    MAX(CASE WHEN rn_last = 1 THEN accum_dly_bal_mtd END)    AS last_dly_bal_mtd,
+    MAX(CASE WHEN rn_last = 1 THEN lst_ann_fee_chrg_amt END) AS last_ann_fee,
+    MAX(CASE WHEN rn_last = 1 THEN net_prch_amt_dly END)     AS last_purch_dly,
+    MAX(CASE WHEN rn_last = 1 THEN status END)               AS last_status,
+    SUM(net_prch_amt_dly)                                    AS total_purch_post
 FROM ranked
-WHERE rn = 1
+GROUP BY acct_no
 """
 
 vba_portfolio = pd.read_sql_query(vba_portfolio_sql, con=EDW)
@@ -193,10 +194,10 @@ tree_input = vba_curated.merge(vba_portfolio, on='acct_no',  how='left')
 tree_input = tree_input.merge(ucp,            on='clnt_no',  how='left')
 
 # Snapshot maturity — how mature each portfolio event is relative to treatment / response
-for c in ['post_event_dt', 'treatmt_strt_dt', 'visa_response_dt']:
+for c in ['last_event_dt', 'treatmt_strt_dt', 'visa_response_dt']:
     tree_input[c] = pd.to_datetime(tree_input[c], errors='coerce')
-tree_input['days_post_treatment'] = (tree_input['post_event_dt'] - tree_input['treatmt_strt_dt']).dt.days
-tree_input['days_post_response']  = (tree_input['post_event_dt'] - tree_input['visa_response_dt']).dt.days
+tree_input['days_post_treatment'] = (tree_input['last_event_dt'] - tree_input['treatmt_strt_dt']).dt.days
+tree_input['days_post_response']  = (tree_input['last_event_dt'] - tree_input['visa_response_dt']).dt.days
 
 print(f"\nFinal analytical file: {len(tree_input):,} rows × {tree_input.shape[1]} columns")
 print("Target class balance (visa_app_approved):")
