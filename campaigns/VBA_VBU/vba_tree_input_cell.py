@@ -129,59 +129,62 @@ print("Approval split (visa_app_approved):")
 print(vba_curated['visa_app_approved'].value_counts(dropna=False))
 
 
-# ============================================================================
-# 2. DLY_FULL_PORTFOLIO — post-treatment spending + attrition flags
-# ----------------------------------------------------------------------------
-# Join key   : acct_no (existing primary card account on the curated table).
-# Window     : 90-day post-treatment ([treatmt_strt_dt, treatmt_strt_dt + 90d]).
-# Spool guard: hard floor `dt_record_ext >= DATE '2025-08-01'` enables
-#              partition pruning on DLY_FULL_PORTFOLIO (it is HUGE — without
-#              a partition-pruning predicate the join blows past spool space).
-#
-# Tree is descriptive — these post-treatment columns are valid splitters
-# for telling the conversion story (where approvals fall, what their
-# behavior looks like after the offer).
-# ============================================================================
-vba_portfolio_sql = """
-WITH cohort AS (
-    SELECT
-        clnt_no,
-        acct_no,
-        MIN(treatmt_strt_dt) AS treatmt_strt_dt
-    FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
-    WHERE mnc = 'VBA'
-      AND gross_response = 1
-      AND treatmt_strt_dt >= DATE '2025-08-01'
-    GROUP BY clnt_no, acct_no
-)
-SELECT
-    c.clnt_no,
-    c.acct_no,
+# === 2. DLY_FULL_PORTFOLIO — batched fetch, aggregate in pandas ============
+# Pull raw portfolio rows by acct_no in batches, aggregate locally to avoid
+# Teradata spool exhaustion that the single-query join was hitting.
 
-    -- Post-treatment spending (treatmt_strt_dt → treatmt_strt_dt + 90 days)
-    SUM(p.net_prch_amt_dly)                              AS post_purch_90d,
-    AVG(p.bal_current)                                   AS post_avg_bal_90d,
-    AVG(p.accum_dly_bal_mtd)                             AS post_avg_dly_bal_mtd_90d,
-    MAX(p.lst_ann_fee_chrg_amt)                          AS post_last_ann_fee_90d,
+cohort = (vba_curated[['clnt_no', 'acct_no', 'treatmt_strt_dt']]
+          .drop_duplicates()
+          .dropna(subset=['acct_no']))
+cohort['treatmt_strt_dt'] = pd.to_datetime(cohort['treatmt_strt_dt'])
+print(f"\nCohort for portfolio fetch: {len(cohort):,} (clnt_no, acct_no) pairs")
 
-    -- Attrition / risk flags during post-treatment window
-    MAX(CASE WHEN p.status = 'VOL'  THEN 1 ELSE 0 END)   AS post_vol,
-    MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END)   AS post_bkpt,
-    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END)   AS post_woff,
-    MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END)   AS post_coll
+BATCH_SIZE = 1000
+accts = cohort['acct_no'].unique()
+raw_parts = []
 
-FROM cohort c
-INNER JOIN dw00_im.d3cv12a.dly_full_portfolio p
-    ON  p.acct_no       =  c.acct_no
-    AND p.dt_record_ext >= DATE '2025-08-01'                   -- partition-prune floor
-    AND p.dt_record_ext >= c.treatmt_strt_dt                   -- post-treatment start
-    AND p.dt_record_ext <= c.treatmt_strt_dt + INTERVAL '90' DAY  -- 90-day ceiling
-GROUP BY c.clnt_no, c.acct_no
-"""
+for i in range(0, len(accts), BATCH_SIZE):
+    batch = accts[i:i + BATCH_SIZE]
+    in_list = "(" + ",".join(f"'{a}'" for a in batch) + ")"
+    sql = f"""
+    SELECT acct_no, dt_record_ext, status,
+           net_prch_amt_dly, bal_current, accum_dly_bal_mtd, lst_ann_fee_chrg_amt
+    FROM dw00_im.d3cv12a.dly_full_portfolio
+    WHERE acct_no IN {in_list}
+      AND dt_record_ext >= DATE '2025-08-01'
+      AND dt_record_ext <= DATE '2026-08-01'
+    """
+    raw_parts.append(pd.read_sql_query(sql, con=EDW))
+    print(f"  batch {i // BATCH_SIZE + 1}: {len(raw_parts[-1]):,} rows")
 
-vba_portfolio = pd.read_sql_query(vba_portfolio_sql, con=EDW)
-print(f"\nPortfolio enrichment: {len(vba_portfolio):,} rows | "
-      f"{vba_portfolio['clnt_no'].nunique():,} unique clients")
+raw = pd.concat(raw_parts, ignore_index=True)
+raw['dt_record_ext'] = pd.to_datetime(raw['dt_record_ext'])
+
+# Apply per-account 90-day post-treatment window in pandas
+raw = raw.merge(cohort[['acct_no', 'treatmt_strt_dt']].drop_duplicates(),
+                on='acct_no', how='inner')
+in_window = raw[(raw['dt_record_ext'] >= raw['treatmt_strt_dt']) &
+                (raw['dt_record_ext'] <= raw['treatmt_strt_dt'] + pd.Timedelta(days=90))]
+
+spend = in_window.groupby('acct_no').agg(
+    post_purch_90d           = ('net_prch_amt_dly',     'sum'),
+    post_avg_bal_90d         = ('bal_current',          'mean'),
+    post_avg_dly_bal_mtd_90d = ('accum_dly_bal_mtd',    'mean'),
+    post_last_ann_fee_90d    = ('lst_ann_fee_chrg_amt', 'max'),
+).reset_index()
+
+status_flags = (in_window.assign(
+        post_vol  = (in_window['status'] == 'VOL').astype(int),
+        post_bkpt = (in_window['status'] == 'BKPT').astype(int),
+        post_woff = (in_window['status'] == 'WOFF').astype(int),
+        post_coll = (in_window['status'] == 'COLL').astype(int),
+    )
+    .groupby('acct_no')[['post_vol', 'post_bkpt', 'post_woff', 'post_coll']]
+    .max()
+    .reset_index())
+
+vba_portfolio = spend.merge(status_flags, on='acct_no', how='outer')
+print(f"Portfolio enrichment: {len(vba_portfolio):,} rows")
 
 
 # ============================================================================
@@ -195,8 +198,8 @@ print(f"\nUCP-business: {len(ucp):,} rows | "
 # ============================================================================
 # 4. Merge → one analytical row per (clnt_no, acct_no)
 # ============================================================================
-tree_input = vba_curated.merge(vba_portfolio, on=['clnt_no', 'acct_no'], how='left')
-tree_input = tree_input.merge(ucp,            on='clnt_no',              how='left')
+tree_input = vba_curated.merge(vba_portfolio, on='acct_no',  how='left')
+tree_input = tree_input.merge(ucp,            on='clnt_no',  how='left')
 
 print(f"\nFinal analytical file: {len(tree_input):,} rows × {tree_input.shape[1]} columns")
 print("Target class balance (visa_app_approved):")
