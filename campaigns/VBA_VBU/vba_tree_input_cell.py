@@ -180,6 +180,12 @@ print(f"\nUCP-business: {len(ucp):,} rows | "
 tree_input = vba_curated.merge(vba_portfolio, on='acct_no',  how='left')
 tree_input = tree_input.merge(ucp,            on='clnt_no',  how='left')
 
+# Snapshot maturity — how mature each portfolio event is relative to treatment / response
+for c in ['post_event_dt', 'treatmt_strt_dt', 'visa_response_dt']:
+    tree_input[c] = pd.to_datetime(tree_input[c], errors='coerce')
+tree_input['days_post_treatment'] = (tree_input['post_event_dt'] - tree_input['treatmt_strt_dt']).dt.days
+tree_input['days_post_response']  = (tree_input['post_event_dt'] - tree_input['visa_response_dt']).dt.days
+
 print(f"\nFinal analytical file: {len(tree_input):,} rows × {tree_input.shape[1]} columns")
 print("Target class balance (visa_app_approved):")
 print(tree_input['visa_app_approved'].value_counts(dropna=False))
