@@ -144,22 +144,34 @@ WITH cohort AS (
       AND gross_response = 1
       AND treatmt_strt_dt >= DATE '2025-08-01'
     GROUP BY clnt_no, acct_no
+),
+ranked AS (
+    SELECT
+        p.acct_no,
+        p.dt_record_ext,
+        p.bal_current,
+        p.accum_dly_bal_mtd,
+        p.lst_ann_fee_chrg_amt,
+        p.net_prch_amt_dly,
+        p.status,
+        ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) AS rn
+    FROM dw00_im.d3cv12a.dly_full_portfolio p
+    INNER JOIN cohort c
+        ON c.acct_no = p.acct_no
+       AND p.dt_record_ext >= c.treatmt_strt_dt
+       AND p.dt_record_ext >= DATE '2025-08-01'
+       AND p.dt_record_ext <= DATE '2026-08-01'
 )
 SELECT
-    p.acct_no,
-    p.dt_record_ext        AS post_event_dt,
-    p.bal_current          AS post_bal,
-    p.accum_dly_bal_mtd    AS post_dly_bal_mtd,
-    p.lst_ann_fee_chrg_amt AS post_last_ann_fee,
-    p.net_prch_amt_dly     AS post_purch_latest,
-    p.status               AS post_status
-FROM dw00_im.d3cv12a.dly_full_portfolio p
-INNER JOIN cohort c
-    ON c.acct_no = p.acct_no
-   AND p.dt_record_ext >= c.treatmt_strt_dt
-   AND p.dt_record_ext >= DATE '2025-08-01'
-   AND p.dt_record_ext <= DATE '2026-08-01'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
+    acct_no,
+    dt_record_ext        AS post_event_dt,
+    bal_current          AS post_bal,
+    accum_dly_bal_mtd    AS post_dly_bal_mtd,
+    lst_ann_fee_chrg_amt AS post_last_ann_fee,
+    net_prch_amt_dly     AS post_purch_latest,
+    status               AS post_status
+FROM ranked
+WHERE rn = 1
 """
 
 vba_portfolio = pd.read_sql_query(vba_portfolio_sql, con=EDW)
