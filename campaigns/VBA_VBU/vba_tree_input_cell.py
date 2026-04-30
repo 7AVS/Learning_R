@@ -12,11 +12,15 @@ Target     : visa_app_approved (1 = approved, 0 = declined, conditional on respo
 Output     : data/vba_tree_input.parquet  — feed (a subset of) columns to the tree tool.
 
 Notes:
-  - Pre-treatment window for spending = 90 days before treatmt_strt_dt
-    (PCQ used post-treatment for a different purpose — for a tree predicting
-     approval, post-treatment features would leak the outcome).
+  - Post-treatment portfolio window = [treatmt_strt_dt, treatmt_strt_dt + 90d].
+    Spending and attrition columns are descriptive outcome data, NOT tree
+    features for predicting `visa_app_approved` — feeding post-treatment
+    activity to such a tree is leakage. Filter them out at tree-input stage.
   - VBA is an upgrade campaign on existing accounts → portfolio data is
     primary card behavior, not new-card behavior.
+  - Hard date floor `dt_record_ext >= DATE '2025-08-01'` is a spool-space
+    guard for Teradata — DLY_FULL_PORTFOLIO is enormous; without a
+    partition-pruning predicate the join exhausts spool.
   - Catalog prefix `dw00_im.d3cv12a.dly_full_portfolio` parallels the existing
     Starburst-style prefix used for `dw00_im.dl_mr_prod.nbo_vba_rbol_combined`.
     If your env exposes the table under a different prefix, adjust here.
@@ -129,12 +133,21 @@ print(vba_curated['visa_app_approved'].value_counts(dropna=False))
 
 
 # ============================================================================
-# 2. DLY_FULL_PORTFOLIO — pre-treatment spending + attrition history
+# 2. DLY_FULL_PORTFOLIO — post-treatment spending + attrition flags
 # ----------------------------------------------------------------------------
-# Join key: acct_no (existing primary card account on the curated table).
-# Time filter: dt_record_ext < treatmt_strt_dt → strictly pre-treatment.
-#   - Spending aggregates use a 90-day pre-treatment window
-#   - Attrition / risk flags use full lifetime up to treatmt_strt_dt
+# Join key   : acct_no (existing primary card account on the curated table).
+# Window     : 90-day post-treatment ([treatmt_strt_dt, treatmt_strt_dt + 90d]).
+# Spool guard: hard floor `dt_record_ext >= DATE '2025-08-01'` enables
+#              partition pruning on DLY_FULL_PORTFOLIO (it is HUGE — without
+#              a partition-pruning predicate the join blows past spool space).
+#
+# NOTE — leakage when tree-input building:
+#   These post-treatment columns describe activity AFTER the campaign and
+#   AFTER the approval decision. Useful for the analytical output (spending
+#   by approved/declined, attrition outcomes), but DO NOT feed them as
+#   features into a tree predicting `visa_app_approved` — that's leakage.
+#   Filter them out at tree-input selection time, same as the engagement
+#   fields above.
 # ============================================================================
 vba_portfolio_sql = """
 WITH cohort AS (
@@ -152,26 +165,24 @@ SELECT
     c.clnt_no,
     c.acct_no,
 
-    -- Pre-treatment spending (90-day window before treatmt_strt_dt)
-    SUM(CASE WHEN p.dt_record_ext >= c.treatmt_strt_dt - INTERVAL '90' DAY
-             THEN p.net_prch_amt_dly END)                AS pre_purch_90d,
-    AVG(CASE WHEN p.dt_record_ext >= c.treatmt_strt_dt - INTERVAL '90' DAY
-             THEN p.bal_current END)                     AS pre_avg_bal_90d,
-    AVG(CASE WHEN p.dt_record_ext >= c.treatmt_strt_dt - INTERVAL '90' DAY
-             THEN p.accum_dly_bal_mtd END)               AS pre_avg_dly_bal_mtd_90d,
-    MAX(CASE WHEN p.dt_record_ext >= c.treatmt_strt_dt - INTERVAL '90' DAY
-             THEN p.lst_ann_fee_chrg_amt END)            AS pre_last_ann_fee_90d,
+    -- Post-treatment spending (treatmt_strt_dt → treatmt_strt_dt + 90 days)
+    SUM(p.net_prch_amt_dly)                              AS post_purch_90d,
+    AVG(p.bal_current)                                   AS post_avg_bal_90d,
+    AVG(p.accum_dly_bal_mtd)                             AS post_avg_dly_bal_mtd_90d,
+    MAX(p.lst_ann_fee_chrg_amt)                          AS post_last_ann_fee_90d,
 
-    -- Lifetime attrition / risk flags (any time before treatmt_strt_dt)
-    MAX(CASE WHEN p.status = 'VOL'  THEN 1 ELSE 0 END)   AS ever_vol_pre,
-    MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END)   AS ever_bkpt_pre,
-    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END)   AS ever_woff_pre,
-    MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END)   AS ever_coll_pre
+    -- Attrition / risk flags during post-treatment window
+    MAX(CASE WHEN p.status = 'VOL'  THEN 1 ELSE 0 END)   AS post_vol,
+    MAX(CASE WHEN p.status = 'BKPT' THEN 1 ELSE 0 END)   AS post_bkpt,
+    MAX(CASE WHEN p.status = 'WOFF' THEN 1 ELSE 0 END)   AS post_woff,
+    MAX(CASE WHEN p.status = 'COLL' THEN 1 ELSE 0 END)   AS post_coll
 
 FROM cohort c
-LEFT JOIN dw00_im.d3cv12a.dly_full_portfolio p
-    ON p.acct_no       = c.acct_no
-   AND p.dt_record_ext < c.treatmt_strt_dt
+INNER JOIN dw00_im.d3cv12a.dly_full_portfolio p
+    ON  p.acct_no       =  c.acct_no
+    AND p.dt_record_ext >= DATE '2025-08-01'                   -- partition-prune floor
+    AND p.dt_record_ext >= c.treatmt_strt_dt                   -- post-treatment start
+    AND p.dt_record_ext <= c.treatmt_strt_dt + INTERVAL '90' DAY  -- 90-day ceiling
 GROUP BY c.clnt_no, c.acct_no
 """
 
