@@ -129,62 +129,41 @@ print("Approval split (visa_app_approved):")
 print(vba_curated['visa_app_approved'].value_counts(dropna=False))
 
 
-# === 2. DLY_FULL_PORTFOLIO — batched fetch, aggregate in pandas ============
-# Pull raw portfolio rows by acct_no in batches, aggregate locally to avoid
-# Teradata spool exhaustion that the single-query join was hitting.
+# === 2. DLY_FULL_PORTFOLIO — latest post-treatment event per acct_no =======
+# Event-driven table. PCQ pattern: take the most recent row per account
+# after treatmt_strt_dt. One row per acct_no, no window aggregation.
 
-cohort = (vba_curated[['clnt_no', 'acct_no', 'treatmt_strt_dt']]
-          .drop_duplicates()
-          .dropna(subset=['acct_no']))
-cohort['treatmt_strt_dt'] = pd.to_datetime(cohort['treatmt_strt_dt'])
-print(f"\nCohort for portfolio fetch: {len(cohort):,} (clnt_no, acct_no) pairs")
+vba_portfolio_sql = """
+WITH cohort AS (
+    SELECT
+        clnt_no,
+        acct_no,
+        MIN(treatmt_strt_dt) AS treatmt_strt_dt
+    FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
+    WHERE mnc = 'VBA'
+      AND gross_response = 1
+      AND treatmt_strt_dt >= DATE '2025-08-01'
+    GROUP BY clnt_no, acct_no
+)
+SELECT
+    p.acct_no,
+    p.dt_record_ext        AS post_event_dt,
+    p.bal_current          AS post_bal,
+    p.accum_dly_bal_mtd    AS post_dly_bal_mtd,
+    p.lst_ann_fee_chrg_amt AS post_last_ann_fee,
+    p.net_prch_amt_dly     AS post_purch_latest,
+    p.status               AS post_status
+FROM dw00_im.d3cv12a.dly_full_portfolio p
+INNER JOIN cohort c
+    ON c.acct_no = p.acct_no
+   AND p.dt_record_ext >= c.treatmt_strt_dt
+   AND p.dt_record_ext >= DATE '2025-08-01'
+   AND p.dt_record_ext <= DATE '2026-08-01'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.dt_record_ext DESC) = 1
+"""
 
-BATCH_SIZE = 1000
-accts = cohort['acct_no'].unique()
-raw_parts = []
-
-for i in range(0, len(accts), BATCH_SIZE):
-    batch = accts[i:i + BATCH_SIZE]
-    in_list = "(" + ",".join(f"'{a}'" for a in batch) + ")"
-    sql = f"""
-    SELECT acct_no, dt_record_ext, status,
-           net_prch_amt_dly, bal_current, accum_dly_bal_mtd, lst_ann_fee_chrg_amt
-    FROM dw00_im.d3cv12a.dly_full_portfolio
-    WHERE acct_no IN {in_list}
-      AND dt_record_ext >= DATE '2025-08-01'
-      AND dt_record_ext <= DATE '2026-08-01'
-    """
-    raw_parts.append(pd.read_sql_query(sql, con=EDW))
-    print(f"  batch {i // BATCH_SIZE + 1}: {len(raw_parts[-1]):,} rows")
-
-raw = pd.concat(raw_parts, ignore_index=True)
-raw['dt_record_ext'] = pd.to_datetime(raw['dt_record_ext'])
-
-# Apply per-account 90-day post-treatment window in pandas
-raw = raw.merge(cohort[['acct_no', 'treatmt_strt_dt']].drop_duplicates(),
-                on='acct_no', how='inner')
-in_window = raw[(raw['dt_record_ext'] >= raw['treatmt_strt_dt']) &
-                (raw['dt_record_ext'] <= raw['treatmt_strt_dt'] + pd.Timedelta(days=90))]
-
-spend = in_window.groupby('acct_no').agg(
-    post_purch_90d           = ('net_prch_amt_dly',     'sum'),
-    post_avg_bal_90d         = ('bal_current',          'mean'),
-    post_avg_dly_bal_mtd_90d = ('accum_dly_bal_mtd',    'mean'),
-    post_last_ann_fee_90d    = ('lst_ann_fee_chrg_amt', 'max'),
-).reset_index()
-
-status_flags = (in_window.assign(
-        post_vol  = (in_window['status'] == 'VOL').astype(int),
-        post_bkpt = (in_window['status'] == 'BKPT').astype(int),
-        post_woff = (in_window['status'] == 'WOFF').astype(int),
-        post_coll = (in_window['status'] == 'COLL').astype(int),
-    )
-    .groupby('acct_no')[['post_vol', 'post_bkpt', 'post_woff', 'post_coll']]
-    .max()
-    .reset_index())
-
-vba_portfolio = spend.merge(status_flags, on='acct_no', how='outer')
-print(f"Portfolio enrichment: {len(vba_portfolio):,} rows")
+vba_portfolio = pd.read_sql_query(vba_portfolio_sql, con=EDW)
+print(f"\nPortfolio (latest event per acct_no): {len(vba_portfolio):,} rows")
 
 
 # ============================================================================
