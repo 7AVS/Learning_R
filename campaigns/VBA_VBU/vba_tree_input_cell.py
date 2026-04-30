@@ -12,10 +12,10 @@ Target     : visa_app_approved (1 = approved, 0 = declined, conditional on respo
 Output     : data/vba_tree_input.parquet  — feed (a subset of) columns to the tree tool.
 
 Notes:
+  - Tree is descriptive, not predictive. Goal: show where approvals fall
+    among responders. All fields — pre-treatment, treatment, post-treatment
+    — are valid splitter candidates. No leakage filtering required.
   - Post-treatment portfolio window = [treatmt_strt_dt, treatmt_strt_dt + 90d].
-    Spending and attrition columns are descriptive outcome data, NOT tree
-    features for predicting `visa_app_approved` — feeding post-treatment
-    activity to such a tree is leakage. Filter them out at tree-input stage.
   - VBA is an upgrade campaign on existing accounts → portfolio data is
     primary card behavior, not new-card behavior.
   - Hard date floor `dt_record_ext >= DATE '2025-08-01'` is a spool-space
@@ -91,10 +91,7 @@ SELECT
     chnl_iu,
     chnl_rd,
 
-    -- Engagement / response activity
-    -- Timing unconfirmed (pre-treatment history vs campaign-window only).
-    -- Keep in the output for inspection; exclude from tree feature set
-    -- until timing is verified — otherwise potential leakage.
+    -- Engagement / response activity (campaign-window engagement)
     csr_interactions,
     cntct_atmpt_gnsis,
     call_ans_gnsis,
@@ -141,13 +138,9 @@ print(vba_curated['visa_app_approved'].value_counts(dropna=False))
 #              partition pruning on DLY_FULL_PORTFOLIO (it is HUGE — without
 #              a partition-pruning predicate the join blows past spool space).
 #
-# NOTE — leakage when tree-input building:
-#   These post-treatment columns describe activity AFTER the campaign and
-#   AFTER the approval decision. Useful for the analytical output (spending
-#   by approved/declined, attrition outcomes), but DO NOT feed them as
-#   features into a tree predicting `visa_app_approved` — that's leakage.
-#   Filter them out at tree-input selection time, same as the engagement
-#   fields above.
+# Tree is descriptive — these post-treatment columns are valid splitters
+# for telling the conversion story (where approvals fall, what their
+# behavior looks like after the offer).
 # ============================================================================
 vba_portfolio_sql = """
 WITH cohort AS (
