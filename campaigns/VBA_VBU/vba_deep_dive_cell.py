@@ -92,8 +92,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 # --- Q1: conversion rollup ---
 vba_q1_sql = """
 SELECT
-    test_group,
-    wave,
+    control,
+    treatmt_strt_dt,
     visa_offer_prod,
     COUNT(*)                              AS deployed,
     SUM(visa_app_started)                 AS started,
@@ -105,8 +105,8 @@ SELECT
 FROM dw00_im.dl_mr_prod.nbo_vba_rbol_combined
 WHERE mnc = 'VBA'
   AND treatmt_strt_dt >= DATE '2025-08-01'
-GROUP BY test_group, wave, visa_offer_prod
-ORDER BY test_group, wave, visa_offer_prod
+GROUP BY control, treatmt_strt_dt, visa_offer_prod
+ORDER BY control, treatmt_strt_dt, visa_offer_prod
 """
 vba_q1 = pd.read_sql_query(vba_q1_sql, con=EDW)
 vba_q1.to_csv(OUT / "vba_q1_conversion_rollup.csv", index=False)
