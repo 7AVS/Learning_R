@@ -191,6 +191,76 @@ if 'visa_offer_test' in sub.columns:
     print(agg.round(4).to_string())
 
 # %% [markdown]
+# ## WestJet (MCB) approver client profile — Q1 26
+# Who's taking the WJ MasterCard? Profiles MCB approvers in Action group, Dec/Jan/Feb 26.
+# Uses vba_tree_input.parquet (responders only, joined to portfolio + UCP-business).
+# Adjust the approval filter to whichever flag is populated in your data.
+
+# %%
+from pathlib import Path
+import pandas as pd
+
+DATA = Path(r'\\maple.fg.rbc.com\data\Toronto\wrkgrp\wrkgrp16\Marketing Services & Transformation\Marketing Analytics\Pod of Gold\Cards\VBA\DeepDive\data')
+
+df = pd.read_parquet(DATA / 'vba_tree_input.parquet')
+df['treatmt_strt_dt'] = pd.to_datetime(df['treatmt_strt_dt'], errors='coerce')
+
+print('Total tree-input rows:', len(df))
+print('visa_offer_prod values:', df['visa_offer_prod'].value_counts(dropna=False).head(10).to_dict())
+print('control values:', df['control'].value_counts(dropna=False).to_dict())
+for col in ['gross_response', 'net_response', 'visa_app_approved']:
+    if col in df.columns:
+        print(f'{col} values: {df[col].value_counts(dropna=False).head().to_dict()}')
+print()
+
+waves = ['2025-12', '2026-01', '2026-02']
+approval_col = 'visa_app_approved' if 'visa_app_approved' in df.columns else 'gross_response'
+
+mcb = df[
+    df['treatmt_strt_dt'].dt.to_period('M').astype(str).isin(waves)
+    & (df['visa_offer_prod'] == 'MCB')
+    & (df['control'] == 'Action')
+    & (df[approval_col] == 1)
+].copy()
+
+print(f'MCB approvers in Q1 26 Action group: {len(mcb)}')
+print(f'Approval filter used: {approval_col}')
+print()
+
+profile_cols = [
+    ('decile', 'value_counts'),
+    ('tenure_rbc_years', 'describe'),
+    ('tenure_rbc_rng', 'value_counts'),
+    ('ucp_tenure_rbc_years', 'describe'),
+    ('ucp_tenure_rbc_rng', 'value_counts'),
+    ('bus_seg', 'value_counts'),
+    ('bsc', 'value_counts'),
+    ('ucp_bus_seg', 'value_counts'),
+    ('ucp_bsc', 'value_counts'),
+    ('actv_prod_cnt', 'describe'),
+    ('opn_prod_cnt', 'describe'),
+    ('ucp_actv_prod_cnt', 'describe'),
+    ('digital_trans_ind', 'value_counts'),
+    ('mobile_trans_ind', 'value_counts'),
+    ('olb_auth_ind', 'value_counts'),
+    ('ucp_digital_trans_ind', 'value_counts'),
+    ('ucp_mobile_trans_ind', 'value_counts'),
+    ('lang_seg_cd', 'value_counts'),
+    ('ucp_lang_seg_cd', 'value_counts'),
+    ('last_bal', 'describe'),
+    ('total_purch_post', 'describe'),
+]
+
+for col, mode in profile_cols:
+    if col in mcb.columns:
+        print(f'--- {col} ---')
+        if mode == 'describe' and mcb[col].dtype.kind in 'fi':
+            print(mcb[col].describe().to_string())
+        else:
+            print(mcb[col].value_counts(dropna=False).head(10).to_string())
+        print()
+
+# %% [markdown]
 # ## Scratch — write queries here
 # Each cell self-contained: re-import, re-define `DATA`, re-load the parquet you need.
 
