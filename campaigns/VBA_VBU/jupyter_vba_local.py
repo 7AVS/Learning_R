@@ -83,6 +83,114 @@ print('head:')
 df.head()
 
 # %% [markdown]
+# ## A/B by wave — Dec 2025 / Jan 2026 / Feb 2026 (finalized waves)
+# Action vs Control net_response side-by-side. Lift in pp and relative %.
+# Uses `vba_vintage_base.parquet` (full lead population, not the responders-only tree input).
+
+# %%
+from pathlib import Path
+import pandas as pd
+
+DATA = Path(r'\\maple.fg.rbc.com\data\Toronto\wrkgrp\wrkgrp16\Marketing Services & Transformation\Marketing Analytics\Pod of Gold\Cards\VBA\DeepDive\data')
+
+df = pd.read_parquet(DATA / 'vba_vintage_base.parquet')
+df['treatmt_strt_dt'] = pd.to_datetime(df['treatmt_strt_dt'], errors='coerce')
+
+waves = ['2025-12', '2026-01', '2026-02']
+sub = df[df['treatmt_strt_dt'].dt.to_period('M').astype(str).isin(waves)].copy()
+
+print('Distinct treatmt_strt_dt × control:')
+print(sub.groupby(['treatmt_strt_dt', 'control']).size().to_string())
+print()
+
+agg = (
+    sub.groupby(['treatmt_strt_dt', 'control'])
+       .agg(n=('control', 'size'), resp=('net_response', 'sum'))
+)
+agg['rate'] = agg['resp'] / agg['n']
+
+wide = agg.unstack('control')
+wide.columns = [f'{m}_{c}' for m, c in wide.columns]
+
+if 'rate_Action' in wide.columns and 'rate_Control' in wide.columns:
+    wide['lift_pp']  = (wide['rate_Action'] - wide['rate_Control']) * 100
+    wide['lift_rel'] = (wide['rate_Action'] / wide['rate_Control'] - 1) * 100
+
+print('Wave-level A/B comparison:')
+print(wide.round(4).to_string())
+
+# %% [markdown]
+# ## A/B by wave × product — Dec 2025 / Jan 2026 / Feb 2026
+# Same comparison split by `visa_offer_prod` (CPX / MC6 / AIB / MCB).
+
+# %%
+from pathlib import Path
+import pandas as pd
+
+DATA = Path(r'\\maple.fg.rbc.com\data\Toronto\wrkgrp\wrkgrp16\Marketing Services & Transformation\Marketing Analytics\Pod of Gold\Cards\VBA\DeepDive\data')
+
+df = pd.read_parquet(DATA / 'vba_vintage_base.parquet')
+df['treatmt_strt_dt'] = pd.to_datetime(df['treatmt_strt_dt'], errors='coerce')
+
+waves = ['2025-12', '2026-01', '2026-02']
+sub = df[df['treatmt_strt_dt'].dt.to_period('M').astype(str).isin(waves)].copy()
+
+agg = (
+    sub.groupby(['treatmt_strt_dt', 'visa_offer_prod', 'control'])
+       .agg(n=('control', 'size'), resp=('net_response', 'sum'))
+)
+agg['rate'] = agg['resp'] / agg['n']
+
+wide = agg.unstack('control')
+wide.columns = [f'{m}_{c}' for m, c in wide.columns]
+
+if 'rate_Action' in wide.columns and 'rate_Control' in wide.columns:
+    wide['lift_pp']  = (wide['rate_Action'] - wide['rate_Control']) * 100
+    wide['lift_rel'] = (wide['rate_Action'] / wide['rate_Control'] - 1) * 100
+
+print('Wave × product A/B comparison:')
+print(wide.round(4).to_string())
+
+# %% [markdown]
+# ## Offer test within Action — Dec 2025 / Jan 2026 / Feb 2026
+# Q1 GTM lists three Avion variants for AIB/CPX: 35K + full fee, 35K + FW, 35K + Full Fee + 2X points.
+# This cell exposes how the offer test is encoded in the data — value counts of the candidate fields,
+# then net_response by `visa_offer_prod × visa_offer_test`.
+
+# %%
+from pathlib import Path
+import pandas as pd
+
+DATA = Path(r'\\maple.fg.rbc.com\data\Toronto\wrkgrp\wrkgrp16\Marketing Services & Transformation\Marketing Analytics\Pod of Gold\Cards\VBA\DeepDive\data')
+
+df = pd.read_parquet(DATA / 'vba_vintage_base.parquet')
+df['treatmt_strt_dt'] = pd.to_datetime(df['treatmt_strt_dt'], errors='coerce')
+
+waves = ['2025-12', '2026-01', '2026-02']
+sub = df[
+    df['treatmt_strt_dt'].dt.to_period('M').astype(str).isin(waves)
+    & (df['control'] == 'Action')
+].copy()
+
+print('Action-group rows in Dec/Jan/Feb:', len(sub))
+print()
+
+for col in ['visa_offer_prod', 'visa_offer_test', 'visa_fee', 'email_creative_id']:
+    if col in sub.columns:
+        print(f'--- {col} value counts ---')
+        print(sub[col].value_counts(dropna=False).head(20).to_string())
+        print()
+
+if 'visa_offer_test' in sub.columns:
+    agg = (
+        sub.groupby(['treatmt_strt_dt', 'visa_offer_prod', 'visa_offer_test'])
+           .agg(n=('control', 'size'), resp=('net_response', 'sum'))
+    )
+    agg['rate'] = agg['resp'] / agg['n']
+    print('Offer test breakout (Action only):')
+    print(agg.round(4).to_string())
+
+# %% [markdown]
 # ## Scratch — write queries here
 # Each cell self-contained: re-import, re-define `DATA`, re-load the parquet you need.
 
