@@ -1,0 +1,212 @@
+VBA Q1 FY26 CAMPAIGN PERFORMANCE DECK — BUILD BRIEF
+====================================================
+
+Feed this entire document to your PowerPoint LLM. You are building TWO slides
+into the currently open .pptx file. Save as VBA_Q1_26_Reporting.pptx.
+
+CONTEXT
+-------
+- Campaign: VBA (Visa Business Acquisition) at RBC Cards pod.
+- Audience: internal stakeholders reviewing Q1 FY 2026 performance.
+- They are not statisticians. Direct, factual bullets. No marketing language,
+  no teaching tone, no qualifiers like "very" / "extremely" / "quite".
+- Slide 1 is a refresh of an existing template. Match its layout and branding.
+- Slide 2 is new — design to match Slide 1's visual style.
+- If the existing template slide is already in this .pptx, replicate its
+  formatting (fonts, colors, blue header bar, logo position). If unsure about
+  any formatting choice, ask before guessing.
+
+GLOBAL STYLE
+------------
+- 16:9 widescreen.
+- Blue header bar with "Campaign Performance: Business Credit Card Acquisition [VBA]".
+- "next best action" logo bottom-right corner of every slide.
+- Footer: "Net Response Rate = Approved and completed response Rate by leads".
+- Small footer note bottom-left: "Refreshed: 2026-05-09".
+- Tables: blue header row, alternating row shading.
+- Lift cells color-coded: green when SS positive ≥ +0.5%, yellow ≥ +0.2%,
+  red when negative or sub-0.10%.
+- Use the labels "SS" and "N-SS" as written. SS = statistically significant,
+  N-SS = not statistically significant.
+
+
+==========================================================================
+SLIDE 1 — Q1 FY26: WestJet sustaining lift; campaign-wide weakness in February
+==========================================================================
+
+LAYOUT (4 quadrants)
+- Top-left: vintage curves chart
+- Top-right: wave-level metrics table (with caption)
+- Bottom-left: empty / chart spillover
+- Bottom-right: call-out text box (3 bullets)
+
+TITLE (large, blue)
+"Q1 FY26: WestJet sustaining lift; campaign-wide weakness in February"
+
+
+CHART (top-left) — mock data acceptable
+----------------------------------------
+Cumulative Net Response Rate by Days. X-axis: 1-50 days. Y-axis: 0% to 3%.
+
+Plot 7 lines with realistic cumulative-response shape (steep days 1-15,
+slowing 15-30, plateau 30-50). Suggested end-point values at day 50:
+
+  Line                  Style          End point ~
+  WJ Q1-26 Test         solid red       2.50%
+  Q2-25 Test            solid teal      1.60%
+  Dec-25 Test           solid blue      1.55%
+  Jan-26 Test           solid lt-blue   1.55%
+  Feb-26 Test           solid green     1.30%
+  Q1-26 Test            solid grey      1.05%
+  Q1-26 Control         dotted grey     0.65%
+
+Legend at bottom of chart, line style + label for each.
+
+
+TABLE (top-right) — exact values
+---------------------------------
+Caption above table: "Channel in Use: All channels except mobile"
+
+Wave        | # Unique Clients in Action Group | Lift   | NIBT Value | Email unsub rate
+26-Feb      |  97,742                          |  0.20% |  $0.2MM    |  0.21%
+26-Jan      |  94,008                          |  0.47% |  $0.5MM    |  0.22%
+25-Dec      |  45,702                          |  0.58% |  $0.2MM    |  0.15%
+Q1 2026     | 203,181                          |  0.37% |  $0.8MM    |  0.18%
+Q2 2025     | 211,615                          |  0.44% |  $1MM      |  0.09%
+Q1 26 WJ    |   6,866                          |  2.04% |  $0.01MM   |  0.19%
+
+
+CALL-OUT TEXT BOX (bottom-right) — three bullets, each ≤2 lines
+----------------------------------------------------------------
+
+• Q1 26 wave-over-wave lift: Dec 25 +0.58% SS / Jan 26 +0.47% SS / Feb 26
+  +0.20% N-SS. Feb first wave below SS in trailing 4 waves.
+
+• WestJet Q1 26: +2.04% lift, 6,866 leads — top wave on chart.
+
+• Audience and offer drivers detail next slide.
+
+
+==========================================================================
+SLIDE 2 — Q1 26 splits: TPA delivering, ITA broken; Avion offer richness not paying off
+==========================================================================
+
+CONTEXT (background — do not place on slide)
+ITA = Invitation to Apply. TPA = True Pre-Approved. Both are sub-segments
+within VBA. Slide 1 was the All view (TPA + ITA combined). This slide splits.
+The two stories are not perfectly correlated:
+- TPA is healthy, especially WestJet (MCB).
+- ITA is broken: Jan 26 Action under Control; Feb 26 Action collapsed on a
+  finalized wave — likely measurement / attribution issue.
+- Within TPA Avion (AIB and CPX), 35K base offer outperforms +XP variants
+  every Q1 wave — offer-richness lever isn't moving the needle.
+- Connection: even healthy TPA isn't getting lift from offer optimization;
+  ITA is a separate, larger problem requiring an attribution audit.
+
+LAYOUT
+Two halves, stacked vertically.
+- Top half: TPA vs ITA tables + 3 bullets.
+- Bottom half: Avion offer arms heatmap + 2 bullets.
+- Single bottom-of-slide one-liner: the "why this matters" call-out.
+
+TITLE (large, blue)
+"Q1 26 splits: TPA delivering, ITA broken; Avion offer richness not paying off"
+
+
+TOP HALF — TPA vs ITA
+----------------------
+Section heading: "TPA carries Q1 lift; ITA Action under Control in Jan, response collapsed in Feb"
+
+Two side-by-side tables.
+
+TPA (5 waves)
+Wave       | Action% | Control% | Lift Abs | Sig
+2025 Jan   |  1.43   |  1.36    |  +0.07   | N-SS
+2025 Feb   |  1.36   |  0.95    |  +0.41   | SS
+2025 Dec   |  1.60   |  1.02    |  +0.58   | SS
+2026 Jan   |  1.83   |  0.65    |  +1.18   | SS
+2026 Feb   |  1.20   |  0.78    |  +0.42   | N-SS
+
+ITA (4 waves — no December cycle in ITA program)
+Wave       | Action% | Control% | Lift Abs | Sig
+2025 Jan   |  1.18   |  0.80    |  +0.39   | SS
+2025 Feb   |  1.10   |  0.52    |  +0.58   | SS
+2026 Jan   |  1.34   |  1.43    |  -0.09   | N-SS
+2026 Feb   |  0.13   |  0.10    |  +0.04   | N-SS
+
+Color rule:
+- TPA Lift Abs row 4 (+1.18%) — green.
+- ITA Lift Abs row 3 (-0.09%) — red.
+- ITA Lift Abs row 4 (+0.04%) and Action% row 4 (0.13%) — red.
+
+Three bullets below the tables (each ≤2 lines):
+
+• TPA Jan 26 +1.18% SS, highest TPA Lift Abs in the visible series — Control
+  0.65% (lowest in series) amplifies the gap.
+
+• ITA Jan 26: Action 1.34% vs Control 1.43%, lift -0.09% N-SS. Action under
+  Control.
+
+• ITA Feb 26 finalized at 0.13% Action on 57,546 deployed — likely
+  attribution issue, not behavior. Investigation pending before Spring Mass
+  (March / April).
+
+
+BOTTOM HALF — Avion offer arms (TPA only)
+------------------------------------------
+Section heading: "35K base outperforms +1XP and +2XP for both AIB and CPX in every Q1 wave"
+
+Heatmap-style table. Rows are Product × Arm. Columns are wave. Cell values
+are TPA Action%. Color cells on a red-to-green gradient per column (highest
+green, lowest red). Bold the 35K rows.
+
+Product × Arm   | Dec 25 | Jan 26 | Feb 26
+AIB 35K         | 1.37%  | 2.17%  | 1.27%
+AIB 35K+1XP     | 0.82%  | 0.51%  | 0.74%
+AIB 35K+2XP     | 0.59%  | 0.47%  | 0.22%
+CPX 35K         | 0.83%  | 0.76%  | 0.51%
+CPX 35K+1XP     | 0.48%  | 0.40%  | 0.46%
+CPX 35K+2XP     | 0.32%  | 0.37%  | 0.23%
+
+Two bullets below the heatmap (each ≤2 lines):
+
+• 35K base Action rate exceeds +1XP and +2XP for both AIB and CPX every
+  Q1 wave.
+
+• Most product × arm × wave cells N-SS individually — directional pattern
+  across cells, not arm-level claim.
+
+
+BOTTOM ONE-LINE CALL-OUT (full-width, mid-grey background, italic)
+"Offer-richness lever not moving needle (revised Avion offer March addresses).
+ITA attribution audit needed before Spring Mass."
+
+
+==========================================================================
+CONSTRAINTS
+==========================================================================
+
+- All bullets max 2 lines.
+- Numbers are exactly as supplied above. Do NOT derive new metrics, ratios,
+  or aggregates. If you need a number not in this brief, flag it back, do
+  not invent.
+- Use "SS" / "N-SS" labels as written.
+- Match Slide 1 fonts and color palette across both slides.
+- Tone: direct, factual. No marketing language, no qualifiers.
+- Plot Slide 1 chart from the mock end-points + curve-shape description above.
+
+==========================================================================
+ITERATION
+==========================================================================
+
+After producing both slides, return them and report:
+1. Any data point you couldn't fit cleanly.
+2. Any formatting choice you guessed at (color, font size, alignment).
+3. Whether the side-by-side tables on Slide 2 fit at the chosen font size,
+   or whether you stacked them.
+
+We will calibrate from there. Expect 2-3 rounds of refinement on:
+- Title wording
+- Bullet phrasing
+- Table layout / coloring
+- Whether the bottom-of-slide call-out reads like a footer or a banner
