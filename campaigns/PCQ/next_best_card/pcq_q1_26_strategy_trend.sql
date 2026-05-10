@@ -200,6 +200,8 @@ SELECT
   SUM(CASE WHEN c.app_approved = 1 AND c.response_channel_grp = 'Other'             THEN 1 ELSE 0 END) AS approved_via_other,
 
   COUNT(s.acct_no)                                                                                                    AS approved_with_portfolio_data,
+  SUM(CASE WHEN s.acct_no IS NOT NULL AND c.asc_on_app_source = 'Period-ASC'                                THEN 1 ELSE 0 END) AS approved_with_portfolio_data_period_asc,
+  SUM(CASE WHEN s.acct_no IS NOT NULL AND (c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL) THEN 1 ELSE 0 END) AS approved_with_portfolio_data_other_asc,
 
   SUM(s.sum_purchases)                                                                                                AS sum_purchases,
   SUM(s.last_bal_current)                                                                                             AS sum_last_bal_current,
