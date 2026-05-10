@@ -165,29 +165,31 @@ SELECT
   c.tpa_ita,
   c.offer_prod_latest,
   c.offer_prod_latest_name,
-  c.asc_on_app_source,
   c.response_channel_grp,
   c.product_applied_name,
   c.model_score_decile,
 
   COUNT(*)                                                                                                            AS deployed,
 
-  SUM(CASE WHEN c.response_dt IS NOT NULL                                                          THEN 1 ELSE 0 END) AS responded,
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.response_dt - c.treatmt_start_dt) <= 15           THEN 1 ELSE 0 END) AS responded_d0_15,
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.response_dt - c.treatmt_start_dt) <= 30           THEN 1 ELSE 0 END) AS responded_d0_30,
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.response_dt - c.treatmt_start_dt) <= 45           THEN 1 ELSE 0 END) AS responded_d0_45,
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.response_dt - c.treatmt_start_dt) <= 60           THEN 1 ELSE 0 END) AS responded_d0_60,
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.response_dt - c.treatmt_start_dt) <= 90           THEN 1 ELSE 0 END) AS responded_d0_90,
+  SUM(CASE WHEN c.response_dt IS NOT NULL  THEN 1 ELSE 0 END) AS responded,
+  SUM(CASE WHEN c.app_approved = 1         THEN 1 ELSE 0 END) AS approved,
 
-  SUM(CASE WHEN c.app_approved = 1                                                                 THEN 1 ELSE 0 END) AS approved,
-  SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 15                  THEN 1 ELSE 0 END) AS approved_d0_15,
-  SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 30                  THEN 1 ELSE 0 END) AS approved_d0_30,
-  SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 45                  THEN 1 ELSE 0 END) AS approved_d0_45,
-  SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 60                  THEN 1 ELSE 0 END) AS approved_d0_60,
-  SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 90                  THEN 1 ELSE 0 END) AS approved_d0_90,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC'                                                  THEN 1 ELSE 0 END) AS responded_period_asc,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 15  THEN 1 ELSE 0 END) AS responded_period_asc_d0_15,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 30  THEN 1 ELSE 0 END) AS responded_period_asc_d0_30,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 45  THEN 1 ELSE 0 END) AS responded_period_asc_d0_45,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 60  THEN 1 ELSE 0 END) AS responded_period_asc_d0_60,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 90  THEN 1 ELSE 0 END) AS responded_period_asc_d0_90,
 
-  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS responded_period_asc,
-  SUM(CASE WHEN c.app_approved = 1        AND c.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC'                                                  THEN 1 ELSE 0 END) AS approved_period_asc,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 15   THEN 1 ELSE 0 END) AS approved_period_asc_d0_15,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 30   THEN 1 ELSE 0 END) AS approved_period_asc_d0_30,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 45   THEN 1 ELSE 0 END) AS approved_period_asc_d0_45,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 60   THEN 1 ELSE 0 END) AS approved_period_asc_d0_60,
+  SUM(CASE WHEN c.app_approved = 1 AND c.asc_on_app_source = 'Period-ASC' AND (c.response_dt - c.treatmt_start_dt) <= 90   THEN 1 ELSE 0 END) AS approved_period_asc_d0_90,
+
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND (c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL) THEN 1 ELSE 0 END) AS responded_other_asc,
+  SUM(CASE WHEN c.app_approved = 1        AND (c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL) THEN 1 ELSE 0 END) AS approved_other_asc,
 
   SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Online'            THEN 1 ELSE 0 END) AS responded_via_online,
   SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Mobile'            THEN 1 ELSE 0 END) AS responded_via_mobile,
@@ -202,17 +204,24 @@ SELECT
   COUNT(s.acct_no)                                                                                                    AS approved_with_portfolio_data,
 
   SUM(s.sum_purchases)                                                                                                AS sum_purchases,
-  SUM(s.sum_purchases_d0_15)                                                                                          AS sum_purchases_d0_15,
-  SUM(s.sum_purchases_d0_30)                                                                                          AS sum_purchases_d0_30,
-  SUM(s.sum_purchases_d0_45)                                                                                          AS sum_purchases_d0_45,
-  SUM(s.sum_purchases_d0_60)                                                                                          AS sum_purchases_d0_60,
-  SUM(s.sum_purchases_d0_90)                                                                                          AS sum_purchases_d0_90,
-
   SUM(s.last_bal_current)                                                                                             AS sum_last_bal_current,
   SUM(s.last_mtd_avg_bal)                                                                                             AS sum_last_mtd_avg_bal,
   SUM(s.days_observed)                                                                                                AS sum_days_observed,
   MAX(s.last_event_dt)                                                                                                AS max_event_dt_in_cohort,
   SUM(CASE WHEN s.acct_cls_dt IS NOT NULL THEN 1 ELSE 0 END)                                                          AS closed_accts,
+
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases       ELSE 0 END)                             AS sum_purchases_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_15 ELSE 0 END)                             AS sum_purchases_period_asc_d0_15,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_30 ELSE 0 END)                             AS sum_purchases_period_asc_d0_30,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_45 ELSE 0 END)                             AS sum_purchases_period_asc_d0_45,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_60 ELSE 0 END)                             AS sum_purchases_period_asc_d0_60,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_90 ELSE 0 END)                             AS sum_purchases_period_asc_d0_90,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.last_bal_current    ELSE 0 END)                             AS sum_last_bal_current_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.last_mtd_avg_bal    ELSE 0 END)                             AS sum_last_mtd_avg_bal_period_asc,
+
+  SUM(CASE WHEN c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL THEN s.sum_purchases    ELSE 0 END) AS sum_purchases_other_asc,
+  SUM(CASE WHEN c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL THEN s.last_bal_current ELSE 0 END) AS sum_last_bal_current_other_asc,
+  SUM(CASE WHEN c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL THEN s.last_mtd_avg_bal ELSE 0 END) AS sum_last_mtd_avg_bal_other_asc,
 
   SUM(CAST(c.tactic_email     AS INTEGER))                                                                            AS clients_tactic_email,
   SUM(CASE WHEN c.email_disposition = 'eMail Open'      THEN 1 ELSE 0 END)                                            AS email_open,
@@ -236,5 +245,5 @@ FROM pcq_q1_cohort c
 LEFT JOIN pcq_q1_acct_summary s
   ON c.acct_no = s.acct_no
  AND c.app_approved = 1
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9;
