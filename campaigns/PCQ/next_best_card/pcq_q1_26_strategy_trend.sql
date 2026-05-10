@@ -27,9 +27,10 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     test_group_latest,
     strtgy_seg_typ,
     tpa_ita,
+    model_score_decile,
     offer_prod_latest,
     offer_prod_latest_name,
-    product_applied,
+    product_applied_name,
     asc_on_app_source,
     asc_on_app,
     treatmt_start_dt,
@@ -38,6 +39,8 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     response_channel,
     response_channel_grp,
     app_approved,
+    tactic_email,
+    email_disposition,
     chnl_dm,
     chnl_do,
     chnl_ec,
@@ -163,6 +166,9 @@ SELECT
   c.offer_prod_latest,
   c.offer_prod_latest_name,
   c.asc_on_app_source,
+  c.response_channel_grp,
+  c.product_applied_name,
+  c.model_score_decile,
 
   COUNT(*)                                                                                                            AS deployed,
 
@@ -205,6 +211,11 @@ SELECT
   MAX(s.last_event_dt)                                                                                                AS max_event_dt_in_cohort,
   SUM(CASE WHEN s.acct_cls_dt IS NOT NULL THEN 1 ELSE 0 END)                                                          AS closed_accts,
 
+  SUM(CAST(c.tactic_email     AS INTEGER))                                                                            AS clients_tactic_email,
+  SUM(CASE WHEN c.email_disposition = 'eMail Open'      THEN 1 ELSE 0 END)                                            AS email_open,
+  SUM(CASE WHEN c.email_disposition LIKE 'eMail Clic%'  THEN 1 ELSE 0 END)                                            AS email_click,
+  SUM(CASE WHEN c.email_disposition LIKE 'eMail Unsu%'  THEN 1 ELSE 0 END)                                            AS email_unsub,
+
   SUM(CAST(c.chnl_dm          AS INTEGER))                                                                            AS clients_chnl_dm,
   SUM(CAST(c.chnl_do          AS INTEGER))                                                                            AS clients_chnl_do,
   SUM(CAST(c.chnl_ec          AS INTEGER))                                                                            AS clients_chnl_ec,
@@ -222,5 +233,5 @@ FROM pcq_q1_cohort c
 LEFT JOIN pcq_q1_acct_summary s
   ON c.acct_no = s.acct_no
  AND c.app_approved = 1
-GROUP BY 1, 2, 3, 4, 5, 6, 7
-ORDER BY 1, 2, 3, 4, 5, 6, 7;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10;
