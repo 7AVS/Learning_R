@@ -26,7 +26,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     acct_no,
     test_group_latest,
     strtgy_seg_typ,
-    tpa_ita,
     model_score_decile,
     offer_prod_latest,
     offer_prod_latest_name,
@@ -55,6 +54,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     chnl_rd
   FROM cards_tpa_pcq_decision_resp
   WHERE treatmt_start_dt >= DATE '2025-11-01'
+    AND tpa_ita = 'TPA'
 ) WITH DATA
 PRIMARY INDEX (clnt_no, acct_no)
 ON COMMIT PRESERVE ROWS;
@@ -70,7 +70,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_approved AS (
     treatmt_start_dt,
     test_group_latest,
     strtgy_seg_typ,
-    tpa_ita,
     offer_prod_latest,
     asc_on_app_source
   FROM pcq_q1_cohort
@@ -162,7 +161,6 @@ SELECT
   c.treatmt_start_dt,
   c.test_group_latest,
   c.strtgy_seg_typ,
-  c.tpa_ita,
   c.offer_prod_latest,
   c.offer_prod_latest_name,
   c.response_channel_grp,
@@ -245,5 +243,5 @@ FROM pcq_q1_cohort c
 LEFT JOIN pcq_q1_acct_summary s
   ON c.acct_no = s.acct_no
  AND c.app_approved = 1
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
-ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+ORDER BY 1, 2, 3, 4, 5, 6, 7, 8;
