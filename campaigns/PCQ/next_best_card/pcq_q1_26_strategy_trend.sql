@@ -29,7 +29,9 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     model_score_decile,
     offer_prod_latest,
     offer_prod_latest_name,
+    offer_cr_lmt_latest,
     product_applied_name,
+    cr_lmt_approved,
     asc_on_app_source,
     asc_on_app,
     treatmt_start_dt,
@@ -202,6 +204,11 @@ SELECT
   COUNT(s.acct_no)                                                                                                    AS approved_with_portfolio_data,
   SUM(CASE WHEN s.acct_no IS NOT NULL AND c.asc_on_app_source = 'Period-ASC'                                THEN 1 ELSE 0 END) AS approved_with_portfolio_data_period_asc,
   SUM(CASE WHEN s.acct_no IS NOT NULL AND (c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL) THEN 1 ELSE 0 END) AS approved_with_portfolio_data_other_asc,
+
+  SUM(c.offer_cr_lmt_latest)                                                                                          AS sum_offer_cr_lmt,
+  SUM(c.cr_lmt_approved)                                                                                              AS sum_cr_lmt_approved,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC'                                THEN c.cr_lmt_approved ELSE 0 END)  AS sum_cr_lmt_approved_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL THEN c.cr_lmt_approved ELSE 0 END) AS sum_cr_lmt_approved_other_asc,
 
   SUM(s.sum_purchases)                                                                                                AS sum_purchases,
   SUM(s.last_bal_current)                                                                                             AS sum_last_bal_current,
