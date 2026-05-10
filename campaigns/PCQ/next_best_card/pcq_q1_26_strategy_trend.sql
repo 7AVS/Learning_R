@@ -186,6 +186,9 @@ SELECT
   SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 60                  THEN 1 ELSE 0 END) AS approved_d0_60,
   SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 90                  THEN 1 ELSE 0 END) AS approved_d0_90,
 
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS responded_period_asc,
+  SUM(CASE WHEN c.app_approved = 1        AND c.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END) AS approved_period_asc,
+
   SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Online'            THEN 1 ELSE 0 END) AS responded_via_online,
   SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Mobile'            THEN 1 ELSE 0 END) AS responded_via_mobile,
   SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Branch/Advice Ctr' THEN 1 ELSE 0 END) AS responded_via_branch,
