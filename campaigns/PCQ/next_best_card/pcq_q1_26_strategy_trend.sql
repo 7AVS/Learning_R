@@ -25,6 +25,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     clnt_no,
     acct_no,
     test_group_latest,
+    strtgy_seg_typ,
     tpa_ita,
     offer_prod_latest,
     offer_prod_latest_name,
@@ -34,6 +35,8 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_cohort AS (
     treatmt_start_dt,
     treatmt_end_dt,
     response_dt,
+    response_channel,
+    response_channel_grp,
     app_approved,
     chnl_dm,
     chnl_do,
@@ -63,6 +66,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_approved AS (
     clnt_no,
     treatmt_start_dt,
     test_group_latest,
+    strtgy_seg_typ,
     tpa_ita,
     offer_prod_latest,
     asc_on_app_source
@@ -154,6 +158,7 @@ ON COMMIT PRESERVE ROWS;
 SELECT
   c.treatmt_start_dt,
   c.test_group_latest,
+  c.strtgy_seg_typ,
   c.tpa_ita,
   c.offer_prod_latest,
   c.offer_prod_latest_name,
@@ -174,6 +179,16 @@ SELECT
   SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 45                  THEN 1 ELSE 0 END) AS approved_d0_45,
   SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 60                  THEN 1 ELSE 0 END) AS approved_d0_60,
   SUM(CASE WHEN c.app_approved = 1 AND (c.response_dt - c.treatmt_start_dt) <= 90                  THEN 1 ELSE 0 END) AS approved_d0_90,
+
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Online'            THEN 1 ELSE 0 END) AS responded_via_online,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Mobile'            THEN 1 ELSE 0 END) AS responded_via_mobile,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Branch/Advice Ctr' THEN 1 ELSE 0 END) AS responded_via_branch,
+  SUM(CASE WHEN c.response_dt IS NOT NULL AND c.response_channel_grp = 'Other'             THEN 1 ELSE 0 END) AS responded_via_other,
+
+  SUM(CASE WHEN c.app_approved = 1 AND c.response_channel_grp = 'Online'            THEN 1 ELSE 0 END) AS approved_via_online,
+  SUM(CASE WHEN c.app_approved = 1 AND c.response_channel_grp = 'Mobile'            THEN 1 ELSE 0 END) AS approved_via_mobile,
+  SUM(CASE WHEN c.app_approved = 1 AND c.response_channel_grp = 'Branch/Advice Ctr' THEN 1 ELSE 0 END) AS approved_via_branch,
+  SUM(CASE WHEN c.app_approved = 1 AND c.response_channel_grp = 'Other'             THEN 1 ELSE 0 END) AS approved_via_other,
 
   COUNT(s.acct_no)                                                                                                    AS approved_with_portfolio_data,
 
@@ -207,5 +222,5 @@ FROM pcq_q1_cohort c
 LEFT JOIN pcq_q1_acct_summary s
   ON c.acct_no = s.acct_no
  AND c.app_approved = 1
-GROUP BY 1, 2, 3, 4, 5, 6
-ORDER BY 1, 2, 3, 4, 5, 6;
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+ORDER BY 1, 2, 3, 4, 5, 6, 7;
