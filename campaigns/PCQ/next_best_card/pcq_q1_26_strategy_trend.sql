@@ -222,6 +222,7 @@ SELECT
   SUM(CASE WHEN c.asc_on_app_source <> 'Period-ASC' OR c.asc_on_app_source IS NULL THEN s.last_mtd_avg_bal ELSE 0 END) AS sum_last_mtd_avg_bal_other_asc,
 
   SUM(CAST(c.tactic_email     AS INTEGER))                                                                            AS clients_tactic_email,
+  SUM(CASE WHEN c.email_disposition = 'eMail Sent'      THEN 1 ELSE 0 END)                                            AS email_sent,
   SUM(CASE WHEN c.email_disposition = 'eMail Open'      THEN 1 ELSE 0 END)                                            AS email_open,
   SUM(CASE WHEN c.email_disposition LIKE 'eMail Clic%'  THEN 1 ELSE 0 END)                                            AS email_click,
   SUM(CASE WHEN c.email_disposition LIKE 'eMail Unsu%'  THEN 1 ELSE 0 END)                                            AS email_unsub,
