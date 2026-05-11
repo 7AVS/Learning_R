@@ -99,140 +99,89 @@ ON COMMIT PRESERVE ROWS;
 
 -- ============================================================
 -- pcq_q1_pa_acct_summary: per-account portfolio rollup since treatmt_start_dt
---   (same logic as the main query -- portfolio data is asc-agnostic
---    at this stage; Period-ASC filter applies at the OUTPUT level)
+-- Single scan of DLY_FULL_PORTFOLIO; two ROW_NUMBER windows (overall +
+-- per-month) feed all per-account fields and 30 monthly pivot columns.
+-- Spool-conscious: avoids the 4-scan structure that overflowed.
 -- ============================================================
 CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
   SELECT
-    s.acct_no,
-    s.sum_purchases,
-    s.sum_purchases_d0_15,
-    s.sum_purchases_d0_30,
-    s.sum_purchases_d0_45,
-    s.sum_purchases_d0_60,
-    s.sum_purchases_d0_90,
-    s.event_days,
-    s.last_event_dt,
-    (s.last_event_dt - a.treatmt_start_dt) AS days_observed,
-    l.last_bal_current,
-    l.last_mtd_avg_bal,
-    l.last_status,
-    l.acct_open_dt,
-    l.acct_cls_dt,
-    l.visa_prod_cd,
-    -- calendar-month pivot: balance (last accum_dly_bal_mtd of month)
-    pm.bal_2025_11, pm.bal_2025_12,
-    pm.bal_2026_01, pm.bal_2026_02, pm.bal_2026_03, pm.bal_2026_04,
-    pm.bal_2026_05, pm.bal_2026_06, pm.bal_2026_07, pm.bal_2026_08,
-    -- calendar-month pivot: purchases (sum net_prch_amt_dly within month)
-    pm.purch_2025_11, pm.purch_2025_12,
-    pm.purch_2026_01, pm.purch_2026_02, pm.purch_2026_03, pm.purch_2026_04,
-    pm.purch_2026_05, pm.purch_2026_06, pm.purch_2026_07, pm.purch_2026_08,
-    -- calendar-month pivot: active flag (1 if >=1 event in month, else NULL)
-    pm.active_2025_11, pm.active_2025_12,
-    pm.active_2026_01, pm.active_2026_02, pm.active_2026_03, pm.active_2026_04,
-    pm.active_2026_05, pm.active_2026_06, pm.active_2026_07, pm.active_2026_08
+    acct_no,
+    -- per-acct totals (day-level)
+    SUM(net_prch_amt_dly)                                                                       AS sum_purchases,
+    SUM(CASE WHEN days_from_treatment <= 15 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_15,
+    SUM(CASE WHEN days_from_treatment <= 30 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_30,
+    SUM(CASE WHEN days_from_treatment <= 45 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_45,
+    SUM(CASE WHEN days_from_treatment <= 60 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_60,
+    SUM(CASE WHEN days_from_treatment <= 90 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_90,
+    COUNT(*)                                                                                     AS event_days,
+    MAX(dt_record_ext)                                                                           AS last_event_dt,
+    (MAX(dt_record_ext) - MAX(treatmt_start_dt))                                                 AS days_observed,
+    -- per-acct last-event snapshot (overall most-recent dt_record_ext)
+    MAX(CASE WHEN rn_overall = 1 THEN bal_current END)                                           AS last_bal_current,
+    MAX(CASE WHEN rn_overall = 1 THEN accum_dly_bal_mtd END)                                     AS last_mtd_avg_bal,
+    MAX(CASE WHEN rn_overall = 1 THEN status END)                                                AS last_status,
+    MAX(CASE WHEN rn_overall = 1 THEN acct_open_dt END)                                          AS acct_open_dt,
+    MAX(CASE WHEN rn_overall = 1 THEN acct_cls_dt END)                                           AS acct_cls_dt,
+    MAX(CASE WHEN rn_overall = 1 THEN visa_prod_cd END)                                          AS visa_prod_cd,
+    -- monthly pivot: balance = last accum_dly_bal_mtd in month (rn_in_month = 1)
+    MAX(CASE WHEN yyyy = 2025 AND mm = 11 AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2025_11,
+    MAX(CASE WHEN yyyy = 2025 AND mm = 12 AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2025_12,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 1  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_01,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 2  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_02,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 3  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_03,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 4  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_04,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 5  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_05,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 6  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_06,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 7  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_07,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 8  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_08,
+    -- monthly pivot: purchases = SUM(net_prch_amt_dly) within month
+    SUM(CASE WHEN yyyy = 2025 AND mm = 11 THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2025_11,
+    SUM(CASE WHEN yyyy = 2025 AND mm = 12 THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2025_12,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 1  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_01,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 2  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_02,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 3  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_03,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 4  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_04,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 5  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_05,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 6  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_06,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 7  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_07,
+    SUM(CASE WHEN yyyy = 2026 AND mm = 8  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_08,
+    -- monthly pivot: active = 1 if any event in month
+    MAX(CASE WHEN yyyy = 2025 AND mm = 11 THEN 1 END)                                            AS active_2025_11,
+    MAX(CASE WHEN yyyy = 2025 AND mm = 12 THEN 1 END)                                            AS active_2025_12,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 1  THEN 1 END)                                            AS active_2026_01,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 2  THEN 1 END)                                            AS active_2026_02,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 3  THEN 1 END)                                            AS active_2026_03,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 4  THEN 1 END)                                            AS active_2026_04,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 5  THEN 1 END)                                            AS active_2026_05,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 6  THEN 1 END)                                            AS active_2026_06,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 7  THEN 1 END)                                            AS active_2026_07,
+    MAX(CASE WHEN yyyy = 2026 AND mm = 8  THEN 1 END)                                            AS active_2026_08
   FROM (
     SELECT
       p.acct_no,
-      SUM(p.net_prch_amt_dly)                                                                                AS sum_purchases,
-      SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 15 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_15,
-      SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 30 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_30,
-      SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 45 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_45,
-      SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 60 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_60,
-      SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 90 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_90,
-      COUNT(*)                                                                                               AS event_days,
-      MAX(p.dt_record_ext)                                                                                   AS last_event_dt
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN pcq_q1_pa_approved a
-      ON p.acct_no = a.acct_no
-    WHERE p.dt_record_ext >= a.treatmt_start_dt
-    GROUP BY p.acct_no
-  ) s
-  INNER JOIN (
-    SELECT
-      p.acct_no,
-      p.bal_current        AS last_bal_current,
-      p.accum_dly_bal_mtd  AS last_mtd_avg_bal,
-      p.status             AS last_status,
+      p.dt_record_ext,
+      p.me_dt,
+      EXTRACT(YEAR  FROM p.me_dt)                                AS yyyy,
+      EXTRACT(MONTH FROM p.me_dt)                                AS mm,
+      p.net_prch_amt_dly,
+      p.accum_dly_bal_mtd,
+      p.bal_current,
+      p.status,
       p.acct_open_dt,
       p.acct_cls_dt,
-      p.visa_prod_cd
+      p.visa_prod_cd,
+      a.treatmt_start_dt,
+      (p.dt_record_ext - a.treatmt_start_dt)                     AS days_from_treatment,
+      ROW_NUMBER() OVER (PARTITION BY p.acct_no
+                         ORDER BY p.dt_record_ext DESC)          AS rn_overall,
+      ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt
+                         ORDER BY p.dt_record_ext DESC)          AS rn_in_month
     FROM D3CV12A.DLY_FULL_PORTFOLIO p
     INNER JOIN pcq_q1_pa_approved a
       ON p.acct_no = a.acct_no
     WHERE p.dt_record_ext >= a.treatmt_start_dt
-    QUALIFY ROW_NUMBER()
-              OVER (PARTITION BY p.acct_no
-                    ORDER BY p.dt_record_ext DESC) = 1
-  ) l
-    ON s.acct_no = l.acct_no
-  INNER JOIN pcq_q1_pa_approved a
-    ON s.acct_no = a.acct_no
-  LEFT JOIN (
-    -- per-account monthly pivot
-    --   bal_YYYY_MM   = LAST accum_dly_bal_mtd of that calendar month
-    --                   (not MAX -- MTD avg drops when client pays down balance)
-    --   purch_YYYY_MM = SUM(net_prch_amt_dly) within the month
-    --   active_YYYY_MM = 1 if any event in the month, else NULL
-    -- Inner pmi pre-aggregates per (acct_no, me_dt) so the outer pivot just
-    -- picks the right month -- balance via QUALIFY-ranked last event.
-    SELECT
-      pmi.acct_no,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 11 THEN pmi.last_mtd_avg_bal END) AS bal_2025_11,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 12 THEN pmi.last_mtd_avg_bal END) AS bal_2025_12,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 1  THEN pmi.last_mtd_avg_bal END) AS bal_2026_01,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 2  THEN pmi.last_mtd_avg_bal END) AS bal_2026_02,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 3  THEN pmi.last_mtd_avg_bal END) AS bal_2026_03,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 4  THEN pmi.last_mtd_avg_bal END) AS bal_2026_04,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 5  THEN pmi.last_mtd_avg_bal END) AS bal_2026_05,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 6  THEN pmi.last_mtd_avg_bal END) AS bal_2026_06,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 7  THEN pmi.last_mtd_avg_bal END) AS bal_2026_07,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 8  THEN pmi.last_mtd_avg_bal END) AS bal_2026_08,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 11 THEN pmi.purch_in_month END)  AS purch_2025_11,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 12 THEN pmi.purch_in_month END)  AS purch_2025_12,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 1  THEN pmi.purch_in_month END)  AS purch_2026_01,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 2  THEN pmi.purch_in_month END)  AS purch_2026_02,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 3  THEN pmi.purch_in_month END)  AS purch_2026_03,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 4  THEN pmi.purch_in_month END)  AS purch_2026_04,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 5  THEN pmi.purch_in_month END)  AS purch_2026_05,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 6  THEN pmi.purch_in_month END)  AS purch_2026_06,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 7  THEN pmi.purch_in_month END)  AS purch_2026_07,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 8  THEN pmi.purch_in_month END)  AS purch_2026_08,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 11 THEN 1 END) AS active_2025_11,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2025 AND EXTRACT(MONTH FROM pmi.me_dt) = 12 THEN 1 END) AS active_2025_12,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 1  THEN 1 END) AS active_2026_01,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 2  THEN 1 END) AS active_2026_02,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 3  THEN 1 END) AS active_2026_03,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 4  THEN 1 END) AS active_2026_04,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 5  THEN 1 END) AS active_2026_05,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 6  THEN 1 END) AS active_2026_06,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 7  THEN 1 END) AS active_2026_07,
-      MAX(CASE WHEN EXTRACT(YEAR FROM pmi.me_dt) = 2026 AND EXTRACT(MONTH FROM pmi.me_dt) = 8  THEN 1 END) AS active_2026_08
-    FROM (
-      SELECT
-        sums.acct_no,
-        sums.me_dt,
-        sums.purch_in_month,
-        lasts.last_mtd_avg_bal
-      FROM (
-        SELECT p.acct_no, p.me_dt, SUM(p.net_prch_amt_dly) AS purch_in_month
-        FROM D3CV12A.DLY_FULL_PORTFOLIO p
-        INNER JOIN pcq_q1_pa_approved a ON p.acct_no = a.acct_no
-        WHERE p.dt_record_ext >= a.treatmt_start_dt
-        GROUP BY p.acct_no, p.me_dt
-      ) sums
-      INNER JOIN (
-        SELECT p.acct_no, p.me_dt, p.accum_dly_bal_mtd AS last_mtd_avg_bal
-        FROM D3CV12A.DLY_FULL_PORTFOLIO p
-        INNER JOIN pcq_q1_pa_approved a ON p.acct_no = a.acct_no
-        WHERE p.dt_record_ext >= a.treatmt_start_dt
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt ORDER BY p.dt_record_ext DESC) = 1
-      ) lasts ON sums.acct_no = lasts.acct_no AND sums.me_dt = lasts.me_dt
-    ) pmi
-    GROUP BY pmi.acct_no
-  ) pm
-    ON s.acct_no = pm.acct_no
+  ) enriched
+  GROUP BY acct_no
 ) WITH DATA
 PRIMARY INDEX (acct_no)
 ON COMMIT PRESERVE ROWS;
