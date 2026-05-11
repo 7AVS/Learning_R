@@ -10,6 +10,11 @@
 --   contact channels (chnl_*)  -> cohort-wide totals (pre-deployment exposure)
 --   offer credit limit         -> cohort-wide total (pre-response)
 -- Volatile tables use pa_ prefix to coexist with the main query in the same session.
+--
+-- Two outputs:
+--   1. Period-ASC cohort summary (grain: cohort x 8 dims)
+--   2. Calendar-month vintage trend (grain: cohort x 8 dims x me_dt)
+--      -- Pivot Strategy x Month with avg balance per active account.
 
 DATABASE DL_MR_PROD;
 
@@ -18,6 +23,7 @@ DATABASE DL_MR_PROD;
 -- Drop volatiles from any prior run in this session.
 -- First-time run will throw 3807 (object does not exist) -- harmless.
 -- ============================================================
+DROP TABLE pcq_q1_pa_acct_month;
 DROP TABLE pcq_q1_pa_acct_summary;
 DROP TABLE pcq_q1_pa_approved;
 DROP TABLE pcq_q1_pa_cohort;
@@ -78,7 +84,11 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_approved AS (
     treatmt_start_dt,
     test_group_latest,
     strtgy_seg_typ,
+    model_score_decile,
     offer_prod_latest,
+    offer_prod_latest_name,
+    product_applied_name,
+    response_channel_grp,
     asc_on_app_source
   FROM pcq_q1_pa_cohort
   WHERE app_approved = 1
@@ -154,7 +164,57 @@ ON COMMIT PRESERVE ROWS;
 
 
 -- ============================================================
--- OUTPUT: Period-ASC focused single summary
+-- pcq_q1_pa_acct_month: per-(account, me_dt) portfolio snapshot
+-- Drives the calendar-month vintage OUTPUT below.
+--   last_mtd_avg_bal       = accum_dly_bal_mtd at last event of the month
+--   last_bal_current       = bal_current at last event of the month
+--   sum_purchases_in_month = SUM(net_prch_amt_dly) inside the month
+-- ============================================================
+CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_month AS (
+  SELECT
+    s.acct_no,
+    s.me_dt,
+    s.sum_purchases_in_month,
+    s.event_days_in_month,
+    s.last_event_dt_in_month,
+    l.last_mtd_avg_bal,
+    l.last_bal_current
+  FROM (
+    SELECT
+      p.acct_no,
+      p.me_dt,
+      SUM(p.net_prch_amt_dly) AS sum_purchases_in_month,
+      COUNT(*)                AS event_days_in_month,
+      MAX(p.dt_record_ext)    AS last_event_dt_in_month
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN pcq_q1_pa_approved a
+      ON p.acct_no = a.acct_no
+    WHERE p.dt_record_ext >= a.treatmt_start_dt
+    GROUP BY p.acct_no, p.me_dt
+  ) s
+  INNER JOIN (
+    SELECT
+      p.acct_no,
+      p.me_dt,
+      p.accum_dly_bal_mtd AS last_mtd_avg_bal,
+      p.bal_current       AS last_bal_current
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    INNER JOIN pcq_q1_pa_approved a
+      ON p.acct_no = a.acct_no
+    WHERE p.dt_record_ext >= a.treatmt_start_dt
+    QUALIFY ROW_NUMBER()
+              OVER (PARTITION BY p.acct_no, p.me_dt
+                    ORDER BY p.dt_record_ext DESC) = 1
+  ) l
+    ON s.acct_no = l.acct_no
+   AND s.me_dt   = l.me_dt
+) WITH DATA
+PRIMARY INDEX (acct_no, me_dt)
+ON COMMIT PRESERVE ROWS;
+
+
+-- ============================================================
+-- OUTPUT 1: Period-ASC focused cohort summary
 -- Grain: 8 dims (no asc, no tpa_ita)
 -- ============================================================
 SELECT
@@ -242,3 +302,37 @@ LEFT JOIN pcq_q1_pa_acct_summary s
  AND c.app_approved = 1
 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
 ORDER BY 1, 2, 3, 4, 5, 6, 7, 8;
+
+
+-- ============================================================
+-- OUTPUT 2: Calendar-month vintage trend
+-- Grain: cohort x 8 dims x me_dt  (one row per cohort x strategy x month)
+-- Pivot recipe:
+--   Rows    : strategy dim (test_group_latest / strtgy_seg_typ / etc.)
+--   Columns : me_dt
+--   Values  : Calculated field = SUM(sum_mtd_avg_bal) / SUM(active_accts)
+-- months_since_treatment included so vintage-by-age pivots are one step too.
+-- ============================================================
+SELECT
+  a.treatmt_start_dt,
+  a.test_group_latest,
+  a.strtgy_seg_typ,
+  a.offer_prod_latest,
+  a.offer_prod_latest_name,
+  a.product_applied_name,
+  a.model_score_decile,
+  a.response_channel_grp,
+  am.me_dt,
+  ((EXTRACT(YEAR FROM am.me_dt) - EXTRACT(YEAR FROM a.treatmt_start_dt)) * 12
+   + (EXTRACT(MONTH FROM am.me_dt) - EXTRACT(MONTH FROM a.treatmt_start_dt))) AS months_since_treatment,
+  COUNT(DISTINCT am.acct_no)            AS active_accts,
+  SUM(am.last_mtd_avg_bal)              AS sum_mtd_avg_bal,
+  SUM(am.last_bal_current)              AS sum_last_bal_current,
+  SUM(am.sum_purchases_in_month)        AS sum_purchases_in_month,
+  SUM(am.event_days_in_month)           AS total_event_days
+FROM pcq_q1_pa_acct_month am
+INNER JOIN pcq_q1_pa_approved a
+  ON am.acct_no = a.acct_no
+WHERE a.asc_on_app_source = 'Period-ASC'
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+ORDER BY 1, 9;
