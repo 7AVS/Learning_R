@@ -24,6 +24,7 @@ DATABASE DL_MR_PROD;
 -- First-time run will throw 3807 (object does not exist) -- harmless.
 -- ============================================================
 DROP TABLE pcq_q1_pa_acct_summary;
+DROP TABLE pcq_q1_pa_events;
 DROP TABLE pcq_q1_pa_approved;
 DROP TABLE pcq_q1_pa_cohort;
 
@@ -98,15 +99,48 @@ ON COMMIT PRESERVE ROWS;
 
 
 -- ============================================================
--- pcq_q1_pa_acct_summary: per-account portfolio rollup since treatmt_start_dt
--- Single scan of DLY_FULL_PORTFOLIO; two ROW_NUMBER windows (overall +
--- per-month) feed all per-account fields and 30 monthly pivot columns.
--- Spool-conscious: avoids the 4-scan structure that overflowed.
+-- pcq_q1_pa_events: stage relevant portfolio events ONCE.
+-- This is the only scan of DLY_FULL_PORTFOLIO. Filter is the join
+-- to pcq_q1_pa_approved + WHERE dt_record_ext >= treatmt_start_dt,
+-- which prunes the full table to just the rows we need. Everything
+-- downstream operates on this small volatile, no rescans of the
+-- big table.
+-- ============================================================
+CREATE MULTISET VOLATILE TABLE pcq_q1_pa_events AS (
+  SELECT
+    p.acct_no,
+    p.dt_record_ext,
+    p.me_dt,
+    EXTRACT(YEAR  FROM p.me_dt)            AS yyyy,
+    EXTRACT(MONTH FROM p.me_dt)            AS mm,
+    p.net_prch_amt_dly,
+    p.accum_dly_bal_mtd,
+    p.bal_current,
+    p.status,
+    p.acct_open_dt,
+    p.acct_cls_dt,
+    p.visa_prod_cd,
+    a.treatmt_start_dt,
+    (p.dt_record_ext - a.treatmt_start_dt) AS days_from_treatment
+  FROM D3CV12A.DLY_FULL_PORTFOLIO p
+  INNER JOIN pcq_q1_pa_approved a
+    ON p.acct_no = a.acct_no
+  WHERE p.dt_record_ext >= a.treatmt_start_dt
+) WITH DATA
+PRIMARY INDEX (acct_no, dt_record_ext)
+ON COMMIT PRESERVE ROWS;
+
+
+-- ============================================================
+-- pcq_q1_pa_acct_summary: per-account rollup from the staged events.
+-- Operates entirely on the small pcq_q1_pa_events volatile -- no
+-- DLY_FULL_PORTFOLIO references. Two ROW_NUMBER windows over the
+-- staged volatile feed last-overall and last-in-month aggregations
+-- via CASE WHEN.
 -- ============================================================
 CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
   SELECT
     acct_no,
-    -- per-acct totals (day-level)
     SUM(net_prch_amt_dly)                                                                       AS sum_purchases,
     SUM(CASE WHEN days_from_treatment <= 15 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_15,
     SUM(CASE WHEN days_from_treatment <= 30 THEN net_prch_amt_dly ELSE 0 END)                   AS sum_purchases_d0_30,
@@ -116,14 +150,12 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     COUNT(*)                                                                                     AS event_days,
     MAX(dt_record_ext)                                                                           AS last_event_dt,
     (MAX(dt_record_ext) - MAX(treatmt_start_dt))                                                 AS days_observed,
-    -- per-acct last-event snapshot (overall most-recent dt_record_ext)
     MAX(CASE WHEN rn_overall = 1 THEN bal_current END)                                           AS last_bal_current,
     MAX(CASE WHEN rn_overall = 1 THEN accum_dly_bal_mtd END)                                     AS last_mtd_avg_bal,
     MAX(CASE WHEN rn_overall = 1 THEN status END)                                                AS last_status,
     MAX(CASE WHEN rn_overall = 1 THEN acct_open_dt END)                                          AS acct_open_dt,
     MAX(CASE WHEN rn_overall = 1 THEN acct_cls_dt END)                                           AS acct_cls_dt,
     MAX(CASE WHEN rn_overall = 1 THEN visa_prod_cd END)                                          AS visa_prod_cd,
-    -- monthly pivot: balance = last accum_dly_bal_mtd in month (rn_in_month = 1)
     MAX(CASE WHEN yyyy = 2025 AND mm = 11 AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2025_11,
     MAX(CASE WHEN yyyy = 2025 AND mm = 12 AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2025_12,
     MAX(CASE WHEN yyyy = 2026 AND mm = 1  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_01,
@@ -134,7 +166,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     MAX(CASE WHEN yyyy = 2026 AND mm = 6  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_06,
     MAX(CASE WHEN yyyy = 2026 AND mm = 7  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_07,
     MAX(CASE WHEN yyyy = 2026 AND mm = 8  AND rn_in_month = 1 THEN accum_dly_bal_mtd END)        AS bal_2026_08,
-    -- monthly pivot: purchases = SUM(net_prch_amt_dly) within month
     SUM(CASE WHEN yyyy = 2025 AND mm = 11 THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2025_11,
     SUM(CASE WHEN yyyy = 2025 AND mm = 12 THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2025_12,
     SUM(CASE WHEN yyyy = 2026 AND mm = 1  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_01,
@@ -145,7 +176,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     SUM(CASE WHEN yyyy = 2026 AND mm = 6  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_06,
     SUM(CASE WHEN yyyy = 2026 AND mm = 7  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_07,
     SUM(CASE WHEN yyyy = 2026 AND mm = 8  THEN net_prch_amt_dly ELSE 0 END)                      AS purch_2026_08,
-    -- monthly pivot: active = 1 if any event in month
     MAX(CASE WHEN yyyy = 2025 AND mm = 11 THEN 1 END)                                            AS active_2025_11,
     MAX(CASE WHEN yyyy = 2025 AND mm = 12 THEN 1 END)                                            AS active_2025_12,
     MAX(CASE WHEN yyyy = 2026 AND mm = 1  THEN 1 END)                                            AS active_2026_01,
@@ -158,28 +188,12 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     MAX(CASE WHEN yyyy = 2026 AND mm = 8  THEN 1 END)                                            AS active_2026_08
   FROM (
     SELECT
-      p.acct_no,
-      p.dt_record_ext,
-      p.me_dt,
-      EXTRACT(YEAR  FROM p.me_dt)                                AS yyyy,
-      EXTRACT(MONTH FROM p.me_dt)                                AS mm,
-      p.net_prch_amt_dly,
-      p.accum_dly_bal_mtd,
-      p.bal_current,
-      p.status,
-      p.acct_open_dt,
-      p.acct_cls_dt,
-      p.visa_prod_cd,
-      a.treatmt_start_dt,
-      (p.dt_record_ext - a.treatmt_start_dt)                     AS days_from_treatment,
-      ROW_NUMBER() OVER (PARTITION BY p.acct_no
-                         ORDER BY p.dt_record_ext DESC)          AS rn_overall,
-      ROW_NUMBER() OVER (PARTITION BY p.acct_no, p.me_dt
-                         ORDER BY p.dt_record_ext DESC)          AS rn_in_month
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN pcq_q1_pa_approved a
-      ON p.acct_no = a.acct_no
-    WHERE p.dt_record_ext >= a.treatmt_start_dt
+      e.*,
+      ROW_NUMBER() OVER (PARTITION BY e.acct_no
+                         ORDER BY e.dt_record_ext DESC)          AS rn_overall,
+      ROW_NUMBER() OVER (PARTITION BY e.acct_no, e.me_dt
+                         ORDER BY e.dt_record_ext DESC)          AS rn_in_month
+    FROM pcq_q1_pa_events e
   ) enriched
   GROUP BY acct_no
 ) WITH DATA
