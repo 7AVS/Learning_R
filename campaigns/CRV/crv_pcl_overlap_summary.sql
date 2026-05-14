@@ -143,7 +143,8 @@ ORDER BY accounts DESC
 ------------------------------------------------------------------------------
 -- D) Headline cannibalization test
 --    PCL universe (IM channel) split by whether a CRV-IM window overlaps.
---    Compare PCL response_cli rate between the two groups.
+--    Pre-computes overlap matches as a CTE then LEFT JOINs (avoids
+--    Teradata's restriction on EXISTS inside CASE expressions).
 --    Control filters TBD on both sides — flagged.
 ------------------------------------------------------------------------------
 WITH pcl_universe AS (
@@ -167,24 +168,29 @@ crv_im AS (
       AND channels_deployed LIKE '%IM%'
       -- TODO: exclude CRV Control via action_control once code is confirmed
 ),
-pcl_flagged AS (
-    SELECT
+overlap_keys AS (
+    SELECT DISTINCT
         p.acct_no,
-        p.responder_cli,
-        CASE WHEN EXISTS (
-            SELECT 1 FROM crv_im c
-             WHERE c.acct_no = p.acct_no
-               AND c.offer_start_date <= p.treatmt_end_dt
-               AND c.offer_end_date   >= p.treatmt_strt_dt
-        ) THEN 'competed_with_crv' ELSE 'no_overlap' END AS overlap_grp
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt
     FROM pcl_universe p
+    INNER JOIN crv_im c
+      ON c.acct_no           = p.acct_no
+     AND c.offer_start_date <= p.treatmt_end_dt
+     AND c.offer_end_date   >= p.treatmt_strt_dt
 )
 SELECT
-    overlap_grp,
+    CASE WHEN o.acct_no IS NOT NULL
+         THEN 'competed_with_crv' ELSE 'no_overlap' END AS overlap_grp,
     COUNT(*)                                       AS pcl_events,
-    SUM(responder_cli)                             AS pcl_responders,
-    CAST(SUM(responder_cli) AS DECIMAL(12,4))
+    SUM(p.responder_cli)                           AS pcl_responders,
+    CAST(SUM(p.responder_cli) AS DECIMAL(12,4))
         / NULLIF(COUNT(*), 0)                      AS pcl_response_rate
-FROM pcl_flagged
-GROUP BY overlap_grp
+FROM pcl_universe p
+LEFT JOIN overlap_keys o
+  ON o.acct_no         = p.acct_no
+ AND o.treatmt_strt_dt = p.treatmt_strt_dt
+ AND o.treatmt_end_dt  = p.treatmt_end_dt
+GROUP BY CASE WHEN o.acct_no IS NOT NULL
+              THEN 'competed_with_crv' ELSE 'no_overlap' END
 ;
