@@ -193,17 +193,11 @@ pcl_flagged AS (
 )
 SELECT
     pcl_month,
-    COUNT(*)                                                              AS total_pcl_leads,
-    SUM(overlap_flag)                                                     AS overlap_leads,
-    CAST(SUM(overlap_flag) AS DECIMAL(12,4))
-        / NULLIF(COUNT(*), 0)                                             AS overlap_pct,
-    SUM(CASE WHEN overlap_flag = 1 THEN responder_cli ELSE 0 END)         AS overlap_responders,
-    CAST(SUM(CASE WHEN overlap_flag = 1 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
-        / NULLIF(SUM(overlap_flag), 0)                                    AS overlap_response_rate,
-    SUM(CASE WHEN overlap_flag = 0 THEN 1 ELSE 0 END)                     AS no_overlap_leads,
-    SUM(CASE WHEN overlap_flag = 0 THEN responder_cli ELSE 0 END)         AS no_overlap_responders,
-    CAST(SUM(CASE WHEN overlap_flag = 0 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
-        / NULLIF(SUM(CASE WHEN overlap_flag = 0 THEN 1 ELSE 0 END), 0)    AS no_overlap_response_rate
+    COUNT(*)                                                       AS total_pcl_leads,
+    SUM(overlap_flag)                                              AS overlap_leads,
+    SUM(CASE WHEN overlap_flag = 1 THEN responder_cli ELSE 0 END)  AS overlap_responders,
+    SUM(CASE WHEN overlap_flag = 0 THEN 1 ELSE 0 END)              AS no_overlap_leads,
+    SUM(CASE WHEN overlap_flag = 0 THEN responder_cli ELSE 0 END)  AS no_overlap_responders
 FROM pcl_flagged
 GROUP BY pcl_month
 ORDER BY pcl_month
