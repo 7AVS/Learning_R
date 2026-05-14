@@ -341,10 +341,10 @@ LEFT JOIN observed o
 ORDER BY d.arm_label, d.model_label, d.ac_temp;
 
 
--- F3: A/C ratio consistency per (arm x model) cell — internal check
--- (Use when no DOE exists. Outputs observed A:C ratio per cell;
---  if the design rule is "everyone gets 70/30", these should all be 0.70.)
+-- F3: A/C ratio consistency per (deployment x arm x model) cell — internal check
+-- TACTIC_ID in GROUP BY so P1 (50/50 split) and P2 (70/30 split) don't get mixed.
 SELECT
+    TACTIC_ID,
     arm_label,
     model_label,
     SUM(CASE WHEN ac_temp = 'Action'  THEN 1 ELSE 0 END)                                AS action_n,
@@ -380,8 +380,8 @@ FROM (
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE SUBSTR(TACTIC_ID, 8, 3) = 'AUH'
 ) x
-GROUP BY arm_label, model_label
-ORDER BY arm_label, model_label;
+GROUP BY TACTIC_ID, arm_label, model_label
+ORDER BY TACTIC_ID, arm_label, model_label;
 
 
 -- F4: Overall chi-square statistic for F2 (rewards SRM)
