@@ -48,8 +48,8 @@ LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA b
        ON  a.acct_no         = b.acct_no
        AND a.prod_cd         = b.prod_cd
        AND b.CHG_DT          = DATE '9999-12-31'
-       AND b.RELATIONSHIP_CD = 'Z'          -- verify: 'Z' (Daniel doc) vs '2' (screenshot)
-       AND (b.card_sts = 'A' OR b.card_sts IS NULL)
+       AND b.RELATIONSHIP_CD = '2'
+       AND b.card_sts IN ('A', '')
        AND b.CAPTR_DT        > a.TREATMT_STRT_DT
 GROUP BY
     a.TACTIC_ID, a.TREATMT_STRT_DT, a.control_grp, a.TREATMT_MN
