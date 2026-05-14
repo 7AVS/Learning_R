@@ -1,15 +1,15 @@
 -- AUH Interim Measurement — Phase 1 + Phase 2 (all waves)
--- All AUH tactic_ids captured via SUBSTR. All codes preserved.
--- Lift slicer = TREATMT_MN (PAUHNM% = Control). Sub-segment grain via TST_GRP_CD x RPT_GRP_CD empirical profile.
+-- All AUH tactic_ids captured via SUBSTR. All raw code columns preserved.
+-- No derived Action/Control or arm-type labels — no confirmed cell-code lookup exists for AUH.
+-- Labeling happens after empirical profiling, not in this SQL.
 
 
--- Q1: Code interaction profile (no success join) — find the grain
+-- Q1: Code interaction profile (no success join) — distinct codes per wave
 SELECT
     TACTIC_ID,
     TREATMT_STRT_DT,
     TREATMT_END_DT,
     TREATMT_MN,
-    CASE WHEN TREATMT_MN LIKE 'PAUHNM%' THEN 'Control' ELSE 'Action' END  AS control_grp,
     TST_GRP_CD,
     RPT_GRP_CD,
     TACTIC_CELL_CD,
@@ -24,11 +24,10 @@ GROUP BY
 ORDER BY TACTIC_ID, TREATMT_MN, TST_GRP_CD, RPT_GRP_CD;
 
 
--- Q2: Action vs Control rollup with success — top-line lift per wave
+-- Q2: Per-arm rollup with success — leads and AU adds by raw TREATMT_MN
 SELECT
     a.TACTIC_ID,
     a.TREATMT_STRT_DT,
-    a.control_grp,
     a.TREATMT_MN,
     COUNT(*)                                                        AS leads,
     SUM(CASE WHEN b.acct_no IS NOT NULL THEN 1 ELSE 0 END)          AS au_adds
@@ -38,7 +37,6 @@ FROM (
         TREATMT_STRT_DT,
         TREATMT_END_DT,
         TREATMT_MN,
-        CASE WHEN TREATMT_MN LIKE 'PAUHNM%' THEN 'Control' ELSE 'Action' END  AS control_grp,
         SUBSTR(TACTIC_DECISN_VRB_INFO, 21, 3)        AS prod_cd,
         CAST(TACTIC_EVNT_ID AS DECIMAL(20,0))        AS acct_no
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
@@ -52,15 +50,14 @@ LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA b
        AND b.card_sts IN ('A', '')
        AND b.CAPTR_DT        > a.TREATMT_STRT_DT
 GROUP BY
-    a.TACTIC_ID, a.TREATMT_STRT_DT, a.control_grp, a.TREATMT_MN
-ORDER BY a.TACTIC_ID, a.control_grp, a.TREATMT_MN;
+    a.TACTIC_ID, a.TREATMT_STRT_DT, a.TREATMT_MN
+ORDER BY a.TACTIC_ID, a.TREATMT_MN;
 
 
--- Q3: Full-grain rollup with success — Action/Control by sub-segment codes
+-- Q3: Full-grain rollup with success — leads and AU adds by all raw codes
 SELECT
     a.TACTIC_ID,
     a.TREATMT_STRT_DT,
-    a.control_grp,
     a.TREATMT_MN,
     a.TST_GRP_CD,
     a.RPT_GRP_CD,
@@ -77,7 +74,6 @@ FROM (
         TST_GRP_CD,
         RPT_GRP_CD,
         TACTIC_CELL_CD,
-        CASE WHEN TREATMT_MN LIKE 'PAUHNM%' THEN 'Control' ELSE 'Action' END  AS control_grp,
         SUBSTR(TACTIC_DECISN_VRB_INFO, 21, 3)        AS prod_cd,
         CAST(TACTIC_EVNT_ID AS DECIMAL(20,0))        AS acct_no
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
@@ -87,20 +83,20 @@ LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA b
        ON  a.acct_no         = b.acct_no
        AND a.prod_cd         = b.prod_cd
        AND b.CHG_DT          = DATE '9999-12-31'
-       AND b.RELATIONSHIP_CD = 'Z'
-       AND (b.card_sts = 'A' OR b.card_sts IS NULL)
+       AND b.RELATIONSHIP_CD = '2'
+       AND b.card_sts IN ('A', '')
        AND b.CAPTR_DT        > a.TREATMT_STRT_DT
 GROUP BY
-    a.TACTIC_ID, a.TREATMT_STRT_DT, a.control_grp, a.TREATMT_MN,
+    a.TACTIC_ID, a.TREATMT_STRT_DT, a.TREATMT_MN,
     a.TST_GRP_CD, a.RPT_GRP_CD, a.TACTIC_CELL_CD, a.prod_cd
-ORDER BY a.TACTIC_ID, a.control_grp, a.TREATMT_MN, a.TST_GRP_CD, a.RPT_GRP_CD;
+ORDER BY a.TACTIC_ID, a.TREATMT_MN, a.TST_GRP_CD, a.RPT_GRP_CD;
 
 
--- Q4: Daily vintage — for the rate-curve chart (Action vs Control per wave)
+-- Q4: Daily vintage — leads and AU adds per arm per CAPTR_DT
 SELECT
     a.TACTIC_ID,
     a.TREATMT_STRT_DT,
-    a.control_grp,
+    a.TREATMT_MN,
     b.CAPTR_DT,
     COUNT(*)                                                        AS leads,
     SUM(CASE WHEN b.acct_no IS NOT NULL THEN 1 ELSE 0 END)          AS au_adds
@@ -109,7 +105,6 @@ FROM (
         TACTIC_ID,
         TREATMT_STRT_DT,
         TREATMT_MN,
-        CASE WHEN TREATMT_MN LIKE 'PAUHNM%' THEN 'Control' ELSE 'Action' END  AS control_grp,
         SUBSTR(TACTIC_DECISN_VRB_INFO, 21, 3)        AS prod_cd,
         CAST(TACTIC_EVNT_ID AS DECIMAL(20,0))        AS acct_no
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
@@ -119,8 +114,8 @@ LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA b
        ON  a.acct_no         = b.acct_no
        AND a.prod_cd         = b.prod_cd
        AND b.CHG_DT          = DATE '9999-12-31'
-       AND b.RELATIONSHIP_CD = 'Z'
-       AND (b.card_sts = 'A' OR b.card_sts IS NULL)
+       AND b.RELATIONSHIP_CD = '2'
+       AND b.card_sts IN ('A', '')
        AND b.CAPTR_DT        > a.TREATMT_STRT_DT
-GROUP BY a.TACTIC_ID, a.TREATMT_STRT_DT, a.control_grp, b.CAPTR_DT
-ORDER BY a.TACTIC_ID, a.control_grp, b.CAPTR_DT;
+GROUP BY a.TACTIC_ID, a.TREATMT_STRT_DT, a.TREATMT_MN, b.CAPTR_DT
+ORDER BY a.TACTIC_ID, a.TREATMT_MN, b.CAPTR_DT;
