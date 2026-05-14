@@ -73,3 +73,57 @@ INNER JOIN pcl p
 GROUP BY c.crv_strt_dt, p.pcl_strt_dt
 ORDER BY c.crv_strt_dt, p.pcl_strt_dt
 ;
+
+------------------------------------------------------------------------------
+-- C) Discovery — distinct channel x test_group per campaign × source
+-- Run these first to map what literals exist before adding the
+-- same-channel + treated filter to sections A/B.
+------------------------------------------------------------------------------
+
+-- C1) Tactic event hist — CRV: channel x test_group
+SELECT
+    substr(tactic_decisn_vrb_info, 121, 8) AS crv_channel,
+    tst_grp_cd,
+    COUNT(DISTINCT clnt_no) AS clients
+FROM dg6v01.tactic_evnt_ip_ar_hist
+WHERE substr(tactic_id, 8, 3) = 'CRV'
+  AND treatmt_strt_dt >= DATE '2024-10-01'
+GROUP BY substr(tactic_decisn_vrb_info, 121, 8), tst_grp_cd
+ORDER BY clients DESC
+;
+
+-- C2) Tactic event hist — PCL: channel x test_group
+SELECT
+    substr(tactic_decisn_vrb_info, 121, 14) AS pcl_channel,
+    tst_grp_cd,
+    COUNT(DISTINCT clnt_no) AS clients
+FROM dg6v01.tactic_evnt_ip_ar_hist
+WHERE substr(tactic_id, 8, 3) = 'PCL'
+  AND treatmt_strt_dt >= DATE '2024-10-01'
+GROUP BY substr(tactic_decisn_vrb_info, 121, 14), tst_grp_cd
+ORDER BY clients DESC
+;
+
+-- C3) Curated CRV decis_resp — channels_deployed x test_group x action_control
+SELECT
+    channels_deployed,
+    test_group,
+    action_control,
+    COUNT(DISTINCT acct_no) AS accounts
+FROM dl_mr_prod.cards_crv_install_decis_resp
+WHERE offer_start_date >= DATE '2024-10-01'
+GROUP BY channels_deployed, test_group, action_control
+ORDER BY accounts DESC
+;
+
+-- C4) Curated PCL decis_resp — channel x test_group x action_code
+SELECT
+    channel,
+    tst_grp_cd,
+    action_code,
+    COUNT(DISTINCT acct_no) AS accounts
+FROM dl_mr_prod.cards_pli_decision_resp
+WHERE treatmt_strt_dt >= DATE '2024-10-01'
+GROUP BY channel, tst_grp_cd, action_code
+ORDER BY accounts DESC
+;
