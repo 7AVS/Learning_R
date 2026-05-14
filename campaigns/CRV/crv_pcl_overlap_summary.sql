@@ -139,3 +139,52 @@ WHERE treatmt_strt_dt >= DATE '2024-10-01'
 GROUP BY channel, tst_grp_cd, action_code
 ORDER BY accounts DESC
 ;
+
+------------------------------------------------------------------------------
+-- D) Headline cannibalization test
+--    PCL universe (IM channel) split by whether a CRV-IM window overlaps.
+--    Compare PCL response_cli rate between the two groups.
+--    Control filters TBD on both sides — flagged.
+------------------------------------------------------------------------------
+WITH pcl_universe AS (
+    SELECT
+        acct_no,
+        treatmt_strt_dt,
+        treatmt_end_dt,
+        responder_cli
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-10-01'
+      AND channel LIKE '%IM%'
+      -- TODO: exclude PCL Control once tst_grp_cd code is confirmed
+),
+crv_im AS (
+    SELECT
+        acct_no,
+        offer_start_date,
+        offer_end_date
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      -- TODO: exclude CRV Control via action_control once code is confirmed
+),
+pcl_flagged AS (
+    SELECT
+        p.acct_no,
+        p.responder_cli,
+        CASE WHEN EXISTS (
+            SELECT 1 FROM crv_im c
+             WHERE c.acct_no = p.acct_no
+               AND c.offer_start_date <= p.treatmt_end_dt
+               AND c.offer_end_date   >= p.treatmt_strt_dt
+        ) THEN 'competed_with_crv' ELSE 'no_overlap' END AS overlap_grp
+    FROM pcl_universe p
+)
+SELECT
+    overlap_grp,
+    COUNT(*)                                       AS pcl_events,
+    SUM(responder_cli)                             AS pcl_responders,
+    CAST(SUM(responder_cli) AS DECIMAL(12,4))
+        / NULLIF(COUNT(*), 0)                      AS pcl_response_rate
+FROM pcl_flagged
+GROUP BY overlap_grp
+;
