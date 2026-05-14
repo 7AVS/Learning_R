@@ -141,18 +141,19 @@ ORDER BY accounts DESC
 ;
 
 ------------------------------------------------------------------------------
--- D) Headline cannibalization test
---    PCL universe (IM channel) split by whether a CRV-IM window overlaps.
---    Pre-computes overlap matches as a CTE then LEFT JOINs (avoids
---    Teradata's restriction on EXISTS inside CASE expressions).
---    Control filters TBD on both sides — flagged.
+-- D) Headline cannibalization test — monthly pivot
+--    Row grain: PCL treatmt_strt_dt rolled to month-start date.
+--    Both groups (overlap / no_overlap) side-by-side as columns so the
+--    response rates are directly comparable per month.
+--    Control filters TBD on both sides.
 ------------------------------------------------------------------------------
 WITH pcl_universe AS (
     SELECT
         acct_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        responder_cli
+        responder_cli,
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%IM%'
@@ -178,19 +179,32 @@ overlap_keys AS (
       ON c.acct_no           = p.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
+),
+pcl_flagged AS (
+    SELECT
+        p.pcl_month,
+        p.responder_cli,
+        CASE WHEN o.acct_no IS NOT NULL THEN 1 ELSE 0 END AS overlap_flag
+    FROM pcl_universe p
+    LEFT JOIN overlap_keys o
+      ON o.acct_no         = p.acct_no
+     AND o.treatmt_strt_dt = p.treatmt_strt_dt
+     AND o.treatmt_end_dt  = p.treatmt_end_dt
 )
 SELECT
-    CASE WHEN o.acct_no IS NOT NULL
-         THEN 'competed_with_crv' ELSE 'no_overlap' END AS overlap_grp,
-    COUNT(*)                                       AS pcl_events,
-    SUM(p.responder_cli)                           AS pcl_responders,
-    CAST(SUM(p.responder_cli) AS DECIMAL(12,4))
-        / NULLIF(COUNT(*), 0)                      AS pcl_response_rate
-FROM pcl_universe p
-LEFT JOIN overlap_keys o
-  ON o.acct_no         = p.acct_no
- AND o.treatmt_strt_dt = p.treatmt_strt_dt
- AND o.treatmt_end_dt  = p.treatmt_end_dt
-GROUP BY CASE WHEN o.acct_no IS NOT NULL
-              THEN 'competed_with_crv' ELSE 'no_overlap' END
+    pcl_month,
+    COUNT(*)                                                              AS total_pcl_leads,
+    SUM(overlap_flag)                                                     AS overlap_leads,
+    CAST(SUM(overlap_flag) AS DECIMAL(12,4))
+        / NULLIF(COUNT(*), 0)                                             AS overlap_pct,
+    SUM(CASE WHEN overlap_flag = 1 THEN responder_cli ELSE 0 END)         AS overlap_responders,
+    CAST(SUM(CASE WHEN overlap_flag = 1 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
+        / NULLIF(SUM(overlap_flag), 0)                                    AS overlap_response_rate,
+    SUM(CASE WHEN overlap_flag = 0 THEN 1 ELSE 0 END)                     AS no_overlap_leads,
+    SUM(CASE WHEN overlap_flag = 0 THEN responder_cli ELSE 0 END)         AS no_overlap_responders,
+    CAST(SUM(CASE WHEN overlap_flag = 0 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
+        / NULLIF(SUM(CASE WHEN overlap_flag = 0 THEN 1 ELSE 0 END), 0)    AS no_overlap_response_rate
+FROM pcl_flagged
+GROUP BY pcl_month
+ORDER BY pcl_month
 ;
