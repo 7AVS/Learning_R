@@ -217,6 +217,30 @@ ORDER BY pcl_month
 --    exposure effect from the selection effect.
 --
 --    Column order: pcl_month, then all counts, then all rates at the end.
+--
+--    Field guide:
+--      total_pcl_leads        = PCL-IM universe per month.
+--      overlap_action_*       = PCL clients with CRV ACTION overlap.
+--                               (CRV-eligible AND actually deployed — exposed to the banner.)
+--      overlap_control_*      = PCL clients with CRV CONTROL overlap.
+--                               (CRV-eligible AND randomly held out — NOT exposed.)
+--      no_overlap_*           = PCL clients with no CRV deployment of any kind.
+--                               (Not CRV-eligible / not in any CRV wave.)
+--      *_response_rate        = responders / leads, within each group.
+--      *_pct                  = leads / total_pcl_leads, share of PCL universe.
+--
+--    Comparisons that matter:
+--      overlap_action_response_rate vs overlap_control_response_rate
+--         CANNIBALIZATION signal. Same CRV-eligibility profile on both sides;
+--         the only difference is CRV exposure. Gap = effect of exposure on PCL.
+--
+--      overlap_control_response_rate vs no_overlap_response_rate
+--         SELECTION BIAS check. Both groups are unexposed to CRV.
+--         If they differ materially, no_overlap is not a clean baseline and
+--         the section-D comparison was partly selection, not cannibalization.
+--
+--      overlap_action_response_rate vs no_overlap_response_rate
+--         Combined effect (same as section D) — kept for continuity.
 ------------------------------------------------------------------------------
 WITH pcl_universe AS (
     SELECT
