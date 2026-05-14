@@ -145,7 +145,7 @@ ORDER BY accounts DESC
 --    Row grain: PCL treatmt_strt_dt rolled to month-start date.
 --    Both groups (overlap / no_overlap) side-by-side as columns so the
 --    response rates are directly comparable per month.
---    Control filters TBD on both sides.
+--    Filters: CRV action_control = 'Action'. PCL has no Action/Control split — IM channel filter is the only treatment-side cut needed.
 ------------------------------------------------------------------------------
 WITH pcl_universe AS (
     SELECT
@@ -157,7 +157,6 @@ WITH pcl_universe AS (
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%IM%'
-      -- TODO: exclude PCL Control once tst_grp_cd code is confirmed
 ),
 crv_im AS (
     SELECT
@@ -167,7 +166,7 @@ crv_im AS (
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
-      -- TODO: exclude CRV Control via action_control once code is confirmed
+      AND action_control    = 'Action'
 ),
 overlap_keys AS (
     SELECT DISTINCT
