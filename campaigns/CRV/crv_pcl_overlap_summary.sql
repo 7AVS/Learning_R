@@ -7,6 +7,8 @@
 
 ------------------------------------------------------------------------------
 -- A) Tactic event history (client-grain via CLNT_NO)
+--    Filtered: channel contains IM on both sides; CRV Control (TG8) excluded.
+--    PCL Control exclusion TBD.
 ------------------------------------------------------------------------------
 WITH crv AS (
     SELECT
@@ -16,6 +18,8 @@ WITH crv AS (
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
       AND treatmt_strt_dt >= DATE '2024-10-01'
+      AND substr(tactic_decisn_vrb_info, 121, 8) LIKE '%IM%'
+      AND tst_grp_cd <> 'TG8'  -- exclude CRV Control
 ),
 pcl AS (
     SELECT
@@ -25,6 +29,8 @@ pcl AS (
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'PCL'
       AND treatmt_strt_dt >= DATE '2024-10-01'
+      AND substr(tactic_decisn_vrb_info, 121, 14) LIKE '%IM%'
+      -- TODO: exclude PCL Control once tst_grp_cd code is confirmed
 )
 SELECT
     c.crv_strt_dt,
@@ -41,6 +47,8 @@ ORDER BY c.crv_strt_dt, p.pcl_strt_dt
 
 ------------------------------------------------------------------------------
 -- B) Curated decision/response tables (account-grain via ACCT_NO)
+--    Filtered: channel contains IM on both sides.
+--    Control exclusions TBD (need curated-table Control codes).
 -- CRV: cards_crv_install_decis_resp     (offer_start_date / offer_end_date)
 -- PCL: cards_pli_decision_resp          (treatmt_strt_dt  / treatmt_end_dt)
 -- clnt_no not surfaced on CRV decis_resp in current schema view — using acct_no.
@@ -52,6 +60,8 @@ WITH crv AS (
         offer_end_date   AS crv_end_dt
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      -- TODO: exclude CRV Control via action_control / test_group once curated-table Control code is confirmed
 ),
 pcl AS (
     SELECT
@@ -60,6 +70,8 @@ pcl AS (
         treatmt_end_dt  AS pcl_end_dt
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
+      AND channel LIKE '%IM%'
+      -- TODO: exclude PCL Control via tst_grp_cd once code is confirmed
 )
 SELECT
     c.crv_strt_dt,
