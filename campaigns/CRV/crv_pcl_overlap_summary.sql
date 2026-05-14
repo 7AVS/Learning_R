@@ -223,7 +223,10 @@ ORDER BY pcl_month
 --      overlap_action_*       = PCL clients with CRV ACTION overlap.
 --                               (CRV-eligible AND actually deployed — exposed to the banner.)
 --      overlap_control_*      = PCL clients with CRV CONTROL overlap.
---                               (CRV-eligible AND randomly held out — NOT exposed.)
+--                               (CRV-eligible AND randomly held out — NOT exposed.
+--                                No channel filter on Control side: Control isn't
+--                                deployed to any channel. Pool is selection-matched
+--                                to Action across all intended channels.)
 --      no_overlap_*           = PCL clients with no CRV deployment of any kind.
 --                               (Not CRV-eligible / not in any CRV wave.)
 --      *_response_rate        = responders / leads, within each group.
@@ -263,14 +266,17 @@ crv_im_action AS (
       AND channels_deployed LIKE '%IM%'
       AND action_control = 'Action'
 ),
-crv_im_control AS (
+crv_control_pool AS (
+    -- No channel filter on Control: Control clients aren't deployed to any
+    -- channel by definition (channels_deployed will be blank/null).
+    -- Population = full CRV eligibility pool randomly held out from any
+    -- deployment. Selection-matched to Action; broader than IM-intended-only.
     SELECT
         acct_no,
         offer_start_date,
         offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
-      AND channels_deployed LIKE '%IM%'
       AND action_control = 'Control'
 ),
 overlap_action_keys AS (
@@ -286,7 +292,7 @@ overlap_control_keys AS (
     SELECT DISTINCT
         p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
     FROM pcl_universe p
-    INNER JOIN crv_im_control c
+    INNER JOIN crv_control_pool c
       ON c.acct_no           = p.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
