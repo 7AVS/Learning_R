@@ -201,3 +201,114 @@ FROM pcl_flagged
 GROUP BY pcl_month
 ORDER BY pcl_month
 ;
+
+------------------------------------------------------------------------------
+-- E) Natural-experiment three-way split
+--    Splits the CRV-overlap cohort into Action vs Control (CRV side) and
+--    keeps a third "no_overlap" group (no CRV deployment at all).
+--    Flags are mutually exclusive: Action takes priority if a PCL event
+--    happens to overlap with both arms across waves.
+--
+--    Why this section exists: the section-D comparison (overlap vs no_overlap)
+--    is contaminated by selection bias — overlap clients were CRV-eligible,
+--    no_overlap clients were not. CRV Control + PCL is the clean
+--    counterfactual: same selection profile as overlap_action, no CRV
+--    exposure. Comparing overlap_action vs overlap_control isolates the
+--    exposure effect from the selection effect.
+--
+--    Column order: pcl_month, then all counts, then all rates at the end.
+------------------------------------------------------------------------------
+WITH pcl_universe AS (
+    SELECT
+        acct_no,
+        treatmt_strt_dt,
+        treatmt_end_dt,
+        responder_cli,
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_month
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-10-01'
+      AND channel LIKE '%IM%'
+),
+crv_im_action AS (
+    SELECT
+        acct_no,
+        offer_start_date,
+        offer_end_date
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      AND action_control = 'Action'
+),
+crv_im_control AS (
+    SELECT
+        acct_no,
+        offer_start_date,
+        offer_end_date
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      AND action_control = 'Control'
+),
+overlap_action_keys AS (
+    SELECT DISTINCT
+        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_im_action c
+      ON c.acct_no           = p.acct_no
+     AND c.offer_start_date <= p.treatmt_end_dt
+     AND c.offer_end_date   >= p.treatmt_strt_dt
+),
+overlap_control_keys AS (
+    SELECT DISTINCT
+        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_im_control c
+      ON c.acct_no           = p.acct_no
+     AND c.offer_start_date <= p.treatmt_end_dt
+     AND c.offer_end_date   >= p.treatmt_strt_dt
+),
+pcl_flagged AS (
+    SELECT
+        p.pcl_month,
+        p.responder_cli,
+        CASE WHEN oa.acct_no IS NOT NULL
+             THEN 1 ELSE 0 END AS overlap_action_flag,
+        CASE WHEN oa.acct_no IS NULL AND oc.acct_no IS NOT NULL
+             THEN 1 ELSE 0 END AS overlap_control_flag
+    FROM pcl_universe p
+    LEFT JOIN overlap_action_keys oa
+      ON oa.acct_no         = p.acct_no
+     AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oa.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN overlap_control_keys oc
+      ON oc.acct_no         = p.acct_no
+     AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oc.treatmt_end_dt  = p.treatmt_end_dt
+)
+SELECT
+    pcl_month,
+    -- counts first
+    COUNT(*)                                                                                  AS total_pcl_leads,
+    SUM(overlap_action_flag)                                                                  AS overlap_action_leads,
+    SUM(CASE WHEN overlap_action_flag = 1 THEN responder_cli ELSE 0 END)                      AS overlap_action_responders,
+    SUM(overlap_control_flag)                                                                 AS overlap_control_leads,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)                     AS overlap_control_responders,
+    SUM(CASE WHEN overlap_action_flag = 0 AND overlap_control_flag = 0
+             THEN 1 ELSE 0 END)                                                               AS no_overlap_leads,
+    SUM(CASE WHEN overlap_action_flag = 0 AND overlap_control_flag = 0
+             THEN responder_cli ELSE 0 END)                                                   AS no_overlap_responders,
+    -- rates at the end
+    CAST(SUM(overlap_action_flag)  AS DECIMAL(12,4)) / NULLIF(COUNT(*), 0)                    AS overlap_action_pct,
+    CAST(SUM(overlap_control_flag) AS DECIMAL(12,4)) / NULLIF(COUNT(*), 0)                    AS overlap_control_pct,
+    CAST(SUM(CASE WHEN overlap_action_flag = 1 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
+        / NULLIF(SUM(overlap_action_flag), 0)                                                 AS overlap_action_response_rate,
+    CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
+        / NULLIF(SUM(overlap_control_flag), 0)                                                AS overlap_control_response_rate,
+    CAST(SUM(CASE WHEN overlap_action_flag = 0 AND overlap_control_flag = 0
+                  THEN responder_cli ELSE 0 END) AS DECIMAL(12,4))
+        / NULLIF(SUM(CASE WHEN overlap_action_flag = 0 AND overlap_control_flag = 0
+                          THEN 1 ELSE 0 END), 0)                                              AS no_overlap_response_rate
+FROM pcl_flagged
+GROUP BY pcl_month
+ORDER BY pcl_month
+;
