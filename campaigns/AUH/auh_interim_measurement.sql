@@ -24,17 +24,37 @@ GROUP BY
 ORDER BY TACTIC_ID, TREATMT_MN, TST_GRP_CD, RPT_GRP_CD;
 
 
--- Q2: Sample full TACTIC_DECISN_VRB_INFO strings per wave — to derive channel/model positions
-SELECT
+-- Q2a: Sample raw TACTIC_DECISN_VRB_INFO strings (NO GROUP BY)
+-- The string is a packed list; tail positions are client-unique numerics.
+-- Never GROUP BY the full string — only header positions are categorical.
+SELECT TOP 200
     TACTIC_ID,
     TREATMT_MN,
     TST_GRP_CD,
     TACTIC_CELL_CD,
-    TACTIC_DECISN_VRB_INFO,
-    COUNT(*) AS rows_with_this_pattern
+    TACTIC_DECISN_VRB_INFO
 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
 WHERE SUBSTR(TACTIC_ID, 8, 3) = 'AUH'
-GROUP BY 1,2,3,4,5
+ORDER BY TACTIC_ID, TREATMT_MN, TST_GRP_CD;
+
+
+-- Q2b: Categorical-only profile of VRB_INFO header positions
+-- Adjust SUBSTR positions once Q2a reveals the layout.
+SELECT
+    TACTIC_ID,
+    TREATMT_MN,
+    TST_GRP_CD,
+    SUBSTR(TACTIC_DECISN_VRB_INFO,  1, 10)   AS vrb_tactic_id,   -- expect = TACTIC_ID
+    SUBSTR(TACTIC_DECISN_VRB_INFO, 12,  8)   AS vrb_model_code,  -- AUHQUTV8 / AUHABMKN / ...
+    SUBSTR(TACTIC_DECISN_VRB_INFO, 21,  5)   AS vrb_prod_seg,    -- IAV / MC1 / RNMAV / CLO / ...
+    COUNT(*) AS leads
+FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+WHERE SUBSTR(TACTIC_ID, 8, 3) = 'AUH'
+GROUP BY
+    TACTIC_ID, TREATMT_MN, TST_GRP_CD,
+    SUBSTR(TACTIC_DECISN_VRB_INFO,  1, 10),
+    SUBSTR(TACTIC_DECISN_VRB_INFO, 12,  8),
+    SUBSTR(TACTIC_DECISN_VRB_INFO, 21,  5)
 ORDER BY TACTIC_ID, TREATMT_MN, TST_GRP_CD;
 
 
