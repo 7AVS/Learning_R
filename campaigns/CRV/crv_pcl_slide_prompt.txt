@@ -1,0 +1,102 @@
+# Slide build request: CRV cannibalizing PCL on mobile in-app banner
+
+Build ONE PowerPoint slide for an internal RBC Cards-pod audience that
+tells the cannibalization story below. Mostly visual, minimal copy.
+
+## Audience and context
+
+Reader: Marketing Analytics partners and Cards-pod stakeholders at RBC.
+They understand campaign measurement, response rates, Action/Control
+design. Do NOT define basics. Be direct. No hedge language ("under review",
+"preliminary", "validating"). No AI flourishing. Write like a senior
+analyst would, plain and precise.
+
+## The story to tell, in narrative order
+
+1. PROBLEM. CRV and PCL both deploy to the mobile in-app banner (IM
+   channel). They share audience. We need to know whether CRV
+   cannibalizes PCL conversion on that shared surface.
+
+2. SETUP. We pulled 20 months of PCL deployments on the IM channel
+   (Oct 2024 - May 2026) and identified, per PCL client, whether they
+   also had a CRV deployment with overlapping treatment window. We split
+   the PCL universe into three groups using CRV's Action/Control design
+   as a natural experiment:
+     - overlap_action: PCL client + CRV Action overlap (CRV-eligible AND exposed)
+     - overlap_control: PCL client + CRV Control overlap (CRV-eligible, randomly held out, NOT exposed)
+     - no_overlap: PCL client, no CRV deployment at all
+   The Action-vs-Control comparison isolates the CRV exposure effect from
+   selection bias (CRV-eligibility is itself correlated with lower PCL
+   conversion, so action-vs-no_overlap overstates the cannibalization).
+
+3. FINDING. Cannibalization is real but smaller than a naive comparison
+   suggests. Selection bias accounts for most of the original gap.
+     - 67% of PCL-IM clients also got CRV-IM (7.4M of 11.0M leads over 20 months).
+     - Aggregated response rates: Action 14.4%, Control 14.7%, No-overlap 18.4%.
+     - True cannibalization (Action vs Control): ~0.85 pp average per month.
+     - Selection bias (Control vs No-overlap): ~3.5 pp average per month.
+     - Combined effect (Action vs No-overlap, naive): ~4.3 pp.
+     - Direction is monotonic and consistent in 20 of 20 months.
+
+4. COST. ~65,000 PCL responders lost to CRV cannibalization over the
+   20-month window. Roughly 3,000 PCL conversions per month.
+
+5. RECOMMENDATION. Discontinuing CRV recovers ~65K PCL conversions over
+   20 months. Whether to discontinue depends on whether CRV itself
+   produces more than 65K incremental conversions over the same period on
+   IM. That CRV-side number is the next analysis to lock down before
+   making the call.
+
+## Slide layout
+
+- TITLE BAR (one line). Use this exact title or a tighter equivalent:
+    "CRV cannibalizes PCL on the mobile in-app banner — but selection bias inflates the headline"
+
+- HEADLINE NUMBER CALLOUTS (a row of 3-4 small KPI tiles near the top):
+    Tile 1: 67% of PCL-IM clients also exposed to CRV
+    Tile 2: 0.85 pp average PCL response rate lost to CRV (Action vs Control)
+    Tile 3: ~65K PCL conversions lost over 20 months
+    Tile 4: 20 of 20 months show consistent cannibalization
+
+- MAIN CHART (center-left, large):
+    Line chart, 20 months on x-axis (Oct 2024 - May 2026).
+    Three lines on the y-axis (PCL response rate, % scale):
+      - overlap_action_response_rate (label: "PCL response — CRV-exposed clients")
+      - overlap_control_response_rate (label: "PCL response — CRV-eligible held-out clients")
+      - no_overlap_response_rate (label: "PCL response — clients not in CRV")
+    Chart title: "PCL response rate by CRV exposure status, monthly"
+    Lines should be clearly distinguishable. Action and Control will track
+    close together (both CRV-eligible); No-overlap will sit ~3-4 pp above.
+
+- SUPPORTING VISUAL (right side, smaller):
+    Stacked bar or annotated number showing how the ~4.3 pp combined gap
+    decomposes:
+      - 0.85 pp cannibalization (the actionable piece)
+      - 3.5 pp selection bias (NOT addressable by discontinuing CRV)
+    Label clearly so reader sees that the actionable lift is the smaller
+    of the two components.
+
+- FOOTER ROW (bottom, plain text):
+    "Source: campaigns/CRV/crv_pcl_overlap_summary.sql section E.
+     Period: Oct 2024 - May 2026. Channel: IM (mobile in-app banner).
+     Cohort: 11.0M PCL-IM events, 7.4M with CRV Action overlap, 385K with CRV Control overlap.
+     Recommendation: pair this with CRV-side conversion volume to decide on discontinue."
+
+## Style rules
+
+- Cite the source SQL file in the footer.
+- Every number on the slide must be traceable to the source file.
+- No external benchmarks, industry comparisons, or "studies show" claims.
+- No emojis.
+- Numbers formatted with thousands separators (7,400,000 or 7.4M, not 7400000).
+- Percentage points written as "pp", percent written as "%".
+- No "approximately" / "around" hedge on numbers we have precisely — use ~ only for the implied-cost figure (~65K) since that is a model estimate, not a direct count.
+- Do not put two charts side by side at equal weight — main line chart is the hero, decomposition visual is supporting.
+- Keep total slide copy under 100 words outside the chart labels and footer.
+
+## What NOT to include
+
+- Do NOT present the discontinue-CRV recommendation as final. Frame it as conditional on CRV-side analysis still to come.
+- Do NOT include the section-D-only naive estimate of 290K lost conversions. That number was inflated by selection bias and is no longer the working figure.
+- Do NOT speculate about why selection bias is so large (e.g., "high-balance clients", "engaged segment") — we have not measured it.
+- Do NOT include methodology beyond what is needed to read the chart. The audience can ask if they want detail.
