@@ -6,7 +6,7 @@
 -- Volatile-table names use mb_ prefix to coexist in the same session.
 --
 -- Excel pivot recipe for Strategy x Month avg balance:
---   Rows    : test_group_latest (or strtgy_seg_typ / offer_prod_latest)
+--   Rows    : strtgy_seg_typ (or offer_prod_latest)
 --   Columns : me_dt
 --   Values  : Calculated field = SUM(sum_mtd_avg_bal) / SUM(active_accts)
 
@@ -32,7 +32,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_cohort AS (
   SELECT
     clnt_no,
     acct_no,
-    test_group_latest,
     strtgy_seg_typ,
     model_score_decile,
     offer_prod_latest,
@@ -58,7 +57,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_approved AS (
     acct_no,
     clnt_no,
     treatmt_start_dt,
-    test_group_latest,
     strtgy_seg_typ,
     model_score_decile,
     offer_prod_latest,
@@ -137,7 +135,6 @@ ON COMMIT PRESERVE ROWS;
 -- ============================================================
 SELECT
   a.treatmt_start_dt,
-  a.test_group_latest,
   a.strtgy_seg_typ,
   a.offer_prod_latest,
   a.offer_prod_latest_name,
@@ -171,5 +168,5 @@ SELECT
 FROM pcq_q1_mb_acct_month am
 INNER JOIN pcq_q1_mb_approved a
   ON am.acct_no = a.acct_no
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-ORDER BY 1, 9;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+ORDER BY 1, 8;
