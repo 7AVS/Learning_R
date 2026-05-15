@@ -102,6 +102,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     s.sum_purchases_d0_45,
     s.sum_purchases_d0_60,
     s.sum_purchases_d0_90,
+    s.sum_bal_current_daily,
     s.event_days,
     s.last_event_dt,
     (s.last_event_dt - a.treatmt_start_dt) AS days_observed,
@@ -121,6 +122,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
       SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 45 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_45,
       SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 60 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_60,
       SUM(CASE WHEN (p.dt_record_ext - a.treatmt_start_dt) <= 90 THEN p.net_prch_amt_dly ELSE 0 END)         AS sum_purchases_d0_90,
+      SUM(p.bal_current)                                                                                     AS sum_bal_current_daily,
       COUNT(*)                                                                                               AS event_days,
       MAX(p.dt_record_ext)                                                                                   AS last_event_dt
     FROM D3CV12A.DLY_FULL_PORTFOLIO p
@@ -224,8 +226,10 @@ SELECT
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '1B'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d301_330_period_asc,
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '1C'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d331_plus_period_asc,
 
-  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.last_mtd_avg_bal    ELSE 0 END)                                                                   AS sum_last_mtd_avg_bal_period_asc,
-  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.days_observed       ELSE 0 END)                                                                   AS sum_days_observed_period_asc,
+  -- True average daily balance inputs. Excel: SUM(sum_bal_current_daily) / SUM(sum_event_days) = ADB across cohort.
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_bal_current_daily ELSE 0 END)                                                                 AS sum_bal_current_daily_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.event_days            ELSE 0 END)                                                                 AS sum_event_days_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.days_observed         ELSE 0 END)                                                                 AS sum_days_observed_period_asc,
   MAX(s.last_event_dt)                                                                                                                                      AS max_event_dt_in_cohort,
   SUM(CASE WHEN s.acct_cls_dt IS NOT NULL AND c.asc_on_app_source = 'Period-ASC' THEN 1 ELSE 0 END)                                                         AS closed_accts_period_asc,
 

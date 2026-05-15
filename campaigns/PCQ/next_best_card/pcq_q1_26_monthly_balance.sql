@@ -5,10 +5,10 @@
 -- Each row = cohort x strategy dims x me_dt (calendar month)
 -- Volatile-table names use mb_ prefix to coexist in the same session.
 --
--- Excel pivot recipe for Strategy x Month avg balance:
+-- Excel pivot recipe for Strategy x Month avg daily balance:
 --   Rows    : strtgy_seg_typ (or offer_prod_latest)
 --   Columns : me_dt
---   Values  : Calculated field = SUM(sum_mtd_avg_bal) / SUM(active_accts)
+--   Values  : Calculated field = SUM(sum_bal_current_daily) / SUM(total_event_days) = true ADB
 
 DATABASE DL_MR_PROD;
 
@@ -83,7 +83,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_events AS (
     p.dt_record_ext,
     p.me_dt,
     p.net_prch_amt_dly,
-    p.accum_dly_bal_mtd,
     p.bal_current,
     p.cd_curr_pst_due
   FROM D3CV12A.DLY_FULL_PORTFOLIO p
@@ -105,8 +104,8 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
     acct_no,
     me_dt,
     SUM(net_prch_amt_dly)                                       AS sum_purchases_in_month,
+    SUM(bal_current)                                            AS sum_bal_current_in_month,
     COUNT(*)                                                    AS event_days_in_month,
-    MAX(CASE WHEN rn = 1 THEN accum_dly_bal_mtd END)            AS last_mtd_avg_bal,
     MAX(CASE WHEN rn = 1 THEN bal_current END)                  AS last_bal_current,
     MAX(CASE WHEN rn = 1 THEN cd_curr_pst_due END)              AS last_pst_due_cd,
     MAX(dt_record_ext)                                          AS last_event_dt_in_month
@@ -116,7 +115,6 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
       e.me_dt,
       e.dt_record_ext,
       e.net_prch_amt_dly,
-      e.accum_dly_bal_mtd,
       e.bal_current,
       e.cd_curr_pst_due,
       ROW_NUMBER() OVER (PARTITION BY e.acct_no, e.me_dt
@@ -145,7 +143,7 @@ SELECT
   ((EXTRACT(YEAR FROM am.me_dt) - EXTRACT(YEAR FROM a.treatmt_start_dt)) * 12
    + (EXTRACT(MONTH FROM am.me_dt) - EXTRACT(MONTH FROM a.treatmt_start_dt))) AS months_since_treatment,
   COUNT(DISTINCT am.acct_no)            AS active_accts,
-  SUM(am.last_mtd_avg_bal)              AS sum_mtd_avg_bal,
+  SUM(am.sum_bal_current_in_month)      AS sum_bal_current_daily,
   SUM(am.last_bal_current)              AS sum_last_bal_current,
 
   -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = sum_last_bal_current.
