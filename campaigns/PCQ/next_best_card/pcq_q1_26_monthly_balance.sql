@@ -86,7 +86,8 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_events AS (
     p.me_dt,
     p.net_prch_amt_dly,
     p.accum_dly_bal_mtd,
-    p.bal_current
+    p.bal_current,
+    p.cd_curr_pst_due
   FROM D3CV12A.DLY_FULL_PORTFOLIO p
   INNER JOIN pcq_q1_mb_approved a
     ON p.acct_no = a.acct_no
@@ -109,6 +110,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
     COUNT(*)                                                    AS event_days_in_month,
     MAX(CASE WHEN rn = 1 THEN accum_dly_bal_mtd END)            AS last_mtd_avg_bal,
     MAX(CASE WHEN rn = 1 THEN bal_current END)                  AS last_bal_current,
+    MAX(CASE WHEN rn = 1 THEN cd_curr_pst_due END)              AS last_pst_due_cd,
     MAX(dt_record_ext)                                          AS last_event_dt_in_month
   FROM (
     SELECT
@@ -118,6 +120,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
       e.net_prch_amt_dly,
       e.accum_dly_bal_mtd,
       e.bal_current,
+      e.cd_curr_pst_due,
       ROW_NUMBER() OVER (PARTITION BY e.acct_no, e.me_dt
                          ORDER BY e.dt_record_ext DESC)         AS rn
     FROM pcq_q1_mb_events e
@@ -147,6 +150,22 @@ SELECT
   COUNT(DISTINCT am.acct_no)            AS active_accts,
   SUM(am.last_mtd_avg_bal)              AS sum_mtd_avg_bal,
   SUM(am.last_bal_current)              AS sum_last_bal_current,
+
+  -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = sum_last_bal_current.
+  SUM(CASE WHEN am.last_pst_due_cd IS NULL THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_current,
+  SUM(CASE WHEN am.last_pst_due_cd = '01'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d1_30,
+  SUM(CASE WHEN am.last_pst_due_cd = '02'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d31_60,
+  SUM(CASE WHEN am.last_pst_due_cd = '03'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d61_90,
+  SUM(CASE WHEN am.last_pst_due_cd = '04'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d91_120,
+  SUM(CASE WHEN am.last_pst_due_cd = '05'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d121_150,
+  SUM(CASE WHEN am.last_pst_due_cd = '06'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d151_180,
+  SUM(CASE WHEN am.last_pst_due_cd = '07'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d181_210,
+  SUM(CASE WHEN am.last_pst_due_cd = '08'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d211_240,
+  SUM(CASE WHEN am.last_pst_due_cd = '09'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d241_270,
+  SUM(CASE WHEN am.last_pst_due_cd = '1A'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d271_300,
+  SUM(CASE WHEN am.last_pst_due_cd = '1B'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d301_330,
+  SUM(CASE WHEN am.last_pst_due_cd = '1C'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d331_plus,
+
   SUM(am.sum_purchases_in_month)        AS sum_purchases_in_month,
   SUM(am.event_days_in_month)           AS total_event_days
 FROM pcq_q1_mb_acct_month am

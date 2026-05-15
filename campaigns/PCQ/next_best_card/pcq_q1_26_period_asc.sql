@@ -108,6 +108,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
     l.last_bal_current,
     l.last_mtd_avg_bal,
     l.last_status,
+    l.last_pst_due_cd,
     l.acct_open_dt,
     l.acct_cls_dt,
     l.visa_prod_cd
@@ -134,6 +135,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_pa_acct_summary AS (
       p.bal_current        AS last_bal_current,
       p.accum_dly_bal_mtd  AS last_mtd_avg_bal,
       p.status             AS last_status,
+      p.cd_curr_pst_due    AS last_pst_due_cd,
       p.acct_open_dt,
       p.acct_cls_dt,
       p.visa_prod_cd
@@ -206,6 +208,22 @@ SELECT
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_60 ELSE 0 END)                                                                   AS sum_purchases_period_asc_d0_60,
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.sum_purchases_d0_90 ELSE 0 END)                                                                   AS sum_purchases_period_asc_d0_90,
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.last_bal_current    ELSE 0 END)                                                                   AS sum_last_bal_current_period_asc,
+
+  -- Past-due balance buckets (Period-ASC scoped). Sum of 13 buckets = sum_last_bal_current_period_asc.
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd IS NULL THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_current_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '01'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d1_30_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '02'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d31_60_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '03'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d61_90_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '04'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d91_120_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '05'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d121_150_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '06'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d151_180_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '07'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d181_210_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '08'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d211_240_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '09'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d241_270_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '1A'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d271_300_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '1B'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d301_330_period_asc,
+  SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' AND s.last_pst_due_cd = '1C'  THEN s.last_bal_current ELSE 0 END)                                         AS sum_bal_pd_d331_plus_period_asc,
+
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.last_mtd_avg_bal    ELSE 0 END)                                                                   AS sum_last_mtd_avg_bal_period_asc,
   SUM(CASE WHEN c.asc_on_app_source = 'Period-ASC' THEN s.days_observed       ELSE 0 END)                                                                   AS sum_days_observed_period_asc,
   MAX(s.last_event_dt)                                                                                                                                      AS max_event_dt_in_cohort,
