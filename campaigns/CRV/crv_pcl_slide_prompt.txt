@@ -1,124 +1,100 @@
-# Slide build request: discontinue CRV on the mobile in-app banner
+# Slide build request: discontinue CRV on mobile in-app — executive slide
 
-Build ONE PowerPoint slide for an internal RBC Cards-pod audience. Two
-visualizations, one callout, clean and not busy. The receiving LLM must
-not over-decorate — minimal text, descriptive plot titles, no extra
-embellishments.
+Build ONE PowerPoint slide for **senior business stakeholders at RBC**
+who need to approve discontinuing CRV. They will look at this slide for
+60 seconds. The visuals must carry the message — they do not read
+methodology, they do not need statistical caveats, they need a clear
+recommendation supported by two simple visuals.
 
-## Audience and context
+## Hard rules
 
-Reader: Marketing Analytics partners and Cards-pod stakeholders at RBC.
-They understand campaign measurement, response rates, Action/Control
-design. Do not define basics. Be direct. No hedge language ("under
-review", "preliminary", "being validated"). No AI flourishing. Write
-like a senior analyst.
+- The title states the recommendation. DO NOT reframe, soften, or pivot
+  to a methodology-first framing.
+- Two plots. No fewer, no more. No additional decomposition charts,
+  waterfalls, pie charts, or supporting visuals.
+- No selection-bias language anywhere on the slide.
+- No "statistical" or "rigor" language anywhere on the slide.
+- No caveats boxes. No "considerations" panels.
+- Annotations live INSIDE the plots, not in cards underneath.
+- Numbers expressed in business units (conversions, clients, %), not
+  in percentage-point gaps.
 
-## The decision the slide supports
+## Title (exact text — do not paraphrase)
 
-Discontinue CRV on the mobile in-app (IM) channel. Two converging lines
-of evidence support the recommendation:
+   "Discontinue CRV on mobile in-app — yield exhausted, ~65K PCL conversions recoverable"
 
-1. CRV is past saturation on its own funnel — additional contacts no
-   longer produce response. Yield collapses past the 5th contact, and
-   only 6% of 2026 deployments touch a new client.
+## Plot A (left half) — Over-contacting and diminishing returns
 
-2. CRV cannibalizes PCL response when both run on IM. Even after
-   correcting for selection bias using CRV's own Action/Control split,
-   PCL conversion drops measurably when CRV is exposed.
+Title: "Most CRV contacts in 2026 hit already-contacted clients, and
+        response collapses past the 5th touch"
 
-Both findings reinforce each other: CRV is producing less, and what
-little it does produce comes at the cost of PCL.
+COMBO CHART: bars (left Y-axis) + line (right Y-axis).
+X-axis: contact frequency, 1 through 7. Channels combined (no IM/EM_IM_DO split).
 
-## Headline numbers (every one must appear on the slide)
+Bars = share of 2026 deployments at each contact frequency.
+Line = response rate at each contact frequency.
 
-- 6%   = share of 2026 IM deployments that contact a new client (94% repeat)
-- 4.4  = average prior contacts per client in 2026 (up from 2.1 in 2025)
-- 0.10% = May 2026 IM response rate — effectively zero
-- ~65K = PCL responders recoverable if CRV discontinued (Oct 2024 – Apr 2026)
-- ~94%  = share of 2026 IM deployments going to clients already contacted at least once
+Data:
+   Freq | % of 2026 deployments | response rate
+   1    | 6.1%                  | 1.57%
+   2    | 21.3%                 | 1.34%
+   3    | 19.6%                 | 1.28%
+   4    | 18.0%                 | 1.19%
+   5    | 16.0%                 | 1.14%
+   6    | 13.1%                 | 1.00%
+   7    | 5.8%                  | 0.31%
 
-Analysis window: Oct 2024 – April 2026 (May 2026 excluded from comparisons
-because it is a partial month at end-of-window and the response data has
-not matured).
+Annotations IN THE PLOT:
+   - Above the freq-1 bar: "Only 6% are new clients"
+   - Floating label between the freq-2 to freq-6 bars: "94% are repeat contacts"
+   - On the line between freq=5 and freq=7: "Response collapses past 5 contacts"
 
-## Slide layout
+Recommended visual emphasis: subtle shading or color change on the bars
+from freq=6 onward to suggest the "saturation zone" where additional
+contacts produce near-zero response.
 
-TITLE (single line at top):
-   "Discontinue CRV on mobile in-app: yield exhausted, cannibalizing PCL"
+## Plot B (right half) — Cannibalization on PCL
 
-TWO PLOTS, side by side, each ~half the slide width:
+Title: "PCL conversion is lower when clients are also exposed to CRV —
+        ~65K conversions recoverable by discontinuing CRV"
 
-PLOT A (left). Title: "CRV response rate collapses past contact #5
-                       (2026 deployments, IM and EM_IM_DO bundles)"
-   - Line chart.
-   - X-axis: contact frequency, 1 through 7 (drop 8 and 9 — both 0%).
-   - Y-axis: response rate, % scale.
-   - Two lines: one for IM bundle, one for EM_IM_DO bundle.
-   - Data points (Year filter: 2026):
-       Freq 1: IM 1.53%, EM_IM_DO 2.22%
-       Freq 2: IM 1.36%, EM_IM_DO 0.91%
-       Freq 3: IM 1.30%, EM_IM_DO 0.76%
-       Freq 4: IM 1.21%, EM_IM_DO 0.68%
-       Freq 5: IM 1.17%, EM_IM_DO 0.64%
-       Freq 6: IM 1.02%, EM_IM_DO 0.51%
-       Freq 7: IM 0.32%, EM_IM_DO 0.12%
-   - Annotate the contact-frequency #5 point or a vertical reference line:
-     "2026 avg contacts per client: 4.4"
+LINE CHART: exactly TWO lines (do not add a third line).
+X-axis: month, Oct 2024 through April 2026 (19 months).
+Y-axis: PCL response rate, % scale.
 
-PLOT B (right). Title: "PCL response rate is suppressed when CRV competes on IM
-                        (Oct 2024 – Apr 2026)"
-   - Line chart, three lines.
-   - X-axis: month (Oct 2024 through April 2026, 19 months — drop May 2026).
-   - Y-axis: PCL response rate, % scale.
-   - Three lines, each labeled:
-       overlap_action       (PCL clients with CRV-Action exposure)
-       overlap_control      (PCL clients with CRV-Control — eligible, not exposed)
-       no_overlap           (PCL clients with no CRV deployment)
-   - Action and Control will sit close together (both CRV-eligible).
-     no_overlap will sit ~3-4 pp above.
-   - The action-vs-control gap is the cannibalization signal; the
-     control-vs-no_overlap gap is selection bias.
-   - DO NOT use percentage-of-percentage stacked formats. Plain lines.
+Two lines, labeled inline at the right end of each line (not in a legend):
+   "CRV-exposed PCL clients"           (lower line, ~14% avg)
+   "Comparable PCL clients (no CRV)"   (upper line, ~15% avg)
 
-CALLOUT BLOCK (bottom of slide, narrow strip):
-   Three large numbers, equal weight, plain typography:
+**Shade the area between the two lines.** Use a single subtle fill color.
+Label the shaded region directly inside the chart:
+   "~65K PCL conversions recoverable if CRV discontinued"
 
-     [ 6% ]                  [ 4.4 ]                  [ ~65K ]
-     2026 IM deployments     avg contacts             PCL responders
-     that touch a            per client in 2026       recoverable if
-     new client              (up from 2.1 in 2025)    CRV discontinued
+Do not add a third "no_overlap" line. Do not break out the components
+of the gap. The shaded area IS the message.
 
-FOOTER ROW (single line, plain):
-   "Source: campaigns/CRV/crv_pcl_overlap_summary.sql (section E),
-    campaigns/CRV/crv_contact_frequency.sql. Window: Oct 2024 – Apr 2026.
-    Channel: IM (mobile in-app banner). CRV filter: action_control = 'Action'."
+## Single footer line (one row, bottom of slide)
 
-## Style rules
+   "Source: campaigns/CRV/crv_pcl_overlap_summary.sql, campaigns/CRV/crv_contact_frequency.sql.
+    Window: Oct 2024 – Apr 2026. Channel: IM (mobile in-app). 7.4M CRV-exposed PCL events."
 
-- Every number on the slide must trace to a source SQL file in the footer.
-- No external benchmarks, industry comparisons, or "studies show" claims.
-- No emojis.
-- Numbers with thousands separators (or M/K abbreviations); use ~ only on
-  estimates (65K is an estimate; the percentages are direct measurements).
-- Percentage points written "pp"; percent written "%".
-- Two plots only. No bonus pie charts, no decorative icons, no logos.
-- Light grid only. No chartjunk. Reasonable colour palette (RBC blue or
-  default Office palette is fine; do not use neon).
-- Plot titles can be one full line each (descriptive); slide-level text
-  outside titles + footer + 3 callouts should total under 30 words.
+## Style
 
-## What NOT to include on the slide
+- Clean, minimal, two plots side by side, balanced visual weight.
+- Light grid only. Plot titles in one line each.
+- Numbers with thousands separators (M/K abbreviations fine on labels).
+- Use ~ only on the 65K estimate. Other numbers are direct measurements.
+- No icons, no decorative graphics, no logos.
+- Reasonable colour palette (RBC blue, dark grey, single accent for the
+  shaded gap). Do not use neon, gradient, or 3D effects.
 
-- No methodology beyond the footer's date window and channel filter.
-- No mention of the 290K naive-estimate figure (superseded by 65K
-  selection-corrected number).
-- No speculation about why selection bias is so large.
-- No "next steps" bullets. The recommendation is in the title.
-- No data tables. Plots only.
-- No animation, no build sequences. Static slide.
+## What to refuse if asked to add it
 
-## Recommendation framing
+- A bias-decomposition waterfall
+- A "considerations" or "caveats" section
+- A "next steps" bullet list
+- A methodology note
+- An additional CRV-side-impact chart
+- More than two plots
 
-The title states the recommendation directly. Do not soften it. If the
-receiving LLM tries to add a "considerations" or "caveats" box, reject —
-caveats live in the analyst's notes, not the exec slide.
+The slide makes one argument with two pieces of evidence. That is all.
