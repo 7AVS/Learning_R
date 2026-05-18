@@ -163,6 +163,7 @@ ON COMMIT PRESERVE ROWS;
 -- ============================================================
 SELECT
   c.treatmt_start_dt,
+  c.treatmt_end_dt,
   c.test_group_latest,
   c.strtgy_seg_typ,
   c.offer_prod_latest,
@@ -262,5 +263,5 @@ FROM pcq_q1_pa_cohort c
 LEFT JOIN pcq_q1_pa_acct_summary s
   ON c.acct_no = s.acct_no
  AND c.app_approved = 1
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
-ORDER BY 1, 2, 3, 4, 5, 6, 7, 8;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
+ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9;
