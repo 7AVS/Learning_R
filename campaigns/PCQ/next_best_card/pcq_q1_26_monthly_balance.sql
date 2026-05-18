@@ -147,8 +147,10 @@ SELECT
    + (EXTRACT(MONTH FROM am.me_dt) - EXTRACT(MONTH FROM a.treatmt_start_dt))) AS months_since_treatment,
   COUNT(DISTINCT am.acct_no)            AS active_accts,
   SUM(am.sum_bal_current_in_month)      AS sum_bal_current_daily,
+  SUM(am.last_bal_current)              AS sum_last_bal_current,
 
-  -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = total balance at last record in month.
+  -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = sum_last_bal_current.
+  -- Use sum_last_bal_current as denominator for "% of balance on past-due accounts" ratios.
   SUM(CASE WHEN am.last_pst_due_cd IS NULL THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_current,
   SUM(CASE WHEN am.last_pst_due_cd = '01'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d1_30,
   SUM(CASE WHEN am.last_pst_due_cd = '02'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d31_60,
