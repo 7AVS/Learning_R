@@ -39,6 +39,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_cohort AS (
     product_applied_name,
     response_channel_grp,
     treatmt_start_dt,
+    treatmt_end_dt,
     app_approved
   FROM cards_tpa_pcq_decision_resp
   WHERE treatmt_start_dt >= DATE '2025-11-01'
@@ -57,6 +58,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_approved AS (
     acct_no,
     clnt_no,
     treatmt_start_dt,
+    treatmt_end_dt,
     strtgy_seg_typ,
     model_score_decile,
     offer_prod_latest,
@@ -133,6 +135,7 @@ ON COMMIT PRESERVE ROWS;
 -- ============================================================
 SELECT
   a.treatmt_start_dt,
+  a.treatmt_end_dt,
   a.strtgy_seg_typ,
   a.offer_prod_latest,
   a.offer_prod_latest_name,
@@ -144,9 +147,8 @@ SELECT
    + (EXTRACT(MONTH FROM am.me_dt) - EXTRACT(MONTH FROM a.treatmt_start_dt))) AS months_since_treatment,
   COUNT(DISTINCT am.acct_no)            AS active_accts,
   SUM(am.sum_bal_current_in_month)      AS sum_bal_current_daily,
-  SUM(am.last_bal_current)              AS sum_last_bal_current,
 
-  -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = sum_last_bal_current.
+  -- Past-due balance buckets (per-month, last record in month). Sum of 13 buckets = total balance at last record in month.
   SUM(CASE WHEN am.last_pst_due_cd IS NULL THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_current,
   SUM(CASE WHEN am.last_pst_due_cd = '01'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d1_30,
   SUM(CASE WHEN am.last_pst_due_cd = '02'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d31_60,
@@ -166,5 +168,5 @@ SELECT
 FROM pcq_q1_mb_acct_month am
 INNER JOIN pcq_q1_mb_approved a
   ON am.acct_no = a.acct_no
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
-ORDER BY 1, 8;
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+ORDER BY 1, 9;
