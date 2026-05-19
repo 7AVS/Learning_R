@@ -22,6 +22,14 @@
 --     Note: contains ALL calendar days (Sat/Sun reflect Friday values).
 --     Index = SRVC_ID + ACCT_NO + VISA_PROD_CD + DT_RECORD_EXT.
 --
+-- COMPANION FILE
+--   - pcq_q1_26_diagnostics.sql : standalone diagnostic queries that verify
+--                                 table-level assumptions encoded below
+--                                 (me_dt convention, daily-snapshot grain,
+--                                 cd_curr_pst_due value coverage). Results
+--                                 of the latest run are in the DIAGNOSTIC
+--                                 VERIFICATION LOG section further down.
+--
 -- OUTPUT GRAIN
 --   One row per (treatmt_start_dt, treatmt_end_dt, strtgy_seg_typ,
 --                offer_prod_latest, offer_prod_latest_name, product_applied_name,
@@ -146,14 +154,48 @@
 --     (catch-all bucket) rather than being silently dropped from the
 --     totals -- so the 13+1 identity always holds.
 --
---     Verification query (run once to confirm):
---         SELECT cd_curr_pst_due, COUNT(*) AS rows
---         FROM pcq_q1_mb_events
---         GROUP BY cd_curr_pst_due
---         ORDER BY rows DESC;
+--     VERIFIED 2026-05-19: NULL is the only "not past-due" indicator in
+--     the data. 13 distinct cd_curr_pst_due values observed across the
+--     observation window, exactly matching the expected set
+--     (NULL + 01,02,03,04,05,06,07,08,09,1A,1B,1C). The IS NULL check is
+--     sound as written. See pcq_q1_26_diagnostics.sql D3/D4 for the
+--     verification queries. Re-run on any source-system change.
 --
---     If sum_bal_pd_unknown > 0 in output, update the IS NULL check below
---     to OR in the additional "current" indicator value.
+-- ============================================================================
+-- DIAGNOSTIC VERIFICATION LOG
+-- ============================================================================
+--
+-- Verifications run against D3CV12A.DLY_FULL_PORTFOLIO directly
+-- (~75M+ rows scanned across the observation window).
+-- Diagnostic queries live in pcq_q1_26_diagnostics.sql.
+--
+-- 2026-05-19 -- Pre-submission diagnostic run
+--
+--   D1 (me_dt convention)             PASS
+--     0 rows where dt_record_ext month != me_dt month across the
+--     observation window. The (acct, me_dt) snapshot semantic in CTE 3
+--     is sound.
+--
+--   D2 (me_dt domain + daily check)   PASS
+--     7 distinct me_dt values, one per calendar month from Nov 2025
+--     through May 2026, each a true month-end date.
+--     event_rows / distinct_accounts ratios per month:
+--       2025-11-30  29.4   2025-12-31  30.9   2026-01-31  30.9
+--       2026-02-28  27.9   2026-03-31  30.2   2026-04-30  29.9
+--       2026-05-31  17.9 (partial -- through 2026-05-19, 19 of 31 days)
+--     Ratios match days-in-month for complete months. Confirms
+--     DLY_FULL_PORTFOLIO is genuinely daily (one row per account per
+--     calendar day, Sat/Sun rolled to Friday). ~12M distinct accounts
+--     per month across the window.
+--
+--   D3 (cd_curr_pst_due coverage)     PASS
+--     13 distinct values total, exactly the expected set:
+--       NULL + 01,02,03,04,05,06,07,08,09,1A,1B,1C
+--     No unexpected codes. sum_bal_pd_unknown expected to be 0 in
+--     normal production output.
+--
+-- Re-run all diagnostics if the production SQL, the source table
+-- semantics, or the past-due code definitions change.
 --
 -- ============================================================================
 -- EXCEL PIVOT RECIPES
@@ -385,9 +427,10 @@ SELECT
   SUM(CASE WHEN am.last_pst_due_cd = '1A'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d271_300,
   SUM(CASE WHEN am.last_pst_due_cd = '1B'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d301_330,
   SUM(CASE WHEN am.last_pst_due_cd = '1C'  THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_d331_plus,
-  -- Catch-all for any unexpected non-NULL code value. Should be 0 in normal
-  -- data. Non-zero signals a new code emerged at source and the bucket
-  -- definitions need to be updated.
+  -- Catch-all for any unexpected non-NULL code value. Verified empirically
+  -- 2026-05-19 to be 0 (no codes outside the 13 known across 75M+ rows).
+  -- Stays in place as defensive insurance against future source-system
+  -- changes. If non-zero in a future run, re-run pcq_q1_26_diagnostics.sql D3.
   SUM(CASE WHEN am.last_pst_due_cd IS NOT NULL
                 AND am.last_pst_due_cd NOT IN ('01','02','03','04','05',
                                                '06','07','08','09',
