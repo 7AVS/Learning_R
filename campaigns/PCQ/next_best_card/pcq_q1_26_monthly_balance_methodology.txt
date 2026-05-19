@@ -1,0 +1,346 @@
+================================================================
+PCQ Q1 26 MONTHLY BALANCE — METHODOLOGY NOTES
+File: campaigns/PCQ/next_best_card/pcq_q1_26_monthly_balance.sql
+================================================================
+
+PURPOSE
+================================================================
+
+Produces a cohort x strategy x month aggregation of:
+  - Approved-account counts that month                  (active_accts)
+  - Total purchases that month                          (sum_purchases_in_month)
+  - Total outstanding balance (snapshot at month-end)   (sum_last_bal_current)
+  - Total balance dollar-days (for ADB)                 (sum_bal_current_daily)
+  - Total event days (denominator for ADB)              (total_event_days)
+  - Balance distribution across 13 past-due bands       (sum_bal_pd_*)
+
+One row per (cohort dimensions x me_dt).
+Output drives the slide 49 charts: per-account spend and past-due
+balance share across Nov 2025 + Feb 2026 deployment waves.
+
+
+DATA SOURCES
+================================================================
+
+1. cards_tpa_pcq_decision_resp  (Teradata, DL_MR_PROD)
+   - Per-client targeting + response record for PCQ deployments
+   - Filters on: treatmt_start_dt, tpa_ita, asc_on_app_source
+   - Joins to portfolio data via acct_no
+
+2. D3CV12A.DLY_FULL_PORTFOLIO  (Teradata, D3CV12A)
+   - Per-account daily portfolio table
+   - One row per (acct_no, dt_record_ext)
+   - Sat/Sun records reflect Friday values
+   - Contains 64 columns; this query pulls only the 6 we need
+
+
+CTE-BY-CTE WALKTHROUGH
+================================================================
+
+CTE 1: pcq_q1_mb_cohort
+----------------------
+Pulls the targeting universe for the analysis.
+
+  Filter: treatmt_start_dt >= '2025-11-01'
+          AND tpa_ita = 'TPA'
+          AND asc_on_app_source = 'Period-ASC'
+
+  Carries every client targeted by PCQ TPA Period-ASC since Nov 2025,
+  including non-responders. Cohort-level dimensions (strategy, offer,
+  product, decile, channel, treatment dates) are preserved.
+
+  app_approved column is carried through so we can filter approvals
+  in the next CTE.
+
+
+CTE 2: pcq_q1_mb_approved
+-------------------------
+Narrows the cohort to approved accounts with a valid acct_no.
+
+  Filter: app_approved = 1 AND acct_no IS NOT NULL
+
+  This is the population for which we have a real account in the
+  bank's portfolio system. Everything downstream joins to portfolio
+  data, which only exists for approved accounts.
+
+
+CTE 3: pcq_q1_mb_events
+-----------------------
+Pulls portfolio events for approved accounts AFTER their treatment.
+
+  INNER JOIN approved.acct_no = DLY_FULL_PORTFOLIO.acct_no
+  Filter: dt_record_ext >= treatmt_start_dt
+
+  Captures per-day records of:
+    - net_prch_amt_dly  (daily purchases, net of refunds)
+    - bal_current       (point-in-time balance snapshot)
+    - cd_curr_pst_due   (past-due aging code)
+    - dt_record_ext     (the day this snapshot is for)
+    - me_dt             (month-end calendar tag for this row)
+
+  This is the ONLY scan of DLY_FULL_PORTFOLIO in the query. Period-ASC
+  filtering on approved accounts already cut the joined account pool,
+  so the staged volatile table fits in spool.
+
+  Why filter on dt_record_ext >= treatmt_start_dt: we only want
+  portfolio behavior AFTER the campaign treatment. Pre-treatment days
+  would muddy the comparison and add unnecessary rows.
+
+
+CTE 4: pcq_q1_mb_acct_month
+---------------------------
+Collapses per-day events into one row per (account, calendar month).
+This is the most important CTE in the file.
+
+The inner subquery ranks events within each (acct, me_dt) by date
+descending:
+
+  ROW_NUMBER() OVER (PARTITION BY acct_no, me_dt
+                     ORDER BY dt_record_ext DESC) AS rn
+
+  rn = 1 marks the LATEST event in that month for that account.
+
+The outer aggregation then computes per (acct, me_dt):
+  - SUM(net_prch_amt_dly)                         = total $ spent that month
+  - SUM(bal_current)                              = sum of daily balance snapshots
+                                                    (= ADB-numerator dollar-days)
+  - COUNT(*)                                      = number of observed event days
+  - MAX(CASE WHEN rn=1 THEN bal_current END)      = month-end balance snapshot
+  - MAX(CASE WHEN rn=1 THEN cd_curr_pst_due END)  = month-end past-due code
+  - MAX(dt_record_ext)                            = the latest event date
+
+Key conceptual distinction at this stage:
+  - sum_bal_current_in_month is for ADB (running balance across days).
+  - last_bal_current is the snapshot at the latest event date (one
+    number per account-month). This is what feeds the past-due
+    bucket calculation.
+
+
+FINAL OUTPUT
+================================================================
+
+INNER JOIN pcq_q1_mb_acct_month am to pcq_q1_mb_approved a
+on acct_no, then GROUP BY all cohort dimensions + me_dt.
+
+Output columns:
+  - active_accts            = COUNT(DISTINCT am.acct_no)
+                              accounts present in the portfolio that month
+  - sum_bal_current_daily   = SUM(am.sum_bal_current_in_month)
+                              ADB numerator (dollar-days)
+  - sum_last_bal_current    = SUM(am.last_bal_current)
+                              total month-end balance across the cohort
+  - 13 sum_bal_pd_* columns = SUM(CASE WHEN last_pst_due_cd = '...' THEN
+                              am.last_bal_current ELSE 0 END)
+                              13 mutually-exclusive PD-aging-band buckets
+  - sum_purchases_in_month  = SUM(am.sum_purchases_in_month)
+                              total purchases across the cohort that month
+  - total_event_days        = SUM(am.event_days_in_month)
+                              total observed days (ADB denominator)
+
+
+KEY METHODOLOGY DECISIONS
+================================================================
+
+[1] Balance snapshot vs balance accumulator
+-------------------------------------------
+
+We capture TWO different views of balance:
+
+  - Month-end snapshot (last_bal_current):  bal_current on the latest
+    observed event date in the month. One value per account-month.
+    Used as the denominator for past-due ratios and as the numerator
+    for the 13 PD-band buckets.
+
+  - Daily balance sum (sum_bal_current_in_month): SUM of bal_current
+    across all observed days in the month. In dollar-days units.
+    Paired with event_days_in_month to compute true ADB.
+
+These answer different questions:
+  - Month-end snapshot = "What's owed at month-end?" (a stock)
+  - ADB = "What's the typical balance carried over the month?"
+    (a time-weighted average)
+
+For the slide 49 past-due story, month-end snapshot is the right
+basis because the PD aging code (cd_curr_pst_due) is itself a
+point-in-time field — it tells us the aging state on the snapshot
+date. Matching snapshot-to-snapshot keeps units consistent.
+
+
+[2] Past-due semantics — flag classifies the account, not a portion
+-------------------------------------------------------------------
+
+DLY_FULL_PORTFOLIO has cd_curr_pst_due (a code) but NO separate
+"past-due dollar amount" field.
+
+The code aging buckets:
+  NULL = no past-due
+  01   = 1-30 days
+  02   = 31-60 days
+  ...
+  09   = 241-270 days
+  1A   = 271-300 days
+  1B   = 301-330 days
+  1C   = 331+ days
+
+Each account is in EXACTLY ONE band at month-end (the aging of the
+oldest unpaid amount, NOT the balance amount).
+
+Our 13 PD buckets sum the FULL last_bal_current of each account into
+the bucket matching that account's code. So:
+
+  sum of all 13 buckets  =  sum_last_bal_current  (by construction)
+
+This means our metric is:
+  "% of outstanding balance carried on accounts flagged at aging band X"
+
+This is NOT the same as:
+  "% of outstanding balance that is itself overdue"
+
+The flag classifies the account-level aging state, not a dollar split
+within the account. Audience needs to know this distinction — it
+matters when someone asks "is it $1 overdue on $1000, or $999 on $1000?"
+We can't answer that question from this data.
+
+
+[3] active_accts as denominator
+-------------------------------
+
+active_accts = COUNT(DISTINCT acct_no) in the (cohort x me_dt) bucket.
+Equivalently: accounts that had at least one event in DLY_FULL_PORTFOLIO
+in that calendar month, post-treatment.
+
+For the per-account spend calc (sum_purchases_in_month / active_accts),
+this gives a 1:1 match: the numerator and denominator both populated
+from the same population. Accounts not in active_accts contribute $0
+to purchases and don't count in the denominator either.
+
+
+[4] event_days as ADB denominator
+---------------------------------
+
+True ADB = sum_bal_current_in_month / event_days_in_month.
+
+Per account: sum of (bal_current per day) / number of days observed
+= average daily balance.
+
+Across the cohort: SUM(sum_bal_current_in_month) / SUM(event_days_in_month)
+= the population's average daily balance.
+
+This is mathematically right because each day contributes one record
+with one balance (DLY_FULL_PORTFOLIO is daily — Sat/Sun reflect Fri).
+
+
+PAIN POINTS RESOLVED DURING THIS BUILD
+================================================================
+
+[A] accum_dly_bal_mtd was misleading
+------------------------------------
+
+Earlier version of the file used sum_mtd_avg_bal (built from
+accum_dly_bal_mtd) as the "balance" output. That field is a within-
+month dollar-days accumulator: it starts at $0 on the 1st and adds
+the day's balance every day. By day 28 of a month at constant $100
+balance, the accumulator is $2,800 (not $100).
+
+Aggregating accum_dly_bal_mtd at last-event-date and treating it as
+a balance gave numbers ~30x larger than they should have been.
+Replaced with sum_bal_current_daily / total_event_days for true ADB
+and dropped accum_dly_bal_mtd from the staging events table.
+
+
+[B] Past-due ratio denominator was in wrong units
+-------------------------------------------------
+
+First version of the Excel calc field divided sum_bal_pd_d1_30
+(dollars, snapshot) by sum_bal_current_daily (dollar-days). Result was
+~30x too small (0.34% A2C 1-30 PD instead of the true ~10%).
+
+Fixed by adding sum_last_bal_current to the final output and using
+it as the denominator. sum_last_bal_current is the snapshot total
+that the 13 PD buckets sum to, so the units match and the ratio is
+a clean share of balance.
+
+
+[C] Brief scare about bal_current being a derived accumulator
+-------------------------------------------------------------
+
+RBC's internal Data Dictionary (last reviewed July 2015) shows a
+derivation rule for bal_current that involves ACCUM_DLY_BAL_MTD as
+a base in some cases. This prompted concern that bal_current itself
+was an accumulator, not a snapshot.
+
+Resolution: the dictionary entry is 11 years old. Day-to-day usage
+of the table by RBC analysts treats bal_current as a point-in-time
+balance, consistent with the field's business description ("the
+current balance amount of the account at the time the record was
+extracted"). Behavior in practice matches snapshot semantics.
+
+Worth noting if a Risk reviewer raises the dictionary entry — the
+derivation referenced there is likely the legacy ETL logic that
+has since been simplified, but it's not something we can verify
+without source-system documentation.
+
+
+[D] dt_record_ext usage — clarified
+-----------------------------------
+
+The Data Dictionary warns: "When extracting data, be sure to use the
+Date Record Extracted to avoid pulling multiple records for the same
+accounts."
+
+The warning is about the table holding one row per account per
+calendar day (every day in the retention window). Without filtering
+on dt_record_ext, you pull every day in history.
+
+The query uses dt_record_ext in two correct ways:
+  - As a filter: dt_record_ext >= treatmt_start_dt (post-treatment only)
+  - As a ranking key in ROW_NUMBER to pick the latest event per
+    (account, me_dt) for snapshot purposes
+
+Both uses respect the daily-snapshot nature of the table.
+
+
+[E] cd_curr_pst_due "not past due" indicator
+--------------------------------------------
+
+The "current" bucket uses last_pst_due_cd IS NULL. If the source data
+uses an empty string ('') or another non-NULL value to indicate "not
+past-due", this check would miss those accounts and they would not
+land in any of the 13 buckets — sum_bal_pd_current would understate
+and the 13 buckets would no longer sum exactly to sum_last_bal_current.
+
+Verification query to run if numbers look off:
+    SELECT cd_curr_pst_due, COUNT(*) AS rows
+    FROM pcq_q1_mb_events
+    GROUP BY cd_curr_pst_due
+    ORDER BY rows DESC;
+
+If non-NULL "current" values appear, line 154 needs to be updated
+to catch them. Most defensive form:
+    SUM(CASE WHEN last_pst_due_cd IS NULL
+                  OR last_pst_due_cd NOT IN ('01','02','03','04','05',
+                                              '06','07','08','09',
+                                              '1A','1B','1C')
+             THEN last_bal_current ELSE 0 END) AS sum_bal_pd_current
+
+
+KNOWN LIMITATIONS
+================================================================
+
+- Scope is Period-ASC attribution only; Other-ASC accounts dropped
+  at cohort-CTE level for spool reasons.
+- Sat/Sun event records carry Friday values; mathematically OK for
+  monthly aggregations because every day in the calendar still has
+  a row, but be aware if doing intra-week analysis.
+- May 2026 is partial through 2026-05-19; the file outputs whatever
+  events have hit DLY_FULL_PORTFOLIO at run time. Downstream consumers
+  should exclude May from final slide outputs until the month closes.
+- No "actual past-due dollar amount" field on DLY_FULL_PORTFOLIO; PD
+  metrics are necessarily "balance on flagged accounts," not
+  "dollars overdue within a balance."
+- No external delinquency benchmark; all comparisons are within-
+  cohort (A2C vs Rest of PCQ).
+
+================================================================
+END
+================================================================
