@@ -153,3 +153,106 @@ FROM D3CV12A.DLY_FULL_PORTFOLIO
 WHERE dt_record_ext >= DATE '2025-11-01'
 GROUP BY cd_curr_pst_due
 ORDER BY rows DESC;
+
+
+-- ============================================================================
+-- DIAGNOSTIC 5: Multi-wave approved accounts / clients
+-- ----------------------------------------------------------------------------
+-- Purpose
+--   Measure how many approved PCQ TPA Period-ASC acct_no (and clnt_no) appear
+--   with more than one distinct treatmt_start_dt across the window. This is
+--   the population that the QUALIFY ROW_NUMBER() dedup in CTE 1 of the
+--   production SQL acts on. The dedup keeps the earliest treatmt_start_dt
+--   per acct_no -- later-wave duplicates are dropped from the cohort. The
+--   higher the multi-wave count, the more material that attribution choice.
+--
+--   Window starts at 2025-10-01 (one month before the production window) so
+--   any October-onward second touch shows up. Note: the production SQL
+--   filters >= 2025-11-01, so accts whose only wave is in Oct are filtered
+--   out entirely and don't enter the dedup at all -- those still appear here
+--   as wave_count = 1, just with a treatmt_start_dt < 2025-11-01.
+--
+-- Expected
+--   Most acct_no / clnt_no land in wave_count = 1 (single deployment).
+--   A non-zero wave_count >= 2 tail is normal (re-targeting across quarters).
+--   If wave_count >= 2 is material (>1% of accts), flag it: the dedup is
+--   silently re-attributing those accounts entirely to the earliest wave.
+--
+-- On failure / what to look for
+--   - wave_count >= 2 with material volume -> the Feb cohort (and any later
+--     waves) is missing accts that the Nov wave already claimed. Decide:
+--     accept first-wave attribution (current behavior), or switch to
+--     latest-wave attribution, or annotate the slide.
+--   - clnt_no wave_count materially higher than acct_no wave_count ->
+--     same client is being re-acquired with a NEW acct_no across waves
+--     (different cards). The acct_no dedup doesn't catch this; each card
+--     stays in its own cohort. Usually fine for slide 49 (per-account view).
+-- ============================================================================
+
+-- 5a: acct_no wave-count distribution
+SELECT
+  wave_count,
+  COUNT(*) AS n_accts
+FROM (
+  SELECT
+    acct_no,
+    COUNT(DISTINCT treatmt_start_dt) AS wave_count
+  FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+  WHERE treatmt_start_dt >= DATE '2025-10-01'
+    AND tpa_ita = 'TPA'
+    AND asc_on_app_source = 'Period-ASC'
+    AND app_approved = 1
+    AND acct_no IS NOT NULL
+  GROUP BY acct_no
+) t
+GROUP BY wave_count
+ORDER BY wave_count;
+
+
+-- 5b: clnt_no wave-count distribution
+SELECT
+  wave_count,
+  COUNT(*) AS n_clients
+FROM (
+  SELECT
+    clnt_no,
+    COUNT(DISTINCT treatmt_start_dt) AS wave_count
+  FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+  WHERE treatmt_start_dt >= DATE '2025-10-01'
+    AND tpa_ita = 'TPA'
+    AND asc_on_app_source = 'Period-ASC'
+    AND app_approved = 1
+    AND clnt_no IS NOT NULL
+  GROUP BY clnt_no
+) t
+GROUP BY wave_count
+ORDER BY wave_count;
+
+
+-- 5c: Sample of multi-wave accounts with all their treatmt_start_dt rows.
+-- Lets you eyeball whether the duplicates look like genuine re-targeting
+-- (different strtgy_seg_typ or product) vs. data quality artifacts.
+SELECT TOP 100
+  r.acct_no,
+  r.clnt_no,
+  r.treatmt_start_dt,
+  r.strtgy_seg_typ,
+  r.offer_prod_latest,
+  r.product_applied_name,
+  r.app_approved
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+INNER JOIN (
+  SELECT acct_no
+  FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+  WHERE treatmt_start_dt >= DATE '2025-10-01'
+    AND tpa_ita = 'TPA'
+    AND asc_on_app_source = 'Period-ASC'
+    AND app_approved = 1
+    AND acct_no IS NOT NULL
+  GROUP BY acct_no
+  HAVING COUNT(DISTINCT treatmt_start_dt) > 1
+) m
+  ON r.acct_no = m.acct_no
+WHERE r.tpa_ita = 'TPA'
+  AND r.asc_on_app_source = 'Period-ASC'
+ORDER BY r.acct_no, r.treatmt_start_dt;
