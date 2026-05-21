@@ -9,7 +9,11 @@
 --       evolve, by aging band?
 --
 --   Output columns:
+--     - cohort_accts            : total approved accts in the cohort
+--                                 (constant across me_dt for a given cohort)
 --     - active_accts            : approved accts with portfolio activity in month
+--                                 (~ cohort_accts in practice; diverges only if
+--                                  accts leave the portfolio)
 --     - sum_purchases_in_month  : total $ purchases (flow)
 --     - sum_bal_dollar_days     : sum of daily bal_current snapshots
 --                                 (ADB numerator, unit: dollar-days)
@@ -159,6 +163,9 @@
 -- ============================================================================
 -- OUTPUT INTERPRETATION
 -- ============================================================================
+--   Avg purchases per cohort acct per month (fixed denominator):
+--     SUM(sum_purchases_in_month) / SUM(cohort_accts)
+--
 --   Avg purchases per active acct per month:
 --     SUM(sum_purchases_in_month) / SUM(active_accts)
 --
@@ -204,27 +211,40 @@ DROP TABLE pcq_q1_mb_approved;
 -- INNER JOIN. Earliest treatmt_start_dt wins -- first wave keeps the acct.
 -- Verified 2026-05-21 (D5): zero multi-wave acct_no in current data, so
 -- the QUALIFY is empirically a no-op. Kept as defensive insurance.
+--
+-- cohort_accts: COUNT(*) OVER cohort dims, computed in the outer SELECT
+-- on the deduped data so the count isn't inflated by pre-dedup duplicates.
+-- Stamped on every acct row; carried through to the final output as a
+-- fixed cohort-size denominator.
 -- ============================================================================
 CREATE MULTISET VOLATILE TABLE pcq_q1_mb_approved AS (
   SELECT
-    acct_no,
-    clnt_no,
-    treatmt_start_dt,
-    treatmt_end_dt,
-    strtgy_seg_typ,
-    model_score_decile,
-    offer_prod_latest,
-    offer_prod_latest_name,
-    product_applied_name,
-    response_channel_grp
-  FROM cards_tpa_pcq_decision_resp
-  WHERE treatmt_start_dt >= DATE '2025-11-01'
-    AND tpa_ita = 'TPA'
-    AND asc_on_app_source = 'Period-ASC'
-    AND app_approved = 1
-    AND acct_no IS NOT NULL
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no
-                             ORDER BY treatmt_start_dt ASC) = 1
+    deduped.*,
+    COUNT(*) OVER (PARTITION BY treatmt_start_dt, treatmt_end_dt, strtgy_seg_typ,
+                                offer_prod_latest, offer_prod_latest_name,
+                                product_applied_name, model_score_decile,
+                                response_channel_grp) AS cohort_accts
+  FROM (
+    SELECT
+      acct_no,
+      clnt_no,
+      treatmt_start_dt,
+      treatmt_end_dt,
+      strtgy_seg_typ,
+      model_score_decile,
+      offer_prod_latest,
+      offer_prod_latest_name,
+      product_applied_name,
+      response_channel_grp
+    FROM cards_tpa_pcq_decision_resp
+    WHERE treatmt_start_dt >= DATE '2025-11-01'
+      AND tpa_ita = 'TPA'
+      AND asc_on_app_source = 'Period-ASC'
+      AND app_approved = 1
+      AND acct_no IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no
+                               ORDER BY treatmt_start_dt ASC) = 1
+  ) deduped
 ) WITH DATA
 PRIMARY INDEX (acct_no)
 ON COMMIT PRESERVE ROWS;
@@ -352,7 +372,12 @@ SELECT
     0
   ) AS months_since_treatment,
 
-  -- Denominator for per-account spend metrics
+  -- Cohort denominator (fixed cohort size, constant across me_dt)
+  MAX(a.cohort_accts)                   AS cohort_accts,
+
+  -- Per-month active denominator (accts with >=1 event row in DLY_FULL_PORTFOLIO
+  -- that month). In practice ~= cohort_accts because the source is daily;
+  -- diverges only if an acct leaves the portfolio (closure / charge-off).
   COUNT(DISTINCT am.acct_no)            AS active_accts,
 
   -- ADB numerator (dollar-days). Use SUM(sum_bal_dollar_days) /
