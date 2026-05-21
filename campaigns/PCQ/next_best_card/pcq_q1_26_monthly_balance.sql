@@ -2,33 +2,33 @@
 -- PCQ Q1 26 -- Monthly balance, spend, and past-due trajectory by cohort
 -- ============================================================================
 -- PURPOSE
---   Produces a (cohort dims x strategy x me_dt) aggregation of:
---     - active_accts            : approved accounts with portfolio activity in month
---     - sum_purchases_in_month  : total $ purchases (flow)
---     - sum_bal_dollar_days     : sum of daily balance snapshots (ADB numerator,
---                                 unit: dollar-days -- NOT dollars)
---     - total_event_days        : count of observed event days (ADB denominator)
---     - sum_last_bal_current    : total month-end balance snapshot across accounts
---     - sum_bal_pd_*            : 13 mutually-exclusive past-due-band buckets +
---                                 a catch-all "unknown" bucket; together they
---                                 sum to sum_last_bal_current
+--   Produce a (cohort dims x me_dt) aggregation answering:
+--     - how does per-account spend evolve month-over-month?
+--     - how does average daily balance evolve?
+--     - how does the share of balance carried on past-due-flagged accounts
+--       evolve, by aging band?
 --
---   Output drives slide 49 of the PCQ Power Pack: per-account spend and
---   past-due balance share across A2C and Rest of PCQ, Nov 2025 + Feb 2026 waves.
+--   Output columns:
+--     - active_accts            : approved accts with portfolio activity in month
+--     - sum_purchases_in_month  : total $ purchases (flow)
+--     - sum_bal_dollar_days     : sum of daily bal_current snapshots
+--                                 (ADB numerator, unit: dollar-days)
+--     - total_event_days        : count of observed event days (ADB denominator)
+--     - sum_last_bal_current    : total month-end balance across accts
+--     - sum_bal_pd_*            : 13 mutually-exclusive past-due bands +
+--                                 a catch-all "unknown" bucket. Sum to
+--                                 sum_last_bal_current by construction.
 --
 -- DATA SOURCES
---   - cards_tpa_pcq_decision_resp  (Teradata, DL_MR_PROD) -- targeting + response
---   - D3CV12A.DLY_FULL_PORTFOLIO   (Teradata) -- per-account daily portfolio
---     Note: contains ALL calendar days (Sat/Sun reflect Friday values).
---     Index = SRVC_ID + ACCT_NO + VISA_PROD_CD + DT_RECORD_EXT.
+--   - DL_MR_PROD.cards_tpa_pcq_decision_resp -- targeting + response
+--   - D3CV12A.DLY_FULL_PORTFOLIO             -- per-account daily portfolio
+--     (contains all calendar days; Sat/Sun reflect Friday values.
+--      Index = SRVC_ID + ACCT_NO + VISA_PROD_CD + DT_RECORD_EXT.)
 --
 -- COMPANION FILE
---   - pcq_q1_26_diagnostics.sql : standalone diagnostic queries that verify
---                                 table-level assumptions encoded below
---                                 (me_dt convention, daily-snapshot grain,
---                                 cd_curr_pst_due value coverage). Results
---                                 of the latest run are in the DIAGNOSTIC
---                                 VERIFICATION LOG section further down.
+--   pcq_q1_26_diagnostics.sql -- standalone queries verifying table-level
+--   assumptions used here. Latest results in the DIAGNOSTIC VERIFICATION
+--   LOG section below.
 --
 -- OUTPUT GRAIN
 --   One row per (treatmt_start_dt, treatmt_end_dt, strtgy_seg_typ,
@@ -40,181 +40,138 @@
 -- KEY METHODOLOGY DECISIONS
 -- ============================================================================
 --
--- [1] TWO BALANCE VIEWS, TWO DIFFERENT UNITS
+-- [1] TWO BALANCE VIEWS, TWO UNITS
 --
 --   - last_bal_current = bal_current on the latest event date in the month
---     (i.e., the row with the largest dt_record_ext within a given me_dt).
---     One value per (account, me_dt). Used for past-due bucket calcs and
---     month-end snapshot totals. Unit: dollars.
+--     (largest dt_record_ext per (acct, me_dt)). Unit: dollars. Used for
+--     past-due bucket assignment and month-end snapshot totals.
+--   - sum_bal_dollar_days = SUM(bal_current) across all observed days in
+--     the month. Unit: dollar-days. Paired with event_days as ADB numerator.
 --
---   - sum_bal_current_in_month = SUM(bal_current) across all observed days
---     in the month. In dollar-days. Paired with event_days as ADB denominator.
---     Exposed at the output level as sum_bal_dollar_days to make the unit
---     explicit (NOT a daily balance figure).
+--   They answer different questions:
+--     last_bal_current  -> what is owed at month-end (stock)
+--     ADB               -> typical balance carried over the month
 --
---   These answer different questions:
---     - last_bal_current  -> what is owed at month-end (stock)
---     - ADB               -> typical balance carried over the month (time-weighted avg)
+--   For past-due ratios, snapshot is the right basis: cd_curr_pst_due is a
+--   point-in-time field, so snapshot-to-snapshot keeps units consistent.
+--   me_dt is the month-end calendar tag shared by every event row in that
+--   calendar month.
 --
---   For past-due ratios, snapshot is the right basis: cd_curr_pst_due is
---   itself a point-in-time field, so matching snapshot-to-snapshot keeps
---   units consistent.
---
---   Note on me_dt: per RBC convention, me_dt is the month-end calendar tag
---   shared by every event row in that calendar month. So
---   PARTITION BY (acct_no, me_dt) ORDER BY dt_record_ext DESC LIMIT 1
---   genuinely returns the latest observed event in that calendar month.
---   Sanity check before reading any output: SELECT DISTINCT me_dt -- should
---   be one value per calendar month, always a month-end-style date.
---
--- [2] PAST-DUE SEMANTICS: FLAG CLASSIFIES THE ACCOUNT, NOT A DOLLAR PORTION
+-- [2] PAST-DUE FLAG CLASSIFIES THE ACCOUNT, NOT A DOLLAR PORTION
 --
 --   DLY_FULL_PORTFOLIO has cd_curr_pst_due (a code) but NO separate
---   "past-due dollar amount" field. Each account is in exactly one band at
---   month-end (the aging of the oldest unpaid amount, not the balance amount).
+--   past-due dollar field. Each acct is in exactly one band at month-end
+--   (aging of the oldest unpaid amount, not the balance amount).
 --
 --   Code mapping:
 --     NULL = no past-due
---     01   = 1-30 days       06   = 151-180 days     1A   = 271-300 days
---     02   = 31-60 days      07   = 181-210 days     1B   = 301-330 days
---     03   = 61-90 days      08   = 211-240 days     1C   = 331+ days
---     04   = 91-120 days     09   = 241-270 days
---     05   = 121-150 days
+--     01 = 1-30 days       06 = 151-180 days     1A = 271-300 days
+--     02 = 31-60 days      07 = 181-210 days     1B = 301-330 days
+--     03 = 61-90 days      08 = 211-240 days     1C = 331+ days
+--     04 = 91-120 days     09 = 241-270 days
+--     05 = 121-150 days
 --
---   The buckets sum the FULL last_bal_current of each account into the
---   bucket matching that account's code. Plus a sum_bal_pd_unknown catch-all
---   for any code value not in the 13 known categories (defensive: should be 0
---   in normal data; non-zero indicates a new code emerged at source).
---   By construction:
---       sum_bal_pd_current + sum_bal_pd_d1_30 + ... + sum_bal_pd_d331_plus
---       + sum_bal_pd_unknown  =  sum_last_bal_current
+--   Each acct contributes its full last_bal_current to the bucket matching
+--   its code. sum_bal_pd_unknown catches any non-NULL code outside the 13
+--   known categories (defensive). By construction:
+--     SUM(sum_bal_pd_current ... sum_bal_pd_d331_plus + sum_bal_pd_unknown)
+--     = SUM(sum_last_bal_current)
 --
---   Resulting metric: "% of outstanding balance carried on accounts flagged
---   at aging band X". NOT "% of balance that is itself overdue".
+--   Resulting metric: "% of outstanding balance carried on accts flagged
+--   at aging band X", NOT "% of balance that is itself overdue".
 --
--- [3] active_accts AS DENOMINATOR FOR PER-ACCOUNT METRICS
+-- [3] active_accts AS PER-ACCOUNT DENOMINATOR
 --
---   active_accts = COUNT(DISTINCT acct_no) in the (cohort x me_dt) bucket
---                = accounts with at least one event row in DLY_FULL_PORTFOLIO
---                  in that month, post-treatment.
+--   COUNT(DISTINCT acct_no) per (cohort x me_dt) = accts with >=1 event row
+--   in DLY_FULL_PORTFOLIO that month, post-treatment.
 --
---   Defensive dedup: pcq_q1_mb_approved deduplicates on acct_no so the final
---   INNER JOIN cannot fan out rows. If a customer was deployed in multiple
---   waves (e.g., Nov AND Feb), the earliest approval is kept.
+--   Defensive dedup: pcq_q1_mb_approved deduplicates on acct_no so the
+--   final INNER JOIN can't fan out. Earliest treatmt_start_dt wins.
+--   Verified 2026-05-21 (D5) -- zero acct_no multi-wave in this population,
+--   so the dedup is empirically a no-op. Kept as insurance against drift.
 --
 -- [4] event_days AS ADB DENOMINATOR
 --
---   True ADB = sum_bal_dollar_days / total_event_days at the cohort level.
+--   True ADB = SUM(sum_bal_dollar_days) / SUM(total_event_days) at cohort.
 --   DLY_FULL_PORTFOLIO is daily so event_days approximates calendar days
---   the account was observable that month.
+--   the acct was observable that month.
 --
 -- ============================================================================
 -- PAIN POINTS RESOLVED DURING BUILD
 -- ============================================================================
 --
 -- [A] accum_dly_bal_mtd is a dollar-days accumulator, not a balance.
---     Original version used sum_mtd_avg_bal derived from accum_dly_bal_mtd.
---     That field resets to $0 on the 1st of each month and accumulates the
---     day's balance daily. At constant $100 balance, day 28 reads $2,800,
---     not $100. Aggregating it as a balance gave numbers ~30x too large.
---     Replaced with sum_bal_dollar_days and event_days for true ADB.
---     accum_dly_bal_mtd dropped entirely.
+--     Resets to $0 on the 1st and accumulates daily. At constant $100
+--     balance, day 28 reads $2,800. Aggregating it as a balance gave
+--     numbers ~30x too large. Replaced with sum_bal_dollar_days +
+--     event_days for true ADB.
 --
 -- [B] Past-due ratio unit mismatch.
---     Initial Excel calc used sum_bal_pd_d1_30 / sum_bal_current_daily.
---     Numerator was dollars (snapshot); denominator was dollar-days.
---     Ratio was ~30x too small. Fixed by adding sum_last_bal_current
---     (the snapshot total) as the natural denominator. The PD buckets
---     sum to sum_last_bal_current by construction, so units match.
---     The dollar-days column has now been renamed sum_bal_dollar_days
---     to prevent the original misread from happening again.
+--     Initial calc was sum_bal_pd_d1_30 / sum_bal_current_daily
+--     (dollars over dollar-days, ~30x too small). Fixed by using
+--     sum_last_bal_current (snapshot total) as the natural denominator;
+--     PD buckets sum to it by construction.
 --
--- [C] Data Dictionary scare about bal_current being derived.
---     RBC's internal Data Dictionary (last reviewed July 2015) shows a
---     derivation rule for bal_current that uses ACCUM_DLY_BAL_MTD as a base
---     in some branches. This raised concern that bal_current itself was an
---     accumulator. Resolution: the dictionary entry is 11 years old; current
---     usage at RBC treats bal_current as a point-in-time balance, consistent
---     with the field's business description. Behavior in practice matches
---     snapshot semantics.
+-- [C] Data Dictionary entry for bal_current is 11 years old and shows a
+--     derivation referencing ACCUM_DLY_BAL_MTD in some branches. Current
+--     RBC usage treats bal_current as a point-in-time balance; behavior
+--     in practice matches snapshot semantics.
 --
 -- [D] dt_record_ext usage.
---     The Data Dictionary warns "use Date Record Extracted to avoid pulling
---     multiple records for the same accounts". The table holds one row per
---     account per calendar day. Without a date filter you pull every day in
---     retention. This file uses dt_record_ext two correct ways:
---       (i) as a filter: dt_record_ext >= treatmt_start_dt
---       (ii) as a ranking key in ROW_NUMBER to pick the latest event per
---            (account, me_dt) for snapshot purposes.
+--     One row per acct per calendar day in DLY_FULL_PORTFOLIO. Used here
+--     as (i) a filter (dt_record_ext >= treatmt_start_dt) and (ii) a
+--     ranking key in ROW_NUMBER to pick the latest event per (acct, me_dt).
 --
--- [E] cd_curr_pst_due "current" indicator may not be NULL.
---     The "current" bucket uses last_pst_due_cd IS NULL. If the source uses
---     an empty string ('') or another non-NULL value for "not past-due",
---     this check misses those accounts. They now land in sum_bal_pd_unknown
---     (catch-all bucket) rather than being silently dropped from the
---     totals -- so the 13+1 identity always holds.
---
---     VERIFIED 2026-05-19: NULL is the only "not past-due" indicator in
---     the data. 13 distinct cd_curr_pst_due values observed across the
---     observation window, exactly matching the expected set
---     (NULL + 01,02,03,04,05,06,07,08,09,1A,1B,1C). The IS NULL check is
---     sound as written. See pcq_q1_26_diagnostics.sql D3/D4 for the
---     verification queries. Re-run on any source-system change.
+-- [E] "Current" indicator may not be NULL.
+--     The current bucket uses last_pst_due_cd IS NULL. If source ever uses
+--     '' or another non-NULL "not past-due" value, those accts land in
+--     sum_bal_pd_unknown rather than being silently dropped, so the 13+1
+--     identity always holds. Verified 2026-05-19 (D3/D4): NULL is the only
+--     not-past-due indicator; 13 distinct codes total, matching the
+--     expected set.
 --
 -- ============================================================================
 -- DIAGNOSTIC VERIFICATION LOG
 -- ============================================================================
+-- Diagnostics live in pcq_q1_26_diagnostics.sql. Re-run on any change to
+-- the production SQL, source table semantics, or past-due code definitions.
 --
--- Verifications run against D3CV12A.DLY_FULL_PORTFOLIO directly
--- (~75M+ rows scanned across the observation window).
--- Diagnostic queries live in pcq_q1_26_diagnostics.sql.
+-- 2026-05-19 -- Pre-submission run
+--   D1 (me_dt convention)            PASS
+--     0 rows where dt_record_ext month != me_dt month.
+--   D2 (me_dt domain + daily check)  PASS
+--     7 month-end values Nov 2025 - May 2026. event_rows / distinct_accts
+--     ratios match days-in-month for complete months
+--     (~12M distinct accts per month).
+--   D3/D4 (cd_curr_pst_due coverage) PASS
+--     13 distinct values: NULL + 01-09, 1A, 1B, 1C. No unexpected codes.
 --
--- 2026-05-19 -- Pre-submission diagnostic run
---
---   D1 (me_dt convention)             PASS
---     0 rows where dt_record_ext month != me_dt month across the
---     observation window. The (acct, me_dt) snapshot semantic in CTE 3
---     is sound.
---
---   D2 (me_dt domain + daily check)   PASS
---     7 distinct me_dt values, one per calendar month from Nov 2025
---     through May 2026, each a true month-end date.
---     event_rows / distinct_accounts ratios per month:
---       2025-11-30  29.4   2025-12-31  30.9   2026-01-31  30.9
---       2026-02-28  27.9   2026-03-31  30.2   2026-04-30  29.9
---       2026-05-31  17.9 (partial -- through 2026-05-19, 19 of 31 days)
---     Ratios match days-in-month for complete months. Confirms
---     DLY_FULL_PORTFOLIO is genuinely daily (one row per account per
---     calendar day, Sat/Sun rolled to Friday). ~12M distinct accounts
---     per month across the window.
---
---   D3 (cd_curr_pst_due coverage)     PASS
---     13 distinct values total, exactly the expected set:
---       NULL + 01,02,03,04,05,06,07,08,09,1A,1B,1C
---     No unexpected codes. sum_bal_pd_unknown expected to be 0 in
---     normal production output.
---
--- Re-run all diagnostics if the production SQL, the source table
--- semantics, or the past-due code definitions change.
+-- 2026-05-21 -- Dedup-impact check
+--   D5 (multi-wave dedup impact)     PASS
+--     - 5a acct_no grain: 669,405 accts, 100% wave_count = 1. The QUALIFY
+--       ROW_NUMBER() in CTE 1 drops zero rows on current data.
+--     - 5b clnt_no grain: 2 clients at wave_count = 2 (~0.0003%). Two
+--       individuals re-acquired with a different acct_no across waves;
+--       each acct sits cleanly in its own cohort row.
+--     - 5c multi-wave acct sample: empty, consistent with 5a.
+--     Conclusion: cohorts are clean. Dedup kept as defensive insurance.
 --
 -- ============================================================================
--- EXCEL PIVOT RECIPES
+-- OUTPUT INTERPRETATION
 -- ============================================================================
---   Avg purchases per active account, per month:
---     Values = SUM(sum_purchases_in_month) / SUM(active_accts)
+--   Avg purchases per active acct per month:
+--     SUM(sum_purchases_in_month) / SUM(active_accts)
 --
---   True average daily balance (ADB), per month:
---     Values = SUM(sum_bal_dollar_days) / SUM(total_event_days)
+--   True average daily balance (ADB) per month:
+--     SUM(sum_bal_dollar_days) / SUM(total_event_days)
 --
---   Past-due rate, per month, per aging band:
---     Values = SUM(sum_bal_pd_d1_30) / SUM(sum_last_bal_current)
---     (and likewise for the other PD bands -- all share the same denominator)
+--   Past-due rate per month per aging band:
+--     SUM(sum_bal_pd_d1_30) / SUM(sum_last_bal_current)
+--     (same denominator for every band)
 --
---   Sanity check that buckets reconcile:
---     SUM(sum_bal_pd_current) + SUM(sum_bal_pd_d1_30) + ... +
---     SUM(sum_bal_pd_d331_plus) + SUM(sum_bal_pd_unknown)
---     should equal SUM(sum_last_bal_current). Any drift indicates a new
---     pd_cd value emerged at source.
+--   Bucket reconciliation:
+--     SUM(sum_bal_pd_current + ... + sum_bal_pd_d331_plus + sum_bal_pd_unknown)
+--     should equal SUM(sum_last_bal_current). Drift = new pd_cd at source.
 -- ============================================================================
 
 
@@ -230,28 +187,23 @@ DROP TABLE pcq_q1_mb_approved;
 -- ============================================================================
 -- CTE 1: pcq_q1_mb_approved
 -- ----------------------------------------------------------------------------
--- Approved PCQ TPA Period-ASC accounts since Nov 2025, deduplicated on
--- acct_no so the downstream INNER JOIN can't fan out rows.
+-- Approved PCQ TPA Period-ASC accts since Nov 2025, deduplicated on acct_no
+-- so the downstream INNER JOIN can't fan out rows.
 --
--- Why this filter shape:
---   - treatmt_start_dt >= '2025-11-01' : current measurement window
+-- Filter shape:
+--   - treatmt_start_dt >= '2025-11-01' : measurement window
 --   - tpa_ita = 'TPA'                  : excludes IPC/IRI from same table
---   - asc_on_app_source = 'Period-ASC' : tightens scope so the joined event
+--   - asc_on_app_source = 'Period-ASC' : tightens scope so the event
 --                                        volatile fits in spool
---   - app_approved = 1                 : portfolio data only exists for
---                                        approved accounts
+--   - app_approved = 1                 : portfolio data exists only for
+--                                        approved accts
 --   - acct_no IS NOT NULL              : safety against unjoinable rows
 --
--- Why dedup: a customer can be deployed in more than one wave. Without
--- QUALIFY, the same acct_no appears multiple times here -> at the final
--- INNER JOIN it would multiply (acct, me_dt) aggregates. We keep the
--- earliest treatmt_start_dt so the customer is attributed to the first
--- wave they entered.
---
--- This is the cohort-equivalent CTE: there is no separate "all targeted"
--- volatile because nothing downstream needs non-approved clients. The
--- companion ASC file does maintain a separate cohort CTE because it
--- computes deployed/responded counts.
+-- Dedup: without QUALIFY, an acct deployed in multiple waves would appear
+-- multiple times here and inflate (acct, me_dt) aggregates at the final
+-- INNER JOIN. Earliest treatmt_start_dt wins -- first wave keeps the acct.
+-- Verified 2026-05-21 (D5): zero multi-wave acct_no in current data, so
+-- the QUALIFY is empirically a no-op. Kept as defensive insurance.
 -- ============================================================================
 CREATE MULTISET VOLATILE TABLE pcq_q1_mb_approved AS (
   SELECT
