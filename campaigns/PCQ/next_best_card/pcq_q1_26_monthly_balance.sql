@@ -14,7 +14,12 @@
 --     - active_accts            : approved accts with portfolio activity in month
 --                                 (~ cohort_accts in practice; diverges only if
 --                                  accts leave the portfolio)
---     - sum_purchases_in_month  : total $ purchases (flow)
+--     - sum_purchases_in_month  : total $ purchases (sum of daily flow)
+--     - sum_purchases_mtd_eom   : sum of month-end net_prch_amt_mtd snapshots.
+--                                 Cross-check vs sum_purchases_in_month --
+--                                 they should match if net_prch_amt_dly is a
+--                                 true daily delta. Divergence flags weekend
+--                                 carry-forward or other daily-double-count.
 --     - sum_bal_dollar_days     : sum of daily bal_current snapshots
 --                                 (ADB numerator, unit: dollar-days)
 --     - total_event_days        : count of observed event days (ADB denominator)
@@ -163,6 +168,9 @@
 -- ============================================================================
 -- OUTPUT INTERPRETATION
 -- ============================================================================
+--   Daily-vs-MTD purchases cross-check (should match if dly is a true delta):
+--     SUM(sum_purchases_in_month) vs SUM(sum_purchases_mtd_eom)
+--
 --   Avg purchases per cohort acct per month (fixed denominator):
 --     SUM(sum_purchases_in_month) / SUM(cohort_accts)
 --
@@ -264,6 +272,9 @@ ON COMMIT PRESERVE ROWS;
 -- Fields pulled (and why):
 --   - acct_no, dt_record_ext, me_dt : grain + grouping keys
 --   - net_prch_amt_dly : daily purchases (flow), summed over the month
+--   - net_prch_amt_mtd : month-to-date purchases (running accumulator, resets
+--                        on the 1st). Latest event in month = true MTD total.
+--                        Cross-check denominator for the daily-flow sum.
 --   - bal_current     : balance snapshot at this event date (used both as
 --                       a daily contribution to ADB and as the source of
 --                       the month-end snapshot via ROW_NUMBER in CTE 3)
@@ -276,6 +287,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_events AS (
     p.dt_record_ext,
     p.me_dt,
     p.net_prch_amt_dly,
+    p.net_prch_amt_mtd,
     p.bal_current,
     p.cd_curr_pst_due
   FROM D3CV12A.DLY_FULL_PORTFOLIO p
@@ -317,6 +329,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
     acct_no,
     me_dt,
     SUM(net_prch_amt_dly)                                       AS sum_purchases_in_month,
+    MAX(CASE WHEN rn = 1 THEN net_prch_amt_mtd END)             AS last_net_prch_amt_mtd,
     SUM(bal_current)                                            AS sum_bal_current_in_month,
     COUNT(*)                                                    AS event_days_in_month,
     MAX(CASE WHEN rn = 1 THEN bal_current END)                  AS last_bal_current,
@@ -328,6 +341,7 @@ CREATE MULTISET VOLATILE TABLE pcq_q1_mb_acct_month AS (
       e.me_dt,
       e.dt_record_ext,
       e.net_prch_amt_dly,
+      e.net_prch_amt_mtd,
       e.bal_current,
       e.cd_curr_pst_due,
       ROW_NUMBER() OVER (PARTITION BY e.acct_no, e.me_dt
@@ -416,6 +430,11 @@ SELECT
 
   -- Total purchases (flow) for the per-account spend numerator
   SUM(am.sum_purchases_in_month)        AS sum_purchases_in_month,
+
+  -- Cross-check: month-end net_prch_amt_mtd snapshots. Should equal
+  -- sum_purchases_in_month at any aggregation level if net_prch_amt_dly
+  -- is a true daily delta. Divergence flags weekend carry-forward etc.
+  SUM(am.last_net_prch_amt_mtd)         AS sum_purchases_mtd_eom,
 
   -- ADB denominator
   SUM(am.event_days_in_month)           AS total_event_days
