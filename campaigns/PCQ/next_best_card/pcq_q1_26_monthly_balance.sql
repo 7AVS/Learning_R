@@ -27,6 +27,11 @@
 --     - sum_bal_pd_*            : 13 mutually-exclusive past-due bands +
 --                                 a catch-all "unknown" bucket. Sum to
 --                                 sum_last_bal_current by construction.
+--     - cnt_pd_*                : acct counts in each of the 14 buckets.
+--                                 Sum to active_accts by construction.
+--                                 Pair with sum_bal_pd_* to see whether a
+--                                 band's $ share matches its acct share
+--                                 (concentration check / 80-20).
 --
 -- DATA SOURCES
 --   - DL_MR_PROD.cards_tpa_pcq_decision_resp -- targeting + response
@@ -184,9 +189,21 @@
 --     SUM(sum_bal_pd_d1_30) / SUM(sum_last_bal_current)
 --     (same denominator for every band)
 --
+--   Past-due acct share per month per aging band:
+--     SUM(cnt_pd_d1_30) / SUM(active_accts)
+--     (same denominator for every band)
+--
+--   Concentration check (does $ share track acct share?):
+--     [SUM(sum_bal_pd_X) / SUM(sum_last_bal_current)]
+--       vs
+--     [SUM(cnt_pd_X) / SUM(active_accts)]
+--     $ share >> acct share -> a few large-balance accts drive the band.
+--     $ share ~ acct share  -> balance-per-acct in band ~ portfolio avg.
+--
 --   Bucket reconciliation:
 --     SUM(sum_bal_pd_current + ... + sum_bal_pd_d331_plus + sum_bal_pd_unknown)
 --     should equal SUM(sum_last_bal_current). Drift = new pd_cd at source.
+--     Same identity holds for cnt_pd_* vs active_accts.
 -- ============================================================================
 
 
@@ -427,6 +444,28 @@ SELECT
                                                '06','07','08','09',
                                                '1A','1B','1C')
            THEN am.last_bal_current ELSE 0 END) AS sum_bal_pd_unknown,
+
+  -- Acct counts per past-due bucket (parallel to sum_bal_pd_*).
+  -- Sum of the 14 cnt_pd_* equals active_accts by construction. Pair with
+  -- the dollar buckets to test whether overdue $ is concentrated or spread.
+  SUM(CASE WHEN am.last_pst_due_cd IS NULL THEN 1 ELSE 0 END) AS cnt_pd_current,
+  SUM(CASE WHEN am.last_pst_due_cd = '01'  THEN 1 ELSE 0 END) AS cnt_pd_d1_30,
+  SUM(CASE WHEN am.last_pst_due_cd = '02'  THEN 1 ELSE 0 END) AS cnt_pd_d31_60,
+  SUM(CASE WHEN am.last_pst_due_cd = '03'  THEN 1 ELSE 0 END) AS cnt_pd_d61_90,
+  SUM(CASE WHEN am.last_pst_due_cd = '04'  THEN 1 ELSE 0 END) AS cnt_pd_d91_120,
+  SUM(CASE WHEN am.last_pst_due_cd = '05'  THEN 1 ELSE 0 END) AS cnt_pd_d121_150,
+  SUM(CASE WHEN am.last_pst_due_cd = '06'  THEN 1 ELSE 0 END) AS cnt_pd_d151_180,
+  SUM(CASE WHEN am.last_pst_due_cd = '07'  THEN 1 ELSE 0 END) AS cnt_pd_d181_210,
+  SUM(CASE WHEN am.last_pst_due_cd = '08'  THEN 1 ELSE 0 END) AS cnt_pd_d211_240,
+  SUM(CASE WHEN am.last_pst_due_cd = '09'  THEN 1 ELSE 0 END) AS cnt_pd_d241_270,
+  SUM(CASE WHEN am.last_pst_due_cd = '1A'  THEN 1 ELSE 0 END) AS cnt_pd_d271_300,
+  SUM(CASE WHEN am.last_pst_due_cd = '1B'  THEN 1 ELSE 0 END) AS cnt_pd_d301_330,
+  SUM(CASE WHEN am.last_pst_due_cd = '1C'  THEN 1 ELSE 0 END) AS cnt_pd_d331_plus,
+  SUM(CASE WHEN am.last_pst_due_cd IS NOT NULL
+                AND am.last_pst_due_cd NOT IN ('01','02','03','04','05',
+                                               '06','07','08','09',
+                                               '1A','1B','1C')
+           THEN 1 ELSE 0 END) AS cnt_pd_unknown,
 
   -- Total purchases (flow) for the per-account spend numerator
   SUM(am.sum_purchases_in_month)        AS sum_purchases_in_month,
