@@ -1,0 +1,277 @@
+-- PCD deployment 2026111PCD — vintage curves dataset
+-- Output: one row per (tactic_id, cohort_yyyymm, slicer_dim, slicer_value, metric, vintage_day)
+-- Metrics: conversion | mobile_view | mobile_click. Denominators: cohort_size, metric_eligible.
+-- Run in Starburst (Trino). No QUALIFY, no NULLIFZERO, no catalog prefix on EDW tables.
+
+-- DIAGNOSTIC (run separately): GA4 it_item_name distribution for PCD 2026111 mobile-deployed clients.
+-- Confirms whether the 4 known PCD promo names exhaust mobile traffic or if there are other creatives.
+/*
+SELECT g.it_item_name, COUNT(DISTINCT TRY_CAST(g.up_srf_id2_value AS BIGINT)) AS unique_clients, COUNT(*) AS events
+FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp c
+INNER JOIN edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
+    ON TRY_CAST(g.up_srf_id2_value AS BIGINT) = c.clnt_no
+WHERE c.tactic_id_parent = '2026111PCD'
+  AND c.channel_deploy_mb = 'Y'
+  AND g.year = '2026' AND g.month IN ('04','05','06')
+  AND g.event_name IN ('view_promotion','select_promotion')
+GROUP BY g.it_item_name
+ORDER BY unique_clients DESC;
+*/
+
+-- cohort: one row per acct in deployment 2026111PCD
+WITH cohort AS (
+    SELECT
+        acct_no,
+        clnt_no,
+        '2026111PCD'                                        AS tactic_id,
+        DATE_TRUNC('month', response_start)                 AS cohort_yyyymm,
+        response_start,
+        channel_deploy_mb,
+        act_ctl_seg,
+        product_at_decision,
+        target_product,
+        responder_anyproduct,
+        success_dt_1
+    FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
+    WHERE tactic_id_parent = '2026111PCD'
+),
+
+-- cohort_stacked: fan out to 5 slicer blocks (one row per acct per slicer_dim)
+cohort_stacked AS (
+    SELECT acct_no, clnt_no, tactic_id, cohort_yyyymm, response_start, channel_deploy_mb,
+           responder_anyproduct, success_dt_1,
+           'overall'              AS slicer_dim,
+           'ALL'                  AS slicer_value
+    FROM cohort
+
+    UNION ALL
+
+    SELECT acct_no, clnt_no, tactic_id, cohort_yyyymm, response_start, channel_deploy_mb,
+           responder_anyproduct, success_dt_1,
+           'act_ctl_seg'          AS slicer_dim,
+           COALESCE(act_ctl_seg, '(null)') AS slicer_value
+    FROM cohort
+
+    UNION ALL
+
+    SELECT acct_no, clnt_no, tactic_id, cohort_yyyymm, response_start, channel_deploy_mb,
+           responder_anyproduct, success_dt_1,
+           'product_at_decision'  AS slicer_dim,
+           COALESCE(product_at_decision, '(null)') AS slicer_value
+    FROM cohort
+
+    UNION ALL
+
+    SELECT acct_no, clnt_no, tactic_id, cohort_yyyymm, response_start, channel_deploy_mb,
+           responder_anyproduct, success_dt_1,
+           'target_product'       AS slicer_dim,
+           COALESCE(target_product, '(null)') AS slicer_value
+    FROM cohort
+
+    UNION ALL
+
+    SELECT acct_no, clnt_no, tactic_id, cohort_yyyymm, response_start, channel_deploy_mb,
+           responder_anyproduct, success_dt_1,
+           'channel_deploy_mb'    AS slicer_dim,
+           COALESCE(channel_deploy_mb, '(null)') AS slicer_value
+    FROM cohort
+),
+
+-- conversion_events: first conversion date per acct (from curated flags)
+conversion_events AS (
+    SELECT
+        acct_no,
+        tactic_id,
+        cohort_yyyymm,
+        slicer_dim,
+        slicer_value,
+        DATE_DIFF('day', response_start, success_dt_1) AS event_day,
+        'conversion'                                    AS metric
+    FROM cohort_stacked
+    WHERE responder_anyproduct = 1
+      AND success_dt_1 IS NOT NULL
+      AND DATE_DIFF('day', response_start, success_dt_1) BETWEEN 0 AND 60
+),
+
+-- ga4_raw: pull GA4 banner events for PCD mobile cohort, both event types
+ga4_raw AS (
+    SELECT
+        TRY_CAST(g.up_srf_id2_value AS BIGINT) AS clnt_no,
+        g.event_name,
+        g.event_date
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
+    WHERE g.year  = '2026'
+      AND g.month IN ('04','05','06')
+      AND g.event_name IN ('view_promotion','select_promotion')
+      AND g.it_item_name IN (
+            'PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_AVP',
+            'PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_IAV',
+            'PB_CC_ALL_26_02_RBC_PCD_PPCN',
+            'PB_CC_ALL_26_02_RBC_PCD_Offer_Hub_Banner'
+          )
+      AND g.up_srf_id2_value IS NOT NULL
+),
+
+-- ga4_first: first view and first click per clnt_no (across all qualifying events)
+ga4_first AS (
+    SELECT
+        clnt_no,
+        MIN(CASE WHEN event_name = 'view_promotion'   THEN event_date END) AS first_view_dt,
+        MIN(CASE WHEN event_name = 'select_promotion' THEN event_date END) AS first_click_dt
+    FROM ga4_raw
+    GROUP BY clnt_no
+),
+
+-- mobile_events: join first GA4 events back to cohort_stacked (mobile-deployed only)
+mobile_events AS (
+    SELECT
+        cs.acct_no,
+        cs.tactic_id,
+        cs.cohort_yyyymm,
+        cs.slicer_dim,
+        cs.slicer_value,
+        gf.first_view_dt,
+        gf.first_click_dt,
+        cs.response_start
+    FROM cohort_stacked cs
+    INNER JOIN ga4_first gf ON gf.clnt_no = cs.clnt_no
+    WHERE cs.channel_deploy_mb = 'Y'
+),
+
+-- mobile_view_events: vintage_day for first banner view
+mobile_view_events AS (
+    SELECT
+        acct_no,
+        tactic_id,
+        cohort_yyyymm,
+        slicer_dim,
+        slicer_value,
+        DATE_DIFF('day', response_start, first_view_dt) AS event_day,
+        'mobile_view'                                    AS metric
+    FROM mobile_events
+    WHERE first_view_dt IS NOT NULL
+      AND first_view_dt >= response_start
+      AND DATE_DIFF('day', response_start, first_view_dt) BETWEEN 0 AND 60
+),
+
+-- mobile_click_events: vintage_day for first banner click
+mobile_click_events AS (
+    SELECT
+        acct_no,
+        tactic_id,
+        cohort_yyyymm,
+        slicer_dim,
+        slicer_value,
+        DATE_DIFF('day', response_start, first_click_dt) AS event_day,
+        'mobile_click'                                    AS metric
+    FROM mobile_events
+    WHERE first_click_dt IS NOT NULL
+      AND first_click_dt >= response_start
+      AND DATE_DIFF('day', response_start, first_click_dt) BETWEEN 0 AND 60
+),
+
+-- all_events: union all three metric sources
+all_events AS (
+    SELECT acct_no, tactic_id, cohort_yyyymm, slicer_dim, slicer_value, event_day, metric
+    FROM conversion_events
+    UNION ALL
+    SELECT acct_no, tactic_id, cohort_yyyymm, slicer_dim, slicer_value, event_day, metric
+    FROM mobile_view_events
+    UNION ALL
+    SELECT acct_no, tactic_id, cohort_yyyymm, slicer_dim, slicer_value, event_day, metric
+    FROM mobile_click_events
+),
+
+-- denominators: cohort size and mobile sub-cohort per (tactic, cohort, slicer) cell
+denominators AS (
+    SELECT
+        tactic_id,
+        cohort_yyyymm,
+        slicer_dim,
+        slicer_value,
+        COUNT(DISTINCT acct_no)                                                 AS slicer_cohort_size,
+        COUNT(DISTINCT CASE WHEN channel_deploy_mb = 'Y' THEN acct_no END)     AS slicer_mobile_size
+    FROM cohort_stacked
+    GROUP BY tactic_id, cohort_yyyymm, slicer_dim, slicer_value
+),
+
+-- daily_counts: accts whose first event for this metric landed on this exact vintage_day
+daily_counts AS (
+    SELECT
+        tactic_id,
+        cohort_yyyymm,
+        slicer_dim,
+        slicer_value,
+        metric,
+        event_day                            AS vintage_day,
+        COUNT(DISTINCT acct_no)              AS n_first_events
+    FROM all_events
+    GROUP BY tactic_id, cohort_yyyymm, slicer_dim, slicer_value, metric, event_day
+),
+
+-- metric_universe: all (slicer, metric) combos for cross-join with day spine
+metric_universe AS (
+    SELECT DISTINCT tactic_id, cohort_yyyymm, slicer_dim, slicer_value, metric
+    FROM all_events
+),
+
+-- scaffold: full day spine 0..60 for every (slicer × metric) cell
+scaffold AS (
+    SELECT
+        mu.tactic_id,
+        mu.cohort_yyyymm,
+        mu.slicer_dim,
+        mu.slicer_value,
+        mu.metric,
+        d.vintage_day
+    FROM metric_universe mu
+    CROSS JOIN UNNEST(SEQUENCE(0, 60)) AS d(vintage_day)
+),
+
+-- cumulative: join daily counts onto scaffold, zero-fill, window cumulative
+cumulative AS (
+    SELECT
+        s.tactic_id,
+        s.cohort_yyyymm,
+        s.slicer_dim,
+        s.slicer_value,
+        s.metric,
+        s.vintage_day,
+        COALESCE(dc.n_first_events, 0)       AS n_first_events,
+        SUM(COALESCE(dc.n_first_events, 0)) OVER (
+            PARTITION BY s.tactic_id, s.cohort_yyyymm, s.slicer_dim, s.slicer_value, s.metric
+            ORDER BY s.vintage_day
+            ROWS UNBOUNDED PRECEDING
+        )                                    AS cum_responders
+    FROM scaffold s
+    LEFT JOIN daily_counts dc
+        ON  dc.tactic_id    = s.tactic_id
+        AND dc.cohort_yyyymm = s.cohort_yyyymm
+        AND dc.slicer_dim   = s.slicer_dim
+        AND dc.slicer_value = s.slicer_value
+        AND dc.metric       = s.metric
+        AND dc.vintage_day  = s.vintage_day
+)
+
+-- final output
+SELECT
+    c.tactic_id,
+    c.cohort_yyyymm,
+    c.slicer_dim,
+    c.slicer_value,
+    c.metric,
+    c.vintage_day,
+    c.n_first_events,
+    c.cum_responders,
+    d.slicer_cohort_size                                                     AS cohort_size,
+    CASE
+        WHEN c.metric IN ('mobile_view','mobile_click') THEN d.slicer_mobile_size
+        ELSE d.slicer_cohort_size
+    END                                                                      AS metric_eligible
+FROM cumulative c
+INNER JOIN denominators d
+    ON  d.tactic_id     = c.tactic_id
+    AND d.cohort_yyyymm = c.cohort_yyyymm
+    AND d.slicer_dim    = c.slicer_dim
+    AND d.slicer_value  = c.slicer_value
+ORDER BY c.tactic_id, c.cohort_yyyymm, c.slicer_dim, c.slicer_value, c.metric, c.vintage_day;
