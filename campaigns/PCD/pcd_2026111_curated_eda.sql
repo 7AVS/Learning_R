@@ -564,15 +564,14 @@ ORDER BY accts DESC;
 -- ---
 -- H2: bi_clnt_seg — top 20 values.
 
-SELECT
+SELECT TOP 20
     bi_clnt_seg,
     COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
 GROUP BY bi_clnt_seg
-ORDER BY accts DESC
-FETCH FIRST 20 ROWS ONLY;
+ORDER BY accts DESC;
 
 
 -- ---
