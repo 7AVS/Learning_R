@@ -2,6 +2,7 @@
 -- Output: one row per (tactic_id, cohort_yyyymm, act_ctl_seg, slicer_dim, slicer_value, metric, vintage_day)
 -- Metrics: conversion | mobile_view | mobile_click_p | mobile_click_n. Denominator: cohort_size (all metrics).
 -- act_ctl_seg is a permanent column, not a slicer. Run in Starburst (Trino).
+-- Action/Control derived from tst_grp_cd suffix (%T/%C); see action_control reference memory for mapping caveat.
 
 -- DIAGNOSTIC (run separately): GA4 it_item_name distribution for PCD 2026111 mobile-deployed clients.
 -- Confirms whether the 4 known PCD promo names exhaust mobile traffic or if there are other creatives.
@@ -18,22 +19,61 @@ GROUP BY g.it_item_name
 ORDER BY unique_clients DESC;
 */
 
--- cohort: one row per acct in deployment 2026111PCD
-WITH cohort AS (
+-- DIAGNOSTIC (run separately): distinct tst_grp_cd values for the cohort.
+-- Reveals what falls into the 'OTHER' bucket (codes that don't suffix in T/C).
+-- Andre has a (campaign_id, tst_grp_cd) -> action_control mapping for the non-T/C codes.
+-- Once that mapping is in hand, replace the 'OTHER' branch above with a CASE list.
+/*
+SELECT
+    t.tst_grp_cd,
+    CASE
+        WHEN TRIM(t.tst_grp_cd) LIKE '%T' THEN 'TEST'
+        WHEN TRIM(t.tst_grp_cd) LIKE '%C' THEN 'CONTROL'
+        WHEN t.tst_grp_cd IS NULL          THEN '(no_match)'
+        ELSE 'OTHER'
+    END AS derived_act_ctl,
+    COUNT(DISTINCT t.clnt_no) AS clients,
+    COUNT(*)                  AS n_rows
+FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+WHERE t.tactic_id = '2026111PCD'
+  AND t.treatmt_strt_dt >= DATE '2026-04-01'
+GROUP BY t.tst_grp_cd
+ORDER BY clients DESC;
+*/
+
+-- tactic_tst_grp: one tst_grp_cd per client from the tactic event table
+WITH tactic_tst_grp AS (
     SELECT
-        acct_no,
         clnt_no,
+        MAX(tst_grp_cd) AS tst_grp_cd          -- if a client appears multiple times for the tactic, MAX picks deterministically
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+    WHERE tactic_id = '2026111PCD'
+      AND treatmt_strt_dt >= DATE '2026-04-01'
+    GROUP BY clnt_no
+),
+
+-- cohort: one row per acct in deployment 2026111PCD
+cohort AS (
+    SELECT
+        c.acct_no,
+        c.clnt_no,
         '2026111PCD'                                        AS tactic_id,
-        DATE_TRUNC('month', response_start)                 AS cohort_yyyymm,
-        response_start,
-        channel_deploy_mb,
-        COALESCE(act_ctl_seg, '(null)')                     AS act_ctl_seg,
-        product_at_decision,
-        target_product,
-        responder_anyproduct,
-        success_dt_1
-    FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
-    WHERE tactic_id_parent = '2026111PCD'
+        DATE_TRUNC('month', c.response_start)               AS cohort_yyyymm,
+        c.response_start,
+        c.channel_deploy_mb,
+        CASE
+            WHEN TRIM(t.tst_grp_cd) LIKE '%T' THEN 'TEST'
+            WHEN TRIM(t.tst_grp_cd) LIKE '%C' THEN 'CONTROL'
+            WHEN t.tst_grp_cd IS NULL          THEN '(no_match)'
+            ELSE 'OTHER'
+        END                                                 AS act_ctl_seg,
+        c.product_at_decision,
+        c.target_product,
+        c.responder_anyproduct,
+        c.success_dt_1
+    FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp c
+    LEFT JOIN tactic_tst_grp t ON t.clnt_no = c.clnt_no
+    WHERE c.tactic_id_parent = '2026111PCD'
 ),
 
 -- cohort_stacked: fan out to 4 rotating slicer blocks; act_ctl_seg carried as permanent column
