@@ -737,7 +737,7 @@ WITH cohort AS (
 first_views AS (
     SELECT
         TRY_CAST(g.up_srf_id2_value AS BIGINT) AS clnt_no,
-        MIN(DATE_PARSE(g.event_date, '%Y%m%d')) AS first_view_dt
+        MIN(g.event_date) AS first_view_dt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
     WHERE g.year  = '2026'
       AND g.month IN ('04', '05', '06')
@@ -798,7 +798,7 @@ WITH cohort AS (
 first_clicks AS (
     SELECT
         TRY_CAST(g.up_srf_id2_value AS BIGINT) AS clnt_no,
-        MIN(DATE_PARSE(g.event_date, '%Y%m%d')) AS first_click_dt
+        MIN(g.event_date) AS first_click_dt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
     WHERE g.year  = '2026'
       AND g.month IN ('04', '05', '06')
