@@ -32,7 +32,7 @@ SELECT
     MIN(response_end)      AS earliest_response_end,
     MAX(response_end)      AS latest_response_end,
     treatmt_mn,
-    COUNT(*)               AS rows_in_wave,
+    COUNT(*)               AS n_rows_in_wave,
     COUNT(DISTINCT acct_no) AS accts_in_wave
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -45,7 +45,7 @@ ORDER BY treatmt_mn;
 
 SELECT
     response_start,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -62,7 +62,7 @@ ORDER BY response_start;
 SELECT
     act_ctl_seg,
     test_groups_period,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts,
     COUNT(DISTINCT clnt_no) AS clients
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
@@ -77,7 +77,7 @@ ORDER BY act_ctl_seg, test_groups_period;
 SELECT
     strategy_seg_cd,
     strtgy_seg_desc,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -91,7 +91,7 @@ ORDER BY accts DESC;
 SELECT
     test_description,
     test_value,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -104,7 +104,7 @@ ORDER BY accts DESC;
 
 SELECT
     cmpgn_seg,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -122,7 +122,7 @@ SELECT
     product_at_decision,
     product_grouping_at_decision,
     product_name_at_decision,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -140,7 +140,7 @@ SELECT
     target_product,
     target_product_name,
     target_product_grouping,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -157,7 +157,7 @@ ORDER BY accts DESC;
 SELECT
     product_at_decision,
     target_product,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -170,7 +170,7 @@ ORDER BY accts DESC;
 
 SELECT
     invitation_to_upgrade,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -281,7 +281,7 @@ ORDER BY channel_flag, accts DESC;
 
 SELECT
     channels,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -323,7 +323,7 @@ ORDER BY active_channels;
 
 SELECT
     offer_bonus_cash,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -336,7 +336,7 @@ ORDER BY offer_bonus_cash;
 
 SELECT
     offer_bonus_points,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -348,15 +348,13 @@ ORDER BY offer_bonus_points;
 -- E3: nibt_expected_value summary — min, max, percentiles, null count.
 
 SELECT
-    COUNT(*)                                    AS total_rows,
-    COUNT(nibt_expected_value)                  AS non_null_rows,
-    COUNT(*) - COUNT(nibt_expected_value)       AS null_rows,
-    MIN(nibt_expected_value)                    AS min_val,
-    MAX(nibt_expected_value)                    AS max_val,
-    APPROX_PERCENTILE(nibt_expected_value, 0.25) AS p25,
-    APPROX_PERCENTILE(nibt_expected_value, 0.50) AS p50,
-    APPROX_PERCENTILE(nibt_expected_value, 0.75) AS p75,
-    APPROX_PERCENTILE(nibt_expected_value, 0.90) AS p90
+    COUNT(*)                                          AS n_rows,
+    COUNT(nibt_expected_value)                        AS n_non_null,
+    SUM(CASE WHEN nibt_expected_value IS NULL THEN 1 ELSE 0 END) AS n_null,
+    MIN(nibt_expected_value)                          AS min_val,
+    MAX(nibt_expected_value)                          AS max_val,
+    AVG(nibt_expected_value)                          AS avg_val,
+    STDDEV_POP(nibt_expected_value)                   AS stddev_val
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD';
 
@@ -365,15 +363,13 @@ WHERE tactic_id_parent = '2026111PCD';
 -- E4: nibt_expec_value_upgradepath summary — same shape as E3.
 
 SELECT
-    COUNT(*)                                              AS total_rows,
-    COUNT(nibt_expec_value_upgradepath)                   AS non_null_rows,
-    COUNT(*) - COUNT(nibt_expec_value_upgradepath)        AS null_rows,
-    MIN(nibt_expec_value_upgradepath)                     AS min_val,
-    MAX(nibt_expec_value_upgradepath)                     AS max_val,
-    APPROX_PERCENTILE(nibt_expec_value_upgradepath, 0.25) AS p25,
-    APPROX_PERCENTILE(nibt_expec_value_upgradepath, 0.50) AS p50,
-    APPROX_PERCENTILE(nibt_expec_value_upgradepath, 0.75) AS p75,
-    APPROX_PERCENTILE(nibt_expec_value_upgradepath, 0.90) AS p90
+    COUNT(*)                                                        AS n_rows,
+    COUNT(nibt_expec_value_upgradepath)                             AS n_non_null,
+    SUM(CASE WHEN nibt_expec_value_upgradepath IS NULL THEN 1 ELSE 0 END) AS n_null,
+    MIN(nibt_expec_value_upgradepath)                               AS min_val,
+    MAX(nibt_expec_value_upgradepath)                               AS max_val,
+    AVG(nibt_expec_value_upgradepath)                               AS avg_val,
+    STDDEV_POP(nibt_expec_value_upgradepath)                        AS stddev_val
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD';
 
@@ -400,7 +396,7 @@ WHERE tactic_id_parent = '2026111PCD';
 SELECT
     success_cd_1,
     success_cd_2,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -452,7 +448,7 @@ ORDER BY
 
 SELECT
     weeknum_response,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -465,7 +461,7 @@ ORDER BY weeknum_response;
 
 SELECT
     new_product,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -497,7 +493,7 @@ SELECT
     tactic_email,
     email_disposition,
     email_status,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -524,7 +520,7 @@ WHERE tactic_id_parent = '2026111PCD';
 
 SELECT
     fulfillment_channel,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -557,7 +553,7 @@ WHERE tactic_id_parent = '2026111PCD';
 SELECT
     life_stage,
     age_band,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -570,7 +566,7 @@ ORDER BY accts DESC;
 
 SELECT
     bi_clnt_seg,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -585,7 +581,7 @@ FETCH FIRST 20 ROWS ONLY;
 SELECT
     credit_phase,
     wallet_band,
-    COUNT(*)               AS rows,
+    COUNT(*)               AS n_rows,
     COUNT(DISTINCT acct_no) AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -603,7 +599,7 @@ SELECT
     MAX(opn_prod_cnt)                              AS max_opn_prod_cnt,
     MIN(actv_prod_cnt)                             AS min_actv_prod_cnt,
     MAX(actv_prod_cnt)                             AS max_actv_prod_cnt,
-    COUNT(*)                                       AS rows,
+    COUNT(*)                                       AS n_rows,
     COUNT(DISTINCT acct_no)                        AS accts
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
@@ -887,8 +883,8 @@ LEFT JOIN banner_viewers bv ON bv.clnt_no = c.clnt_no;
 -- =============================================================================
 -- 1. channel_deploy_* active indicator: assumed '1' but these are char(1) — confirm
 --    what the active value is from D1 raw output before using D3 multi-channel counts.
--- 2. APPROX_PERCENTILE syntax (E3/E4): Teradata may not support this; replace with
---    manual percentile via PERCENTILE_CONT if queries fail.
+-- 2. E3/E4 now use MIN/MAX/AVG/STDDEV_POP instead of APPROX_PERCENTILE (Trino-only).
+--    Compute percentiles in Excel from raw distribution if needed.
 -- 3. Section I cohort subquery uses DL_MR_PROD in Trino cross-ref CTEs — I1 is
 --    Teradata-only; I2–I6 require the cohort to be materialized or queried via a
 --    Starburst-accessible federated view. Confirm whether cross-engine inline CTEs
