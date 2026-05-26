@@ -296,14 +296,14 @@ ORDER BY accts DESC;
 WITH channel_counts AS (
     SELECT
         acct_no,
-        (CASE WHEN channel_deploy_cc = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_dm = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_do = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_im = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_em = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_rd = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_iv = '1' THEN 1 ELSE 0 END
-       + CASE WHEN channel_deploy_mb = '1' THEN 1 ELSE 0 END) AS active_channels
+        (CASE WHEN channel_deploy_cc = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_dm = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_do = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_im = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_em = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_rd = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_iv = 'Y' THEN 1 ELSE 0 END
+       + CASE WHEN channel_deploy_mb = 'Y' THEN 1 ELSE 0 END) AS active_channels
     FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
 )
@@ -650,7 +650,7 @@ SELECT
     COUNT(DISTINCT clnt_no) AS mobile_deployed_clients
 FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
 WHERE tactic_id_parent = '2026111PCD'
-  AND channel_deploy_mb = '1';
+  AND channel_deploy_mb = 'Y';
 
 
 -- ---
@@ -661,7 +661,7 @@ WITH cohort AS (
     SELECT DISTINCT clnt_no
     FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
-      AND channel_deploy_mb = '1'
+      AND channel_deploy_mb = 'Y'
 ),
 ga4_pcd AS (
     SELECT
@@ -701,7 +701,7 @@ WITH cohort AS (
     SELECT DISTINCT clnt_no
     FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
-      AND channel_deploy_mb = '1'
+      AND channel_deploy_mb = 'Y'
 )
 SELECT
     g.it_item_name,
@@ -733,7 +733,7 @@ WITH cohort AS (
     SELECT DISTINCT clnt_no, response_start
     FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
-      AND channel_deploy_mb = '1'
+      AND channel_deploy_mb = 'Y'
 ),
 first_views AS (
     SELECT
@@ -794,7 +794,7 @@ WITH cohort AS (
     SELECT DISTINCT clnt_no, response_start
     FROM DL_MR_PROD.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
-      AND channel_deploy_mb = '1'
+      AND channel_deploy_mb = 'Y'
 ),
 first_clicks AS (
     SELECT
@@ -881,8 +881,9 @@ LEFT JOIN banner_viewers bv ON bv.clnt_no = c.clnt_no;
 -- =============================================================================
 -- Open questions / things to verify after running
 -- =============================================================================
--- 1. channel_deploy_* active indicator: assumed '1' but these are char(1) — confirm
---    what the active value is from D1 raw output before using D3 multi-channel counts.
+-- 1. channel_deploy_* active indicator = 'Y' (confirmed for channel_deploy_mb on
+--    cards_pcd_ongoing_decis_resp by Andre 2026-05-26). D3 + Section I assume the
+--    same convention for the other channel_deploy_* columns — verify via D1 output.
 -- 2. E3/E4 now use MIN/MAX/AVG/STDDEV_POP instead of APPROX_PERCENTILE (Trino-only).
 --    Compute percentiles in Excel from raw distribution if needed.
 -- 3. Section I cohort subquery uses DL_MR_PROD in Trino cross-ref CTEs — I1 is
