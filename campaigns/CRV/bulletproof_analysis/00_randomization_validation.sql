@@ -82,35 +82,72 @@ pcl_monthly_counts AS (
     FROM pcl_waves
     GROUP BY deploy_month
 ),
-crv_action_summary AS (
+-- Wave-level stats per campaign (single row each)
+crv_action_wave_agg AS (
     SELECT
-        CAST('CRV-Action' AS VARCHAR(20))                                                            AS campaign,
-        (SELECT COUNT(*) FROM crv_action_waves)                                                      AS n_distinct_waves,
-        (SELECT AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                  FROM crv_action_waves)     AS duration_mean,
-        (SELECT PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1) FROM crv_action_waves) AS duration_p50,
-        (SELECT MIN(end_dt - strt_dt + 1) FROM crv_action_waves)                                     AS duration_min,
-        (SELECT MAX(end_dt - strt_dt + 1) FROM crv_action_waves)                                     AS duration_max,
-        (SELECT COUNT(*) FROM crv_action_monthly_counts)                                             AS n_months_in_window,
-        (SELECT AVG(CAST(waves_in_month AS FLOAT)) FROM crv_action_monthly_counts)                   AS waves_per_month_mean,
-        (SELECT MIN(waves_in_month) FROM crv_action_monthly_counts)                                  AS waves_per_month_min,
-        (SELECT MAX(waves_in_month) FROM crv_action_monthly_counts)                                  AS waves_per_month_max
+        COUNT(*)                                                                  AS n_distinct_waves,
+        AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                                  AS duration_mean,
+        PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1)        AS duration_p50,
+        MIN(end_dt - strt_dt + 1)                                                 AS duration_min,
+        MAX(end_dt - strt_dt + 1)                                                 AS duration_max
+    FROM crv_action_waves
 ),
-pcl_summary AS (
+pcl_wave_agg AS (
     SELECT
-        CAST('PCL-mobile' AS VARCHAR(20))                                                            AS campaign,
-        (SELECT COUNT(*) FROM pcl_waves)                                                             AS n_distinct_waves,
-        (SELECT AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                  FROM pcl_waves)            AS duration_mean,
-        (SELECT PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1) FROM pcl_waves)   AS duration_p50,
-        (SELECT MIN(end_dt - strt_dt + 1) FROM pcl_waves)                                            AS duration_min,
-        (SELECT MAX(end_dt - strt_dt + 1) FROM pcl_waves)                                            AS duration_max,
-        (SELECT COUNT(*) FROM pcl_monthly_counts)                                                    AS n_months_in_window,
-        (SELECT AVG(CAST(waves_in_month AS FLOAT)) FROM pcl_monthly_counts)                          AS waves_per_month_mean,
-        (SELECT MIN(waves_in_month) FROM pcl_monthly_counts)                                         AS waves_per_month_min,
-        (SELECT MAX(waves_in_month) FROM pcl_monthly_counts)                                         AS waves_per_month_max
+        COUNT(*)                                                                  AS n_distinct_waves,
+        AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                                  AS duration_mean,
+        PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1)        AS duration_p50,
+        MIN(end_dt - strt_dt + 1)                                                 AS duration_min,
+        MAX(end_dt - strt_dt + 1)                                                 AS duration_max
+    FROM pcl_waves
+),
+-- Monthly waves-count stats per campaign (single row each)
+crv_action_month_agg AS (
+    SELECT
+        COUNT(*)                                  AS n_months_in_window,
+        AVG(CAST(waves_in_month AS FLOAT))        AS waves_per_month_mean,
+        MIN(waves_in_month)                       AS waves_per_month_min,
+        MAX(waves_in_month)                       AS waves_per_month_max
+    FROM crv_action_monthly_counts
+),
+pcl_month_agg AS (
+    SELECT
+        COUNT(*)                                  AS n_months_in_window,
+        AVG(CAST(waves_in_month AS FLOAT))        AS waves_per_month_mean,
+        MIN(waves_in_month)                       AS waves_per_month_min,
+        MAX(waves_in_month)                       AS waves_per_month_max
+    FROM pcl_monthly_counts
 )
-SELECT * FROM crv_action_summary
+SELECT
+    CAST('CRV-Action' AS VARCHAR(20)) AS campaign,
+    w.n_distinct_waves,
+    w.duration_mean,
+    w.duration_p50,
+    w.duration_min,
+    w.duration_max,
+    m.n_months_in_window,
+    m.waves_per_month_mean,
+    m.waves_per_month_min,
+    m.waves_per_month_max
+FROM crv_action_wave_agg w
+CROSS JOIN crv_action_month_agg m
+
 UNION ALL
-SELECT * FROM pcl_summary
+
+SELECT
+    CAST('PCL-mobile' AS VARCHAR(20)),
+    pw.n_distinct_waves,
+    pw.duration_mean,
+    pw.duration_p50,
+    pw.duration_min,
+    pw.duration_max,
+    pm.n_months_in_window,
+    pm.waves_per_month_mean,
+    pm.waves_per_month_min,
+    pm.waves_per_month_max
+FROM pcl_wave_agg pw
+CROSS JOIN pcl_month_agg pm
+
 ORDER BY 1
 ;
 
