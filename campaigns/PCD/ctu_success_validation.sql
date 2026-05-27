@@ -64,7 +64,7 @@ precamp_product AS (
     INNER JOIN ddwv01.clnt_ar_reltn_dly b
         ON  b.clnt_no    = c.clnt_no
         AND b.dw_srvc_id = 1
-        AND b.snap_dt    = date_add('day', -1, c.treatmt_strt_dt)
+        AND b.snap_dt    = c.treatmt_strt_dt - 1
     INNER JOIN ddwv01.ar_static_dly s
         ON  s.ar_id          = b.ar_id
         AND s.snap_dt        = b.snap_dt
