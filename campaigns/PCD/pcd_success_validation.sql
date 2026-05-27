@@ -43,7 +43,7 @@ cohort AS (
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND strtok(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' ',3)
-          IN ('MBC8YU53','MA02BC35','MA02ED01','MFB8L6X6','MF88UJPY','MF89BX97','MF89HY07')
+          IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
       AND (trim(coalesce(tst_grp_cd, '')) LIKE '%T'
            OR trim(coalesce(tst_grp_cd, '')) LIKE '%C')
 ),
