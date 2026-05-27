@@ -1,0 +1,45 @@
+CRV-PCL BULLETPROOF ANALYSIS — FINDINGS LOG
+============================================
+
+Cohort window: offer_start_date / treatmt_strt_dt >= 2024-10-01
+               (May 2026 partial-month excluded at reporting, not in SQL)
+Methodology:   Lead grain — each (acct_no x CRV wave x arm) is its own
+               observation. No dedup across waves.
+Queries:       00_randomization_validation.sql through
+               11_throttling_scenarios.sql in this folder.
+
+This file is the rolling log for findings as each query is run.
+One section per query, appended in run order. Keep entries terse:
+result table + interpretation + side observations + open follow-ups.
+
+
+================================================================
+Query 00 — Randomization design (sticky vs per-wave)
+Run date: 2026-05-26
+================================================================
+
+Result A — account bucket summary:
+  bucket          accounts     pct_share
+  action_only     4,471,313    94.80%
+  control_only      233,017     4.90%
+  both               10,279     0.20%
+  TOTAL           4,714,609
+
+Result B (sample of 100 "both" accounts): NOT YET REVIEWED.
+
+Interpretation:
+- CRV randomization is EFFECTIVELY STICKY.
+- 0.20% crossover ("both" bucket) is small enough to treat as edge
+  cases. Section E's Action-priority dedup was a near-no-op.
+- Lead-grain methodology still the right formalism but the practical
+  impact on the original 0.97pp headline is negligible.
+
+Side observations:
+- Control holdout = control_only + both = 5.10% of accounts ever in
+  CRV. On the smaller side for an RCT (typical 10-20%). Worth
+  tracking when interpreting the CI on the 0.97pp gap (query 04).
+
+Open follow-ups:
+- Review Result B to understand WHEN the 10,279 crossovers happen
+  (early vs late waves, specific eligibility-model change date?).
+  Low priority — not blocking.

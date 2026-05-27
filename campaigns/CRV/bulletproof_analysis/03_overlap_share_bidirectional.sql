@@ -93,5 +93,5 @@ SELECT * FROM dir2_overall
 UNION ALL
 SELECT * FROM dir2_monthly
 
-ORDER BY direction, deploy_month
+ORDER BY 1, 2
 ;

@@ -79,5 +79,5 @@ SELECT
     SUM(CASE WHEN crv_resp = 0 AND pcl_resp = 0 THEN 1 ELSE 0 END)
 FROM overlap_control
 
-ORDER BY arm
+ORDER BY 1
 ;

@@ -129,5 +129,5 @@ FROM overlap_raw
 WHERE arm = 'Control'
 GROUP BY crv_month
 
-ORDER BY arm, crv_month
+ORDER BY 1, 2
 ;

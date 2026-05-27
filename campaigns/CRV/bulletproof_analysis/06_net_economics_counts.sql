@@ -144,5 +144,5 @@ monthly_agg AS (
 SELECT * FROM overall_agg
 UNION ALL
 SELECT * FROM monthly_agg
-ORDER BY deploy_month
+ORDER BY 1
 ;
