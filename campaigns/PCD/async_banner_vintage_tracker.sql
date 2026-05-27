@@ -303,6 +303,7 @@ ORDER BY cohort_month, vintage_day
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 3 — O2P                                                              ║
 -- ║ Eligibility: RPT_GRP_CD IN (9 PO2P reporting groups), tactic_id IN (3).    ║
+-- ║ tactic_ids: 2026099O2P, 2026126O2P, 2026132O2P (suffix is letter O).       ║
 -- ║ Scope: TST_GRP_CD IN ('TG4','TG7'); TG4=TEST, TG7=CONTROL.                 ║
 -- ║ is_mobile derived from TACTIC_CELL_CD LIKE '%MB%' (not a filter).          ║
 -- ║ Holdout confirmed as designed 5.00% across all 9 reporting groups.         ║
@@ -325,7 +326,7 @@ cohort_raw AS (
         END AS test_control_flag,
         CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('202609902P','202612602P','202613202P')
+    WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(rpt_grp_cd) IN (
             'PO2PNL01','PO2PNL03','PO2PNL07',
