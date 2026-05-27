@@ -60,7 +60,7 @@ overlap_control AS (
     GROUP BY c.acct_no, c.offer_start_date, c.responder
 )
 SELECT
-    'Action'                                                    AS arm,
+    CAST('Action' AS VARCHAR(10))                               AS arm,
     COUNT(*)                                                    AS n_overlap_leads,
     SUM(CASE WHEN crv_resp = 1 AND pcl_resp = 0 THEN 1 ELSE 0 END) AS n_crv_converters_only,
     SUM(CASE WHEN crv_resp = 0 AND pcl_resp = 1 THEN 1 ELSE 0 END) AS n_pcl_converters_only,
@@ -71,7 +71,7 @@ FROM overlap_action
 UNION ALL
 
 SELECT
-    'Control'                                                   AS arm,
+    CAST('Control' AS VARCHAR(10))                              AS arm,
     COUNT(*),
     SUM(CASE WHEN crv_resp = 1 AND pcl_resp = 0 THEN 1 ELSE 0 END),
     SUM(CASE WHEN crv_resp = 0 AND pcl_resp = 1 THEN 1 ELSE 0 END),

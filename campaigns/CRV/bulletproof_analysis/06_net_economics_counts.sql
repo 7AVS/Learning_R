@@ -69,7 +69,7 @@ overlap_control AS (
 -- Overall summary
 overall AS (
     SELECT
-        'overall'                        AS deploy_month,
+        CAST('overall' AS VARCHAR(20))   AS deploy_month,
         COUNT(*)                         AS n_action_leads,
         SUM(crv_responder)               AS crv_responder_count_on_action,
         SUM(pcl_responder)               AS pcl_responder_count_action_overlap,
@@ -79,7 +79,7 @@ overall AS (
     FROM overlap_action
     UNION ALL
     SELECT
-        'overall'                        AS deploy_month,
+        CAST('overall' AS VARCHAR(20))   AS deploy_month,
         0                                AS n_action_leads,
         0                                AS crv_responder_count_on_action,
         0                                AS pcl_responder_count_action_overlap,

@@ -17,7 +17,7 @@ crv_action AS (
         acct_no,
         offer_start_date AS crv_strt_dt,
         offer_end_date   AS crv_end_dt,
-        'Action'         AS arm
+        CAST('Action' AS VARCHAR(10)) AS arm
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -28,7 +28,7 @@ crv_control AS (
         acct_no,
         offer_start_date AS crv_strt_dt,
         offer_end_date   AS crv_end_dt,
-        'Control'        AS arm
+        CAST('Control' AS VARCHAR(10)) AS arm
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
@@ -78,21 +78,21 @@ gap_by_order AS (
 )
 -- Section 1: counts by arm × arrival order
 SELECT
-    'arm_x_arrival_counts'     AS section,
-    arm || '|' || arrival_order AS slice,
-    leads                       AS n_action,
-    NULL                        AS n_control,
-    responders                  AS resp_action,
-    NULL                        AS resp_control,
-    NULL                        AS gap_control_minus_action
+    CAST('arm_x_arrival_counts' AS VARCHAR(30))      AS section,
+    CAST(arm || '|' || arrival_order AS VARCHAR(30)) AS slice,
+    leads                                            AS n_action,
+    NULL                                             AS n_control,
+    responders                                       AS resp_action,
+    NULL                                             AS resp_control,
+    NULL                                             AS gap_control_minus_action
 FROM arm_order_counts
 
 UNION ALL
 
 -- Section 2: gap per arrival order bucket
 SELECT
-    'gap_by_arrival_order'     AS section,
-    arrival_order              AS slice,
+    CAST('gap_by_arrival_order' AS VARCHAR(30))      AS section,
+    CAST(arrival_order AS VARCHAR(30))               AS slice,
     n_action,
     n_control,
     resp_action,
