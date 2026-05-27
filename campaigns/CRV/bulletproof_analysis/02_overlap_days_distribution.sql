@@ -1,14 +1,14 @@
--- Overlap-days distribution for CRV-Action and CRV-Control leads that overlap PCL-mobile.
--- Lead grain: each (CRV wave x account) is one observation. No dedup.
--- Two subsets: all overlap leads, and overlap leads where PCL responded (responder_cli=1).
--- Comparing the two subsets tells us whether shorter overlap correlates with PCL conversion.
+-- Overlap-days distribution for PCL-mobile leads that overlap CRV-Action or CRV-Control.
+-- PCL-LEAD CENTRIC: unit = one PCL deployment per account. overlap_days = MAX across all CRV waves that touch it.
+-- 8 sections: all_leads / pcl_responders × Action / Control × overall / per pcl_month.
 
 WITH pcl_universe AS (
     SELECT
         acct_no,
-        treatmt_strt_dt AS pcl_strt_dt,
-        treatmt_end_dt  AS pcl_end_dt,
-        responder_cli
+        treatmt_strt_dt                                                            AS pcl_strt_dt,
+        treatmt_end_dt                                                             AS pcl_end_dt,
+        responder_cli,
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)                 AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
@@ -17,9 +17,7 @@ crv_action AS (
     SELECT
         acct_no,
         offer_start_date AS crv_strt_dt,
-        offer_end_date   AS crv_end_dt,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month,
-        CAST('Action' AS VARCHAR(10)) AS arm
+        offer_end_date   AS crv_end_dt
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -29,45 +27,55 @@ crv_control AS (
     SELECT
         acct_no,
         offer_start_date AS crv_strt_dt,
-        offer_end_date   AS crv_end_dt,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month,
-        CAST('Control' AS VARCHAR(10)) AS arm
+        offer_end_date   AS crv_end_dt
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
-crv_all AS (
-    SELECT acct_no, crv_strt_dt, crv_end_dt, crv_month, arm FROM crv_action
-    UNION ALL
-    SELECT acct_no, crv_strt_dt, crv_end_dt, crv_month, arm FROM crv_control
-),
--- One row per CRV lead. overlap_days = max calendar overlap across PCL waves it touches.
--- pcl_resp = 1 if any overlapping PCL wave converted.
-overlap_raw AS (
+-- One row per PCL lead with Action overlap; overlap_days = MAX across all overlapping CRV-Action waves.
+overlap_action AS (
     SELECT
-        c.acct_no,
-        c.crv_strt_dt,
-        c.crv_month,
-        c.arm,
+        p.acct_no,
+        p.pcl_strt_dt,
+        p.pcl_month,
+        p.responder_cli,
         MAX(
             LEAST(c.crv_end_dt, p.pcl_end_dt)
             - GREATEST(c.crv_strt_dt, p.pcl_strt_dt)
             + 1
-        ) AS overlap_days,
-        MAX(p.responder_cli) AS pcl_resp
-    FROM crv_all c
-    INNER JOIN pcl_universe p
-      ON p.acct_no        = c.acct_no
+        ) AS overlap_days
+    FROM pcl_universe p
+    INNER JOIN crv_action c
+      ON c.acct_no        = p.acct_no
      AND c.crv_strt_dt   <= p.pcl_end_dt
      AND c.crv_end_dt    >= p.pcl_strt_dt
-    GROUP BY c.acct_no, c.crv_strt_dt, c.crv_month, c.arm
+    GROUP BY p.acct_no, p.pcl_strt_dt, p.pcl_month, p.responder_cli
+),
+-- One row per PCL lead with Control overlap; overlap_days = MAX across all overlapping CRV-Control waves.
+overlap_control AS (
+    SELECT
+        p.acct_no,
+        p.pcl_strt_dt,
+        p.pcl_month,
+        p.responder_cli,
+        MAX(
+            LEAST(c.crv_end_dt, p.pcl_end_dt)
+            - GREATEST(c.crv_strt_dt, p.pcl_strt_dt)
+            + 1
+        ) AS overlap_days
+    FROM pcl_universe p
+    INNER JOIN crv_control c
+      ON c.acct_no        = p.acct_no
+     AND c.crv_strt_dt   <= p.pcl_end_dt
+     AND c.crv_end_dt    >= p.pcl_strt_dt
+    GROUP BY p.acct_no, p.pcl_strt_dt, p.pcl_month, p.responder_cli
 )
 
--- All overlap leads — Action overall
+-- All overlap PCL leads — Action overall
 SELECT
     CAST('all_leads'  AS VARCHAR(20))                                  AS subset,
     CAST('Action'     AS VARCHAR(10))                                  AS arm,
-    CAST('overall'    AS VARCHAR(20))                                  AS crv_month,
+    CAST('overall'    AS VARCHAR(20))                                  AS pcl_month,
     COUNT(*)                                                           AS n,
     AVG(CAST(overlap_days AS DECIMAL(12,4)))                           AS mean_days,
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days)         AS p10,
@@ -77,16 +85,15 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days)         AS p90,
     MIN(overlap_days)                                                  AS min_days,
     MAX(overlap_days)                                                  AS max_days
-FROM overlap_raw
-WHERE arm = 'Action'
+FROM overlap_action
 
 UNION ALL
 
--- All overlap leads — Action per-month
+-- All overlap PCL leads — Action per-month
 SELECT
     CAST('all_leads' AS VARCHAR(20)),
     CAST('Action'    AS VARCHAR(10)),
-    CAST(crv_month   AS VARCHAR(20)),
+    CAST(pcl_month   AS VARCHAR(20)),
     COUNT(*),
     AVG(CAST(overlap_days AS DECIMAL(12,4))),
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days),
@@ -96,13 +103,12 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Action'
-GROUP BY crv_month
+FROM overlap_action
+GROUP BY pcl_month
 
 UNION ALL
 
--- All overlap leads — Control overall
+-- All overlap PCL leads — Control overall
 SELECT
     CAST('all_leads' AS VARCHAR(20)),
     CAST('Control'   AS VARCHAR(10)),
@@ -116,16 +122,15 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Control'
+FROM overlap_control
 
 UNION ALL
 
--- All overlap leads — Control per-month
+-- All overlap PCL leads — Control per-month
 SELECT
     CAST('all_leads' AS VARCHAR(20)),
     CAST('Control'   AS VARCHAR(10)),
-    CAST(crv_month   AS VARCHAR(20)),
+    CAST(pcl_month   AS VARCHAR(20)),
     COUNT(*),
     AVG(CAST(overlap_days AS DECIMAL(12,4))),
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days),
@@ -135,9 +140,8 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Control'
-GROUP BY crv_month
+FROM overlap_control
+GROUP BY pcl_month
 
 UNION ALL
 
@@ -155,8 +159,8 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Action' AND pcl_resp = 1
+FROM overlap_action
+WHERE responder_cli = 1
 
 UNION ALL
 
@@ -164,7 +168,7 @@ UNION ALL
 SELECT
     CAST('pcl_responders' AS VARCHAR(20)),
     CAST('Action'         AS VARCHAR(10)),
-    CAST(crv_month        AS VARCHAR(20)),
+    CAST(pcl_month        AS VARCHAR(20)),
     COUNT(*),
     AVG(CAST(overlap_days AS DECIMAL(12,4))),
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days),
@@ -174,9 +178,9 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Action' AND pcl_resp = 1
-GROUP BY crv_month
+FROM overlap_action
+WHERE responder_cli = 1
+GROUP BY pcl_month
 
 UNION ALL
 
@@ -194,8 +198,8 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Control' AND pcl_resp = 1
+FROM overlap_control
+WHERE responder_cli = 1
 
 UNION ALL
 
@@ -203,7 +207,7 @@ UNION ALL
 SELECT
     CAST('pcl_responders' AS VARCHAR(20)),
     CAST('Control'        AS VARCHAR(10)),
-    CAST(crv_month        AS VARCHAR(20)),
+    CAST(pcl_month        AS VARCHAR(20)),
     COUNT(*),
     AVG(CAST(overlap_days AS DECIMAL(12,4))),
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days),
@@ -213,9 +217,9 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY overlap_days),
     MIN(overlap_days),
     MAX(overlap_days)
-FROM overlap_raw
-WHERE arm = 'Control' AND pcl_resp = 1
-GROUP BY crv_month
+FROM overlap_control
+WHERE responder_cli = 1
+GROUP BY pcl_month
 
 ORDER BY 1, 2, 3
 ;

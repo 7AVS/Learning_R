@@ -1,6 +1,6 @@
--- Net economics: counts of leads, CRV responders, and PCL responders in the overlap cohort.
+-- Net economics: counts of PCL leads, PCL responders, and CRV responders in the overlap cohort.
+-- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account.
 -- Counts only. No rates, no $ math. Andre computes derived metrics in Excel.
--- Lead grain: each (CRV wave × account × arm) that overlaps a PCL-mobile deployment.
 
 WITH pcl_universe AS (
     SELECT
@@ -8,7 +8,7 @@ WITH pcl_universe AS (
         treatmt_strt_dt,
         treatmt_end_dt,
         responder_cli,
-        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_deploy_month
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
@@ -18,8 +18,7 @@ crv_action AS (
         acct_no,
         offer_start_date,
         offer_end_date,
-        responder,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
+        responder
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -30,119 +29,78 @@ crv_control AS (
         acct_no,
         offer_start_date,
         offer_end_date,
-        responder,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
+        responder
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
--- Action: one CRV lead = one row; take max PCL responder across overlapping PCL deployments
-overlap_action AS (
+-- Single scan over pcl_universe with EXISTS flags per arm.
+-- Extra EXISTS checks responder=1 on the matching CRV wave(s) for CRV-conversion count.
+pcl_flagged AS (
     SELECT
-        c.acct_no,
-        c.offer_start_date,
-        c.crv_month,
-        c.responder                   AS crv_responder,
-        MAX(p.responder_cli)          AS pcl_responder
-    FROM crv_action c
-    INNER JOIN pcl_universe p
-      ON p.acct_no           = c.acct_no
-     AND c.offer_start_date <= p.treatmt_end_dt
-     AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date, c.crv_month, c.responder
+        p.pcl_month,
+        p.responder_cli,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM crv_action ca
+                WHERE ca.acct_no           = p.acct_no
+                  AND ca.offer_start_date <= p.treatmt_end_dt
+                  AND ca.offer_end_date   >= p.treatmt_strt_dt
+            ) THEN 1 ELSE 0
+        END AS overlap_action_flag,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM crv_action ca
+                WHERE ca.acct_no           = p.acct_no
+                  AND ca.offer_start_date <= p.treatmt_end_dt
+                  AND ca.offer_end_date   >= p.treatmt_strt_dt
+                  AND ca.responder        = 1
+            ) THEN 1 ELSE 0
+        END AS crv_responded_action_flag,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM crv_control cc
+                WHERE cc.acct_no           = p.acct_no
+                  AND cc.offer_start_date <= p.treatmt_end_dt
+                  AND cc.offer_end_date   >= p.treatmt_strt_dt
+            ) THEN 1 ELSE 0
+        END AS overlap_control_flag,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM crv_control cc
+                WHERE cc.acct_no           = p.acct_no
+                  AND cc.offer_start_date <= p.treatmt_end_dt
+                  AND cc.offer_end_date   >= p.treatmt_strt_dt
+                  AND cc.responder        = 1
+            ) THEN 1 ELSE 0
+        END AS crv_responded_control_flag
+    FROM pcl_universe p
 ),
--- Control: same pattern
-overlap_control AS (
+agg_overall AS (
     SELECT
-        c.acct_no,
-        c.offer_start_date,
-        c.crv_month,
-        c.responder                   AS crv_responder,
-        MAX(p.responder_cli)          AS pcl_responder
-    FROM crv_control c
-    INNER JOIN pcl_universe p
-      ON p.acct_no           = c.acct_no
-     AND c.offer_start_date <= p.treatmt_end_dt
-     AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date, c.crv_month, c.responder
+        CAST('overall' AS VARCHAR(20))                                                                    AS pcl_month,
+        SUM(overlap_action_flag)                                                                          AS n_pcl_leads_action_overlap,
+        SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)                             AS pcl_responders_action_overlap,
+        SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_responded_action_flag  ELSE 0 END)               AS crv_responders_in_action_overlap,
+        SUM(overlap_control_flag)                                                                         AS n_pcl_leads_control_overlap,
+        SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)                             AS pcl_responders_control_overlap,
+        SUM(CASE WHEN overlap_control_flag = 1 THEN crv_responded_control_flag ELSE 0 END)               AS crv_responders_in_control_overlap
+    FROM pcl_flagged
 ),
--- Overall summary
-overall AS (
+agg_monthly AS (
     SELECT
-        CAST('overall' AS VARCHAR(20))   AS deploy_month,
-        COUNT(*)                         AS n_action_leads,
-        SUM(crv_responder)               AS crv_responder_count_on_action,
-        SUM(pcl_responder)               AS pcl_responder_count_action_overlap,
-        0                                AS n_control_leads,
-        0                                AS crv_responder_count_on_control,
-        0                                AS pcl_responder_count_control_overlap
-    FROM overlap_action
-    UNION ALL
-    SELECT
-        CAST('overall' AS VARCHAR(20))   AS deploy_month,
-        0                                AS n_action_leads,
-        0                                AS crv_responder_count_on_action,
-        0                                AS pcl_responder_count_action_overlap,
-        COUNT(*)                         AS n_control_leads,
-        SUM(crv_responder)               AS crv_responder_count_on_control,
-        SUM(pcl_responder)               AS pcl_responder_count_control_overlap
-    FROM overlap_control
-),
-overall_agg AS (
-    SELECT
-        deploy_month,
-        SUM(n_action_leads)                       AS n_action_leads,
-        SUM(crv_responder_count_on_action)         AS crv_responder_count_on_action,
-        SUM(pcl_responder_count_action_overlap)    AS pcl_responder_count_action_overlap,
-        SUM(n_control_leads)                       AS n_control_leads,
-        SUM(crv_responder_count_on_control)        AS crv_responder_count_on_control,
-        SUM(pcl_responder_count_control_overlap)   AS pcl_responder_count_control_overlap
-    FROM overall
-    GROUP BY deploy_month
-),
--- Monthly breakdown
-monthly_action AS (
-    SELECT
-        CAST(crv_month AS VARCHAR(20))   AS deploy_month,
-        COUNT(*)                         AS n_action_leads,
-        SUM(crv_responder)               AS crv_responder_count_on_action,
-        SUM(pcl_responder)               AS pcl_responder_count_action_overlap,
-        0                                AS n_control_leads,
-        0                                AS crv_responder_count_on_control,
-        0                                AS pcl_responder_count_control_overlap
-    FROM overlap_action
-    GROUP BY crv_month
-),
-monthly_control AS (
-    SELECT
-        CAST(crv_month AS VARCHAR(20))   AS deploy_month,
-        0                                AS n_action_leads,
-        0                                AS crv_responder_count_on_action,
-        0                                AS pcl_responder_count_action_overlap,
-        COUNT(*)                         AS n_control_leads,
-        SUM(crv_responder)               AS crv_responder_count_on_control,
-        SUM(pcl_responder)               AS pcl_responder_count_control_overlap
-    FROM overlap_control
-    GROUP BY crv_month
-),
-monthly_agg AS (
-    SELECT
-        deploy_month,
-        SUM(n_action_leads)                       AS n_action_leads,
-        SUM(crv_responder_count_on_action)         AS crv_responder_count_on_action,
-        SUM(pcl_responder_count_action_overlap)    AS pcl_responder_count_action_overlap,
-        SUM(n_control_leads)                       AS n_control_leads,
-        SUM(crv_responder_count_on_control)        AS crv_responder_count_on_control,
-        SUM(pcl_responder_count_control_overlap)   AS pcl_responder_count_control_overlap
-    FROM (
-        SELECT * FROM monthly_action
-        UNION ALL
-        SELECT * FROM monthly_control
-    ) x
-    GROUP BY deploy_month
+        CAST(pcl_month AS VARCHAR(20))                                                                    AS pcl_month,
+        SUM(overlap_action_flag)                                                                          AS n_pcl_leads_action_overlap,
+        SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)                             AS pcl_responders_action_overlap,
+        SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_responded_action_flag  ELSE 0 END)               AS crv_responders_in_action_overlap,
+        SUM(overlap_control_flag)                                                                         AS n_pcl_leads_control_overlap,
+        SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)                             AS pcl_responders_control_overlap,
+        SUM(CASE WHEN overlap_control_flag = 1 THEN crv_responded_control_flag ELSE 0 END)               AS crv_responders_in_control_overlap
+    FROM pcl_flagged
+    GROUP BY pcl_month
 )
-SELECT * FROM overall_agg
+SELECT * FROM agg_overall
 UNION ALL
-SELECT * FROM monthly_agg
+SELECT * FROM agg_monthly
 ORDER BY 1
 ;
