@@ -1,0 +1,202 @@
+-- CTU success validation
+-- Validates the chequing-account-switch conversion logic against the CTU cohort
+-- (tactic_id = '2026098CTU'). Emits two flags per (clnt, ar):
+--   primary_success   = switch destination matches the campaign's target product
+--                       (requires current_product / target_product — TODO item #3 below)
+--   secondary_success = switch destination is an upgrade per the hardcoded product ladder
+-- Aggregation uses COUNT(DISTINCT clnt_no) so multi-AR clients are not overcounted.
+-- No control arm available for CTU — output is gross response only, not lift.
+-- Engine: Starburst (Trino) over EDW (DG6V01 / DD0W01 / DDWV01 federated).
+
+WITH
+cohort AS (
+    SELECT
+        clnt_no,
+        treatmt_strt_dt,
+        treatmt_end_dt,
+        -- TODO item #3: current_product and target_product live in the tactic event table
+        -- (likely a parsed position in tactic_decisn_vrb_info or a related lookup).
+        -- Replace these NULLs once the mapping is confirmed. primary_success returns 0
+        -- until they're populated; secondary_success works regardless.
+        CAST(NULL AS VARCHAR) AS current_product,
+        CAST(NULL AS VARCHAR) AS target_product
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+    WHERE tactic_id = '2026098CTU'
+      AND treatmt_strt_dt >= DATE '2026-04-01'
+),
+
+-- Most recent applicable pba_acct_lkup snap_dt across the cohort's date span.
+-- Precomputed once to avoid a correlated subquery on the lookup join.
+pba_max_snap AS (
+    SELECT MAX(snap_dt) AS snap_dt
+    FROM ddwv01.pba_acct_lkup
+    WHERE pda_typ_cd = 'C'
+      AND snap_dt BETWEEN (SELECT MIN(treatmt_strt_dt) FROM cohort)
+                      AND (SELECT MAX(treatmt_end_dt)  FROM cohort)
+),
+
+-- Pre-campaign chequing product per (clnt, ar), snapshotted one day before treatment start.
+-- Product label derived from acct_typ + acct_cls + flt_pr_tm_trnsctn (chequing tiers).
+precamp_product AS (
+    SELECT
+        c.clnt_no,
+        c.treatmt_strt_dt,
+        b.ar_id,
+        b.prmry_clnt_ind,
+        CASE
+            WHEN s.acct_typ = 13 AND s.acct_cls = 10    AND d.flt_pr_tm_trnsctn = 3 THEN 'RBC Student Banking'
+            WHEN s.acct_typ = 13 AND s.acct_cls = 10    AND d.flt_pr_tm_trnsctn = 4 THEN 'RBC No Limit Banking for Students'
+            WHEN s.acct_typ = 13 AND s.acct_cls = 0     AND d.flt_pr_tm_trnsctn = 2 THEN 'RBC Day to Day Banking'
+            WHEN s.acct_typ = 13 AND s.acct_cls = 0     AND d.flt_pr_tm_trnsctn = 4 THEN 'RBC No Limit Banking'
+            WHEN s.acct_typ = 13 AND s.acct_cls IN (8,9) AND d.flt_pr_tm_trnsctn = 0 THEN 'RBC Signature No Limit Banking'
+        END AS from_product
+    FROM cohort c
+    INNER JOIN ddwv01.clnt_ar_reltn_dly b
+        ON  b.clnt_no    = c.clnt_no
+        AND b.dw_srvc_id = 1
+        AND b.snap_dt    = date_add('day', -1, c.treatmt_strt_dt)
+    INNER JOIN ddwv01.ar_static_dly s
+        ON  s.ar_id          = b.ar_id
+        AND s.snap_dt        = b.snap_dt
+        AND s.srvc_id        = 1
+        AND s.open_cls_sts   = 'O'
+        AND s.acct_typ       = 13
+        AND s.acct_cls IN (0,8,9,10)
+    INNER JOIN ddwv01.deposit_account_dly d
+        ON  d.ar_id      = b.ar_id
+        AND d.snap_dt    = b.snap_dt
+        AND d.dw_srvc_id = 1
+),
+
+-- Account switch events during the treatment window, with product names looked up.
+-- Most-recent switch per (clnt, ar) via ROW_NUMBER (QUALIFY is Teradata-only).
+switches_raw AS (
+    SELECT
+        c.clnt_no,
+        c.treatmt_strt_dt,
+        c.treatmt_end_dt,
+        sw.ar_id,
+        sw.acct_sw_proc_dt                 AS switch_dt,
+        sw.acct_sw_proc_tm                 AS switch_tm,
+        sw.rec_typ_cd                      AS switch_channel,
+        fl.prod_en_nm                      AS latest_from_product,
+        tl.prod_en_nm                      AS latest_to_product,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.clnt_no, sw.ar_id
+            ORDER BY sw.acct_sw_proc_dt DESC, sw.acct_sw_proc_tm DESC
+        ) AS rn
+    FROM cohort c
+    INNER JOIN ddwv01.clnt_ar_reltn_dly r
+        ON  r.clnt_no    = c.clnt_no
+        AND r.dw_srvc_id = 1
+        AND r.snap_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
+    INNER JOIN ddwv01.dep_acct_sw_dly sw
+        ON  sw.ar_id            = r.ar_id
+        AND sw.acct_sw_proc_dt  = r.snap_dt
+    INNER JOIN ddwv01.pba_acct_lkup fl
+        ON  fl.acct_typ_cd       = sw.from_acct_typ
+        AND fl.acct_clss_cd      = sw.from_acct_clss
+        AND fl.srvc_fee_opt_cd   = sw.from_fee_opt
+        AND fl.pda_typ_cd        = 'C'
+        AND fl.snap_dt           = (SELECT snap_dt FROM pba_max_snap)
+    INNER JOIN ddwv01.pba_acct_lkup tl
+        ON  tl.acct_typ_cd       = sw.to_acct_typ
+        AND tl.acct_clss_cd      = sw.to_acct_clss
+        AND tl.srvc_fee_opt_cd   = sw.to_fee_opt
+        AND tl.pda_typ_cd        = 'C'
+        AND tl.snap_dt           = (SELECT snap_dt FROM pba_max_snap)
+),
+
+switches AS (
+    SELECT clnt_no, ar_id, switch_dt, switch_channel,
+           latest_from_product, latest_to_product
+    FROM switches_raw
+    WHERE rn = 1
+),
+
+-- Per (clnt, ar): assemble pre-campaign product, switch, and compute success flags
+success AS (
+    SELECT
+        c.clnt_no,
+        c.current_product,
+        c.target_product,
+        p.ar_id,
+        p.from_product,
+        s.switch_dt,
+        s.latest_to_product,
+
+        -- primary: switch destination = campaign's target product (requires item #3)
+        CASE
+            WHEN c.target_product IS NOT NULL
+             AND c.target_product = s.latest_to_product
+            THEN 1 ELSE 0
+        END AS primary_success,
+
+        -- secondary: any upgrade per the hardcoded chequing-tier ladder
+        CASE
+            WHEN p.from_product = 'RBC Student Banking'
+             AND s.latest_to_product IN (
+                'RBC No Limit Banking for Students','RBC Day to Day Banking',
+                'RBC No Limit Banking','RBC Signature No Limit Banking','RBC VIP Banking')
+            THEN 1
+            WHEN p.from_product = 'RBC No Limit Banking for Students'
+             AND s.latest_to_product IN (
+                'RBC Student Banking','RBC Day to Day Banking',
+                'RBC No Limit Banking','RBC Signature No Limit Banking','RBC VIP Banking')
+            THEN 1
+            WHEN p.from_product = 'RBC Day to Day Banking'
+             AND s.latest_to_product IN (
+                'RBC No Limit Banking','RBC Signature No Limit Banking',
+                'RBC VIP Banking','RBC Advantage Banking')
+            THEN 1
+            WHEN p.from_product = 'RBC No Limit Banking'
+             AND s.latest_to_product IN (
+                'RBC VIP Banking','RBC Advantage Banking','RBC Signature No Limit Banking')
+            THEN 1
+            WHEN p.from_product = 'RBC Signature No Limit Banking'
+             AND s.latest_to_product IN ('RBC VIP Banking')
+            THEN 1
+            ELSE 0
+        END AS secondary_success
+    FROM cohort c
+    LEFT JOIN precamp_product p
+        ON  p.clnt_no         = c.clnt_no
+        AND p.treatmt_strt_dt = c.treatmt_strt_dt
+    LEFT JOIN switches s
+        ON  s.clnt_no = p.clnt_no
+        AND s.ar_id   = p.ar_id
+),
+
+rollup AS (
+    -- ALL grain (overall CTU cohort)
+    SELECT
+        CAST('ALL'     AS VARCHAR) AS segment,
+        CAST('OVERALL' AS VARCHAR) AS segment_level,
+        COUNT(DISTINCT clnt_no)                                                  AS cohort_size,
+        COUNT(DISTINCT CASE WHEN primary_success   = 1 THEN clnt_no END)         AS primary_responders,
+        COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END)         AS secondary_responders
+    FROM success
+
+    UNION ALL
+
+    -- FROM_PRODUCT grain (per pre-campaign product — for ladder validation)
+    SELECT
+        'FROM_PRODUCT' AS segment,
+        from_product   AS segment_level,
+        COUNT(DISTINCT clnt_no),
+        COUNT(DISTINCT CASE WHEN primary_success   = 1 THEN clnt_no END),
+        COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END)
+    FROM success
+    WHERE from_product IS NOT NULL
+    GROUP BY from_product
+)
+
+SELECT
+    segment,
+    segment_level,
+    cohort_size,
+    primary_responders,
+    secondary_responders
+FROM rollup
+ORDER BY segment, segment_level
+;
