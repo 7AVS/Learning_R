@@ -33,15 +33,15 @@ applications AS (
         a.clnt_no,
         d.prod_app_dt       AS app_dt,
         d.prod_app_compl_dt AS success_dt
-    FROM DD0W01.CR_APP_CLNT_RELTN     AS a
-    JOIN DD0W01.OVRL_CR_APP            AS b
+    FROM DDWV01.CR_APP_CLNT_RELTN     AS a
+    JOIN DDWV01.OVRL_CR_APP            AS b
         ON  b.cr_app_id  = a.cr_app_id
         AND b.sys_src_id = a.sys_src_id
-    JOIN DD0W01.CR_APP_CLNT_PROD_RELTN AS c
+    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN AS c
         ON  c.cr_app_id          = a.cr_app_id
         AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
         AND c.sys_src_id         = a.sys_src_id
-    JOIN DD0W01.CR_APP_PROD            AS d
+    JOIN DDWV01.CR_APP_PROD            AS d
         ON  d.cr_app_id          = c.cr_app_id
         AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
         AND d.sys_src_id         = c.sys_src_id
@@ -64,8 +64,8 @@ responders AS (
         AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
 ),
 
-summary AS (
-    -- ALL grain (summary across reporting groups)
+seg_counts AS (
+    -- ALL grain (seg_counts across reporting groups)
     SELECT
         CAST('ALL'     AS VARCHAR(50)) AS segment,
         CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
@@ -102,6 +102,6 @@ SELECT
     test_control_flag,
     cohort_size,
     responders
-FROM summary
+FROM seg_counts
 ORDER BY segment, segment_level, test_control_flag
 ;

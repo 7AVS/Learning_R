@@ -22,7 +22,7 @@
 --   2. Add a primary_success CASE to the responders CTE:
 --        CASE WHEN target_product IS NOT NULL AND target_product = new_product
 --             THEN 1 ELSE 0 END AS primary_success
---   3. Add primary_responders to the summary:
+--   3. Add primary_responders to the seg_counts:
 --        COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS primary_responders
 -- ---------------------------------------------------------------------------
 
@@ -81,8 +81,8 @@ responders AS (
     GROUP BY 1,2,3,4,5
 ),
 
-summary AS (
-    -- ALL grain (summary across products)
+seg_counts AS (
+    -- ALL grain (seg_counts across products)
     SELECT
         CAST('ALL'     AS VARCHAR(50)) AS segment,
         CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
@@ -123,6 +123,6 @@ SELECT
     test_control_flag,
     cohort_size,
     secondary_responders
-FROM summary
+FROM seg_counts
 ORDER BY segment, segment_level, test_control_flag
 ;
