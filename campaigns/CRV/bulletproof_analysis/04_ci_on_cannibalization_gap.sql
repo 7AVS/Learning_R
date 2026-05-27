@@ -1,6 +1,10 @@
 -- Statistical significance test on the CRV-Action vs CRV-Control cannibalization gap in PCL response.
--- Lead grain: one row per (CRV wave x account x arm) that overlaps a PCL-mobile deployment.
--- Output: one row for 'overall' plus one row per CRV deployment month.
+-- PCL-LEAD CENTRIC (matching original Section E framing):
+--   Unit of observation = one PCL-mobile lead (one row per PCL deployment per account).
+--   Treatment exposure   = does this PCL lead overlap with a CRV-Action / CRV-Control wave?
+--   Outcome              = PCL responder_cli on this lead.
+-- This matches the deck's denominator: PCL conversions among PCL leads.
+-- Output: 'overall' row + one row per PCL deployment month.
 -- All statistical math forced to FLOAT to avoid Teradata DECIMAL precision overflow.
 
 WITH pcl_universe AS (
@@ -8,7 +12,8 @@ WITH pcl_universe AS (
         acct_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        responder_cli
+        responder_cli,
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
@@ -17,8 +22,7 @@ crv_action AS (
     SELECT
         acct_no,
         offer_start_date,
-        offer_end_date,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
+        offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -28,89 +32,69 @@ crv_control AS (
     SELECT
         acct_no,
         offer_start_date,
-        offer_end_date,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
+        offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
-overlap_action AS (
-    SELECT
-        c.acct_no,
-        c.offer_start_date,
-        c.crv_month,
-        MAX(p.responder_cli) AS pcl_responded
-    FROM crv_action c
-    INNER JOIN pcl_universe p
-      ON p.acct_no           = c.acct_no
+-- For each PCL lead, flag whether it overlaps a CRV-Action wave or CRV-Control wave.
+-- DISTINCT collapses multi-CRV-wave fan-out so each PCL lead is counted once.
+overlap_action_keys AS (
+    SELECT DISTINCT
+        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_action c
+      ON c.acct_no           = p.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date, c.crv_month
 ),
-overlap_control AS (
-    SELECT
-        c.acct_no,
-        c.offer_start_date,
-        c.crv_month,
-        MAX(p.responder_cli) AS pcl_responded
-    FROM crv_control c
-    INNER JOIN pcl_universe p
-      ON p.acct_no           = c.acct_no
+overlap_control_keys AS (
+    SELECT DISTINCT
+        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_control c
+      ON c.acct_no           = p.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date, c.crv_month
 ),
--- Aggregate at (slice) grain: 'overall' + each month
+-- One row per PCL lead with overlap flags.
+-- Flags are NOT mutually exclusive (a PCL lead can overlap with both Action and Control waves);
+-- we count each side independently so the comparison is at PCL-lead grain on each arm.
+pcl_flagged AS (
+    SELECT
+        p.pcl_month,
+        p.responder_cli,
+        CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS overlap_action_flag,
+        CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS overlap_control_flag
+    FROM pcl_universe p
+    LEFT JOIN overlap_action_keys oa
+      ON oa.acct_no         = p.acct_no
+     AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oa.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN overlap_control_keys oc
+      ON oc.acct_no         = p.acct_no
+     AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oc.treatmt_end_dt  = p.treatmt_end_dt
+),
+-- Aggregate: one row per (slice = 'overall' | pcl_month) with counts.
 agg_overall AS (
     SELECT
-        CAST('overall' AS VARCHAR(20)) AS slice,
-        CAST(SUM(a.n_action)     AS FLOAT) AS n_action,
-        CAST(SUM(a.resp_action)  AS FLOAT) AS resp_action,
-        CAST(SUM(a.n_control)    AS FLOAT) AS n_control,
-        CAST(SUM(a.resp_control) AS FLOAT) AS resp_control
-    FROM (
-        SELECT
-            CAST(COUNT(*)           AS FLOAT) AS n_action,
-            CAST(SUM(pcl_responded) AS FLOAT) AS resp_action,
-            CAST(0                  AS FLOAT) AS n_control,
-            CAST(0                  AS FLOAT) AS resp_control
-        FROM overlap_action
-        UNION ALL
-        SELECT
-            CAST(0                  AS FLOAT),
-            CAST(0                  AS FLOAT),
-            CAST(COUNT(*)           AS FLOAT),
-            CAST(SUM(pcl_responded) AS FLOAT)
-        FROM overlap_control
-    ) a
+        CAST('overall' AS VARCHAR(20))                                                                 AS slice,
+        CAST(SUM(overlap_action_flag)                                                       AS FLOAT)  AS n_action,
+        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_action,
+        CAST(SUM(overlap_control_flag)                                                      AS FLOAT)  AS n_control,
+        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_control
+    FROM pcl_flagged
 ),
 agg_monthly AS (
     SELECT
-        CAST(slice AS VARCHAR(20)) AS slice,
-        CAST(SUM(n_action)     AS FLOAT) AS n_action,
-        CAST(SUM(resp_action)  AS FLOAT) AS resp_action,
-        CAST(SUM(n_control)    AS FLOAT) AS n_control,
-        CAST(SUM(resp_control) AS FLOAT) AS resp_control
-    FROM (
-        SELECT
-            CAST(crv_month AS VARCHAR(20)) AS slice,
-            CAST(COUNT(*)           AS FLOAT) AS n_action,
-            CAST(SUM(pcl_responded) AS FLOAT) AS resp_action,
-            CAST(0                  AS FLOAT) AS n_control,
-            CAST(0                  AS FLOAT) AS resp_control
-        FROM overlap_action
-        GROUP BY crv_month
-        UNION ALL
-        SELECT
-            CAST(crv_month AS VARCHAR(20)),
-            CAST(0                  AS FLOAT),
-            CAST(0                  AS FLOAT),
-            CAST(COUNT(*)           AS FLOAT),
-            CAST(SUM(pcl_responded) AS FLOAT)
-        FROM overlap_control
-        GROUP BY crv_month
-    ) b
-    GROUP BY slice
+        CAST(pcl_month AS VARCHAR(20))                                                                 AS slice,
+        CAST(SUM(overlap_action_flag)                                                       AS FLOAT)  AS n_action,
+        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_action,
+        CAST(SUM(overlap_control_flag)                                                      AS FLOAT)  AS n_control,
+        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_control
+    FROM pcl_flagged
+    GROUP BY pcl_month
 ),
 agg AS (
     SELECT * FROM agg_overall
