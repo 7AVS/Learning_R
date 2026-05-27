@@ -1,0 +1,282 @@
+CRV-PCL BULLETPROOF ANALYSIS — PLAN & RATIONALE
+==================================================
+Captured: 2026-05-26
+Purpose: preserve the WHY behind the 12 queries. The queries themselves
+are self-explanatory; this file is the reasoning + context + locked
+methodology + open items, so future sessions don't lose the thread.
+
+
+----------------------------------------------------------------
+1. WHY WE REOPENED CRV
+----------------------------------------------------------------
+
+The original CRV-vs-PCL cannibalization deck was delivered May 2025
+(closed 2026-05-15). Recommendation: discontinue CRV on the mobile
+banner. Headline: ~42K PCL conversions recoverable, translated to
+~$30M IBT. That $30M figure made executives' eyes pop — and now we
+have eyes on us. The recommendation is a transfer of dollars from one
+line of business (CRV) to another (PCL), held by different executives,
+who will scrutinize hard. The case needs to be bulletproof.
+
+Bulletproof means: methodology is airtight, the causal claim is
+defensible, the $$ figure is reproducible and net (not just gross),
+the alternative options have been considered.
+
+
+----------------------------------------------------------------
+2. CROSS-LOB STAKES
+----------------------------------------------------------------
+
+- PCL exec WILL accept the recovery story (gets the dollars)
+- CRV exec WILL push back (loses the dollars and the campaign)
+- Both will scrutinize the math, the audience, and the methodology
+- Neutral framing matters: "yield exhausted on one side + recovery on
+  the other" is more defensible than "kill CRV"
+- Throttling (not killing) is the obvious soft-landing exec ask — we
+  must be ready with numbers for that scenario
+
+
+----------------------------------------------------------------
+3. WHAT THE DECK NEEDS TO DEFEND
+----------------------------------------------------------------
+
+a) The 0.97pp Action-vs-Control PCL response gap is the CAUSAL piece.
+   The 3.6pp no-overlap-vs-Action gap is selection bias and should
+   NOT be the headline. The original deck conflated them; the
+   bulletproof version separates them explicitly.
+
+b) The ~$30M is GROSS PCL recovery, not net. Net = PCL gained MINUS
+   CRV conversions forgone. We need both counts to compute the net
+   number (Excel-side, post-SQL).
+
+c) The 4.4M overlap cohort needs to be characterized — what kind of
+   clients are they? Are they the PCL ICP? Is the audience comparable
+   across arms?
+
+d) Robustness: the gap should hold across months, across audience
+   profiles, across alternative throttling policies.
+
+e) Statistical significance: the gap is real, not noise.
+
+
+----------------------------------------------------------------
+4. THE KEY DISTINCTION: CAUSAL VS SELECTION
+----------------------------------------------------------------
+
+Action vs Control comparison = CAUSAL (randomization survives in the
+overlap subset, validated by Query 01 balance test)
+
+Action vs no-overlap = NOT CAUSAL (different audience, different
+selection process). The no-overlap clients were never deployed CRV
+in the window — they're a structurally different group.
+
+The slide should center the 0.97pp causal piece. The no-overlap line
+either gets dropped or gets an explicit "different audience" caveat.
+
+
+----------------------------------------------------------------
+5. GROSS VS NET ECONOMICS
+----------------------------------------------------------------
+
+Gross PCL recovery = 42K conversions × $6.95 PCL NIBT/IBT = ~$30M
+                    (PCL $-per-conversion confirmed by Andre)
+
+Net = Gross PCL gained MINUS gross CRV forgone
+CRV forgone = (CRV-Action conversion rate on overlap cohort) ×
+              (4.4M overlap leads) × (CRV $-per-conversion, TBD)
+
+Substitution effect (Query 07) further nuances this — if CRV and PCL
+are SUBSTITUTES (clients pick one or the other for similar needs),
+stopping CRV captures the same demand cleanly via PCL. If COMPLEMENTS
+(different needs), we lose distinct customer value. Co-conversion
+rate in the overlap cohort tells us which.
+
+Andre does all $-math in Excel. SQL outputs counts only.
+
+
+----------------------------------------------------------------
+6. WHAT EACH QUERY BULLETPROOFS
+----------------------------------------------------------------
+
+00 — RANDOMIZATION VALIDATION (sticky vs per-wave)
+     Validates whether lead-grain methodology is overkill or
+     necessary. RESULT (2026-05-26): 0.20% crossover, effectively
+     sticky. Lead grain still correct but practical impact minimal.
+
+01 — BALANCE TEST
+     Does the original CRV randomization survive when we slice to the
+     PCL-mobile overlap subset? If yes, the 0.97pp gap is causal on
+     the subset. If no, the headline number needs caveating.
+
+02 — OVERLAP DAYS DISTRIBUTION
+     When CRV and PCL deploy to the same client in overlapping
+     windows, how many days do they actually compete? Mean, median,
+     p10–p90, min, max — gives the slide a concrete "they compete
+     for X days on average" number.
+
+03 — BIDIRECTIONAL OVERLAP SHARE
+     What % of PCL overlaps CRV (the ~60% number on the deck) AND
+     what % of CRV overlaps PCL (missing from original deck). Both
+     directions matter for the exec audience.
+
+04 — CI ON THE 0.97PP GAP
+     95% confidence interval and z-stat. Kills "could just be noise"
+     pushback before it starts. With n=4.4M the CI is tight.
+
+05 — CRV ECONOMICS ON OVERLAP COHORT
+     APR, term, fee, principal distributions. Tells us what CRV is
+     actually delivering to the cannibalized clients — proves the
+     CRV-side $$ that's being given up if we discontinue.
+
+06 — NET ECONOMICS (COUNTS ONLY)
+     Action and Control responder counts on overlap, for both CRV
+     and PCL. Andre multiplies by $ in Excel for the net figure.
+
+07 — SUBSTITUTION TEST
+     For overlap leads: % CRV-only converters, % PCL-only converters,
+     % both, % neither. Substitution vs complementarity question.
+     Critical for the CRV-exec rebuttal.
+
+08 — DECILE DISTRIBUTION
+     PCL decile composition across (Action / Control / no-overlap)
+     cohorts. Characterizes audience. Explains the high no-overlap
+     PCL response rate (likely structural audience difference).
+     CRV decile NOT available on curated table.
+
+09 — TIMING WITHIN OVERLAP
+     When both deploy to same client, who arrives first? crv_first
+     vs pcl_first vs same_day. Sequence affects interpretation
+     (intrusion vs fatigue).
+
+10 — TIME-TO-PCL AFTER CRV
+     Did CRV merely delay PCL conversion or block it? Days from
+     CRV offer start to PCL CLI effective date. Could reframe
+     magnitude if PCL just gets pushed out a few months.
+
+11 — THROTTLING SCENARIOS
+     For caps N in {2,3,4,5}: contacts removed, CRV conversions
+     forgone, PCL overlap exposures affected. Soft-landing
+     alternative to full kill. Exec WILL ask this — we have the
+     answer ready.
+
+
+----------------------------------------------------------------
+7. METHODOLOGY LOCKS
+----------------------------------------------------------------
+
+These were debated and decided in session. Don't re-litigate.
+
+- Date window: offer_start_date / treatmt_strt_dt >= '2024-10-01'.
+  NO upper bound in SQL. Andre excludes partial May 2026 manually
+  in Excel reporting.
+
+- Channel filter (different per campaign — CRITICAL):
+  * CRV side: channels_deployed LIKE '%IM%'
+    (CRV mobile-banner deployment stamps IM in data — backend
+    labeling quirk, CRV-specific)
+  * CRV-Control rows: NO channel filter (Control not deployed)
+  * PCL side: channel LIKE '%MB%'
+    (PCL labels mobile correctly as MB — no quirk)
+  * Both target the mobile banner surface
+  * NEVER filter PCL with %IM% — that picks up online banner,
+    different surface, wrong audience
+
+- Lead grain throughout: each (acct_no × CRV wave × arm) is its
+  own observation. NO collapsing to unique-account grain. Same
+  client appearing in multiple waves contributes multiple rows.
+  Section E's original Action-priority dedup was discarded.
+
+- PCL has NO Action/Control split — confirmed 2026-05-26. Only
+  filter PCL by channel and date, never by arm.
+
+- CRV-Control filter on curated: action_control = 'Control'
+- CRV-Control filter on tactic event: tst_grp_cd = 'TG8'
+
+- Counts only in SQL. All $-math, rates, ratios computed in Excel.
+
+- Output: one row per slice (month, arm, decile, etc.). Side-by-
+  side column layout where direct comparison helps (Query 01
+  restructured this way; 07 / 09 may follow if needed).
+
+- PCL $-per-conversion: $6.95 NIBT/IBT (confirmed)
+- CRV $-per-conversion: PENDING from Andre
+
+
+----------------------------------------------------------------
+8. METHODOLOGY CORRECTIONS DURING THIS SESSION
+----------------------------------------------------------------
+
+- Initially queries used dedup logic inherited from Section E.
+  Dropped after Andre confirmed lead grain is correct.
+
+- Initially PCL channel filter was %IM% (matched the original
+  deck). Corrected to %MB% mid-session. Original deck's numbers
+  may be affected — if exec asks for exact reproduction of the
+  $30M figure, we cite the original methodology; for any NEW
+  analysis the corrected filter applies.
+
+- CHAR truncation bug discovered after Andre's first run of
+  Query 01 showed control_count = 0. Cause: Teradata UNION ALL
+  may force first SELECT's column length, truncating 'Control'
+  (CHAR 7) to 'Contro' (CHAR 6). Fix: CAST all string label
+  literals to VARCHAR(N) before UNION ALL.
+
+- ORDER BY with column names after UNION ALL fails in Teradata.
+  All ORDER BY converted to positional integers.
+
+
+----------------------------------------------------------------
+9. BLIND SPOTS IDENTIFIED (CONSIDERED, MOST DEPRIORITIZED)
+----------------------------------------------------------------
+
+- Throttle vs kill — modeled in Query 11. ADDRESSED.
+
+- "Are overlap clients the PCL ICP?" — moot. By definition both
+  campaigns deployed to them. Dropped.
+
+- "Does CRV exposure change PCL eligibility?" — moot. Section E
+  randomization handles it. Dropped.
+
+- "Why is no-overlap PCL response so much higher?" — partial
+  answer via Query 08 decile distribution. Andre deprioritized
+  deep audience decomposition (scope creep).
+
+- "Did CRV merely delay PCL?" — addressed in Query 10.
+
+- "EM_IM_DO bundle" — ~5-10% of CRV deployments. Bulletproof
+  analysis focused on IM-only (95% of CRV). Bundle is a follow-up
+  if asked.
+
+- Result B of Query 00 (sample of 100 "both" accounts) — NOT
+  REVIEWED. Low priority, 0.20% crossover is in the noise.
+
+
+----------------------------------------------------------------
+10. OPEN ITEMS PENDING
+----------------------------------------------------------------
+
+- CRV $-per-conversion from Andre → feeds Query 06 net economics
+  multiplication in Excel.
+
+- Run remaining queries (02-11) in Teradata Studio Express. As
+  results come in, append to findings.txt.
+
+- Side-by-side restructure for Queries 07 and 09 if their default
+  row-per-slice layout proves hard to read.
+
+- Synthesis of all findings into a slide-ready narrative — once
+  Queries 03, 04, 06, 07, 08, 10, 11 have results.
+
+
+----------------------------------------------------------------
+11. FOR FUTURE SESSIONS
+----------------------------------------------------------------
+
+If you (Claude) are reading this in a future session:
+- Memory: project_crv_cannibalization_status.md has the locked
+  methodology. Read it first.
+- This file: explains WHY each query exists. Read if you're being
+  asked to extend / modify the analysis.
+- findings.txt: rolling results log. Append new results here.
+- The 12 query files: the analysis itself. Don't modify methodology
+  without re-reading this plan first.
