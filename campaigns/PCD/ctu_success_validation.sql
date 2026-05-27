@@ -1,25 +1,35 @@
 -- CTU success validation
 -- Validates the chequing-account-switch conversion logic against the CTU cohort
--- (tactic_id = '2026098CTU'). Emits two flags per (clnt, ar):
---   primary_success   = switch destination matches the campaign's target product
---                       (requires current_product / target_product — TODO item #3 below)
---   secondary_success = switch destination is an upgrade per the hardcoded product ladder
--- Aggregation uses COUNT(DISTINCT clnt_no) so multi-AR clients are not overcounted.
--- No control arm available for CTU — output is gross response only, not lift.
--- Engine: Starburst (Trino) over EDW (DG6V01 / DD0W01 / DDWV01 federated).
+-- (tactic_id = '2026098CTU'). Aligned with the production query at
+-- zp10-nba-measurement-data/src/sql/ctu_success.sql.
+--
+-- Currently emits: secondary_success (switch destination is an upgrade per the hardcoded
+-- product ladder). Aggregation uses COUNT(DISTINCT clnt_no) so multi-AR clients are not
+-- overcounted. No control arm for CTU — gross response only, no lift.
+--
+-- ---------------------------------------------------------------------------
+-- TODO — primary_success placeholder (suppressed until target_product is sourced)
+-- ---------------------------------------------------------------------------
+-- The production query has DROPPED primary_success (switch-to-the-specific-targeted-
+-- product). Likely because target_product was never reliably wired into any upstream
+-- table — it would live in the tactic event table or a campaign-design lookup, and
+-- nobody pinned that down. When the source is identified (probably a position in
+-- tactic_decisn_vrb_info or a separate lookup), re-enable in three steps:
+--   1. Add current_product / target_product columns to the `cohort` CTE.
+--   2. Add a primary_success CASE to the `success` CTE:
+--        CASE WHEN target_product IS NOT NULL AND target_product = latest_to_product
+--             THEN 1 ELSE 0 END AS primary_success
+--   3. Add primary_responders to the rollup:
+--        COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS primary_responders
+-- ---------------------------------------------------------------------------
+-- Engine: Starburst (Trino) over EDW (DG6V01 / DDWV01 federated).
 
 WITH
 cohort AS (
     SELECT
         clnt_no,
         treatmt_strt_dt,
-        treatmt_end_dt,
-        -- TODO item #3: current_product and target_product live in the tactic event table
-        -- (likely a parsed position in tactic_decisn_vrb_info or a related lookup).
-        -- Replace these NULLs once the mapping is confirmed. primary_success returns 0
-        -- until they're populated; secondary_success works regardless.
-        CAST(NULL AS VARCHAR) AS current_product,
-        CAST(NULL AS VARCHAR) AS target_product
+        treatmt_end_dt
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id = '2026098CTU'
       AND treatmt_strt_dt >= DATE '2026-04-01'
@@ -114,25 +124,17 @@ switches AS (
     WHERE rn = 1
 ),
 
--- Per (clnt, ar): assemble pre-campaign product, switch, and compute success flags
+-- Per (clnt, ar): assemble pre-campaign product, switch, and compute success flag
 success AS (
     SELECT
         c.clnt_no,
-        c.current_product,
-        c.target_product,
         p.ar_id,
         p.from_product,
         s.switch_dt,
         s.latest_to_product,
 
-        -- primary: switch destination = campaign's target product (requires item #3)
-        CASE
-            WHEN c.target_product IS NOT NULL
-             AND c.target_product = s.latest_to_product
-            THEN 1 ELSE 0
-        END AS primary_success,
-
         -- secondary: any upgrade per the hardcoded chequing-tier ladder
+        -- (ladder matches production: zp10-nba-measurement-data/src/sql/ctu_success.sql)
         CASE
             WHEN p.from_product = 'RBC Student Banking'
              AND s.latest_to_product IN (
@@ -151,7 +153,7 @@ success AS (
             THEN 1
             WHEN p.from_product = 'RBC No Limit Banking'
              AND s.latest_to_product IN (
-                'RBC VIP Banking','RBC Advantage Banking','RBC Signature No Limit Banking')
+                'RBC Signature No Limit Banking','RBC VIP Banking','RBC Advantage Banking')
             THEN 1
             WHEN p.from_product = 'RBC Signature No Limit Banking'
              AND s.latest_to_product IN ('RBC VIP Banking')
@@ -172,9 +174,8 @@ rollup AS (
     SELECT
         CAST('ALL'     AS VARCHAR) AS segment,
         CAST('OVERALL' AS VARCHAR) AS segment_level,
-        COUNT(DISTINCT clnt_no)                                                  AS cohort_size,
-        COUNT(DISTINCT CASE WHEN primary_success   = 1 THEN clnt_no END)         AS primary_responders,
-        COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END)         AS secondary_responders
+        COUNT(DISTINCT clnt_no)                                          AS cohort_size,
+        COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END) AS secondary_responders
     FROM success
 
     UNION ALL
@@ -184,7 +185,6 @@ rollup AS (
         'FROM_PRODUCT' AS segment,
         from_product   AS segment_level,
         COUNT(DISTINCT clnt_no),
-        COUNT(DISTINCT CASE WHEN primary_success   = 1 THEN clnt_no END),
         COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END)
     FROM success
     WHERE from_product IS NOT NULL
@@ -195,7 +195,6 @@ SELECT
     segment,
     segment_level,
     cohort_size,
-    primary_responders,
     secondary_responders
 FROM rollup
 ORDER BY segment, segment_level
