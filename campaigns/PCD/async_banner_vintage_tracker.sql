@@ -1,36 +1,28 @@
 -- Async banner vintage tracker — PCD, CTU, O2P (engagement + responders)
--- Engine: Starburst (Trino). Required for federated access to GA4 (Trino catalog)
--- and EDW source tables (Teradata catalog).
+-- Engine: Starburst (Trino). Required for federated GA4 + EDW access.
 --
--- Three independent blocks (one per campaign). Each block emits the engagement
--- vintage curve (views, clicks, leads) PLUS the campaign-specific responder
--- curve, on a common (cohort_month × segment × segment_level × test_control_flag
--- × vintage_day) grain.
+-- Three independent blocks. Each emits engagement vintage curves (views, clicks,
+-- leads) and a campaign-specific responder vintage curve, sliced by
+-- cohort_month × segment × segment_level × test_control_flag × cohort_arm × vintage_day.
 --
--- Responder source per campaign:
---   PCD : first product change in D3CV12A.dly_full_portfolio where the new
---         visa_prod_cd differs from the FROM-product code carried in
---         tactic_decisn_vrb_info positions 42-44, within the treatment window.
---   CTU : first ladder-valid chequing-account switch in ddwv01.dep_acct_sw_dly,
---         classified against the pre-campaign chequing product snapshotted at
---         treatmt_strt_dt - 1. Ladder mirrors zp10-nba-measurement-data/src/sql/
---         ctu_success.sql (production).
---   O2P : first completed/approved primary card application
---         (DDWV01.CR_APP_PROD.prod_app_compl_dt) with PROD_APP_DT inside the
---         treatment window.
+-- cohort_arm: ASYNC (in async allowlist) vs NON_ASYNC (in tactic, outside allowlist).
+-- NON_ASYNC is a directional comparison cohort — especially useful for CTU which has
+-- no control arm. For PCD, NON_ASYNC responders are emitted as NULL because the
+-- from_product_code parse (SUBSTR position 42-44 of tactic_decisn_vrb_info) is
+-- reliable only for async tactic events; engagement comparison stands.
 --
 -- Output columns:
---   campaign | cohort | segment | segment_level | test_control_flag | vintage_day
---   | total_population [| mobile_population for O2P]
+--   campaign | cohort | segment | segment_level | test_control_flag | cohort_arm
+--   | vintage_day | total_population [| mobile_population for O2P]
 --   | view_users | click_users | leads_p | leads_n | responders
 --   | view_users_cum | click_users_cum | leads_p_cum | leads_n_cum | responders_cum
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 1 — PCD                                                              ║
--- ║ Eligibility: position-3 of tactic_decisn_vrb_info IN (async allowlist).    ║
--- ║ Scope: tst_grp_cd ends in T or C (in experimental design).                 ║
--- ║ Emits ALL rollup + PRODUCT-level grain.                                    ║
+-- ║ tactic_ids: 2026111PCD, 2026125PCD. tst_grp_cd ends in T/C.                ║
+-- ║ cohort_arm: ASYNC if position-3 of tactic_decisn_vrb_info IN (allowlist).   ║
+-- ║ ASYNC responders only — NON_ASYNC responders are NULL.                     ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -49,13 +41,16 @@ cohort_raw AS (
         CASE
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%C' THEN 'CONTROL'
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%T' THEN 'TEST'
-        END                                                                                AS test_control_flag,
-        SUBSTR(tactic_decisn_vrb_info, 42, 3)                                              AS from_product_code
+        END AS test_control_flag,
+        CASE
+            WHEN element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 3)
+                IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
+            THEN 'ASYNC' ELSE 'NON_ASYNC'
+        END AS cohort_arm,
+        SUBSTR(tactic_decisn_vrb_info, 42, 3) AS from_product_code
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 3)
-          IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
       AND (trim(coalesce(tst_grp_cd, '')) LIKE '%T'
            OR trim(coalesce(tst_grp_cd, '')) LIKE '%C')
 ),
@@ -63,18 +58,18 @@ cohort_raw AS (
 cohort AS (
     SELECT DISTINCT
         clnt_no, visa_acct_no, treatmt_strt_dt, treatmt_end_dt,
-        cohort_month, product_mnemonic, test_control_flag, from_product_code
+        cohort_month, product_mnemonic, test_control_flag, cohort_arm, from_product_code
     FROM cohort_raw
 ),
 
 population AS (
-    SELECT cohort_month, product_mnemonic, test_control_flag,
+    SELECT cohort_month, product_mnemonic, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
-    GROUP BY 1,2,3
+    GROUP BY 1,2,3,4
 ),
 
--- ── Engagement (GA4 events within 0-60 days of treatmt_strt_dt) ────────────────
+-- ── Engagement (GA4 within 0-60 days of treatmt_strt_dt) ──────────────────────
 engagement_events AS (
     SELECT
         event_date,
@@ -100,7 +95,7 @@ engagement_events AS (
 
 engagement_attributed AS (
     SELECT
-        c.cohort_month, c.product_mnemonic, c.test_control_flag, c.clnt_no,
+        c.cohort_month, c.product_mnemonic, c.test_control_flag, c.cohort_arm, c.clnt_no,
         e.event_name, e.lead_class,
         date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM cohort c
@@ -111,48 +106,29 @@ engagement_attributed AS (
 
 engagement_daily AS (
     SELECT
-        cohort_month, product_mnemonic, test_control_flag, vintage_day,
+        cohort_month, product_mnemonic, test_control_flag, cohort_arm, vintage_day,
         COUNT(DISTINCT CASE WHEN lower(event_name) = 'view_promotion'   THEN clnt_no END) AS view_users,
         COUNT(DISTINCT CASE WHEN lower(event_name) = 'select_promotion' THEN clnt_no END) AS click_users,
         COUNT(DISTINCT CASE WHEN lead_class = 'click_p'                 THEN clnt_no END) AS leads_p,
         COUNT(DISTINCT CASE WHEN lead_class = 'click_n'                 THEN clnt_no END) AS leads_n
     FROM engagement_attributed
-    GROUP BY 1,2,3,4
+    GROUP BY 1,2,3,4,5
 ),
 
--- ── Success: first product change in dly_full_portfolio (single scan) ─────────
--- Pre-aggregate cohort to the visa_acct_no grain with min/max window dates,
--- then pre-filter DFP via an inner join on cohort_accts. This pushes a tight
--- acct_no + date range predicate down to the DFP scan instead of relying on
--- the per-row BETWEEN inside the success join, which Trino doesn't always
--- prune aggressively and which was blowing spool.
-cohort_accts AS (
-    SELECT
-        visa_acct_no,
-        MIN(date_add('day', -1, treatmt_strt_dt)) AS scan_min,
-        MAX(treatmt_end_dt)                       AS scan_max
-    FROM cohort
-    WHERE visa_acct_no IS NOT NULL
-    GROUP BY visa_acct_no
-),
-
-dfp_for_cohort AS (
-    SELECT dfp.acct_no, dfp.dt_record_ext, dfp.visa_prod_cd
-    FROM D3CV12A.dly_full_portfolio dfp
-    INNER JOIN cohort_accts a
-        ON  a.visa_acct_no = dfp.acct_no
-        AND dfp.dt_record_ext BETWEEN a.scan_min AND a.scan_max
-),
-
+-- ── Success: ASYNC arm only (from_product_code parse is async-specific).
+-- Hard literal date floor on DFP scan so Teradata can partition-prune.
 success_events AS (
     SELECT
         c.cohort_month, c.product_mnemonic, c.test_control_flag, c.clnt_no, c.treatmt_strt_dt,
         MIN(dfp.dt_record_ext) AS first_change_dt
     FROM cohort c
-    INNER JOIN dfp_for_cohort dfp
+    INNER JOIN D3CV12A.dly_full_portfolio dfp
         ON  dfp.acct_no = c.visa_acct_no
         AND dfp.dt_record_ext BETWEEN date_add('day', -1, c.treatmt_strt_dt) AND c.treatmt_end_dt
         AND dfp.visa_prod_cd <> c.from_product_code
+    WHERE c.cohort_arm = 'ASYNC'
+      AND dfp.dt_record_ext >= DATE '2026-04-01'
+      AND dfp.dt_record_ext <= DATE '2026-07-31'
     GROUP BY 1,2,3,4,5
 ),
 
@@ -167,7 +143,7 @@ success_daily AS (
 
 -- ── Spine + base + grain ──────────────────────────────────────────────────────
 spine AS (
-    SELECT p.cohort_month, p.product_mnemonic, p.test_control_flag,
+    SELECT p.cohort_month, p.product_mnemonic, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
@@ -175,18 +151,20 @@ spine AS (
 
 base AS (
     SELECT
-        s.cohort_month, s.product_mnemonic, s.test_control_flag, s.vintage_day,
+        s.cohort_month, s.product_mnemonic, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
         COALESCE(e.leads_p,     0) AS leads_p,
         COALESCE(e.leads_n,     0) AS leads_n,
-        COALESCE(r.responders,  0) AS responders
+        CASE WHEN s.cohort_arm = 'ASYNC' THEN COALESCE(r.responders, 0)
+             ELSE CAST(NULL AS BIGINT) END AS responders
     FROM spine s
     LEFT JOIN engagement_daily e
         ON  e.cohort_month      = s.cohort_month
         AND e.product_mnemonic  = s.product_mnemonic
         AND e.test_control_flag = s.test_control_flag
+        AND e.cohort_arm        = s.cohort_arm
         AND e.vintage_day       = s.vintage_day
     LEFT JOIN success_daily r
         ON  r.cohort_month      = s.cohort_month
@@ -200,7 +178,7 @@ final_grain AS (
         cohort_month                   AS cohort,
         CAST('ALL'     AS VARCHAR)     AS segment,
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
-        test_control_flag, vintage_day,
+        test_control_flag, cohort_arm, vintage_day,
         SUM(total_population)          AS total_population,
         SUM(view_users)                AS view_users,
         SUM(click_users)               AS click_users,
@@ -208,7 +186,7 @@ final_grain AS (
         SUM(leads_n)                   AS leads_n,
         SUM(responders)                AS responders
     FROM base
-    GROUP BY cohort_month, test_control_flag, vintage_day
+    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
@@ -216,7 +194,7 @@ final_grain AS (
         cohort_month                   AS cohort,
         'PRODUCT'                      AS segment,
         product_mnemonic               AS segment_level,
-        test_control_flag, vintage_day,
+        test_control_flag, cohort_arm, vintage_day,
         total_population,
         view_users, click_users, leads_p, leads_n, responders
     FROM base
@@ -224,7 +202,7 @@ final_grain AS (
 
 SELECT
     CAST('PCD' AS VARCHAR) AS campaign,
-    cohort, segment, segment_level, test_control_flag, vintage_day,
+    cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
     total_population,
     view_users, click_users, leads_p, leads_n, responders,
     SUM(view_users)  OVER w AS view_users_cum,
@@ -234,19 +212,20 @@ SELECT
     SUM(responders)  OVER w AS responders_cum
 FROM final_grain
 WINDOW w AS (
-    PARTITION BY cohort, segment, segment_level, test_control_flag
+    PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
     ORDER BY vintage_day
     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 )
-ORDER BY cohort, segment, segment_level, test_control_flag, vintage_day
+ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day
 ;
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 2 — CTU                                                              ║
--- ║ Eligibility: tactic_id 2026098CTU AND tactic_decisn_vrb_info(121,30) LIKE '%MB%'. ║
--- ║ No test/control split (channel-only deployment) → test_control_flag='ALL'. ║
--- ║ Responder = first ladder-valid chequing-account switch.                    ║
+-- ║ tactic_id: 2026098CTU. No test/control design → test_control_flag='ALL'.   ║
+-- ║ cohort_arm: ASYNC if substring(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'. ║
+-- ║ Both arms get a responder count (precamp_product + dep_acct_sw_dly works   ║
+-- ║ for both — independent of tactic-event encoding).                          ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -259,22 +238,23 @@ cohort_raw AS (
         clnt_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        date_trunc('month', treatmt_strt_dt) AS cohort_month
+        date_trunc('month', treatmt_strt_dt) AS cohort_month,
+        CASE WHEN substring(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
+             THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id = '2026098CTU'
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND substring(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
 ),
 
 cohort AS (
-    SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt, cohort_month
+    SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt, cohort_month, cohort_arm
     FROM cohort_raw
 ),
 
 population AS (
-    SELECT cohort_month, COUNT(DISTINCT clnt_no) AS total_population
+    SELECT cohort_month, cohort_arm, COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
-    GROUP BY 1
+    GROUP BY 1,2
 ),
 
 -- ── Engagement (GA4) ──────────────────────────────────────────────────────────
@@ -296,7 +276,7 @@ engagement_events AS (
 ),
 
 engagement_attributed AS (
-    SELECT c.cohort_month, c.clnt_no, e.event_name, e.lead_class,
+    SELECT c.cohort_month, c.cohort_arm, c.clnt_no, e.event_name, e.lead_class,
            date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM cohort c
     INNER JOIN engagement_events e
@@ -305,16 +285,16 @@ engagement_attributed AS (
 ),
 
 engagement_daily AS (
-    SELECT cohort_month, vintage_day,
+    SELECT cohort_month, cohort_arm, vintage_day,
            COUNT(DISTINCT CASE WHEN lower(event_name) = 'view_promotion'   THEN clnt_no END) AS view_users,
            COUNT(DISTINCT CASE WHEN lower(event_name) = 'select_promotion' THEN clnt_no END) AS click_users,
            COUNT(DISTINCT CASE WHEN lead_class = 'click_p'                 THEN clnt_no END) AS leads_p,
            COUNT(DISTINCT CASE WHEN lead_class = 'click_n'                 THEN clnt_no END) AS leads_n
     FROM engagement_attributed
-    GROUP BY 1,2
+    GROUP BY 1,2,3
 ),
 
--- ── Success setup: pre-campaign chequing product + lookup ─────────────────────
+-- ── Success setup (precamp product + lookup) ──────────────────────────────────
 cohort_snap_dts AS (
     SELECT DISTINCT date_add('day', -1, treatmt_strt_dt) AS snap_dt FROM cohort
 ),
@@ -323,7 +303,6 @@ cohort_window AS (
     SELECT MIN(treatmt_strt_dt) AS min_dt, MAX(treatmt_end_dt) AS max_dt FROM cohort
 ),
 
--- Single-pass filter on pba_acct_lkup: keep rows from the latest snap_dt only.
 pba_lkup_curr AS (
     SELECT acct_typ_cd, acct_clss_cd, srvc_fee_opt_cd, prod_en_nm
     FROM (
@@ -339,7 +318,7 @@ pba_lkup_curr AS (
 
 precamp_product AS (
     SELECT
-        c.clnt_no, c.cohort_month, c.treatmt_strt_dt, c.treatmt_end_dt,
+        c.clnt_no, c.cohort_month, c.cohort_arm, c.treatmt_strt_dt, c.treatmt_end_dt,
         b.ar_id,
         CASE
             WHEN s.acct_typ = 13 AND s.acct_cls = 10    AND d.flt_pr_tm_trnsctn = 3 THEN 'RBC Student Banking'
@@ -369,12 +348,11 @@ precamp_product AS (
       AND d.snap_dt IN (SELECT snap_dt FROM cohort_snap_dts)
 ),
 
--- Switches within window with translated destination product
 switches_with_product AS (
     SELECT
-        p.clnt_no, p.cohort_month, p.treatmt_strt_dt, p.from_product,
-        sw.ar_id, sw.acct_sw_proc_dt AS switch_dt,
-        tl.prod_en_nm AS latest_to_product
+        p.clnt_no, p.cohort_month, p.cohort_arm, p.treatmt_strt_dt, p.from_product,
+        sw.acct_sw_proc_dt AS switch_dt,
+        tl.prod_en_nm      AS latest_to_product
     FROM precamp_product p
     INNER JOIN ddwv01.dep_acct_sw_dly sw
         ON  sw.ar_id            = p.ar_id
@@ -387,9 +365,8 @@ switches_with_product AS (
                                  AND (SELECT max_dt FROM cohort_window)
 ),
 
--- First ladder-valid upgrade per client
 success_events AS (
-    SELECT clnt_no, cohort_month, treatmt_strt_dt,
+    SELECT clnt_no, cohort_month, cohort_arm, treatmt_strt_dt,
            MIN(switch_dt) AS first_switch_dt
     FROM switches_with_product
     WHERE (
@@ -404,28 +381,28 @@ success_events AS (
         OR (from_product = 'RBC Signature No Limit Banking'
          AND latest_to_product = 'RBC VIP Banking')
     )
-    GROUP BY 1,2,3
+    GROUP BY 1,2,3,4
 ),
 
 success_daily AS (
-    SELECT cohort_month,
+    SELECT cohort_month, cohort_arm,
            date_diff('day', treatmt_strt_dt, first_switch_dt) AS vintage_day,
            COUNT(DISTINCT clnt_no) AS responders
     FROM success_events
     WHERE date_diff('day', treatmt_strt_dt, first_switch_dt) BETWEEN 0 AND 60
-    GROUP BY 1,2
+    GROUP BY 1,2,3
 ),
 
 -- ── Spine + base ──────────────────────────────────────────────────────────────
 spine AS (
-    SELECT p.cohort_month, v.vintage_day, p.total_population
+    SELECT p.cohort_month, p.cohort_arm, v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
 
 base AS (
     SELECT
-        s.cohort_month, s.vintage_day,
+        s.cohort_month, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
@@ -434,9 +411,13 @@ base AS (
         COALESCE(r.responders,  0) AS responders
     FROM spine s
     LEFT JOIN engagement_daily e
-        ON e.cohort_month = s.cohort_month AND e.vintage_day = s.vintage_day
+        ON  e.cohort_month = s.cohort_month
+        AND e.cohort_arm   = s.cohort_arm
+        AND e.vintage_day  = s.vintage_day
     LEFT JOIN success_daily r
-        ON r.cohort_month = s.cohort_month AND r.vintage_day = s.vintage_day
+        ON  r.cohort_month = s.cohort_month
+        AND r.cohort_arm   = s.cohort_arm
+        AND r.vintage_day  = s.vintage_day
 )
 
 SELECT
@@ -445,7 +426,7 @@ SELECT
     CAST('ALL'     AS VARCHAR) AS segment,
     CAST('OVERALL' AS VARCHAR) AS segment_level,
     CAST('ALL'     AS VARCHAR) AS test_control_flag,
-    vintage_day,
+    cohort_arm, vintage_day,
     total_population,
     view_users, click_users, leads_p, leads_n, responders,
     SUM(view_users)  OVER w AS view_users_cum,
@@ -455,21 +436,20 @@ SELECT
     SUM(responders)  OVER w AS responders_cum
 FROM base
 WINDOW w AS (
-    PARTITION BY cohort_month
+    PARTITION BY cohort_month, cohort_arm
     ORDER BY vintage_day
     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 )
-ORDER BY cohort_month, vintage_day
+ORDER BY cohort_month, cohort_arm, vintage_day
 ;
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 3 — O2P                                                              ║
--- ║ Eligibility: RPT_GRP_CD IN (9 PO2P reporting groups).                      ║
 -- ║ tactic_ids: 2026099O2P, 2026126O2P, 2026132O2P (suffix is letter O).       ║
--- ║ Scope: TST_GRP_CD IN ('TG4','TG7'); TG4=TEST, TG7=CONTROL.                 ║
--- ║ is_mobile derived from TACTIC_CELL_CD LIKE '%MB%' (descriptive only).      ║
--- ║ Responder = first completed-approved primary card application in window.   ║
+-- ║ TG4=TEST, TG7=CONTROL (in experimental design).                            ║
+-- ║ cohort_arm: ASYNC if RPT_GRP_CD IN (9 PO2P codes).                         ║
+-- ║ Both arms get a responder count (CR_APP chain works independent of arm).   ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -488,31 +468,34 @@ cohort_raw AS (
             WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
             WHEN TRIM(tst_grp_cd) = 'TG7' THEN 'CONTROL'
         END AS test_control_flag,
+        CASE
+            WHEN TRIM(rpt_grp_cd) IN (
+                'PO2PNL01','PO2PNL03','PO2PNL07',
+                'PO2POT01','PO2POT03','PO2POT07',
+                'PO2PPR01','PO2PPR03','PO2PPR07'
+            ) THEN 'ASYNC' ELSE 'NON_ASYNC'
+        END AS cohort_arm,
         CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND TRIM(rpt_grp_cd) IN (
-            'PO2PNL01','PO2PNL03','PO2PNL07',
-            'PO2POT01','PO2POT03','PO2POT07',
-            'PO2PPR01','PO2PPR03','PO2PPR07'
-          )
       AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),
 
 cohort AS (
-    SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt, cohort_month, rpt_grp_cd, test_control_flag,
+    SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt,
+           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
            MAX(is_mobile) AS is_mobile
     FROM cohort_raw
-    GROUP BY 1,2,3,4,5,6
+    GROUP BY 1,2,3,4,5,6,7
 ),
 
 population AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag,
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no)                                  AS total_population,
            COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
     FROM cohort
-    GROUP BY 1,2,3
+    GROUP BY 1,2,3,4
 ),
 
 -- ── Engagement (GA4) ──────────────────────────────────────────────────────────
@@ -534,7 +517,7 @@ engagement_events AS (
 ),
 
 engagement_attributed AS (
-    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.clnt_no,
+    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm, c.clnt_no,
            e.event_name, e.lead_class,
            date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM cohort c
@@ -544,13 +527,13 @@ engagement_attributed AS (
 ),
 
 engagement_daily AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, vintage_day,
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm, vintage_day,
            COUNT(DISTINCT CASE WHEN lower(event_name) = 'view_promotion'   THEN clnt_no END) AS view_users,
            COUNT(DISTINCT CASE WHEN lower(event_name) = 'select_promotion' THEN clnt_no END) AS click_users,
            COUNT(DISTINCT CASE WHEN lead_class = 'click_p'                 THEN clnt_no END) AS leads_p,
            COUNT(DISTINCT CASE WHEN lead_class = 'click_n'                 THEN clnt_no END) AS leads_n
     FROM engagement_attributed
-    GROUP BY 1,2,3,4
+    GROUP BY 1,2,3,4,5
 ),
 
 -- ── Success: completed-approved primary card application in window ───────────
@@ -576,35 +559,36 @@ applications AS (
 ),
 
 success_events AS (
-    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.clnt_no, c.treatmt_strt_dt,
+    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
+           c.clnt_no, c.treatmt_strt_dt,
            MIN(a.app_dt) AS first_app_dt
     FROM cohort c
     INNER JOIN applications a
         ON  a.clnt_no = c.clnt_no
         AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
-    GROUP BY 1,2,3,4,5
+    GROUP BY 1,2,3,4,5,6
 ),
 
 success_daily AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag,
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
            date_diff('day', treatmt_strt_dt, first_app_dt) AS vintage_day,
            COUNT(DISTINCT clnt_no) AS responders
     FROM success_events
     WHERE date_diff('day', treatmt_strt_dt, first_app_dt) BETWEEN 0 AND 60
-    GROUP BY 1,2,3,4
+    GROUP BY 1,2,3,4,5
 ),
 
 -- ── Spine + base + grain ──────────────────────────────────────────────────────
 spine AS (
-    SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, v.vintage_day,
-           p.total_population, p.mobile_population
+    SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
+           v.vintage_day, p.total_population, p.mobile_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
 
 base AS (
     SELECT
-        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.vintage_day,
+        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population, s.mobile_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
@@ -616,11 +600,13 @@ base AS (
         ON  e.cohort_month      = s.cohort_month
         AND e.rpt_grp_cd        = s.rpt_grp_cd
         AND e.test_control_flag = s.test_control_flag
+        AND e.cohort_arm        = s.cohort_arm
         AND e.vintage_day       = s.vintage_day
     LEFT JOIN success_daily r
         ON  r.cohort_month      = s.cohort_month
         AND r.rpt_grp_cd        = s.rpt_grp_cd
         AND r.test_control_flag = s.test_control_flag
+        AND r.cohort_arm        = s.cohort_arm
         AND r.vintage_day       = s.vintage_day
 ),
 
@@ -629,7 +615,7 @@ final_grain AS (
         cohort_month                   AS cohort,
         CAST('ALL'     AS VARCHAR)     AS segment,
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
-        test_control_flag, vintage_day,
+        test_control_flag, cohort_arm, vintage_day,
         SUM(total_population)          AS total_population,
         SUM(mobile_population)         AS mobile_population,
         SUM(view_users)                AS view_users,
@@ -638,7 +624,7 @@ final_grain AS (
         SUM(leads_n)                   AS leads_n,
         SUM(responders)                AS responders
     FROM base
-    GROUP BY cohort_month, test_control_flag, vintage_day
+    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
@@ -646,7 +632,7 @@ final_grain AS (
         cohort_month                   AS cohort,
         'REPORT_GROUP'                 AS segment,
         rpt_grp_cd                     AS segment_level,
-        test_control_flag, vintage_day,
+        test_control_flag, cohort_arm, vintage_day,
         total_population, mobile_population,
         view_users, click_users, leads_p, leads_n, responders
     FROM base
@@ -654,7 +640,7 @@ final_grain AS (
 
 SELECT
     CAST('O2P' AS VARCHAR) AS campaign,
-    cohort, segment, segment_level, test_control_flag, vintage_day,
+    cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
     total_population, mobile_population,
     view_users, click_users, leads_p, leads_n, responders,
     SUM(view_users)  OVER w AS view_users_cum,
@@ -664,9 +650,9 @@ SELECT
     SUM(responders)  OVER w AS responders_cum
 FROM final_grain
 WINDOW w AS (
-    PARTITION BY cohort, segment, segment_level, test_control_flag
+    PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
     ORDER BY vintage_day
     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 )
-ORDER BY cohort, segment, segment_level, test_control_flag, vintage_day
+ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day
 ;
