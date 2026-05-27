@@ -19,7 +19,7 @@
 --   2. Add a primary_success CASE to the `success` CTE:
 --        CASE WHEN target_product IS NOT NULL AND target_product = latest_to_product
 --             THEN 1 ELSE 0 END AS primary_success
---   3. Add primary_responders to the summary:
+--   3. Add primary_responders to the seg_counts:
 --        COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS primary_responders
 -- ---------------------------------------------------------------------------
 -- Engine: Starburst (Trino) over EDW (DG6V01 / DDWV01 federated).
@@ -169,7 +169,7 @@ success AS (
         AND s.ar_id   = p.ar_id
 ),
 
-summary AS (
+seg_counts AS (
     -- ALL grain (overall CTU cohort)
     SELECT
         CAST('ALL'     AS VARCHAR(50)) AS segment,
@@ -196,6 +196,6 @@ SELECT
     segment_level,
     cohort_size,
     secondary_responders
-FROM summary
+FROM seg_counts
 ORDER BY segment, segment_level
 ;
