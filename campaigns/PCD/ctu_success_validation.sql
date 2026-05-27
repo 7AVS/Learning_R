@@ -45,12 +45,25 @@ pba_max_snap AS (
                       AND (SELECT MAX(treatmt_end_dt)  FROM cohort)
 ),
 
+-- Pre-filter pba_acct_lkup to the current snap_dt + consumer rows.
+-- Materialized once and joined twice (from/to) in switches_raw — cheaper than
+-- scanning the full lookup against two different key sets.
+pba_lkup_curr AS (
+    SELECT acct_typ_cd, acct_clss_cd, srvc_fee_opt_cd, prod_en_nm
+    FROM ddwv01.pba_acct_lkup
+    WHERE pda_typ_cd = 'C'
+      AND snap_dt    = (SELECT snap_dt FROM pba_max_snap)
+),
+
 -- Pre-campaign chequing product per (clnt, ar), snapshotted one day before treatment start.
 -- Product label derived from acct_typ + acct_cls + flt_pr_tm_trnsctn (chequing tiers).
+-- Also doubles as the (clnt_no, ar_id) source for switches_raw so we avoid a
+-- second range-scan of clnt_ar_reltn_dly across the treatment window.
 precamp_product AS (
     SELECT
         c.clnt_no,
         c.treatmt_strt_dt,
+        c.treatmt_end_dt,
         b.ar_id,
         b.prmry_clnt_ind,
         CASE
@@ -79,12 +92,14 @@ precamp_product AS (
 ),
 
 -- Account switch events during the treatment window, with product names looked up.
+-- ar_id mapping comes from precamp_product (already at treatmt_strt_dt - 1) — avoids
+-- the date-range scan on clnt_ar_reltn_dly that was blowing spool.
 -- Most-recent switch per (clnt, ar) via ROW_NUMBER (QUALIFY is Teradata-only).
 switches_raw AS (
     SELECT
-        c.clnt_no,
-        c.treatmt_strt_dt,
-        c.treatmt_end_dt,
+        p.clnt_no,
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt,
         sw.ar_id,
         sw.acct_sw_proc_dt                 AS switch_dt,
         sw.acct_sw_proc_tm                 AS switch_tm,
@@ -92,29 +107,21 @@ switches_raw AS (
         fl.prod_en_nm                      AS latest_from_product,
         tl.prod_en_nm                      AS latest_to_product,
         ROW_NUMBER() OVER (
-            PARTITION BY c.clnt_no, sw.ar_id
+            PARTITION BY p.clnt_no, sw.ar_id
             ORDER BY sw.acct_sw_proc_dt DESC, sw.acct_sw_proc_tm DESC
         ) AS rn
-    FROM cohort c
-    INNER JOIN ddwv01.clnt_ar_reltn_dly r
-        ON  r.clnt_no    = c.clnt_no
-        AND r.dw_srvc_id = 1
-        AND r.snap_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
+    FROM precamp_product p
     INNER JOIN ddwv01.dep_acct_sw_dly sw
-        ON  sw.ar_id            = r.ar_id
-        AND sw.acct_sw_proc_dt  = r.snap_dt
-    INNER JOIN ddwv01.pba_acct_lkup fl
-        ON  fl.acct_typ_cd       = sw.from_acct_typ
-        AND fl.acct_clss_cd      = sw.from_acct_clss
-        AND fl.srvc_fee_opt_cd   = sw.from_fee_opt
-        AND fl.pda_typ_cd        = 'C'
-        AND fl.snap_dt           = (SELECT snap_dt FROM pba_max_snap)
-    INNER JOIN ddwv01.pba_acct_lkup tl
-        ON  tl.acct_typ_cd       = sw.to_acct_typ
-        AND tl.acct_clss_cd      = sw.to_acct_clss
-        AND tl.srvc_fee_opt_cd   = sw.to_fee_opt
-        AND tl.pda_typ_cd        = 'C'
-        AND tl.snap_dt           = (SELECT snap_dt FROM pba_max_snap)
+        ON  sw.ar_id            = p.ar_id
+        AND sw.acct_sw_proc_dt BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
+    INNER JOIN pba_lkup_curr fl
+        ON  fl.acct_typ_cd     = sw.from_acct_typ
+        AND fl.acct_clss_cd    = sw.from_acct_clss
+        AND fl.srvc_fee_opt_cd = sw.from_fee_opt
+    INNER JOIN pba_lkup_curr tl
+        ON  tl.acct_typ_cd     = sw.to_acct_typ
+        AND tl.acct_clss_cd    = sw.to_acct_clss
+        AND tl.srvc_fee_opt_cd = sw.to_fee_opt
 ),
 
 switches AS (
