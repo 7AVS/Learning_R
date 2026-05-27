@@ -38,8 +38,7 @@ cohort_raw AS (
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND (trim(coalesce(tst_grp_cd, '')) LIKE '%T'
-           OR trim(coalesce(tst_grp_cd, '')) LIKE '%C')
+      AND trim(coalesce(tst_grp_cd, '')) LIKE '%T'
 ),
 
 cohort AS (
@@ -310,26 +309,23 @@ cohort_raw AS (
                 'PO2POT01','PO2POT03','PO2POT07',
                 'PO2PPR01','PO2PPR03','PO2PPR07'
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
-        END AS cohort_arm,
-        CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
+        END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND TRIM(tst_grp_cd) IN ('TG4','TG7')
+      AND TRIM(tst_grp_cd) = 'TG4'
 ),
 
 cohort AS (
-    SELECT clnt_no, treatmt_strt_dt,
-           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           MAX(is_mobile) AS is_mobile
+    SELECT DISTINCT
+        clnt_no, treatmt_strt_dt,
+        cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
     FROM cohort_raw
-    GROUP BY 1,2,3,4,5,6
 ),
 
 population AS (
     SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           COUNT(DISTINCT clnt_no)                                  AS total_population,
-           COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
+           COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3,4
 ),
@@ -373,7 +369,7 @@ engagement_daily AS (
 
 spine AS (
     SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
-           v.vintage_day, p.total_population, p.mobile_population
+           v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
@@ -381,7 +377,7 @@ spine AS (
 base AS (
     SELECT
         s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
-        s.total_population, s.mobile_population,
+        s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
         COALESCE(e.leads_p,     0) AS leads_p,
@@ -402,7 +398,6 @@ final_grain AS (
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
         SUM(total_population)          AS total_population,
-        SUM(mobile_population)         AS mobile_population,
         SUM(view_users)                AS view_users,
         SUM(click_users)               AS click_users,
         SUM(leads_p)                   AS leads_p,
@@ -417,7 +412,7 @@ final_grain AS (
         'REPORT_GROUP'                 AS segment,
         rpt_grp_cd                     AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
-        total_population, mobile_population,
+        total_population,
         view_users, click_users, leads_p, leads_n
     FROM base
 )
@@ -425,7 +420,7 @@ final_grain AS (
 SELECT
     CAST('O2P' AS VARCHAR) AS campaign,
     cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
-    total_population, mobile_population,
+    total_population,
     view_users, click_users, leads_p, leads_n,
     SUM(view_users)  OVER w AS view_users_cum,
     SUM(click_users) OVER w AS click_users_cum,
