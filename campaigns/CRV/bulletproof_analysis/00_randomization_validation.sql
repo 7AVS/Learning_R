@@ -87,7 +87,6 @@ crv_action_wave_agg AS (
     SELECT
         COUNT(*)                                                                  AS n_distinct_waves,
         AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                                  AS duration_mean,
-        PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1)        AS duration_p50,
         MIN(end_dt - strt_dt + 1)                                                 AS duration_min,
         MAX(end_dt - strt_dt + 1)                                                 AS duration_max
     FROM crv_action_waves
@@ -96,7 +95,6 @@ pcl_wave_agg AS (
     SELECT
         COUNT(*)                                                                  AS n_distinct_waves,
         AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                                  AS duration_mean,
-        PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1)        AS duration_p50,
         MIN(end_dt - strt_dt + 1)                                                 AS duration_min,
         MAX(end_dt - strt_dt + 1)                                                 AS duration_max
     FROM pcl_waves
@@ -122,7 +120,6 @@ SELECT
     CAST('CRV-Action' AS VARCHAR(20)) AS campaign,
     w.n_distinct_waves,
     w.duration_mean,
-    w.duration_p50,
     w.duration_min,
     w.duration_max,
     m.n_months_in_window,
@@ -138,7 +135,6 @@ SELECT
     CAST('PCL-mobile' AS VARCHAR(20)),
     pw.n_distinct_waves,
     pw.duration_mean,
-    pw.duration_p50,
     pw.duration_min,
     pw.duration_max,
     pm.n_months_in_window,
