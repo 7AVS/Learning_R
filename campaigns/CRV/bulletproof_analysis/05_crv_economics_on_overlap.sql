@@ -16,7 +16,38 @@ WITH pcl_universe AS (
       AND channel LIKE '%MB%'
 ),
 
--- One row per CRV decision (Action or Control); flag overlap with PCL-mobile window.
+-- CRV decisions in window (Action with IM channel filter, OR Control with no channel filter).
+crv_decisions_in_window AS (
+    SELECT
+        acct_no,
+        tactic_id,
+        offer_start_date,
+        offer_end_date,
+        action_control
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND (
+            (action_control = 'Action'  AND channels_deployed LIKE '%IM%')
+         OR  action_control = 'Control'
+          )
+),
+
+-- Subset of CRV decisions that overlap a PCL-mobile window (EXISTS in WHERE = allowed).
+crv_overlap_keys AS (
+    SELECT
+        c.acct_no,
+        c.tactic_id,
+        c.offer_start_date
+    FROM crv_decisions_in_window c
+    WHERE EXISTS (
+        SELECT 1 FROM pcl_universe p
+        WHERE p.acct_no          = c.acct_no
+          AND c.offer_start_date <= p.treatmt_end_dt
+          AND c.offer_end_date   >= p.treatmt_strt_dt
+    )
+),
+
+-- One row per CRV decision with overlap flag, then cohort assignment via CASE on IS NOT NULL.
 crv_decisions_classified AS (
     SELECT
         c.acct_no,
@@ -24,27 +55,16 @@ crv_decisions_classified AS (
         c.offer_start_date,
         CAST(c.offer_start_date - (EXTRACT(DAY FROM c.offer_start_date) - 1) AS VARCHAR(20)) AS crv_month,
         CASE
-            WHEN c.action_control = 'Action' AND EXISTS (
-                SELECT 1 FROM pcl_universe p
-                WHERE p.acct_no          = c.acct_no
-                  AND c.offer_start_date <= p.treatmt_end_dt
-                  AND c.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 'action_with_pcl_overlap'
-            WHEN c.action_control = 'Action' THEN 'action_no_pcl_overlap'
-            WHEN c.action_control = 'Control' AND EXISTS (
-                SELECT 1 FROM pcl_universe p
-                WHERE p.acct_no          = c.acct_no
-                  AND c.offer_start_date <= p.treatmt_end_dt
-                  AND c.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 'control_with_pcl_overlap'
+            WHEN c.action_control = 'Action'  AND ov.acct_no IS NOT NULL THEN 'action_with_pcl_overlap'
+            WHEN c.action_control = 'Action'                              THEN 'action_no_pcl_overlap'
+            WHEN c.action_control = 'Control' AND ov.acct_no IS NOT NULL THEN 'control_with_pcl_overlap'
             ELSE 'control_no_pcl_overlap'
         END                                                 AS crv_cohort
-    FROM dl_mr_prod.cards_crv_install_decis_resp c
-    WHERE c.offer_start_date >= DATE '2024-10-01'
-      AND (
-            (c.action_control = 'Action'  AND c.channels_deployed LIKE '%IM%')
-         OR  c.action_control = 'Control'
-          )
+    FROM crv_decisions_in_window c
+    LEFT JOIN crv_overlap_keys ov
+      ON ov.acct_no          = c.acct_no
+     AND ov.tactic_id        = c.tactic_id
+     AND ov.offer_start_date = c.offer_start_date
 ),
 
 -- CRV wave joined to installment transactions; cohort + month carried through.
