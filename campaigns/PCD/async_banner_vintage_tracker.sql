@@ -311,10 +311,10 @@ ORDER BY cohort_month, vintage_day
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 3 — O2P                                                              ║
--- ║ Eligibility: tactic_id IN (202609902P, 202612602P, 202613202P).            ║
--- ║ No test/control split available (channel-only deployment). test_control='ALL'. ║
--- ║ is_mobile derived from TACTIC_CELL_CD LIKE '%IMN%'.                        ║
--- ║ Emits ALL/OVERALL grain only.                                              ║
+-- ║ Eligibility: RPT_GRP_CD IN (9 PO2P reporting groups), tactic_id IN (3).    ║
+-- ║ Scope: TST_GRP_CD IN ('TG4','TG7'); TG4=TEST, TG7=CONTROL.                 ║
+-- ║ is_mobile derived from TACTIC_CELL_CD LIKE '%MB%' (not a filter).          ║
+-- ║ Holdout confirmed as designed 5.00% across all 9 reporting groups.         ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -327,27 +327,38 @@ cohort_raw AS (
         clnt_no,
         treatmt_strt_dt,
         date_trunc('month', treatmt_strt_dt) AS cohort_month,
-        CASE WHEN TRIM(tactic_cell_cd) LIKE '%IMN%' THEN 1 ELSE 0 END AS is_mobile
+        TRIM(rpt_grp_cd) AS rpt_grp_cd,
+        CASE
+            WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
+            WHEN TRIM(tst_grp_cd) = 'TG7' THEN 'CONTROL'
+        END AS test_control_flag,
+        CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('202609902P','202612602P','202613202P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
+      AND TRIM(rpt_grp_cd) IN (
+            'PO2PNL01','PO2PNL03','PO2PNL07',
+            'PO2POT01','PO2POT03','PO2POT07',
+            'PO2PPR01','PO2PPR03','PO2PPR07'
+          )
+      AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),
 
 cohort AS (
     SELECT
-        clnt_no, treatmt_strt_dt, cohort_month,
+        clnt_no, treatmt_strt_dt, cohort_month, rpt_grp_cd, test_control_flag,
         MAX(is_mobile) AS is_mobile
     FROM cohort_raw
-    GROUP BY 1,2,3
+    GROUP BY 1,2,3,4,5
 ),
 
 population AS (
     SELECT
-        cohort_month,
+        cohort_month, rpt_grp_cd, test_control_flag,
         COUNT(DISTINCT clnt_no)                                  AS total_population,
         COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
     FROM cohort
-    GROUP BY 1
+    GROUP BY 1,2,3
 ),
 
 events AS (
@@ -369,30 +380,31 @@ events AS (
 
 attributed AS (
     SELECT
-        c.cohort_month, c.clnt_no, e.event_name, e.lead_class,
+        c.cohort_month, c.rpt_grp_cd, c.test_control_flag,
+        c.clnt_no, e.event_name, e.lead_class,
         date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM cohort c
     INNER JOIN events e
         ON  e.clnt_no = c.clnt_no
         AND e.event_date BETWEEN c.treatmt_strt_dt
                              AND date_add('day', 60, c.treatmt_strt_dt)
-    WHERE c.is_mobile = 1
 ),
 
 daily_metrics AS (
     SELECT
-        cohort_month, vintage_day,
+        cohort_month, rpt_grp_cd, test_control_flag, vintage_day,
         COUNT(DISTINCT CASE WHEN lower(event_name) = 'view_promotion'   THEN clnt_no END) AS view_users,
         COUNT(DISTINCT CASE WHEN lower(event_name) = 'select_promotion' THEN clnt_no END) AS click_users,
         COUNT(DISTINCT CASE WHEN lead_class = 'click_p'                 THEN clnt_no END) AS leads_p,
         COUNT(DISTINCT CASE WHEN lead_class = 'click_n'                 THEN clnt_no END) AS leads_n
     FROM attributed
-    GROUP BY 1,2
+    GROUP BY 1,2,3,4
 ),
 
 spine AS (
     SELECT
-        p.cohort_month, v.vintage_day,
+        p.cohort_month, p.rpt_grp_cd, p.test_control_flag,
+        v.vintage_day,
         p.total_population, p.mobile_population
     FROM population p
     CROSS JOIN vintage_days v
@@ -400,7 +412,7 @@ spine AS (
 
 base AS (
     SELECT
-        s.cohort_month, s.vintage_day,
+        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.vintage_day,
         s.total_population, s.mobile_population,
         COALESCE(d.view_users,  0) AS view_users,
         COALESCE(d.click_users, 0) AS click_users,
@@ -408,28 +420,55 @@ base AS (
         COALESCE(d.leads_n,     0) AS leads_n
     FROM spine s
     LEFT JOIN daily_metrics d
-        ON  d.cohort_month = s.cohort_month
-        AND d.vintage_day  = s.vintage_day
+        ON  d.cohort_month      = s.cohort_month
+        AND d.rpt_grp_cd        = s.rpt_grp_cd
+        AND d.test_control_flag = s.test_control_flag
+        AND d.vintage_day       = s.vintage_day
+),
+
+final_grain AS (
+    -- ALL rollup across reporting groups
+    SELECT
+        cohort_month                   AS cohort,
+        CAST('ALL'     AS VARCHAR)     AS segment,
+        CAST('OVERALL' AS VARCHAR)     AS segment_level,
+        test_control_flag, vintage_day,
+        SUM(total_population)          AS total_population,
+        SUM(mobile_population)         AS mobile_population,
+        SUM(view_users)                AS view_users,
+        SUM(click_users)               AS click_users,
+        SUM(leads_p)                   AS leads_p,
+        SUM(leads_n)                   AS leads_n
+    FROM base
+    GROUP BY cohort_month, test_control_flag, vintage_day
+
+    UNION ALL
+
+    -- Per reporting group
+    SELECT
+        cohort_month                   AS cohort,
+        'REPORT_GROUP'                 AS segment,
+        rpt_grp_cd                     AS segment_level,
+        test_control_flag, vintage_day,
+        total_population, mobile_population,
+        view_users, click_users, leads_p, leads_n
+    FROM base
 )
 
 SELECT
-    CAST('O2P'     AS VARCHAR) AS campaign,
-    cohort_month               AS cohort,
-    CAST('ALL'     AS VARCHAR) AS segment,
-    CAST('OVERALL' AS VARCHAR) AS segment_level,
-    CAST('ALL'     AS VARCHAR) AS test_control_flag,
-    vintage_day,
+    CAST('O2P' AS VARCHAR) AS campaign,
+    cohort, segment, segment_level, test_control_flag, vintage_day,
     total_population, mobile_population,
     view_users, click_users, leads_p, leads_n,
     SUM(view_users)  OVER w AS view_users_cum,
     SUM(click_users) OVER w AS click_users_cum,
     SUM(leads_p)     OVER w AS leads_p_cum,
     SUM(leads_n)     OVER w AS leads_n_cum
-FROM base
+FROM final_grain
 WINDOW w AS (
-    PARTITION BY cohort_month
+    PARTITION BY cohort, segment, segment_level, test_control_flag
     ORDER BY vintage_day
     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 )
-ORDER BY cohort_month, vintage_day
+ORDER BY cohort, segment, segment_level, test_control_flag, vintage_day
 ;
