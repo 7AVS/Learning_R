@@ -12,75 +12,63 @@
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
--- ║ BLOCK 1 — PCD                                                              ║
+-- ║ BLOCK 1 — PCD (using curated dl_mr_prod.cards_pcd_ongoing_decis_resp)      ║
+-- ║ Same swap as the vintage success file. Adds responders_target alongside    ║
+-- ║ responders. cohort_arm from channel_deploy_mb; test_control_flag from      ║
+-- ║ act_ctl_seg (verify against tst_grp_cd if values look off).                ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
-cohort_raw AS (
-    SELECT
-        clnt_no,
-        visa_acct_no,
-        treatmt_strt_dt,
-        treatmt_end_dt,
-        CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
-        STRTOK(REGEXP_REPLACE(TRIM(tactic_decisn_vrb_info), ' +', ' '), ' ', 4) AS product_mnemonic,
-        CASE
-            WHEN TRIM(COALESCE(tst_grp_cd, '')) LIKE '%C' THEN 'CONTROL'
-            WHEN TRIM(COALESCE(tst_grp_cd, '')) LIKE '%T' THEN 'TEST'
-        END AS test_control_flag,
-        CASE
-            WHEN STRTOK(REGEXP_REPLACE(TRIM(tactic_decisn_vrb_info), ' +', ' '), ' ', 3)
-                IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
-            THEN 'ASYNC' ELSE 'NON_ASYNC'
-        END AS cohort_arm,
-        SUBSTR(tactic_decisn_vrb_info, 42, 3) AS from_product_code
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('2026111PCD','2026125PCD')
-      AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND (TRIM(COALESCE(tst_grp_cd, '')) LIKE '%T'
-           OR TRIM(COALESCE(tst_grp_cd, '')) LIKE '%C')
-),
-
 cohort AS (
-    SELECT DISTINCT
-        clnt_no, visa_acct_no, treatmt_strt_dt, treatmt_end_dt,
-        cohort_month, product_mnemonic, test_control_flag, cohort_arm, from_product_code
-    FROM cohort_raw
+    SELECT
+        acct_no, clnt_no, tactic_id_parent,
+        response_start, response_end,
+        CAST(response_start - (EXTRACT(DAY FROM response_start) - 1) AS DATE) AS cohort_month,
+        product_at_decision,
+        target_product,
+        new_product,
+        dt_prod_change,
+        responder_anyproduct,
+        responder_targetproduct,
+        CASE WHEN channel_deploy_mb = 'Y' THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm,
+        CASE
+            WHEN TRIM(act_ctl_seg) IN ('Control','C','CONTROL') THEN 'CONTROL'
+            WHEN TRIM(act_ctl_seg) IN ('Action','A','ACTION','Test','TEST') THEN 'TEST'
+        END AS test_control_flag
+    FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
+    WHERE tactic_id_parent IN ('2026111PCD','2026125PCD')
+      AND response_start >= DATE '2026-04-01'
 ),
 
 population AS (
-    SELECT cohort_month, product_mnemonic, test_control_flag, cohort_arm,
+    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
+    WHERE test_control_flag IS NOT NULL
     GROUP BY 1,2,3,4
 ),
 
 success_total AS (
-    SELECT
-        c.cohort_month, c.product_mnemonic, c.test_control_flag,
-        COUNT(DISTINCT c.clnt_no) AS responders
-    FROM cohort c
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO dfp
-        ON  dfp.acct_no = c.visa_acct_no
-        AND dfp.dt_record_ext BETWEEN c.treatmt_strt_dt - 1 AND c.treatmt_end_dt
-        AND dfp.visa_prod_cd <> c.from_product_code
-    WHERE c.cohort_arm = 'ASYNC'
-      AND dfp.dt_record_ext >= DATE '2026-04-01'
-      AND dfp.dt_record_ext <= DATE '2026-07-31'
-    GROUP BY 1,2,3
+    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
+           COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
+           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target
+    FROM cohort
+    WHERE test_control_flag IS NOT NULL
+    GROUP BY 1,2,3,4
 ),
 
 base AS (
     SELECT
-        p.cohort_month, p.product_mnemonic, p.test_control_flag, p.cohort_arm,
+        p.cohort_month, p.product_at_decision, p.test_control_flag, p.cohort_arm,
         p.total_population,
-        CASE WHEN p.cohort_arm = 'ASYNC' THEN COALESCE(r.responders, 0)
-             ELSE CAST(NULL AS BIGINT) END AS responders
+        COALESCE(r.responders,        0) AS responders,
+        COALESCE(r.responders_target, 0) AS responders_target
     FROM population p
     LEFT JOIN success_total r
-        ON  r.cohort_month      = p.cohort_month
-        AND r.product_mnemonic  = p.product_mnemonic
-        AND r.test_control_flag = p.test_control_flag
+        ON  r.cohort_month        = p.cohort_month
+        AND r.product_at_decision = p.product_at_decision
+        AND r.test_control_flag   = p.test_control_flag
+        AND r.cohort_arm          = p.cohort_arm
 )
 
 SELECT
@@ -89,8 +77,9 @@ SELECT
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
-    SUM(total_population) AS total_population,
-    SUM(responders)       AS responders
+    SUM(total_population)  AS total_population,
+    SUM(responders)        AS responders,
+    SUM(responders_target) AS responders_target
 FROM base
 GROUP BY cohort_month, test_control_flag, cohort_arm
 
@@ -100,10 +89,10 @@ SELECT
     CAST('PCD' AS VARCHAR(50))     AS campaign,
     cohort_month                   AS cohort,
     CAST('PRODUCT' AS VARCHAR(50)) AS segment,
-    product_mnemonic               AS segment_level,
+    product_at_decision            AS segment_level,
     test_control_flag, cohort_arm,
     total_population,
-    responders
+    responders, responders_target
 FROM base
 ORDER BY 2, 3, 4, 5, 6
 ;
