@@ -1,6 +1,7 @@
 -- Statistical significance test on the CRV-Action vs CRV-Control cannibalization gap in PCL response.
 -- Lead grain: one row per (CRV wave x account x arm) that overlaps a PCL-mobile deployment.
--- All statistical math forced to FLOAT explicitly to avoid Teradata DECIMAL precision overflow.
+-- Output: one row for 'overall' plus one row per CRV deployment month.
+-- All statistical math forced to FLOAT to avoid Teradata DECIMAL precision overflow.
 
 WITH pcl_universe AS (
     SELECT
@@ -16,7 +17,8 @@ crv_action AS (
     SELECT
         acct_no,
         offer_start_date,
-        offer_end_date
+        offer_end_date,
+        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -26,7 +28,8 @@ crv_control AS (
     SELECT
         acct_no,
         offer_start_date,
-        offer_end_date
+        offer_end_date,
+        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
@@ -35,50 +38,88 @@ overlap_action AS (
     SELECT
         c.acct_no,
         c.offer_start_date,
+        c.crv_month,
         MAX(p.responder_cli) AS pcl_responded
     FROM crv_action c
     INNER JOIN pcl_universe p
       ON p.acct_no           = c.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date
+    GROUP BY c.acct_no, c.offer_start_date, c.crv_month
 ),
 overlap_control AS (
     SELECT
         c.acct_no,
         c.offer_start_date,
+        c.crv_month,
         MAX(p.responder_cli) AS pcl_responded
     FROM crv_control c
     INNER JOIN pcl_universe p
       ON p.acct_no           = c.acct_no
      AND c.offer_start_date <= p.treatmt_end_dt
      AND c.offer_end_date   >= p.treatmt_strt_dt
-    GROUP BY c.acct_no, c.offer_start_date
+    GROUP BY c.acct_no, c.offer_start_date, c.crv_month
 ),
-agg AS (
+-- Aggregate at (slice) grain: 'overall' + each month
+agg_overall AS (
     SELECT
+        CAST('overall' AS VARCHAR(20)) AS slice,
         CAST(SUM(a.n_action)     AS FLOAT) AS n_action,
         CAST(SUM(a.resp_action)  AS FLOAT) AS resp_action,
         CAST(SUM(a.n_control)    AS FLOAT) AS n_control,
         CAST(SUM(a.resp_control) AS FLOAT) AS resp_control
     FROM (
         SELECT
-            CAST(COUNT(*)            AS FLOAT) AS n_action,
-            CAST(SUM(pcl_responded)  AS FLOAT) AS resp_action,
-            CAST(0                   AS FLOAT) AS n_control,
-            CAST(0                   AS FLOAT) AS resp_control
+            CAST(COUNT(*)           AS FLOAT) AS n_action,
+            CAST(SUM(pcl_responded) AS FLOAT) AS resp_action,
+            CAST(0                  AS FLOAT) AS n_control,
+            CAST(0                  AS FLOAT) AS resp_control
         FROM overlap_action
         UNION ALL
         SELECT
-            CAST(0                   AS FLOAT),
-            CAST(0                   AS FLOAT),
-            CAST(COUNT(*)            AS FLOAT),
-            CAST(SUM(pcl_responded)  AS FLOAT)
+            CAST(0                  AS FLOAT),
+            CAST(0                  AS FLOAT),
+            CAST(COUNT(*)           AS FLOAT),
+            CAST(SUM(pcl_responded) AS FLOAT)
         FROM overlap_control
     ) a
 ),
+agg_monthly AS (
+    SELECT
+        CAST(slice AS VARCHAR(20)) AS slice,
+        CAST(SUM(n_action)     AS FLOAT) AS n_action,
+        CAST(SUM(resp_action)  AS FLOAT) AS resp_action,
+        CAST(SUM(n_control)    AS FLOAT) AS n_control,
+        CAST(SUM(resp_control) AS FLOAT) AS resp_control
+    FROM (
+        SELECT
+            CAST(crv_month AS VARCHAR(20)) AS slice,
+            CAST(COUNT(*)           AS FLOAT) AS n_action,
+            CAST(SUM(pcl_responded) AS FLOAT) AS resp_action,
+            CAST(0                  AS FLOAT) AS n_control,
+            CAST(0                  AS FLOAT) AS resp_control
+        FROM overlap_action
+        GROUP BY crv_month
+        UNION ALL
+        SELECT
+            CAST(crv_month AS VARCHAR(20)),
+            CAST(0                  AS FLOAT),
+            CAST(0                  AS FLOAT),
+            CAST(COUNT(*)           AS FLOAT),
+            CAST(SUM(pcl_responded) AS FLOAT)
+        FROM overlap_control
+        GROUP BY crv_month
+    ) b
+    GROUP BY slice
+),
+agg AS (
+    SELECT * FROM agg_overall
+    UNION ALL
+    SELECT * FROM agg_monthly
+),
 stats AS (
     SELECT
+        slice,
         n_action,
         resp_action,
         n_control,
@@ -89,6 +130,7 @@ stats AS (
 ),
 se_calc AS (
     SELECT
+        slice,
         n_action, resp_action, n_control, resp_control,
         p_action, p_control,
         p_control - p_action AS gap,
@@ -99,6 +141,7 @@ se_calc AS (
     FROM stats
 )
 SELECT
+    slice,
     n_action,
     resp_action,
     n_control,
@@ -117,4 +160,5 @@ SELECT
         ELSE 0
     END AS significant_at_95
 FROM se_calc
+ORDER BY 1
 ;
