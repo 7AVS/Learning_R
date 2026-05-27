@@ -35,6 +35,18 @@ cohort AS (
       AND treatmt_strt_dt >= DATE '2026-04-01'
 ),
 
+-- Distinct snap_dts and overall window — explicit IN-list / BETWEEN predicates
+-- below let Teradata partition-prune the daily-snapshot tables instead of
+-- scanning the full archive against per-row join conditions.
+cohort_snap_dts AS (
+    SELECT DISTINCT (treatmt_strt_dt - 1) AS snap_dt FROM cohort
+),
+cohort_window AS (
+    SELECT MIN(treatmt_strt_dt) AS min_dt,
+           MAX(treatmt_end_dt)  AS max_dt
+    FROM cohort
+),
+
 -- Most recent applicable pba_acct_lkup snap_dt across the cohort's date span.
 -- Precomputed once to avoid a correlated subquery on the lookup join.
 pba_max_snap AS (
@@ -89,6 +101,9 @@ precamp_product AS (
         ON  d.ar_id      = b.ar_id
         AND d.snap_dt    = b.snap_dt
         AND d.dw_srvc_id = 1
+    WHERE b.snap_dt IN (SELECT snap_dt FROM cohort_snap_dts)
+      AND s.snap_dt IN (SELECT snap_dt FROM cohort_snap_dts)
+      AND d.snap_dt IN (SELECT snap_dt FROM cohort_snap_dts)
 ),
 
 -- Account switch events during the treatment window, with product names looked up.
@@ -122,6 +137,8 @@ switches_raw AS (
         ON  tl.acct_typ_cd     = sw.to_acct_typ
         AND tl.acct_clss_cd    = sw.to_acct_clss
         AND tl.srvc_fee_opt_cd = sw.to_fee_opt
+    WHERE sw.acct_sw_proc_dt BETWEEN (SELECT min_dt FROM cohort_window)
+                                 AND (SELECT max_dt FROM cohort_window)
 ),
 
 switches AS (
