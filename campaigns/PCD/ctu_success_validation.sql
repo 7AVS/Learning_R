@@ -33,6 +33,7 @@ cohort AS (
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id = '2026098CTU'
       AND treatmt_strt_dt >= DATE '2026-04-01'
+      AND SUBSTRING(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
 ),
 
 -- Distinct snap_dts and overall window — explicit IN-list / BETWEEN predicates
