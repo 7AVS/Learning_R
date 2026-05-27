@@ -1,6 +1,6 @@
--- When CRV and PCL deploy to the same account, which offer arrives first?
--- Lead grain: each (CRV wave × account × arm) joined to each overlapping PCL deployment.
--- Classify arrival order; aggregate Action vs Control PCL response counts by arrival bucket.
+-- Arrival-order analysis: for PCL-mobile leads with CRV overlap, which offer started first?
+-- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account. Split by Action vs Control overlap.
+-- For each PCL lead, find MIN overlapping CRV offer_start_date across all matching waves; compare to pcl treatmt_strt_dt.
 
 WITH pcl_universe AS (
     SELECT
@@ -16,8 +16,7 @@ crv_action AS (
     SELECT
         acct_no,
         offer_start_date AS crv_strt_dt,
-        offer_end_date   AS crv_end_dt,
-        CAST('Action' AS VARCHAR(10)) AS arm
+        offer_end_date   AS crv_end_dt
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -27,72 +26,109 @@ crv_control AS (
     SELECT
         acct_no,
         offer_start_date AS crv_strt_dt,
-        offer_end_date   AS crv_end_dt,
-        CAST('Control' AS VARCHAR(10)) AS arm
+        offer_end_date   AS crv_end_dt
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
-crv_all AS (
-    SELECT acct_no, crv_strt_dt, crv_end_dt, arm FROM crv_action
-    UNION ALL
-    SELECT acct_no, crv_strt_dt, crv_end_dt, arm FROM crv_control
-),
--- Each (CRV lead × PCL deployment) overlap — lead grain, no dedup
-overlap_classified AS (
+-- Per PCL lead: earliest CRV-Action offer_start_date across all overlapping Action waves.
+action_earliest AS (
     SELECT
         p.acct_no,
-        c.arm,
+        p.pcl_strt_dt,
         p.responder_cli,
-        CASE
-            WHEN c.crv_strt_dt < p.pcl_strt_dt THEN 'crv_first'
-            WHEN c.crv_strt_dt > p.pcl_strt_dt THEN 'pcl_first'
-            ELSE 'same_day'
-        END AS arrival_order
-    FROM crv_all c
-    INNER JOIN pcl_universe p
-      ON p.acct_no      = c.acct_no
-     AND c.crv_strt_dt <= p.pcl_end_dt
-     AND c.crv_end_dt  >= p.pcl_strt_dt
+        MIN(c.crv_strt_dt) AS earliest_crv_strt_dt
+    FROM pcl_universe p
+    INNER JOIN crv_action c
+      ON c.acct_no       = p.acct_no
+     AND c.crv_strt_dt  <= p.pcl_end_dt
+     AND c.crv_end_dt   >= p.pcl_strt_dt
+    GROUP BY p.acct_no, p.pcl_strt_dt, p.responder_cli
 ),
--- Arrival-order distribution by arm
+-- Per PCL lead: earliest CRV-Control offer_start_date across all overlapping Control waves.
+control_earliest AS (
+    SELECT
+        p.acct_no,
+        p.pcl_strt_dt,
+        p.responder_cli,
+        MIN(c.crv_strt_dt) AS earliest_crv_strt_dt
+    FROM pcl_universe p
+    INNER JOIN crv_control c
+      ON c.acct_no       = p.acct_no
+     AND c.crv_strt_dt  <= p.pcl_end_dt
+     AND c.crv_end_dt   >= p.pcl_strt_dt
+    GROUP BY p.acct_no, p.pcl_strt_dt, p.responder_cli
+),
+-- Classify arrival order per PCL lead (Action arm).
+action_classified AS (
+    SELECT
+        responder_cli,
+        CASE
+            WHEN earliest_crv_strt_dt < pcl_strt_dt THEN CAST('crv_first' AS VARCHAR(10))
+            WHEN earliest_crv_strt_dt > pcl_strt_dt THEN CAST('pcl_first' AS VARCHAR(10))
+            ELSE                                          CAST('same_day'  AS VARCHAR(10))
+        END AS arrival_order
+    FROM action_earliest
+),
+-- Classify arrival order per PCL lead (Control arm).
+control_classified AS (
+    SELECT
+        responder_cli,
+        CASE
+            WHEN earliest_crv_strt_dt < pcl_strt_dt THEN CAST('crv_first' AS VARCHAR(10))
+            WHEN earliest_crv_strt_dt > pcl_strt_dt THEN CAST('pcl_first' AS VARCHAR(10))
+            ELSE                                          CAST('same_day'  AS VARCHAR(10))
+        END AS arrival_order
+    FROM control_earliest
+),
+-- Arrival-order distribution by arm.
 arm_order_counts AS (
     SELECT
-        arm,
+        CAST('Action'  AS VARCHAR(10)) AS arm,
         arrival_order,
-        COUNT(*)           AS leads,
-        SUM(responder_cli) AS responders
-    FROM overlap_classified
-    GROUP BY arm, arrival_order
+        COUNT(*)                       AS n_leads,
+        SUM(responder_cli)             AS pcl_responders
+    FROM action_classified
+    GROUP BY arrival_order
+
+    UNION ALL
+
+    SELECT
+        CAST('Control' AS VARCHAR(10)),
+        arrival_order,
+        COUNT(*),
+        SUM(responder_cli)
+    FROM control_classified
+    GROUP BY arrival_order
 ),
--- Gap (control minus action) per arrival_order bucket
+-- Gap (Control minus Action) per arrival_order bucket.
 gap_by_order AS (
     SELECT
         arrival_order,
-        SUM(CASE WHEN arm = 'Action'  THEN leads       ELSE 0 END) AS n_action,
-        SUM(CASE WHEN arm = 'Control' THEN leads       ELSE 0 END) AS n_control,
-        SUM(CASE WHEN arm = 'Action'  THEN responders  ELSE 0 END) AS resp_action,
-        SUM(CASE WHEN arm = 'Control' THEN responders  ELSE 0 END) AS resp_control
+        SUM(CASE WHEN arm = 'Action'  THEN n_leads        ELSE 0 END) AS n_action,
+        SUM(CASE WHEN arm = 'Control' THEN n_leads        ELSE 0 END) AS n_control,
+        SUM(CASE WHEN arm = 'Action'  THEN pcl_responders ELSE 0 END) AS resp_action,
+        SUM(CASE WHEN arm = 'Control' THEN pcl_responders ELSE 0 END) AS resp_control
     FROM arm_order_counts
     GROUP BY arrival_order
 )
--- Section 1: counts by arm × arrival order
+-- Section 1: counts by arm x arrival order
 SELECT
-    CAST('arm_x_arrival_counts' AS VARCHAR(30))      AS section,
-    CAST(arm || '|' || arrival_order AS VARCHAR(30)) AS slice,
-    leads                                            AS n_action,
-    NULL                                             AS n_control,
-    responders                                       AS resp_action,
-    NULL                                             AS resp_control,
-    NULL                                             AS gap_control_minus_action
+    CAST('arm_x_arrival_counts' AS VARCHAR(30))                       AS section,
+    CAST(arm || '|' || arrival_order AS VARCHAR(30))                  AS slice,
+    n_leads                                                           AS n_action,
+    NULL                                                              AS n_control,
+    pcl_responders                                                    AS resp_action,
+    NULL                                                              AS resp_control,
+    NULL                                                              AS gap_control_minus_action
 FROM arm_order_counts
 
 UNION ALL
 
--- Section 2: gap per arrival order bucket
+-- Section 2: PCL-response gap per arrival order bucket
 SELECT
-    CAST('gap_by_arrival_order' AS VARCHAR(30))      AS section,
-    CAST(arrival_order AS VARCHAR(30))               AS slice,
+    CAST('gap_by_arrival_order' AS VARCHAR(30))                       AS section,
+    CAST(arrival_order AS VARCHAR(30))                                AS slice,
     n_action,
     n_control,
     resp_action,
