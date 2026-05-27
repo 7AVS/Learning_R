@@ -34,7 +34,7 @@ pcl_universe AS (
         responder_cli
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
-      AND channel LIKE '%IM%'
+      AND channel LIKE '%MB%'
 ),
 -- For each Action contact, flag whether it has a PCL overlap and the PCL response
 crv_with_pcl AS (

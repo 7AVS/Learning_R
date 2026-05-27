@@ -8,7 +8,7 @@ WITH pcl_universe AS (
         treatmt_end_dt
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
-      AND channel LIKE '%IM%'
+      AND channel LIKE '%MB%'
 ),
 crv_action_overlap AS (
     SELECT DISTINCT
