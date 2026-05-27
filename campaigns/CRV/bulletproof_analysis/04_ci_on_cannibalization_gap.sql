@@ -1,10 +1,10 @@
 -- Statistical significance test on the CRV-Action vs CRV-Control cannibalization gap in PCL response.
 -- PCL-LEAD CENTRIC (matching original Section E framing):
 --   Unit of observation = one PCL-mobile lead (one row per PCL deployment per account).
---   Treatment exposure   = does this PCL lead overlap with a CRV-Action / CRV-Control wave?
---   Outcome              = PCL responder_cli on this lead.
--- This matches the deck's denominator: PCL conversions among PCL leads.
+--   Overlap flag        = does this PCL lead overlap with a CRV-Action / CRV-Control wave?
+--   Outcome             = PCL responder_cli on this lead.
 -- Output: 'overall' row + one row per PCL deployment month.
+-- Spool-optimized: EXISTS semi-joins (no fan-out, no DISTINCT). Single pcl_universe scan.
 -- All statistical math forced to FLOAT to avoid Teradata DECIMAL precision overflow.
 
 WITH pcl_universe AS (
@@ -37,62 +37,49 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
--- For each PCL lead, flag whether it overlaps a CRV-Action wave or CRV-Control wave.
--- DISTINCT collapses multi-CRV-wave fan-out so each PCL lead is counted once.
-overlap_action_keys AS (
-    SELECT DISTINCT
-        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
-    FROM pcl_universe p
-    INNER JOIN crv_action c
-      ON c.acct_no           = p.acct_no
-     AND c.offer_start_date <= p.treatmt_end_dt
-     AND c.offer_end_date   >= p.treatmt_strt_dt
-),
-overlap_control_keys AS (
-    SELECT DISTINCT
-        p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
-    FROM pcl_universe p
-    INNER JOIN crv_control c
-      ON c.acct_no           = p.acct_no
-     AND c.offer_start_date <= p.treatmt_end_dt
-     AND c.offer_end_date   >= p.treatmt_strt_dt
-),
--- One row per PCL lead with overlap flags.
--- Flags are NOT mutually exclusive (a PCL lead can overlap with both Action and Control waves);
--- we count each side independently so the comparison is at PCL-lead grain on each arm.
+-- Single pass over pcl_universe; EXISTS semi-joins flag each PCL lead.
+-- No fan-out, no DISTINCT — minimal spool footprint.
 pcl_flagged AS (
     SELECT
         p.pcl_month,
         p.responder_cli,
-        CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS overlap_action_flag,
-        CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS overlap_control_flag
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM crv_action ca
+                WHERE ca.acct_no            = p.acct_no
+                  AND ca.offer_start_date  <= p.treatmt_end_dt
+                  AND ca.offer_end_date    >= p.treatmt_strt_dt
+            ) THEN 1 ELSE 0
+        END AS overlap_action_flag,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM crv_control cc
+                WHERE cc.acct_no            = p.acct_no
+                  AND cc.offer_start_date  <= p.treatmt_end_dt
+                  AND cc.offer_end_date    >= p.treatmt_strt_dt
+            ) THEN 1 ELSE 0
+        END AS overlap_control_flag
     FROM pcl_universe p
-    LEFT JOIN overlap_action_keys oa
-      ON oa.acct_no         = p.acct_no
-     AND oa.treatmt_strt_dt = p.treatmt_strt_dt
-     AND oa.treatmt_end_dt  = p.treatmt_end_dt
-    LEFT JOIN overlap_control_keys oc
-      ON oc.acct_no         = p.acct_no
-     AND oc.treatmt_strt_dt = p.treatmt_strt_dt
-     AND oc.treatmt_end_dt  = p.treatmt_end_dt
 ),
--- Aggregate: one row per (slice = 'overall' | pcl_month) with counts.
+-- Aggregate to overall + per-month with one pass over the flagged set.
 agg_overall AS (
     SELECT
-        CAST('overall' AS VARCHAR(20))                                                                 AS slice,
-        CAST(SUM(overlap_action_flag)                                                       AS FLOAT)  AS n_action,
-        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_action,
-        CAST(SUM(overlap_control_flag)                                                      AS FLOAT)  AS n_control,
-        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_control
+        CAST('overall' AS VARCHAR(20))                                                                AS slice,
+        CAST(SUM(overlap_action_flag)                                                       AS FLOAT) AS n_action,
+        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT) AS resp_action,
+        CAST(SUM(overlap_control_flag)                                                      AS FLOAT) AS n_control,
+        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT) AS resp_control
     FROM pcl_flagged
 ),
 agg_monthly AS (
     SELECT
-        CAST(pcl_month AS VARCHAR(20))                                                                 AS slice,
-        CAST(SUM(overlap_action_flag)                                                       AS FLOAT)  AS n_action,
-        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_action,
-        CAST(SUM(overlap_control_flag)                                                      AS FLOAT)  AS n_control,
-        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT)  AS resp_control
+        CAST(pcl_month AS VARCHAR(20))                                                                AS slice,
+        CAST(SUM(overlap_action_flag)                                                       AS FLOAT) AS n_action,
+        CAST(SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)          AS FLOAT) AS resp_action,
+        CAST(SUM(overlap_control_flag)                                                      AS FLOAT) AS n_control,
+        CAST(SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)          AS FLOAT) AS resp_control
     FROM pcl_flagged
     GROUP BY pcl_month
 ),
