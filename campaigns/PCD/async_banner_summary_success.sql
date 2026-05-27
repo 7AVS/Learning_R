@@ -30,6 +30,7 @@ cohort AS (
         dt_prod_change,
         responder_anyproduct,
         responder_targetproduct,
+        responder_upgrade_path,
         CASE
             WHEN strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
             THEN 'ASYNC' ELSE 'NON_ASYNC'
@@ -54,7 +55,8 @@ population AS (
 success_total AS (
     SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
-           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target
+           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
+           COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade
     FROM cohort
     WHERE test_control_flag IS NOT NULL
     GROUP BY 1,2,3,4
@@ -64,8 +66,9 @@ base AS (
     SELECT
         p.cohort_month, p.product_at_decision, p.test_control_flag, p.cohort_arm,
         p.total_population,
-        COALESCE(r.responders,        0) AS responders,
-        COALESCE(r.responders_target, 0) AS responders_target
+        COALESCE(r.responders,         0) AS responders,
+        COALESCE(r.responders_target,  0) AS responders_target,
+        COALESCE(r.responders_upgrade, 0) AS responders_upgrade
     FROM population p
     LEFT JOIN success_total r
         ON  r.cohort_month        = p.cohort_month
@@ -80,9 +83,10 @@ SELECT
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
-    SUM(total_population)  AS total_population,
-    SUM(responders)        AS responders,
-    SUM(responders_target) AS responders_target
+    SUM(total_population)   AS total_population,
+    SUM(responders)         AS responders,
+    SUM(responders_target)  AS responders_target,
+    SUM(responders_upgrade) AS responders_upgrade
 FROM base
 GROUP BY cohort_month, test_control_flag, cohort_arm
 
@@ -95,7 +99,7 @@ SELECT
     product_at_decision            AS segment_level,
     test_control_flag, cohort_arm,
     total_population,
-    responders, responders_target
+    responders, responders_target, responders_upgrade
 FROM base
 ORDER BY 2, 3, 4, 5, 6
 ;
