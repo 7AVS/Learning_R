@@ -48,10 +48,16 @@ cohort AS (
         dt_prod_change,
         responder_anyproduct,
         responder_targetproduct,
-        CASE WHEN channel_deploy_mb = 'Y' THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm,
+        -- cohort_arm from the campaign code (same allowlist as position-3 in tactic event)
         CASE
-            WHEN TRIM(act_ctl_seg) IN ('Control','C','CONTROL') THEN 'CONTROL'
-            WHEN TRIM(act_ctl_seg) IN ('Action','A','ACTION','Test','TEST') THEN 'TEST'
+            WHEN strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
+            THEN 'ASYNC' ELSE 'NON_ASYNC'
+        END AS cohort_arm,
+        -- test_control_flag overrides the curated team's act_ctl_seg derivation;
+        -- our rule = suffix on the raw test group code, same logic we use on tst_grp_cd.
+        CASE
+            WHEN TRIM(test_groups_period) LIKE '%C' THEN 'CONTROL'
+            WHEN TRIM(test_groups_period) LIKE '%T' THEN 'TEST'
         END AS test_control_flag
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent IN ('2026111PCD','2026125PCD')
