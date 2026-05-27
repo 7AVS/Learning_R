@@ -48,3 +48,148 @@ Open follow-ups:
 - Review Result B to understand WHEN the 10,279 crossovers happen
   (early vs late waves, specific eligibility-model change date?).
   Low priority — not blocking.
+
+
+================================================================
+Query 01 — Action/Control balance test
+Run date: 2026-05-26
+================================================================
+
+Per-month side-by-side: full CRV Action and Control lead counts vs
+overlap-with-PCL-mobile Action and Control lead counts.
+
+Action lead counts in 'full_crv' rows hit hundreds of thousands to
+~1.8M per month (e.g., 2024-10: 833,415; 2025-05: 1,877,642).
+
+Initial run came back with control_count = 0 everywhere — caused
+by Teradata CHAR truncation in UNION ALL when 'Action' (6 chars)
+unioned with 'Control' (7 chars) and the unified type forced to
+CHAR(6), truncating 'Control' to 'Contro'. Fixed by CAST(arm AS
+VARCHAR(10)) in all CTEs across queries.
+
+After fix: side-by-side layout works. Balance check pending
+detailed read once Andre filters/pivots in Excel.
+
+Interpretation framework:
+- Compare Action:Control ratio in full vs in overlap.
+- If ratios match → randomization preserved on the subset → 0.97pp
+  / 1.5pp gap is causal.
+- If ratios differ significantly → randomization breaking down at
+  the overlap stage → cannibalization estimate needs caveating.
+
+
+================================================================
+Query 02 — Overlap days distribution
+Run date: 2026-05-26
+================================================================
+
+Output filtered to 'overall' rows:
+
+subset          arm      n          mean   p10  p25  p50  p75  p90  min  max
+all_leads       Action   6,381,886  45.66  14   39   49   60   65   1    90
+all_leads       Control    331,214  45.41  14   38   49   60   65   1    90
+pcl_responders  Action   1,631,562  38.77  11   18   43   54   62   1    90
+pcl_responders  Control     89,802  38.58  11   18   43   54   62   1    90
+
+Two findings:
+
+1) Randomization holds on overlap days.
+   Action and Control distributions are essentially identical across
+   all percentiles. Overlap duration is not biased by arm.
+
+2) PCL responders have SHORTER overlap with CRV than the average lead.
+   - all_leads mean = 45.7 days; pcl_responders mean = 38.8 days
+   - all_leads p50 = 49 days; pcl_responders p50 = 43 days
+   - ~6-7 day shorter overlap among converters.
+
+   Consistent with the cannibalization mechanism: less CRV competition
+   (shorter overlap window) correlates with more PCL conversion.
+
+Side observation: max = 90 days across all rows. There's a 90-day
+cap somewhere (likely PCL or CRV deployment window). Doesn't affect
+the analysis but worth confirming.
+
+Open follow-ups:
+- Per-month detail not yet inspected — should confirm the
+  pcl_responder vs all_leads gap is stable month-to-month.
+
+
+================================================================
+Query 03 — Bidirectional overlap share (4 directions)
+Run date: 2026-05-26
+================================================================
+
+Overall rows:
+
+direction              total       overlap     pct
+crv_action_with_pcl    23,058,958  6,381,886   28%
+crv_control_with_pcl    1,218,758    331,214   27%
+pcl_with_crv_action     9,721,444  6,492,198   67%
+pcl_with_crv_control    9,721,444    337,853    3%
+
+Two findings:
+
+1) Randomization confidence check PASSED.
+   CRV-Action overlaps PCL at 28%. CRV-Control overlaps PCL at 27%.
+   1-point difference — Action and Control encounter PCL at
+   essentially the same rate. The Q04 gap is on comparable
+   populations.
+
+2) PCL footprint of CRV-Action is large.
+   67% of PCL-mobile leads are touched by a CRV-Action deployment
+   during their window. That's the magnitude story for the deck:
+   two-thirds of mobile PCL deployments compete with CRV.
+
+The 67% vs 3% asymmetry (CRV-Action vs CRV-Control share of PCL) is
+just population size: CRV-Action has ~19x more leads than CRV-Control
+(holdout is small). Not a randomization issue.
+
+
+================================================================
+Query 04 — CI on the cannibalization gap (overall + per-month)
+Run date: 2026-05-26
+================================================================
+
+Overall:
+n_action = 6,381,886    p_action = 25.6%
+n_control = 331,214     p_control = 27.1%
+gap = 1.5pp             se = 0.001
+95% CI = [1.4pp, 1.7pp]
+z = 19.55               significant_at_95 = 1
+
+Per-month: all ~20 months show:
+- gap positive (0.01 to 0.03)
+- significant_at_95 = 1
+- z-stat from 2.4 (Apr 2026) to 6.2 (Oct 2025)
+
+NO month reversed direction.
+
+Interpretation:
+- Cannibalization is statistically overwhelming (z = 19.55 overall,
+  p < 10^-50).
+- Direction is consistent across every month — robustness confirmed.
+- Magnitude varies 1pp-3pp by month but always positive.
+
+IMPORTANT — reconciliation with original deck:
+- Original deck (May 2025 deliverable): 0.97pp gap, p_action 15.02%,
+  p_control 15.99%. Window: May 2025 – Mar 2026. Filter: PCL on
+  '%IM%' (online banner, NOT mobile).
+- This bulletproof analysis: 1.5pp gap, p_action 25.6%, p_control
+  27.1%. Window: Oct 2024 – present. Filter: PCL on '%MB%' (mobile,
+  correct surface for the CRV-mobile-banner comparison).
+
+THE TWO NUMBERS DON'T HAVE TO MATCH — they're different windows on
+different audiences. Both confirm the SAME DIRECTION (Action < Control
+on PCL conversion). The deck number remains the published reference
+for that specific window. The bulletproof 1.5pp is the wider-window,
+corrected-channel confirmation showing the story is even stronger on
+the actual mobile-on-mobile surface.
+
+How to read per-month rows going forward:
+- Same direction every month (Control > Action) → robustness ✓
+- Magnitude varies high/low → expected, note it, not a flag
+- Direction REVERSES (Action > Control) on any month → ⚠️ red flag,
+  investigate before defending the headline
+
+Open follow-ups:
+- None for the headline. Q04 is the bulletproof centerpiece.
