@@ -22,9 +22,7 @@ crv_decisions_classified AS (
         c.acct_no,
         c.tactic_id,
         c.offer_start_date,
-        CAST(
-            c.offer_start_date - (EXTRACT(DAY FROM c.offer_start_date) - 1) (FORMAT 'YYYY-MM-DD')
-        AS VARCHAR(20))                                     AS crv_month,
+        CAST(c.offer_start_date - (EXTRACT(DAY FROM c.offer_start_date) - 1) AS VARCHAR(20)) AS crv_month,
         CASE
             WHEN c.action_control = 'Action' AND EXISTS (
                 SELECT 1 FROM pcl_universe p
@@ -40,7 +38,7 @@ crv_decisions_classified AS (
                   AND c.offer_end_date   >= p.treatmt_strt_dt
             ) THEN 'control_with_pcl_overlap'
             ELSE 'control_no_pcl_overlap'
-        END                                                 AS cohort
+        END                                                 AS crv_cohort
     FROM dl_mr_prod.cards_crv_install_decis_resp c
     WHERE c.offer_start_date >= DATE '2024-10-01'
       AND (
@@ -52,7 +50,7 @@ crv_decisions_classified AS (
 -- CRV wave joined to installment transactions; cohort + month carried through.
 details AS (
     SELECT
-        w.cohort,
+        w.crv_cohort,
         w.crv_month,
         w.acct_no,
         w.tactic_id,
@@ -71,70 +69,70 @@ details AS (
 -- Computed separately for overall and per-month slices, then stacked.
 acct_agg_overall AS (
     SELECT
-        cohort,
+        crv_cohort,
         CAST('overall' AS VARCHAR(20))  AS slice_val,
         acct_no,
         COUNT(*)                        AS acct_txn_cnt,
         SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_total_principal
     FROM details
-    GROUP BY cohort, acct_no
+    GROUP BY crv_cohort, acct_no
 ),
 
 acct_agg_monthly AS (
     SELECT
-        cohort,
+        crv_cohort,
         crv_month                       AS slice_val,
         acct_no,
         COUNT(*)                        AS acct_txn_cnt,
         SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_total_principal
     FROM details
-    GROUP BY cohort, crv_month, acct_no
+    GROUP BY crv_cohort, crv_month, acct_no
 ),
 
--- Roll up to (cohort, slice) level for account-level metrics.
+-- Roll up to (crv_cohort, slice) level for account-level metrics.
 acct_rollup_overall AS (
     SELECT
-        cohort,
+        crv_cohort,
         slice_val,
         COUNT(DISTINCT tactic_id)           AS n_waves,
         COUNT(DISTINCT acct_no)             AS n_accounts,
         SUM(acct_txn_cnt)                   AS n_transactions,
         AVG(acct_total_principal)           AS mean_principal_per_acct
     FROM (
-        SELECT a.cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
+        SELECT a.crv_cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
                d2.tactic_id
         FROM acct_agg_overall a
         INNER JOIN (
-            SELECT DISTINCT cohort, acct_no, tactic_id FROM details
-        ) d2 ON d2.cohort = a.cohort AND d2.acct_no = a.acct_no
+            SELECT DISTINCT crv_cohort, acct_no, tactic_id FROM details
+        ) d2 ON d2.crv_cohort = a.crv_cohort AND d2.acct_no = a.acct_no
     ) x
-    GROUP BY cohort, slice_val
+    GROUP BY crv_cohort, slice_val
 ),
 
 acct_rollup_monthly AS (
     SELECT
-        cohort,
+        crv_cohort,
         slice_val,
         COUNT(DISTINCT tactic_id)           AS n_waves,
         COUNT(DISTINCT acct_no)             AS n_accounts,
         SUM(acct_txn_cnt)                   AS n_transactions,
         AVG(acct_total_principal)           AS mean_principal_per_acct
     FROM (
-        SELECT a.cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
+        SELECT a.crv_cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
                d2.tactic_id
         FROM acct_agg_monthly a
         INNER JOIN (
-            SELECT DISTINCT cohort, crv_month, acct_no, tactic_id FROM details
-        ) d2 ON d2.cohort   = a.cohort
-             AND d2.crv_month = a.slice_val
-             AND d2.acct_no   = a.acct_no
+            SELECT DISTINCT crv_cohort, crv_month, acct_no, tactic_id FROM details
+        ) d2 ON d2.crv_cohort = a.crv_cohort
+             AND d2.crv_month  = a.slice_val
+             AND d2.acct_no    = a.acct_no
     ) x
-    GROUP BY cohort, slice_val
+    GROUP BY crv_cohort, slice_val
 )
 
--- Overall rows (one per cohort)
+-- Overall rows (one per crv_cohort)
 SELECT
-    ar.cohort                                                                   AS cohort,
+    ar.crv_cohort                                                               AS crv_cohort,
     ar.slice_val                                                                AS slice,
     ar.n_waves,
     ar.n_accounts,
@@ -158,9 +156,9 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT)) AS p90_fee_pct
 FROM acct_rollup_overall ar
 INNER JOIN details d
-  ON d.cohort = ar.cohort
+  ON d.crv_cohort = ar.crv_cohort
 GROUP BY
-    ar.cohort,
+    ar.crv_cohort,
     ar.slice_val,
     ar.n_waves,
     ar.n_accounts,
@@ -169,9 +167,9 @@ GROUP BY
 
 UNION ALL
 
--- Per-month rows (one per cohort × deployment month)
+-- Per-month rows (one per crv_cohort × deployment month)
 SELECT
-    ar.cohort,
+    ar.crv_cohort,
     ar.slice_val,
     ar.n_waves,
     ar.n_accounts,
@@ -195,10 +193,10 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT))
 FROM acct_rollup_monthly ar
 INNER JOIN details d
-  ON d.cohort    = ar.cohort
- AND d.crv_month = ar.slice_val
+  ON d.crv_cohort = ar.crv_cohort
+ AND d.crv_month  = ar.slice_val
 GROUP BY
-    ar.cohort,
+    ar.crv_cohort,
     ar.slice_val,
     ar.n_waves,
     ar.n_accounts,
