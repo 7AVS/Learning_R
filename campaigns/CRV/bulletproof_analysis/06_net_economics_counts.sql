@@ -11,7 +11,7 @@ WITH pcl_universe AS (
         treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_deploy_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
-      AND channel LIKE '%IM%'
+      AND channel LIKE '%MB%'
 ),
 crv_action AS (
     SELECT

@@ -5,6 +5,11 @@ Cohort window: offer_start_date / treatmt_strt_dt >= 2024-10-01
                (May 2026 partial-month excluded at reporting, not in SQL)
 Methodology:   Lead grain — each (acct_no x CRV wave x arm) is its own
                observation. No dedup across waves.
+Channel filter (CRITICAL — different per campaign — corrected 2026-05-26):
+   CRV side: channels_deployed LIKE '%IM%' (CRV's mobile deployment
+             stamps IM in data — backend labeling quirk)
+   PCL side: channel LIKE '%MB%' (PCL labels mobile correctly as MB)
+   Both target the mobile banner surface. NEVER filter PCL with %IM%.
 Queries:       00_randomization_validation.sql through
                11_throttling_scenarios.sql in this folder.
 
