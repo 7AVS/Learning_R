@@ -1,17 +1,18 @@
 -- Async banner vintage tracker — PCD, CTU, O2P
 -- Engine: Starburst (Trino).
 -- Three independent blocks. Each one builds its own vintage curve and can be run on its own.
--- Output schema is consistent across blocks so they can be unioned downstream if desired:
+-- Output schema (PCD):
 --   campaign | cohort | segment | segment_level | test_control_flag | vintage_day
---   | total_population | mobile_population | view_users | click_users | leads_p | leads_n
+--   | total_population | view_users | click_users | leads_p | leads_n
 --   | view_users_cum  | click_users_cum  | leads_p_cum | leads_n_cum
+-- CTU and O2P additionally carry mobile_population (channel-served count).
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 1 — PCD                                                              ║
 -- ║ Eligibility: position-3 of tactic_decisn_vrb_info IN (async allowlist).    ║
 -- ║ Scope: tst_grp_cd ends in T or C (in experimental design).                 ║
--- ║ is_mobile derived from last-token LIKE '%MB%' (not a filter).              ║
+-- ║ Channel intentionally NOT used — campaign-ID + arm fully define the cohort. ║
 -- ║ Emits ALL rollup + PRODUCT-level grain.                                    ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
@@ -29,14 +30,7 @@ cohort_raw AS (
         CASE
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%C' THEN 'CONTROL'
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%T' THEN 'TEST'
-        END AS test_control_flag,
-        CASE
-            WHEN element_at(
-                   split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '),
-                   cardinality(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '))
-                 ) LIKE '%MB%'
-            THEN 1 ELSE 0
-        END AS is_mobile
+        END AS test_control_flag
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
@@ -47,18 +41,15 @@ cohort_raw AS (
 ),
 
 cohort AS (
-    SELECT
-        clnt_no, treatmt_strt_dt, cohort_month, product_mnemonic, test_control_flag,
-        MAX(is_mobile) AS is_mobile
+    SELECT DISTINCT
+        clnt_no, treatmt_strt_dt, cohort_month, product_mnemonic, test_control_flag
     FROM cohort_raw
-    GROUP BY 1,2,3,4,5
 ),
 
 population AS (
     SELECT
         cohort_month, product_mnemonic, test_control_flag,
-        COUNT(DISTINCT clnt_no)                                  AS total_population,
-        COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
+        COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3
 ),
@@ -113,7 +104,7 @@ spine AS (
     SELECT
         p.cohort_month, p.product_mnemonic, p.test_control_flag,
         v.vintage_day,
-        p.total_population, p.mobile_population
+        p.total_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
@@ -121,7 +112,7 @@ spine AS (
 base AS (
     SELECT
         s.cohort_month, s.product_mnemonic, s.test_control_flag, s.vintage_day,
-        s.total_population, s.mobile_population,
+        s.total_population,
         COALESCE(d.view_users,  0) AS view_users,
         COALESCE(d.click_users, 0) AS click_users,
         COALESCE(d.leads_p,     0) AS leads_p,
@@ -142,7 +133,6 @@ final_grain AS (
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
         test_control_flag, vintage_day,
         SUM(total_population)          AS total_population,
-        SUM(mobile_population)         AS mobile_population,
         SUM(view_users)                AS view_users,
         SUM(click_users)               AS click_users,
         SUM(leads_p)                   AS leads_p,
@@ -158,7 +148,7 @@ final_grain AS (
         'PRODUCT'                      AS segment,
         product_mnemonic               AS segment_level,
         test_control_flag, vintage_day,
-        total_population, mobile_population,
+        total_population,
         view_users, click_users, leads_p, leads_n
     FROM base
 )
@@ -166,7 +156,7 @@ final_grain AS (
 SELECT
     CAST('PCD' AS VARCHAR) AS campaign,
     cohort, segment, segment_level, test_control_flag, vintage_day,
-    total_population, mobile_population,
+    total_population,
     view_users, click_users, leads_p, leads_n,
     SUM(view_users)  OVER w AS view_users_cum,
     SUM(click_users) OVER w AS click_users_cum,
