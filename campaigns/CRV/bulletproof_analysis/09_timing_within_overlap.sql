@@ -101,5 +101,5 @@ SELECT
         - CAST(resp_action  AS DECIMAL(12,6)) / NULLIF(n_action,  0) AS gap_control_minus_action
 FROM gap_by_order
 
-ORDER BY section, slice
+ORDER BY 1, 2
 ;

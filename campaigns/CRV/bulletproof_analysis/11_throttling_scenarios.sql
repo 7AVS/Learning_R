@@ -80,5 +80,5 @@ SELECT
 FROM crv_with_pcl
 CROSS JOIN caps
 GROUP BY caps.cap_n
-ORDER BY caps.cap_n
+ORDER BY 1
 ;

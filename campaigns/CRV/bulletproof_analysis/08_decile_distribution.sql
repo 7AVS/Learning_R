@@ -71,5 +71,5 @@ SELECT
     COUNT(*) AS n_leads
 FROM labeled
 GROUP BY cohort, decile, new_decile
-ORDER BY cohort, decile, new_decile
+ORDER BY 1, 2, 3
 ;

@@ -68,5 +68,5 @@ SELECT
 FROM overlap_timed
 GROUP BY crv_month
 
-ORDER BY crv_month
+ORDER BY 1
 ;

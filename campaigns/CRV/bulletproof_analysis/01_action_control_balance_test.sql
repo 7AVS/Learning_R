@@ -83,5 +83,5 @@ SELECT
     control_count
 FROM overlap_monthly
 
-ORDER BY cohort, deploy_month
+ORDER BY 1, 2
 ;

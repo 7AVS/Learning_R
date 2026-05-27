@@ -132,5 +132,5 @@ SELECT
 FROM details
 GROUP BY crv_month
 
-ORDER BY crv_month, instl_txn_actvat_chnl
+ORDER BY 1, 2
 ;
