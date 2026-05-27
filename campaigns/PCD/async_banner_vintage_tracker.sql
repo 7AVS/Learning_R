@@ -12,10 +12,11 @@ vintage_days AS (
 ),
 
 -- ── Recipient cohorts ──────────────────────────────────────────────────────────
--- One row per (campaign, tactic_id, clnt_no, treatmt_strt_dt) raw event;
--- is_mobile flags whether this client was a mobile-channel recipient.
--- Note: PCD restricts to mobile recipients in the source filter (preserved from
--- original), so PCD total_pop == mobile_pop. CTU/O2P keep them separate.
+-- One row per (campaign, clnt_no, treatmt_strt_dt) raw event.
+-- is_mobile flags whether this client was actually served via mobile (last-token MB);
+-- this is a flag on action recipients, not an eligibility filter — controls keep is_mobile=0.
+-- PCD restricts the source to async-eligible (position-3 allowlist) AND in-design (tst_grp_cd
+-- ends in T or C), so both arms are present and OTHER recipients are excluded.
 
 cohort_raw AS (
     -- CTU
@@ -47,7 +48,7 @@ cohort_raw AS (
 
     UNION ALL
 
-    -- PCD  (source filter restricts to mobile recipients only — preserved from original)
+    -- PCD  (eligibility = async allowlist at position 3; experimental scope = tst_grp_cd ends in T/C)
     SELECT
         'PCD',
         clnt_no,
@@ -59,16 +60,20 @@ cohort_raw AS (
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%T' THEN 'TEST'
             ELSE 'OTHER'
         END                                                                        AS test_control_flag,
-        1                                                                          AS is_mobile
+        CASE
+            WHEN element_at(
+                   split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '),
+                   cardinality(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '))
+                 ) LIKE '%MB%'
+            THEN 1 ELSE 0
+        END                                                                        AS is_mobile
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 3)
           IN ('MBC8YU53','MA02BC35','MA02ED01','MFB8L6X6','MF88UJPY','MF89BX97','MF89HY07')
-      AND element_at(
-            split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '),
-            cardinality(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '))
-          ) LIKE '%MB%'
+      AND (trim(coalesce(tst_grp_cd, '')) LIKE '%T'
+           OR trim(coalesce(tst_grp_cd, '')) LIKE '%C')
 ),
 
 -- One row per (campaign, clnt_no, treatmt_strt_dt) within the cohort key
