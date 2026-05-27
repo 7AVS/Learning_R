@@ -33,7 +33,7 @@ cohort AS (
         visa_acct_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 4) AS product_mnemonic,
+        strtok(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' ',4) AS product_mnemonic,
         CASE
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%C' THEN 'CONTROL'
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%T' THEN 'TEST'
@@ -42,7 +42,7 @@ cohort AS (
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026111PCD','2026125PCD')
       AND treatmt_strt_dt >= DATE '2026-04-01'
-      AND element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 3)
+      AND strtok(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' ',3)
           IN ('MBC8YU53','MA02BC35','MA02ED01','MFB8L6X6','MF88UJPY','MF89BX97','MF89HY07')
       AND (trim(coalesce(tst_grp_cd, '')) LIKE '%T'
            OR trim(coalesce(tst_grp_cd, '')) LIKE '%C')
@@ -63,7 +63,7 @@ product_changes AS (
     FROM cohort c
     INNER JOIN D3CV12A.dly_full_portfolio dfp
         ON  dfp.acct_no       = c.visa_acct_no
-        AND dfp.dt_record_ext BETWEEN date_add('day', -1, c.treatmt_strt_dt)
+        AND dfp.dt_record_ext BETWEEN c.treatmt_strt_dt - 1
                                   AND c.treatmt_end_dt
         AND dfp.visa_prod_cd <> c.from_product_code
 ),
