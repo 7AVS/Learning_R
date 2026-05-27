@@ -1,5 +1,5 @@
 -- Overlap-days distribution for CRV-Action and CRV-Control leads that overlap PCL-mobile.
--- Lead grain: each (CRV wave × account) is one observation. No dedup.
+-- Lead grain: each (CRV wave x account) is one observation. No dedup.
 
 WITH pcl_universe AS (
     SELECT
@@ -16,7 +16,7 @@ crv_action AS (
         offer_start_date AS crv_strt_dt,
         offer_end_date   AS crv_end_dt,
         offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month,
-        'Action' AS arm
+        CAST('Action' AS VARCHAR(10)) AS arm
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
@@ -28,7 +28,7 @@ crv_control AS (
         offer_start_date AS crv_strt_dt,
         offer_end_date   AS crv_end_dt,
         offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS crv_month,
-        'Control' AS arm
+        CAST('Control' AS VARCHAR(10)) AS arm
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
@@ -59,8 +59,8 @@ overlap_raw AS (
 )
 -- Overall distribution — Action
 SELECT
-    'Action'                                                           AS arm,
-    'overall'                                                          AS crv_month,
+    CAST('Action'  AS VARCHAR(10))                                     AS arm,
+    CAST('overall' AS VARCHAR(20))                                     AS crv_month,
     COUNT(*)                                                           AS n,
     AVG(CAST(overlap_days AS DECIMAL(12,4)))                           AS mean_days,
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days)         AS p10,
@@ -77,7 +77,7 @@ UNION ALL
 
 -- Per CRV deployment month — Action
 SELECT
-    'Action'                                                           AS arm,
+    CAST('Action' AS VARCHAR(10))                                      AS arm,
     CAST(crv_month AS VARCHAR(20))                                     AS crv_month,
     COUNT(*)                                                           AS n,
     AVG(CAST(overlap_days AS DECIMAL(12,4)))                           AS mean_days,
@@ -96,8 +96,8 @@ UNION ALL
 
 -- Overall distribution — Control
 SELECT
-    'Control'                                                          AS arm,
-    'overall'                                                          AS crv_month,
+    CAST('Control' AS VARCHAR(10))                                     AS arm,
+    CAST('overall' AS VARCHAR(20))                                     AS crv_month,
     COUNT(*)                                                           AS n,
     AVG(CAST(overlap_days AS DECIMAL(12,4)))                           AS mean_days,
     PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY overlap_days)         AS p10,
@@ -114,7 +114,7 @@ UNION ALL
 
 -- Per CRV deployment month — Control
 SELECT
-    'Control'                                                          AS arm,
+    CAST('Control' AS VARCHAR(10))                                     AS arm,
     CAST(crv_month AS VARCHAR(20))                                     AS crv_month,
     COUNT(*)                                                           AS n,
     AVG(CAST(overlap_days AS DECIMAL(12,4)))                           AS mean_days,
