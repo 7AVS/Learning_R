@@ -105,7 +105,7 @@ SELECT
     total_population,
     responders
 FROM base
-ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm
+ORDER BY 2, 3, 4, 5, 6
 ;
 
 
@@ -233,7 +233,7 @@ FROM population p
 LEFT JOIN success_total r
     ON  r.cohort_month = p.cohort_month
     AND r.cohort_arm   = p.cohort_arm
-ORDER BY cohort, cohort_arm
+ORDER BY 2, 6
 ;
 
 
@@ -351,5 +351,5 @@ SELECT
     total_population, mobile_population,
     responders
 FROM base
-ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm
+ORDER BY 2, 3, 4, 5, 6
 ;

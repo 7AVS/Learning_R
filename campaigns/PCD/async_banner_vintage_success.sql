@@ -19,11 +19,11 @@
 -- ║ ASYNC responders only — NON_ASYNC responders are NULL.                     ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
-WITH RECURSIVE
-vintage_days (vintage_day) AS (
-    SELECT 0 AS vintage_day
-    UNION ALL
-    SELECT vintage_day + 1 FROM vintage_days WHERE vintage_day < 60
+WITH
+vintage_days AS (
+    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    FROM sys_calendar.calendar
+    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
 ),
 
 cohort_raw AS (
@@ -155,11 +155,11 @@ ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_
 -- ║ Both arms get a responder count (precamp_product chain).                   ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
-WITH RECURSIVE
-vintage_days (vintage_day) AS (
-    SELECT 0 AS vintage_day
-    UNION ALL
-    SELECT vintage_day + 1 FROM vintage_days WHERE vintage_day < 60
+WITH
+vintage_days AS (
+    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    FROM sys_calendar.calendar
+    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
 ),
 
 cohort_raw AS (
@@ -328,11 +328,11 @@ ORDER BY cohort_month, cohort_arm, vintage_day
 -- ║ Both arms get a responder count (CR_APP chain).                            ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
-WITH RECURSIVE
-vintage_days (vintage_day) AS (
-    SELECT 0 AS vintage_day
-    UNION ALL
-    SELECT vintage_day + 1 FROM vintage_days WHERE vintage_day < 60
+WITH
+vintage_days AS (
+    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    FROM sys_calendar.calendar
+    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
 ),
 
 cohort_raw AS (
