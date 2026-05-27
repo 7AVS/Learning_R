@@ -48,6 +48,7 @@ cohort AS (
         dt_prod_change,
         responder_anyproduct,
         responder_targetproduct,
+        responder_upgrade_path,
         -- cohort_arm from the campaign code (same allowlist as position-3 in tactic event)
         CASE
             WHEN strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
@@ -76,7 +77,8 @@ success_daily AS (
     SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
            (dt_prod_change - response_start) AS vintage_day,
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
-           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target
+           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
+           COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade
     FROM cohort
     WHERE test_control_flag IS NOT NULL
       AND dt_prod_change IS NOT NULL
@@ -95,8 +97,9 @@ base AS (
     SELECT
         s.cohort_month, s.product_at_decision, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
-        COALESCE(r.responders,        0) AS responders,
-        COALESCE(r.responders_target, 0) AS responders_target
+        COALESCE(r.responders,         0) AS responders,
+        COALESCE(r.responders_target,  0) AS responders_target,
+        COALESCE(r.responders_upgrade, 0) AS responders_upgrade
     FROM spine s
     LEFT JOIN success_daily r
         ON  r.cohort_month         = s.cohort_month
@@ -114,7 +117,8 @@ final_grain AS (
         test_control_flag, cohort_arm, vintage_day,
         SUM(total_population)                 AS total_population,
         SUM(responders)                       AS responders,
-        SUM(responders_target)                AS responders_target
+        SUM(responders_target)                AS responders_target,
+        SUM(responders_upgrade)               AS responders_upgrade
     FROM base
     GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
 
@@ -126,7 +130,7 @@ final_grain AS (
         product_at_decision                   AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
         total_population,
-        responders, responders_target
+        responders, responders_target, responders_upgrade
     FROM base
 )
 
@@ -134,7 +138,7 @@ SELECT
     CAST('PCD' AS VARCHAR(50)) AS campaign,
     cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
     total_population,
-    responders, responders_target,
+    responders, responders_target, responders_upgrade,
     SUM(responders) OVER (
         PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
         ORDER BY vintage_day
@@ -144,7 +148,12 @@ SELECT
         PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS responders_target_cum
+    ) AS responders_target_cum,
+    SUM(responders_upgrade) OVER (
+        PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
+        ORDER BY vintage_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS responders_upgrade_cum
 FROM final_grain
 ORDER BY 2, 3, 4, 5, 6, 7
 ;
