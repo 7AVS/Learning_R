@@ -121,12 +121,35 @@ engagement_daily AS (
 ),
 
 -- ── Success: first product change in dly_full_portfolio (single scan) ─────────
+-- Pre-aggregate cohort to the visa_acct_no grain with min/max window dates,
+-- then pre-filter DFP via an inner join on cohort_accts. This pushes a tight
+-- acct_no + date range predicate down to the DFP scan instead of relying on
+-- the per-row BETWEEN inside the success join, which Trino doesn't always
+-- prune aggressively and which was blowing spool.
+cohort_accts AS (
+    SELECT
+        visa_acct_no,
+        MIN(date_add('day', -1, treatmt_strt_dt)) AS scan_min,
+        MAX(treatmt_end_dt)                       AS scan_max
+    FROM cohort
+    WHERE visa_acct_no IS NOT NULL
+    GROUP BY visa_acct_no
+),
+
+dfp_for_cohort AS (
+    SELECT dfp.acct_no, dfp.dt_record_ext, dfp.visa_prod_cd
+    FROM D3CV12A.dly_full_portfolio dfp
+    INNER JOIN cohort_accts a
+        ON  a.visa_acct_no = dfp.acct_no
+        AND dfp.dt_record_ext BETWEEN a.scan_min AND a.scan_max
+),
+
 success_events AS (
     SELECT
         c.cohort_month, c.product_mnemonic, c.test_control_flag, c.clnt_no, c.treatmt_strt_dt,
         MIN(dfp.dt_record_ext) AS first_change_dt
     FROM cohort c
-    INNER JOIN D3CV12A.dly_full_portfolio dfp
+    INNER JOIN dfp_for_cohort dfp
         ON  dfp.acct_no = c.visa_acct_no
         AND dfp.dt_record_ext BETWEEN date_add('day', -1, c.treatmt_strt_dt) AND c.treatmt_end_dt
         AND dfp.visa_prod_cd <> c.from_product_code
