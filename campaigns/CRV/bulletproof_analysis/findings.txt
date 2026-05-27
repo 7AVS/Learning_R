@@ -146,50 +146,60 @@ just population size: CRV-Action has ~19x more leads than CRV-Control
 
 
 ================================================================
-Query 04 — CI on the cannibalization gap (overall + per-month)
+Query 04 — CI on the cannibalization gap (PCL-LEAD CENTRIC)
 Run date: 2026-05-26
 ================================================================
 
-Overall:
-n_action = 6,381,886    p_action = 25.6%
-n_control = 331,214     p_control = 27.1%
-gap = 1.5pp             se = 0.001
-95% CI = [1.4pp, 1.7pp]
-z = 19.55               significant_at_95 = 1
+** Headline figure for the bulletproof analysis **
 
-Per-month: all ~20 months show:
-- gap positive (0.01 to 0.03)
-- significant_at_95 = 1
-- z-stat from 2.4 (Apr 2026) to 6.2 (Oct 2025)
+Overall (PCL-mobile, Oct 2024 – May 2026):
+n_action = 6,492,198    p_action = 16.15%
+n_control = 337,853     p_control = 17.23%
+gap = 1.08pp            se = 0.001
+95% CI = [0.9pp, 1.2pp]
+z = 16.23               significant_at_95 = 1
 
-NO month reversed direction.
+Per-month: 20 months reported.
+- Every single month: Control > Action (direction 100% consistent)
+- significant_at_95 = 1 on most months; 0 on a few smaller-sample
+  months (Nov 2024, Dec 2024, Feb 2025) — CI too wide there but
+  direction still positive
+- Range of monthly gaps: ~0.4pp to ~1.6pp
 
 Interpretation:
-- Cannibalization is statistically overwhelming (z = 19.55 overall,
-  p < 10^-50).
-- Direction is consistent across every month — robustness confirmed.
-- Magnitude varies 1pp-3pp by month but always positive.
+- Cannibalization is statistically overwhelming and directionally
+  consistent. Real and reproducible.
 
-IMPORTANT — reconciliation with original deck:
-- Original deck (May 2025 deliverable): 0.97pp gap, p_action 15.02%,
-  p_control 15.99%. Window: May 2025 – Mar 2026. Filter: PCL on
-  '%IM%' (online banner, NOT mobile).
-- This bulletproof analysis: 1.5pp gap, p_action 25.6%, p_control
-  27.1%. Window: Oct 2024 – present. Filter: PCL on '%MB%' (mobile,
-  correct surface for the CRV-mobile-banner comparison).
+METHODOLOGY CORRECTION NOTE — what changed mid-session:
+- Initial Q04 build used CRV-LEAD grain (count CRV waves with PCL
+  overlap, denominator = CRV waves). Produced inflated 1.5pp gap
+  because clients with multiple CRV waves got weighted multiple times.
+- Refactored to PCL-LEAD grain (count PCL leads with CRV overlap,
+  denominator = PCL leads) — matches original Section E and the
+  deck framing. Produces the 1.08pp figure above.
+- Q00 Result C added to characterize wave durations and multi-wave-
+  per-month frequency so we can audit when the difference matters.
 
-THE TWO NUMBERS DON'T HAVE TO MATCH — they're different windows on
-different audiences. Both confirm the SAME DIRECTION (Action < Control
-on PCL conversion). The deck number remains the published reference
-for that specific window. The bulletproof 1.5pp is the wider-window,
-corrected-channel confirmation showing the story is even stronger on
-the actual mobile-on-mobile surface.
+Reconciliation across the three numbers we've seen:
+                          Window          PCL filter   Gap     Status
+Original deck             12 mo           %IM% online  0.97pp  Published
+CRV-centric Q4 (wrong)    20 mo           %MB% mobile  1.50pp  Discarded
+PCL-centric Q4 (correct)  20 mo           %MB% mobile  1.08pp  Bulletproof headline
+
+The 1.08pp is the right number going forward. Close to the deck's
+0.97pp (same framing, different window/channel) — story confirmed.
+The 1.5pp was a methodology artifact and should not be cited anywhere.
 
 How to read per-month rows going forward:
 - Same direction every month (Control > Action) → robustness ✓
 - Magnitude varies high/low → expected, note it, not a flag
 - Direction REVERSES (Action > Control) on any month → ⚠️ red flag,
   investigate before defending the headline
+- significant_at_95 = 0 on a small-sample month → wide CI, not noise
+  in the headline. Direction still informative.
 
 Open follow-ups:
-- None for the headline. Q04 is the bulletproof centerpiece.
+- Sweep Q02, Q06, Q07, Q08, Q09 to PCL-lead centric for consistency.
+- Run Q00 Result C to confirm wave-period geometry (whether multi-wave-
+  per-month is rare or common, which explains the CRV-centric vs
+  PCL-centric divergence in absolute counts).
