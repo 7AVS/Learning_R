@@ -40,247 +40,77 @@ QUALIFY ROW_NUMBER() OVER (ORDER BY wave_count DESC, acct_no) <= 100;
 
 
 -- ============================================================
--- Result C: deployment period and frequency characterization
--- Three metrics per campaign:
---   wave_duration_days       — how many days each wave runs (treatmt_strt_dt to end)
---   waves_per_month          — how many distinct waves are deployed per calendar month
---   waves_per_acct_per_month — how often the same account appears in multiple waves
---                              within a single month (multi-touch indicator)
--- Wave identity:
---   CRV: distinct (offer_start_date, offer_end_date)
---   PCL: distinct (treatmt_strt_dt, treatmt_end_dt)
+-- Result C: deployment characterization (one row per campaign)
+--
+-- For each campaign we need two simple things:
+--   1. How long does each deployment / wave last (days)
+--   2. How often does the campaign deploy (waves per calendar month)
+--
+-- Wave identity = DISTINCT (start_date, end_date) within the campaign.
+-- CRV-Control dropped from this view (Control's end-date convention
+-- differs from Action — not comparable as a "deployment duration").
+-- waves_per_acct_per_month dropped (was the spool culprit and is
+-- already covered by Q02's overlap-days distribution).
 -- ============================================================
 
 WITH crv_action_waves AS (
     SELECT DISTINCT
-        offer_start_date,
-        offer_end_date,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS wave_month
+        offer_start_date AS strt_dt,
+        offer_end_date   AS end_dt,
+        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS deploy_month
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
       AND action_control = 'Action'
-),
-crv_control_waves AS (
-    SELECT DISTINCT
-        offer_start_date,
-        offer_end_date,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS wave_month
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01'
-      AND action_control = 'Control'
 ),
 pcl_waves AS (
     SELECT DISTINCT
         treatmt_strt_dt AS strt_dt,
         treatmt_end_dt  AS end_dt,
-        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS wave_month
+        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS deploy_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
 ),
--- Per-account per-month wave counts (for multi-touch metric)
-crv_action_acct_month AS (
-    SELECT
-        acct_no,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS wave_month,
-        COUNT(DISTINCT offer_start_date) AS waves_in_month
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01'
-      AND channels_deployed LIKE '%IM%'
-      AND action_control = 'Action'
-    GROUP BY acct_no,
-             offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)
-),
-crv_control_acct_month AS (
-    SELECT
-        acct_no,
-        offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1) AS wave_month,
-        COUNT(DISTINCT offer_start_date) AS waves_in_month
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01'
-      AND action_control = 'Control'
-    GROUP BY acct_no,
-             offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)
-),
-pcl_acct_month AS (
-    SELECT
-        acct_no,
-        treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS wave_month,
-        COUNT(DISTINCT treatmt_strt_dt) AS waves_in_month
-    FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2024-10-01'
-      AND channel LIKE '%MB%'
-    GROUP BY acct_no,
-             treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)
-),
--- Per-month wave count (for waves_per_month metric)
-crv_action_month_counts AS (
-    SELECT wave_month, COUNT(*) AS waves_in_month
+crv_action_monthly_counts AS (
+    SELECT deploy_month, COUNT(*) AS waves_in_month
     FROM crv_action_waves
-    GROUP BY wave_month
+    GROUP BY deploy_month
 ),
-crv_control_month_counts AS (
-    SELECT wave_month, COUNT(*) AS waves_in_month
-    FROM crv_control_waves
-    GROUP BY wave_month
-),
-pcl_month_counts AS (
-    SELECT wave_month, COUNT(*) AS waves_in_month
+pcl_monthly_counts AS (
+    SELECT deploy_month, COUNT(*) AS waves_in_month
     FROM pcl_waves
-    GROUP BY wave_month
+    GROUP BY deploy_month
+),
+crv_action_summary AS (
+    SELECT
+        CAST('CRV-Action' AS VARCHAR(20))                                                            AS campaign,
+        (SELECT COUNT(*) FROM crv_action_waves)                                                      AS n_distinct_waves,
+        (SELECT AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                  FROM crv_action_waves)     AS duration_mean,
+        (SELECT PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1) FROM crv_action_waves) AS duration_p50,
+        (SELECT MIN(end_dt - strt_dt + 1) FROM crv_action_waves)                                     AS duration_min,
+        (SELECT MAX(end_dt - strt_dt + 1) FROM crv_action_waves)                                     AS duration_max,
+        (SELECT COUNT(*) FROM crv_action_monthly_counts)                                             AS n_months_in_window,
+        (SELECT AVG(CAST(waves_in_month AS FLOAT)) FROM crv_action_monthly_counts)                   AS waves_per_month_mean,
+        (SELECT MIN(waves_in_month) FROM crv_action_monthly_counts)                                  AS waves_per_month_min,
+        (SELECT MAX(waves_in_month) FROM crv_action_monthly_counts)                                  AS waves_per_month_max
+),
+pcl_summary AS (
+    SELECT
+        CAST('PCL-mobile' AS VARCHAR(20))                                                            AS campaign,
+        (SELECT COUNT(*) FROM pcl_waves)                                                             AS n_distinct_waves,
+        (SELECT AVG(CAST(end_dt - strt_dt + 1 AS FLOAT))                  FROM pcl_waves)            AS duration_mean,
+        (SELECT PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1) FROM pcl_waves)   AS duration_p50,
+        (SELECT MIN(end_dt - strt_dt + 1) FROM pcl_waves)                                            AS duration_min,
+        (SELECT MAX(end_dt - strt_dt + 1) FROM pcl_waves)                                            AS duration_max,
+        (SELECT COUNT(*) FROM pcl_monthly_counts)                                                    AS n_months_in_window,
+        (SELECT AVG(CAST(waves_in_month AS FLOAT)) FROM pcl_monthly_counts)                          AS waves_per_month_mean,
+        (SELECT MIN(waves_in_month) FROM pcl_monthly_counts)                                         AS waves_per_month_min,
+        (SELECT MAX(waves_in_month) FROM pcl_monthly_counts)                                         AS waves_per_month_max
 )
-
--- 1. Wave duration — CRV-Action
-SELECT
-    CAST('CRV-Action'         AS VARCHAR(20)) AS campaign,
-    CAST('wave_duration_days' AS VARCHAR(40)) AS metric,
-    COUNT(*)                                                                              AS n_obs,
-    AVG(CAST(offer_end_date - offer_start_date + 1 AS FLOAT))                             AS mean_val,
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1)  AS p10,
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1)  AS p25,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1)  AS p50,
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1)  AS p75,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1)  AS p90,
-    MIN(offer_end_date - offer_start_date + 1)                                            AS min_val,
-    MAX(offer_end_date - offer_start_date + 1)                                            AS max_val
-FROM crv_action_waves
-
+SELECT * FROM crv_action_summary
 UNION ALL
-
--- 2. Wave duration — CRV-Control
-SELECT
-    CAST('CRV-Control'        AS VARCHAR(20)),
-    CAST('wave_duration_days' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(offer_end_date - offer_start_date + 1 AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY offer_end_date - offer_start_date + 1),
-    MIN(offer_end_date - offer_start_date + 1),
-    MAX(offer_end_date - offer_start_date + 1)
-FROM crv_control_waves
-
-UNION ALL
-
--- 3. Wave duration — PCL-mobile
-SELECT
-    CAST('PCL-mobile'         AS VARCHAR(20)),
-    CAST('wave_duration_days' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(end_dt - strt_dt + 1 AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY end_dt - strt_dt + 1),
-    MIN(end_dt - strt_dt + 1),
-    MAX(end_dt - strt_dt + 1)
-FROM pcl_waves
-
-UNION ALL
-
--- 4. Waves per month — CRV-Action
-SELECT
-    CAST('CRV-Action'      AS VARCHAR(20)),
-    CAST('waves_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM crv_action_month_counts
-
-UNION ALL
-
--- 5. Waves per month — CRV-Control
-SELECT
-    CAST('CRV-Control'     AS VARCHAR(20)),
-    CAST('waves_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM crv_control_month_counts
-
-UNION ALL
-
--- 6. Waves per month — PCL-mobile
-SELECT
-    CAST('PCL-mobile'      AS VARCHAR(20)),
-    CAST('waves_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM pcl_month_counts
-
-UNION ALL
-
--- 7. Waves per acct per month — CRV-Action  (multi-touch indicator)
-SELECT
-    CAST('CRV-Action'               AS VARCHAR(20)),
-    CAST('waves_per_acct_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM crv_action_acct_month
-
-UNION ALL
-
--- 8. Waves per acct per month — CRV-Control
-SELECT
-    CAST('CRV-Control'              AS VARCHAR(20)),
-    CAST('waves_per_acct_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM crv_control_acct_month
-
-UNION ALL
-
--- 9. Waves per acct per month — PCL-mobile
-SELECT
-    CAST('PCL-mobile'               AS VARCHAR(20)),
-    CAST('waves_per_acct_per_month' AS VARCHAR(40)),
-    COUNT(*),
-    AVG(CAST(waves_in_month AS FLOAT)),
-    PERCENTILE_DISC(0.10) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY waves_in_month),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY waves_in_month),
-    MIN(waves_in_month),
-    MAX(waves_in_month)
-FROM pcl_acct_month
-
-ORDER BY 1, 2
+SELECT * FROM pcl_summary
+ORDER BY 1
 ;
+
