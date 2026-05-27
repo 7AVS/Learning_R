@@ -64,11 +64,11 @@ responders AS (
         AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
 ),
 
-rollup AS (
-    -- ALL grain (rollup across reporting groups)
+summary AS (
+    -- ALL grain (summary across reporting groups)
     SELECT
-        CAST('ALL'     AS VARCHAR) AS segment,
-        CAST('OVERALL' AS VARCHAR) AS segment_level,
+        CAST('ALL'     AS VARCHAR(50)) AS segment,
+        CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
         c.test_control_flag,
         COUNT(DISTINCT c.clnt_no) AS cohort_size,
         COUNT(DISTINCT r.clnt_no) AS responders
@@ -102,6 +102,6 @@ SELECT
     test_control_flag,
     cohort_size,
     responders
-FROM rollup
+FROM summary
 ORDER BY segment, segment_level, test_control_flag
 ;
