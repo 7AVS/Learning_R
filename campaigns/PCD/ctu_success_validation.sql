@@ -19,7 +19,7 @@
 --   2. Add a primary_success CASE to the `success` CTE:
 --        CASE WHEN target_product IS NOT NULL AND target_product = latest_to_product
 --             THEN 1 ELSE 0 END AS primary_success
---   3. Add primary_responders to the rollup:
+--   3. Add primary_responders to the summary:
 --        COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS primary_responders
 -- ---------------------------------------------------------------------------
 -- Engine: Starburst (Trino) over EDW (DG6V01 / DDWV01 federated).
@@ -169,11 +169,11 @@ success AS (
         AND s.ar_id   = p.ar_id
 ),
 
-rollup AS (
+summary AS (
     -- ALL grain (overall CTU cohort)
     SELECT
-        CAST('ALL'     AS VARCHAR) AS segment,
-        CAST('OVERALL' AS VARCHAR) AS segment_level,
+        CAST('ALL'     AS VARCHAR(50)) AS segment,
+        CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
         COUNT(DISTINCT clnt_no)                                          AS cohort_size,
         COUNT(DISTINCT CASE WHEN secondary_success = 1 THEN clnt_no END) AS secondary_responders
     FROM success
@@ -196,6 +196,6 @@ SELECT
     segment_level,
     cohort_size,
     secondary_responders
-FROM rollup
+FROM summary
 ORDER BY segment, segment_level
 ;

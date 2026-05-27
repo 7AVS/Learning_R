@@ -22,7 +22,7 @@
 --   2. Add a primary_success CASE to the responders CTE:
 --        CASE WHEN target_product IS NOT NULL AND target_product = new_product
 --             THEN 1 ELSE 0 END AS primary_success
---   3. Add primary_responders to the rollup:
+--   3. Add primary_responders to the summary:
 --        COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS primary_responders
 -- ---------------------------------------------------------------------------
 
@@ -81,11 +81,11 @@ responders AS (
     GROUP BY 1,2,3,4,5
 ),
 
-rollup AS (
-    -- ALL grain (rollup across products)
+summary AS (
+    -- ALL grain (summary across products)
     SELECT
-        CAST('ALL'     AS VARCHAR) AS segment,
-        CAST('OVERALL' AS VARCHAR) AS segment_level,
+        CAST('ALL'     AS VARCHAR(50)) AS segment,
+        CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
         c.test_control_flag,
         COUNT(DISTINCT c.clnt_no) AS cohort_size,
         COUNT(DISTINCT r.clnt_no) AS secondary_responders
@@ -123,6 +123,6 @@ SELECT
     test_control_flag,
     cohort_size,
     secondary_responders
-FROM rollup
+FROM summary
 ORDER BY segment, segment_level, test_control_flag
 ;
