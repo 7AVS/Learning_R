@@ -226,7 +226,8 @@ events AS (
         END AS lead_class,
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-    WHERE event_date >= DATE '2026-04-01'
+    WHERE year = '2026' AND month IN ('04','05','06')
+      AND event_date >= DATE '2026-04-01'
       AND lower(it_item_id) IN ('i_300102')
       AND lower(event_name) IN ('view_promotion','select_promotion')
 ),
@@ -363,7 +364,8 @@ events AS (
         END AS lead_class,
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-    WHERE event_date >= DATE '2026-04-01'
+    WHERE year = '2026' AND month IN ('04','05','06')
+      AND event_date >= DATE '2026-04-01'
       AND lower(it_item_id) IN ('i_298045')
       AND lower(event_name) IN ('view_promotion','select_promotion')
 ),
