@@ -76,9 +76,7 @@ details AS (
         w.tactic_id,
         d.instl_apr,
         d.instl_txn_trm,
-        d.instl_txn_prncpl_amt,
-        d.instl_txn_fee_amt,
-        d.instl_fee_pct
+        d.instl_txn_prncpl_amt
     FROM crv_decisions_classified w
     INNER JOIN dl_mr_prod.cards_crv_install_details d
       ON d.acct_no   = w.acct_no
@@ -167,13 +165,7 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p90_term,
     AVG(CAST(d.instl_txn_prncpl_amt   AS FLOAT))                                AS mean_txn_principal,
     PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p50_txn_principal,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p90_txn_principal,
-    AVG(CAST(d.instl_txn_fee_amt      AS FLOAT))                                AS mean_fee,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_fee_amt AS FLOAT)) AS p50_fee,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_fee_amt AS FLOAT)) AS p90_fee,
-    AVG(CAST(d.instl_fee_pct          AS FLOAT))                                AS mean_fee_pct,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT)) AS p50_fee_pct,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT)) AS p90_fee_pct
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p90_txn_principal
 FROM acct_rollup_overall ar
 INNER JOIN details d
   ON d.crv_cohort = ar.crv_cohort
@@ -204,13 +196,7 @@ SELECT
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)),
     AVG(CAST(d.instl_txn_prncpl_amt   AS FLOAT)),
     PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)),
-    AVG(CAST(d.instl_txn_fee_amt      AS FLOAT)),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_fee_amt AS FLOAT)),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_fee_amt AS FLOAT)),
-    AVG(CAST(d.instl_fee_pct          AS FLOAT)),
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT)),
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_fee_pct AS FLOAT))
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT))
 FROM acct_rollup_monthly ar
 INNER JOIN details d
   ON d.crv_cohort = ar.crv_cohort
