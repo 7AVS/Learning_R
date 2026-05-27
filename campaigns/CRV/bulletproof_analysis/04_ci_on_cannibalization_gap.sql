@@ -1,6 +1,6 @@
 -- Statistical significance test on the CRV-Action vs CRV-Control cannibalization gap in PCL response.
 -- Lead grain: one row per (CRV wave x account x arm) that overlaps a PCL-mobile deployment.
--- Uses FLOAT for the statistical math to avoid DECIMAL precision overflow on large n.
+-- All statistical math forced to FLOAT explicitly to avoid Teradata DECIMAL precision overflow.
 
 WITH pcl_universe AS (
     SELECT
@@ -31,8 +31,6 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
--- Action overlap: each (CRV-Action lead x PCL deployment) pair that overlaps.
--- Take one PCL row per CRV lead (max responder_cli across PCL deployments).
 overlap_action AS (
     SELECT
         c.acct_no,
@@ -45,7 +43,6 @@ overlap_action AS (
      AND c.offer_end_date   >= p.treatmt_strt_dt
     GROUP BY c.acct_no, c.offer_start_date
 ),
--- Control overlap: each (CRV-Control lead x PCL deployment) pair that overlaps.
 overlap_control AS (
     SELECT
         c.acct_no,
@@ -60,15 +57,23 @@ overlap_control AS (
 ),
 agg AS (
     SELECT
-        SUM(a.n_action)     AS n_action,
-        SUM(a.resp_action)  AS resp_action,
-        SUM(a.n_control)    AS n_control,
-        SUM(a.resp_control) AS resp_control
+        CAST(SUM(a.n_action)     AS FLOAT) AS n_action,
+        CAST(SUM(a.resp_action)  AS FLOAT) AS resp_action,
+        CAST(SUM(a.n_control)    AS FLOAT) AS n_control,
+        CAST(SUM(a.resp_control) AS FLOAT) AS resp_control
     FROM (
-        SELECT COUNT(*) AS n_action, SUM(pcl_responded) AS resp_action, 0 AS n_control, 0 AS resp_control
+        SELECT
+            CAST(COUNT(*)            AS FLOAT) AS n_action,
+            CAST(SUM(pcl_responded)  AS FLOAT) AS resp_action,
+            CAST(0                   AS FLOAT) AS n_control,
+            CAST(0                   AS FLOAT) AS resp_control
         FROM overlap_action
         UNION ALL
-        SELECT 0, 0, COUNT(*), SUM(pcl_responded)
+        SELECT
+            CAST(0                   AS FLOAT),
+            CAST(0                   AS FLOAT),
+            CAST(COUNT(*)            AS FLOAT),
+            CAST(SUM(pcl_responded)  AS FLOAT)
         FROM overlap_control
     ) a
 ),
@@ -78,21 +83,19 @@ stats AS (
         resp_action,
         n_control,
         resp_control,
-        CAST(resp_action  AS FLOAT) / NULLIF(CAST(n_action AS FLOAT), 0) AS p_action,
-        CAST(resp_control AS FLOAT) / NULLIF(CAST(n_control AS FLOAT), 0) AS p_control
+        CASE WHEN n_action  > CAST(0 AS FLOAT) THEN resp_action  / n_action  ELSE NULL END AS p_action,
+        CASE WHEN n_control > CAST(0 AS FLOAT) THEN resp_control / n_control ELSE NULL END AS p_control
     FROM agg
 ),
 se_calc AS (
     SELECT
-        n_action,
-        resp_action,
-        n_control,
-        resp_control,
-        p_action,
-        p_control,
+        n_action, resp_action, n_control, resp_control,
+        p_action, p_control,
         p_control - p_action AS gap,
-        SQRT(  p_action  * (1.0 - p_action)  / NULLIF(CAST(n_action AS FLOAT), 0)
-             + p_control * (1.0 - p_control) / NULLIF(CAST(n_control AS FLOAT), 0) ) AS se
+        SQRT(
+              p_action  * (CAST(1 AS FLOAT) - p_action)  / n_action
+            + p_control * (CAST(1 AS FLOAT) - p_control) / n_control
+        ) AS se
     FROM stats
 )
 SELECT
@@ -105,11 +108,12 @@ SELECT
     -- gap: positive = control higher than action = cannibalization signal
     gap,
     se,
-    gap - 1.96 * se AS ci_lower,
-    gap + 1.96 * se AS ci_upper,
-    gap / NULLIF(se, 0) AS z_stat,
+    gap - CAST(1.96 AS FLOAT) * se AS ci_lower,
+    gap + CAST(1.96 AS FLOAT) * se AS ci_upper,
+    CASE WHEN se > CAST(0 AS FLOAT) THEN gap / se ELSE NULL END AS z_stat,
     CASE
-        WHEN (gap - 1.96 * se) > 0 OR (gap + 1.96 * se) < 0 THEN 1
+        WHEN (gap - CAST(1.96 AS FLOAT) * se) > CAST(0 AS FLOAT)
+          OR (gap + CAST(1.96 AS FLOAT) * se) < CAST(0 AS FLOAT) THEN 1
         ELSE 0
     END AS significant_at_95
 FROM se_calc
