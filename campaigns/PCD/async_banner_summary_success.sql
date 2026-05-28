@@ -16,9 +16,9 @@
 -- ║ Same swap as the vintage success file. Adds responders_target alongside    ║
 -- ║ responders. cohort_arm from channel_deploy_mb; test_control_flag from      ║
 -- ║ act_ctl_seg (verify against tst_grp_cd if values look off).                ║
--- ║ Also emits nibt_value (SUM nibt_expected_value for anyproduct responders)  ║
--- ║ and upgrade_value (SUM nibt_expec_value_upgradepath for upgrade-path       ║
--- ║ responders).                                                               ║
+-- ║ Also emits nibt_value_target (SUM nibt_expected_value for targetproduct     ║
+-- ║ responders) and nibt_value_upgrade (SUM nibt_expec_value_upgradepath for   ║
+-- ║ upgrade-path responders).                                                  ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -60,8 +60,8 @@ success_total AS (
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
            COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade,
-           SUM(CASE WHEN responder_anyproduct   = 1 THEN nibt_expected_value      END) AS nibt_value,
-           SUM(CASE WHEN responder_upgrade_path = 1 THEN nibt_expec_value_upgradepath END) AS upgrade_value
+           SUM(CASE WHEN responder_targetproduct = 1 THEN nibt_expected_value      END) AS nibt_value_target,
+           SUM(CASE WHEN responder_upgrade_path = 1 THEN nibt_expec_value_upgradepath END) AS nibt_value_upgrade
     FROM cohort
     WHERE test_control_flag IS NOT NULL
     GROUP BY 1,2,3,4
@@ -74,8 +74,8 @@ base AS (
         COALESCE(r.responders,         0) AS responders,
         COALESCE(r.responders_target,  0) AS responders_target,
         COALESCE(r.responders_upgrade, 0) AS responders_upgrade,
-        COALESCE(r.nibt_value,         0) AS nibt_value,
-        COALESCE(r.upgrade_value,      0) AS upgrade_value
+        COALESCE(r.nibt_value_target,   0) AS nibt_value_target,
+        COALESCE(r.nibt_value_upgrade,  0) AS nibt_value_upgrade
     FROM population p
     LEFT JOIN success_total r
         ON  r.wave_dt             = p.wave_dt
@@ -94,8 +94,8 @@ SELECT
     SUM(responders)         AS responders,
     SUM(responders_target)  AS responders_target,
     SUM(responders_upgrade) AS responders_upgrade,
-    SUM(nibt_value)         AS nibt_value,
-    SUM(upgrade_value)      AS upgrade_value
+    SUM(nibt_value_target)  AS nibt_value_target,
+    SUM(nibt_value_upgrade) AS nibt_value_upgrade
 FROM base
 GROUP BY wave_dt, test_control_flag, cohort_arm
 
@@ -109,7 +109,7 @@ SELECT
     test_control_flag, cohort_arm,
     total_population,
     responders, responders_target, responders_upgrade,
-    nibt_value, upgrade_value
+    nibt_value_target, nibt_value_upgrade
 FROM base
 ORDER BY 2, 3, 4, 5, 6
 ;
