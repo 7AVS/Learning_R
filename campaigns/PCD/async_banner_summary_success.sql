@@ -221,7 +221,7 @@ population AS (
 ),
 
 applications AS (
-    SELECT a.clnt_no, d.prod_app_dt AS app_dt
+    SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
     FROM DDWV01.CR_APP_CLNT_RELTN     AS a
     JOIN DDWV01.OVRL_CR_APP            AS b
         ON  b.cr_app_id  = a.cr_app_id
@@ -244,7 +244,8 @@ applications AS (
 success_total AS (
     SELECT
         c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
-        COUNT(DISTINCT c.clnt_no) AS responders
+        COUNT(DISTINCT c.clnt_no)                                          AS responders,
+        COUNT(DISTINCT CASE WHEN a.appl_for_prod_typ = '43' THEN c.clnt_no END) AS responders_target
     FROM cohort c
     INNER JOIN applications a
         ON  a.clnt_no = c.clnt_no
@@ -256,7 +257,8 @@ base AS (
     SELECT
         p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
         p.total_population, p.mobile_population,
-        COALESCE(r.responders, 0) AS responders
+        COALESCE(r.responders,        0) AS responders,
+        COALESCE(r.responders_target, 0) AS responders_target
     FROM population p
     LEFT JOIN success_total r
         ON  r.cohort_month      = p.cohort_month
@@ -271,9 +273,10 @@ SELECT
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
-    SUM(total_population)  AS total_population,
-    SUM(mobile_population) AS mobile_population,
-    SUM(responders)        AS responders
+    SUM(total_population)   AS total_population,
+    SUM(mobile_population)  AS mobile_population,
+    SUM(responders)         AS responders,
+    SUM(responders_target)  AS responders_target
 FROM base
 GROUP BY cohort_month, test_control_flag, cohort_arm
 
@@ -286,7 +289,7 @@ SELECT
     rpt_grp_cd                          AS segment_level,
     test_control_flag, cohort_arm,
     total_population, mobile_population,
-    responders
+    responders, responders_target
 FROM base
 ORDER BY 2, 3, 4, 5, 6
 ;
