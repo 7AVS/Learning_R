@@ -41,7 +41,7 @@ cohort AS (
         tactic_id_parent,
         response_start,
         response_end,
-        CAST(response_start - (EXTRACT(DAY FROM response_start) - 1) AS DATE) AS cohort_month,
+        response_start AS wave_dt,
         product_at_decision,
         target_product,
         new_product,
@@ -66,7 +66,7 @@ cohort AS (
 ),
 
 population AS (
-    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
+    SELECT wave_dt, product_at_decision, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     WHERE test_control_flag IS NOT NULL
@@ -74,7 +74,7 @@ population AS (
 ),
 
 success_daily AS (
-    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
+    SELECT wave_dt, product_at_decision, test_control_flag, cohort_arm,
            (dt_prod_change - response_start) AS vintage_day,
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
@@ -87,7 +87,7 @@ success_daily AS (
 ),
 
 spine AS (
-    SELECT p.cohort_month, p.product_at_decision, p.test_control_flag, p.cohort_arm,
+    SELECT p.wave_dt, p.product_at_decision, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
@@ -95,14 +95,14 @@ spine AS (
 
 base AS (
     SELECT
-        s.cohort_month, s.product_at_decision, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.product_at_decision, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(r.responders,         0) AS responders,
         COALESCE(r.responders_target,  0) AS responders_target,
         COALESCE(r.responders_upgrade, 0) AS responders_upgrade
     FROM spine s
     LEFT JOIN success_daily r
-        ON  r.cohort_month         = s.cohort_month
+        ON  r.wave_dt              = s.wave_dt
         AND r.product_at_decision  = s.product_at_decision
         AND r.test_control_flag    = s.test_control_flag
         AND r.cohort_arm           = s.cohort_arm
@@ -111,7 +111,7 @@ base AS (
 
 final_grain AS (
     SELECT
-        cohort_month                          AS cohort,
+        wave_dt                               AS cohort,
         CAST('ALL'     AS VARCHAR(50))        AS segment,
         CAST('OVERALL' AS VARCHAR(50))        AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -120,12 +120,12 @@ final_grain AS (
         SUM(responders_target)                AS responders_target,
         SUM(responders_upgrade)               AS responders_upgrade
     FROM base
-    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
+    GROUP BY wave_dt, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
     SELECT
-        cohort_month                          AS cohort,
+        wave_dt                               AS cohort,
         CAST('PRODUCT' AS VARCHAR(50))        AS segment,
         product_at_decision                   AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -179,7 +179,7 @@ cohort AS (
         tactic_id,
         treatmt_strt_dt,
         treatmt_end_dt,
-        CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         current_product,
         target_product,
         primary_success,
@@ -194,14 +194,14 @@ cohort AS (
 ),
 
 population AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
+    SELECT wave_dt, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3
 ),
 
 success_daily AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
+    SELECT wave_dt, test_control_flag, cohort_arm,
            (response_dt - treatmt_strt_dt) AS vintage_day,
            COUNT(DISTINCT CASE WHEN success          = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN primary_success  = 1 THEN clnt_no END) AS responders_target
@@ -212,7 +212,7 @@ success_daily AS (
 ),
 
 spine AS (
-    SELECT p.cohort_month, p.test_control_flag, p.cohort_arm,
+    SELECT p.wave_dt, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
@@ -220,13 +220,13 @@ spine AS (
 
 base AS (
     SELECT
-        s.cohort_month, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(r.responders,        0) AS responders,
         COALESCE(r.responders_target, 0) AS responders_target
     FROM spine s
     LEFT JOIN success_daily r
-        ON  r.cohort_month      = s.cohort_month
+        ON  r.wave_dt           = s.wave_dt
         AND r.test_control_flag = s.test_control_flag
         AND r.cohort_arm        = s.cohort_arm
         AND r.vintage_day       = s.vintage_day
@@ -234,19 +234,19 @@ base AS (
 
 SELECT
     CAST('CTU'     AS VARCHAR(50)) AS campaign,
-    cohort_month                   AS cohort,
+    wave_dt                        AS cohort,
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm, vintage_day,
     total_population,
     responders, responders_target,
     SUM(responders) OVER (
-        PARTITION BY cohort_month, test_control_flag, cohort_arm
+        PARTITION BY wave_dt, test_control_flag, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS responders_cum,
     SUM(responders_target) OVER (
-        PARTITION BY cohort_month, test_control_flag, cohort_arm
+        PARTITION BY wave_dt, test_control_flag, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS responders_target_cum
@@ -274,7 +274,7 @@ cohort_raw AS (
         clnt_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         TRIM(rpt_grp_cd) AS rpt_grp_cd,
         CASE
             WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
@@ -295,12 +295,12 @@ cohort_raw AS (
 
 cohort AS (
     SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt,
-           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
+           wave_dt, rpt_grp_cd, test_control_flag, cohort_arm
     FROM cohort_raw
 ),
 
 population AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+    SELECT wave_dt, rpt_grp_cd, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3,4
@@ -328,19 +328,19 @@ applications AS (
 ),
 
 success_events AS (
-    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
+    SELECT c.wave_dt, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
            c.clnt_no, c.treatmt_strt_dt,
            MIN(a.app_dt)                                              AS first_app_dt,
            MIN(CASE WHEN a.appl_for_prod_typ = '43' THEN a.app_dt END) AS first_app_dt_target
     FROM cohort c
     INNER JOIN applications a
         ON  a.clnt_no = c.clnt_no
-        AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
+        AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_strt_dt + 60
     GROUP BY 1,2,3,4,5,6
 ),
 
 responders_daily AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+    SELECT wave_dt, rpt_grp_cd, test_control_flag, cohort_arm,
            (first_app_dt - treatmt_strt_dt) AS vintage_day,
            COUNT(DISTINCT clnt_no) AS responders
     FROM success_events
@@ -349,7 +349,7 @@ responders_daily AS (
 ),
 
 responders_target_daily AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+    SELECT wave_dt, rpt_grp_cd, test_control_flag, cohort_arm,
            (first_app_dt_target - treatmt_strt_dt) AS vintage_day,
            COUNT(DISTINCT clnt_no) AS responders_target
     FROM success_events
@@ -359,7 +359,7 @@ responders_target_daily AS (
 ),
 
 spine AS (
-    SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
+    SELECT p.wave_dt, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
@@ -367,19 +367,19 @@ spine AS (
 
 base AS (
     SELECT
-        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(r1.responders,        0) AS responders,
         COALESCE(r2.responders_target, 0) AS responders_target
     FROM spine s
     LEFT JOIN responders_daily r1
-        ON  r1.cohort_month      = s.cohort_month
+        ON  r1.wave_dt           = s.wave_dt
         AND r1.rpt_grp_cd        = s.rpt_grp_cd
         AND r1.test_control_flag = s.test_control_flag
         AND r1.cohort_arm        = s.cohort_arm
         AND r1.vintage_day       = s.vintage_day
     LEFT JOIN responders_target_daily r2
-        ON  r2.cohort_month      = s.cohort_month
+        ON  r2.wave_dt           = s.wave_dt
         AND r2.rpt_grp_cd        = s.rpt_grp_cd
         AND r2.test_control_flag = s.test_control_flag
         AND r2.cohort_arm        = s.cohort_arm
@@ -388,7 +388,7 @@ base AS (
 
 final_grain AS (
     SELECT
-        cohort_month                          AS cohort,
+        wave_dt                               AS cohort,
         CAST('ALL'     AS VARCHAR(50))        AS segment,
         CAST('OVERALL' AS VARCHAR(50))        AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -396,12 +396,12 @@ final_grain AS (
         SUM(responders)                       AS responders,
         SUM(responders_target)                AS responders_target
     FROM base
-    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
+    GROUP BY wave_dt, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
     SELECT
-        cohort_month                          AS cohort,
+        wave_dt                               AS cohort,
         CAST('REPORT_GROUP' AS VARCHAR(50))   AS segment,
         rpt_grp_cd                            AS segment_level,
         test_control_flag, cohort_arm, vintage_day,

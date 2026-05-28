@@ -25,7 +25,7 @@ pcd_cohort_raw AS (
     SELECT
         clnt_no,
         treatmt_strt_dt,
-        date_trunc('month', treatmt_strt_dt) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         element_at(split(regexp_replace(trim(tactic_decisn_vrb_info), ' +', ' '), ' '), 4) AS product_mnemonic,
         CASE
             WHEN trim(coalesce(tst_grp_cd, '')) LIKE '%C' THEN 'CONTROL'
@@ -45,12 +45,12 @@ pcd_cohort_raw AS (
 pcd_cohort AS (
     SELECT DISTINCT
         clnt_no, treatmt_strt_dt,
-        cohort_month, product_mnemonic, test_control_flag, cohort_arm
+        wave_dt, product_mnemonic, test_control_flag, cohort_arm
     FROM pcd_cohort_raw
 ),
 
 pcd_population AS (
-    SELECT cohort_month, product_mnemonic, test_control_flag, cohort_arm,
+    SELECT wave_dt, product_mnemonic, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM pcd_cohort
     GROUP BY 1,2,3,4
@@ -86,7 +86,7 @@ pcd_engagement_events AS (
 
 pcd_engagement_attributed AS (
     SELECT
-        c.cohort_month, c.product_mnemonic, c.test_control_flag, c.cohort_arm, c.clnt_no,
+        c.wave_dt, c.product_mnemonic, c.test_control_flag, c.cohort_arm, c.clnt_no,
         e.event_name, e.lead_class,
         date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM pcd_cohort c
@@ -97,29 +97,29 @@ pcd_engagement_attributed AS (
 
 pcd_client_first_dates AS (
     SELECT
-        cohort_month, product_mnemonic, test_control_flag, cohort_arm, clnt_no,
+        wave_dt, product_mnemonic, test_control_flag, cohort_arm, clnt_no,
         MIN(CASE WHEN lower(event_name) = 'view_promotion'   THEN vintage_day END) AS first_view_day,
         MIN(CASE WHEN lead_class IN ('click_p','click_n')    THEN vintage_day END) AS first_click_day,
         MIN(CASE WHEN lead_class = 'click_p'                 THEN vintage_day END) AS first_click_p_day,
         MIN(CASE WHEN lead_class = 'click_n'                 THEN vintage_day END) AS first_click_n_day
     FROM pcd_engagement_attributed
-    GROUP BY cohort_month, product_mnemonic, test_control_flag, cohort_arm, clnt_no
+    GROUP BY wave_dt, product_mnemonic, test_control_flag, cohort_arm, clnt_no
 ),
 
 pcd_engagement_daily AS (
     SELECT
-        f.cohort_month, f.product_mnemonic, f.test_control_flag, f.cohort_arm, v.vintage_day,
+        f.wave_dt, f.product_mnemonic, f.test_control_flag, f.cohort_arm, v.vintage_day,
         COUNT(CASE WHEN first_view_day    = v.vintage_day THEN 1 END) AS view_users,
         COUNT(CASE WHEN first_click_day   = v.vintage_day THEN 1 END) AS click_users,
         COUNT(CASE WHEN first_click_p_day = v.vintage_day THEN 1 END) AS leads_p,
         COUNT(CASE WHEN first_click_n_day = v.vintage_day THEN 1 END) AS leads_n
     FROM pcd_client_first_dates f
     CROSS JOIN pcd_vintage_days v
-    GROUP BY f.cohort_month, f.product_mnemonic, f.test_control_flag, f.cohort_arm, v.vintage_day
+    GROUP BY f.wave_dt, f.product_mnemonic, f.test_control_flag, f.cohort_arm, v.vintage_day
 ),
 
 pcd_spine AS (
-    SELECT p.cohort_month, p.product_mnemonic, p.test_control_flag, p.cohort_arm,
+    SELECT p.wave_dt, p.product_mnemonic, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM pcd_population p
     CROSS JOIN pcd_vintage_days v
@@ -127,7 +127,7 @@ pcd_spine AS (
 
 pcd_base AS (
     SELECT
-        s.cohort_month, s.product_mnemonic, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.product_mnemonic, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
@@ -135,7 +135,7 @@ pcd_base AS (
         COALESCE(e.leads_n,     0) AS leads_n
     FROM pcd_spine s
     LEFT JOIN pcd_engagement_daily e
-        ON  e.cohort_month      = s.cohort_month
+        ON  e.wave_dt           = s.wave_dt
         AND e.product_mnemonic  = s.product_mnemonic
         AND e.test_control_flag = s.test_control_flag
         AND e.cohort_arm        = s.cohort_arm
@@ -144,7 +144,7 @@ pcd_base AS (
 
 pcd_final_grain AS (
     SELECT
-        cohort_month                   AS cohort,
+        wave_dt                        AS cohort,
         CAST('ALL'     AS VARCHAR)     AS segment,
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -154,12 +154,12 @@ pcd_final_grain AS (
         SUM(leads_p)                   AS leads_p,
         SUM(leads_n)                   AS leads_n
     FROM pcd_base
-    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
+    GROUP BY wave_dt, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
     SELECT
-        cohort_month                   AS cohort,
+        wave_dt                        AS cohort,
         'PRODUCT'                      AS segment,
         product_mnemonic               AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -201,7 +201,7 @@ ctu_cohort_raw AS (
     SELECT
         clnt_no,
         treatmt_strt_dt,
-        date_trunc('month', treatmt_strt_dt) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         CASE WHEN substring(tactic_decisn_vrb_info, 121, 30) LIKE '%MB%'
              THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
@@ -210,12 +210,12 @@ ctu_cohort_raw AS (
 ),
 
 ctu_cohort AS (
-    SELECT DISTINCT clnt_no, treatmt_strt_dt, cohort_month, cohort_arm
+    SELECT DISTINCT clnt_no, treatmt_strt_dt, wave_dt, cohort_arm
     FROM ctu_cohort_raw
 ),
 
 ctu_population AS (
-    SELECT cohort_month, cohort_arm, COUNT(DISTINCT clnt_no) AS total_population
+    SELECT wave_dt, cohort_arm, COUNT(DISTINCT clnt_no) AS total_population
     FROM ctu_cohort
     GROUP BY 1,2
 ),
@@ -244,7 +244,7 @@ ctu_engagement_events AS (
 ),
 
 ctu_engagement_attributed AS (
-    SELECT c.cohort_month, c.cohort_arm, c.clnt_no, e.event_name, e.lead_class,
+    SELECT c.wave_dt, c.cohort_arm, c.clnt_no, e.event_name, e.lead_class,
            date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM ctu_cohort c
     INNER JOIN ctu_engagement_events e
@@ -254,36 +254,36 @@ ctu_engagement_attributed AS (
 
 ctu_client_first_dates AS (
     SELECT
-        cohort_month, cohort_arm, clnt_no,
+        wave_dt, cohort_arm, clnt_no,
         MIN(CASE WHEN lower(event_name) = 'view_promotion'   THEN vintage_day END) AS first_view_day,
         MIN(CASE WHEN lead_class IN ('click_p','click_n')    THEN vintage_day END) AS first_click_day,
         MIN(CASE WHEN lead_class = 'click_p'                 THEN vintage_day END) AS first_click_p_day,
         MIN(CASE WHEN lead_class = 'click_n'                 THEN vintage_day END) AS first_click_n_day
     FROM ctu_engagement_attributed
-    GROUP BY cohort_month, cohort_arm, clnt_no
+    GROUP BY wave_dt, cohort_arm, clnt_no
 ),
 
 ctu_engagement_daily AS (
     SELECT
-        f.cohort_month, f.cohort_arm, v.vintage_day,
+        f.wave_dt, f.cohort_arm, v.vintage_day,
         COUNT(CASE WHEN first_view_day    = v.vintage_day THEN 1 END) AS view_users,
         COUNT(CASE WHEN first_click_day   = v.vintage_day THEN 1 END) AS click_users,
         COUNT(CASE WHEN first_click_p_day = v.vintage_day THEN 1 END) AS leads_p,
         COUNT(CASE WHEN first_click_n_day = v.vintage_day THEN 1 END) AS leads_n
     FROM ctu_client_first_dates f
     CROSS JOIN ctu_vintage_days v
-    GROUP BY f.cohort_month, f.cohort_arm, v.vintage_day
+    GROUP BY f.wave_dt, f.cohort_arm, v.vintage_day
 ),
 
 ctu_spine AS (
-    SELECT p.cohort_month, p.cohort_arm, v.vintage_day, p.total_population
+    SELECT p.wave_dt, p.cohort_arm, v.vintage_day, p.total_population
     FROM ctu_population p
     CROSS JOIN ctu_vintage_days v
 ),
 
 ctu_base AS (
     SELECT
-        s.cohort_month, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
@@ -291,15 +291,15 @@ ctu_base AS (
         COALESCE(e.leads_n,     0) AS leads_n
     FROM ctu_spine s
     LEFT JOIN ctu_engagement_daily e
-        ON  e.cohort_month = s.cohort_month
-        AND e.cohort_arm   = s.cohort_arm
+        ON  e.wave_dt    = s.wave_dt
+        AND e.cohort_arm = s.cohort_arm
         AND e.vintage_day  = s.vintage_day
 ),
 
 ctu_final AS (
     SELECT
         CAST('CTU'     AS VARCHAR) AS campaign,
-        cohort_month               AS cohort,
+        wave_dt                    AS cohort,
         CAST('ALL'     AS VARCHAR) AS segment,
         CAST('OVERALL' AS VARCHAR) AS segment_level,
         CAST('ALL'     AS VARCHAR) AS test_control_flag,
@@ -312,7 +312,7 @@ ctu_final AS (
         SUM(leads_n)     OVER w AS leads_n_cum
     FROM ctu_base
     WINDOW w AS (
-        PARTITION BY cohort_month, cohort_arm
+        PARTITION BY wave_dt, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     )
@@ -333,7 +333,7 @@ o2p_cohort_raw AS (
     SELECT
         clnt_no,
         treatmt_strt_dt,
-        date_trunc('month', treatmt_strt_dt) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         TRIM(rpt_grp_cd) AS rpt_grp_cd,
         CASE
             WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
@@ -355,12 +355,12 @@ o2p_cohort_raw AS (
 o2p_cohort AS (
     SELECT DISTINCT
         clnt_no, treatmt_strt_dt,
-        cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
+        wave_dt, rpt_grp_cd, test_control_flag, cohort_arm
     FROM o2p_cohort_raw
 ),
 
 o2p_population AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+    SELECT wave_dt, rpt_grp_cd, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM o2p_cohort
     GROUP BY 1,2,3,4
@@ -390,7 +390,7 @@ o2p_engagement_events AS (
 ),
 
 o2p_engagement_attributed AS (
-    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm, c.clnt_no,
+    SELECT c.wave_dt, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm, c.clnt_no,
            e.event_name, e.lead_class,
            date_diff('day', c.treatmt_strt_dt, e.event_date) AS vintage_day
     FROM o2p_cohort c
@@ -401,29 +401,29 @@ o2p_engagement_attributed AS (
 
 o2p_client_first_dates AS (
     SELECT
-        cohort_month, rpt_grp_cd, test_control_flag, cohort_arm, clnt_no,
+        wave_dt, rpt_grp_cd, test_control_flag, cohort_arm, clnt_no,
         MIN(CASE WHEN lower(event_name) = 'view_promotion'   THEN vintage_day END) AS first_view_day,
         MIN(CASE WHEN lead_class IN ('click_p','click_n')    THEN vintage_day END) AS first_click_day,
         MIN(CASE WHEN lead_class = 'click_p'                 THEN vintage_day END) AS first_click_p_day,
         MIN(CASE WHEN lead_class = 'click_n'                 THEN vintage_day END) AS first_click_n_day
     FROM o2p_engagement_attributed
-    GROUP BY cohort_month, rpt_grp_cd, test_control_flag, cohort_arm, clnt_no
+    GROUP BY wave_dt, rpt_grp_cd, test_control_flag, cohort_arm, clnt_no
 ),
 
 o2p_engagement_daily AS (
     SELECT
-        f.cohort_month, f.rpt_grp_cd, f.test_control_flag, f.cohort_arm, v.vintage_day,
+        f.wave_dt, f.rpt_grp_cd, f.test_control_flag, f.cohort_arm, v.vintage_day,
         COUNT(CASE WHEN first_view_day    = v.vintage_day THEN 1 END) AS view_users,
         COUNT(CASE WHEN first_click_day   = v.vintage_day THEN 1 END) AS click_users,
         COUNT(CASE WHEN first_click_p_day = v.vintage_day THEN 1 END) AS leads_p,
         COUNT(CASE WHEN first_click_n_day = v.vintage_day THEN 1 END) AS leads_n
     FROM o2p_client_first_dates f
     CROSS JOIN o2p_vintage_days v
-    GROUP BY f.cohort_month, f.rpt_grp_cd, f.test_control_flag, f.cohort_arm, v.vintage_day
+    GROUP BY f.wave_dt, f.rpt_grp_cd, f.test_control_flag, f.cohort_arm, v.vintage_day
 ),
 
 o2p_spine AS (
-    SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
+    SELECT p.wave_dt, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
            v.vintage_day, p.total_population
     FROM o2p_population p
     CROSS JOIN o2p_vintage_days v
@@ -431,7 +431,7 @@ o2p_spine AS (
 
 o2p_base AS (
     SELECT
-        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.wave_dt, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
         s.total_population,
         COALESCE(e.view_users,  0) AS view_users,
         COALESCE(e.click_users, 0) AS click_users,
@@ -439,7 +439,7 @@ o2p_base AS (
         COALESCE(e.leads_n,     0) AS leads_n
     FROM o2p_spine s
     LEFT JOIN o2p_engagement_daily e
-        ON  e.cohort_month      = s.cohort_month
+        ON  e.wave_dt           = s.wave_dt
         AND e.rpt_grp_cd        = s.rpt_grp_cd
         AND e.test_control_flag = s.test_control_flag
         AND e.cohort_arm        = s.cohort_arm
@@ -448,7 +448,7 @@ o2p_base AS (
 
 o2p_final_grain AS (
     SELECT
-        cohort_month                   AS cohort,
+        wave_dt                        AS cohort,
         CAST('ALL'     AS VARCHAR)     AS segment,
         CAST('OVERALL' AS VARCHAR)     AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
@@ -458,12 +458,12 @@ o2p_final_grain AS (
         SUM(leads_p)                   AS leads_p,
         SUM(leads_n)                   AS leads_n
     FROM o2p_base
-    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
+    GROUP BY wave_dt, test_control_flag, cohort_arm, vintage_day
 
     UNION ALL
 
     SELECT
-        cohort_month                   AS cohort,
+        wave_dt                        AS cohort,
         'REPORT_GROUP'                 AS segment,
         rpt_grp_cd                     AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
