@@ -196,8 +196,7 @@ cohort_raw AS (
                 'PO2POT01','PO2POT03','PO2POT07',
                 'PO2PPR01','PO2PPR03','PO2PPR07'
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
-        END AS cohort_arm,
-        CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
+        END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
@@ -205,17 +204,14 @@ cohort_raw AS (
 ),
 
 cohort AS (
-    SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt,
-           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           MAX(is_mobile) AS is_mobile
+    SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt,
+           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
     FROM cohort_raw
-    GROUP BY 1,2,3,4,5,6,7
 ),
 
 population AS (
     SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           COUNT(DISTINCT clnt_no)                                  AS total_population,
-           COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
+           COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3,4
 ),
@@ -256,7 +252,7 @@ success_total AS (
 base AS (
     SELECT
         p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
-        p.total_population, p.mobile_population,
+        p.total_population,
         COALESCE(r.responders,        0) AS responders,
         COALESCE(r.responders_target, 0) AS responders_target
     FROM population p
@@ -274,7 +270,6 @@ SELECT
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
     SUM(total_population)   AS total_population,
-    SUM(mobile_population)  AS mobile_population,
     SUM(responders)         AS responders,
     SUM(responders_target)  AS responders_target
 FROM base
@@ -288,7 +283,7 @@ SELECT
     CAST('REPORT_GROUP' AS VARCHAR(50)) AS segment,
     rpt_grp_cd                          AS segment_level,
     test_control_flag, cohort_arm,
-    total_population, mobile_population,
+    total_population,
     responders, responders_target
 FROM base
 ORDER BY 2, 3, 4, 5, 6
