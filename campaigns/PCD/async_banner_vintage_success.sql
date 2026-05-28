@@ -23,6 +23,10 @@
 -- ║ success = converted to the targeted product) alongside responders          ║
 -- ║ (= responder_anyproduct, the secondary success = any product change).      ║
 -- ║                                                                            ║
+-- ║ Also emits nibt_value (SUM nibt_expected_value for anyproduct responders)  ║
+-- ║ and upgrade_value (SUM nibt_expec_value_upgradepath for upgrade-path       ║
+-- ║ responders), both raw and cumulative.                                      ║
+-- ║                                                                            ║
 -- ║ test_control_flag derived from act_ctl_seg in the curated table. If those  ║
 -- ║ values look wrong, swap for a join back to TACTIC_EVNT_IP_AR_HIST.tst_grp_cd.║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
@@ -78,7 +82,9 @@ success_daily AS (
            (dt_prod_change - response_start) AS vintage_day,
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
-           COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade
+           COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade,
+           SUM(CASE WHEN responder_anyproduct   = 1 THEN nibt_expected_value      END) AS nibt_value,
+           SUM(CASE WHEN responder_upgrade_path = 1 THEN nibt_expec_value_upgradepath END) AS upgrade_value
     FROM cohort
     WHERE test_control_flag IS NOT NULL
       AND dt_prod_change IS NOT NULL
@@ -99,7 +105,9 @@ base AS (
         s.total_population,
         COALESCE(r.responders,         0) AS responders,
         COALESCE(r.responders_target,  0) AS responders_target,
-        COALESCE(r.responders_upgrade, 0) AS responders_upgrade
+        COALESCE(r.responders_upgrade, 0) AS responders_upgrade,
+        COALESCE(r.nibt_value,         0) AS nibt_value,
+        COALESCE(r.upgrade_value,      0) AS upgrade_value
     FROM spine s
     LEFT JOIN success_daily r
         ON  r.wave_dt              = s.wave_dt
@@ -118,7 +126,9 @@ final_grain AS (
         SUM(total_population)                 AS total_population,
         SUM(responders)                       AS responders,
         SUM(responders_target)                AS responders_target,
-        SUM(responders_upgrade)               AS responders_upgrade
+        SUM(responders_upgrade)               AS responders_upgrade,
+        SUM(nibt_value)                       AS nibt_value,
+        SUM(upgrade_value)                    AS upgrade_value
     FROM base
     GROUP BY wave_dt, test_control_flag, cohort_arm, vintage_day
 
@@ -130,7 +140,8 @@ final_grain AS (
         product_at_decision                   AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
         total_population,
-        responders, responders_target, responders_upgrade
+        responders, responders_target, responders_upgrade,
+        nibt_value, upgrade_value
     FROM base
 )
 
@@ -139,6 +150,7 @@ SELECT
     cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
     total_population,
     responders, responders_target, responders_upgrade,
+    nibt_value, upgrade_value,
     SUM(responders) OVER (
         PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
         ORDER BY vintage_day
@@ -153,7 +165,17 @@ SELECT
         PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS responders_upgrade_cum
+    ) AS responders_upgrade_cum,
+    SUM(nibt_value) OVER (
+        PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
+        ORDER BY vintage_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS nibt_value_cum,
+    SUM(upgrade_value) OVER (
+        PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
+        ORDER BY vintage_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS upgrade_value_cum
 FROM final_grain
 ORDER BY 2, 3, 4, 5, 6, 7
 ;
