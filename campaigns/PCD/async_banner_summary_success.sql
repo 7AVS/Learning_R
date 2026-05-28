@@ -23,7 +23,7 @@ cohort AS (
     SELECT
         acct_no, clnt_no, tactic_id_parent,
         response_start, response_end,
-        CAST(response_start - (EXTRACT(DAY FROM response_start) - 1) AS DATE) AS cohort_month,
+        response_start AS wave_dt,
         product_at_decision,
         target_product,
         new_product,
@@ -45,7 +45,7 @@ cohort AS (
 ),
 
 population AS (
-    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
+    SELECT wave_dt, product_at_decision, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     WHERE test_control_flag IS NOT NULL
@@ -53,7 +53,7 @@ population AS (
 ),
 
 success_total AS (
-    SELECT cohort_month, product_at_decision, test_control_flag, cohort_arm,
+    SELECT wave_dt, product_at_decision, test_control_flag, cohort_arm,
            COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
            COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade
@@ -64,14 +64,14 @@ success_total AS (
 
 base AS (
     SELECT
-        p.cohort_month, p.product_at_decision, p.test_control_flag, p.cohort_arm,
+        p.wave_dt, p.product_at_decision, p.test_control_flag, p.cohort_arm,
         p.total_population,
         COALESCE(r.responders,         0) AS responders,
         COALESCE(r.responders_target,  0) AS responders_target,
         COALESCE(r.responders_upgrade, 0) AS responders_upgrade
     FROM population p
     LEFT JOIN success_total r
-        ON  r.cohort_month        = p.cohort_month
+        ON  r.wave_dt             = p.wave_dt
         AND r.product_at_decision = p.product_at_decision
         AND r.test_control_flag   = p.test_control_flag
         AND r.cohort_arm          = p.cohort_arm
@@ -79,7 +79,7 @@ base AS (
 
 SELECT
     CAST('PCD' AS VARCHAR(50))     AS campaign,
-    cohort_month                   AS cohort,
+    wave_dt                        AS cohort,
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
@@ -88,13 +88,13 @@ SELECT
     SUM(responders_target)  AS responders_target,
     SUM(responders_upgrade) AS responders_upgrade
 FROM base
-GROUP BY cohort_month, test_control_flag, cohort_arm
+GROUP BY wave_dt, test_control_flag, cohort_arm
 
 UNION ALL
 
 SELECT
     CAST('PCD' AS VARCHAR(50))     AS campaign,
-    cohort_month                   AS cohort,
+    wave_dt                        AS cohort,
     CAST('PRODUCT' AS VARCHAR(50)) AS segment,
     product_at_decision            AS segment_level,
     test_control_flag, cohort_arm,
@@ -119,7 +119,7 @@ cohort AS (
         tactic_id,
         treatmt_strt_dt,
         treatmt_end_dt,
-        CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         current_product,
         target_product,
         primary_success,
@@ -134,14 +134,14 @@ cohort AS (
 ),
 
 population AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
+    SELECT wave_dt, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3
 ),
 
 success_total AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
+    SELECT wave_dt, test_control_flag, cohort_arm,
            COUNT(DISTINCT CASE WHEN success         = 1 THEN clnt_no END) AS responders,
            COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS responders_target
     FROM cohort
@@ -150,20 +150,20 @@ success_total AS (
 
 base AS (
     SELECT
-        p.cohort_month, p.test_control_flag, p.cohort_arm,
+        p.wave_dt, p.test_control_flag, p.cohort_arm,
         p.total_population,
         COALESCE(r.responders,        0) AS responders,
         COALESCE(r.responders_target, 0) AS responders_target
     FROM population p
     LEFT JOIN success_total r
-        ON  r.cohort_month      = p.cohort_month
+        ON  r.wave_dt           = p.wave_dt
         AND r.test_control_flag = p.test_control_flag
         AND r.cohort_arm        = p.cohort_arm
 )
 
 SELECT
     CAST('CTU'     AS VARCHAR(50)) AS campaign,
-    cohort_month                   AS cohort,
+    wave_dt                        AS cohort,
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
@@ -184,7 +184,7 @@ cohort_raw AS (
         clnt_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
+        treatmt_strt_dt AS wave_dt,
         TRIM(rpt_grp_cd) AS rpt_grp_cd,
         CASE
             WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
@@ -205,12 +205,12 @@ cohort_raw AS (
 
 cohort AS (
     SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt,
-           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
+           wave_dt, rpt_grp_cd, test_control_flag, cohort_arm
     FROM cohort_raw
 ),
 
 population AS (
-    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+    SELECT wave_dt, rpt_grp_cd, test_control_flag, cohort_arm,
            COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3,4
@@ -239,7 +239,7 @@ applications AS (
 
 success_total AS (
     SELECT
-        c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
+        c.wave_dt, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
         COUNT(DISTINCT c.clnt_no)                                          AS responders,
         COUNT(DISTINCT CASE WHEN a.appl_for_prod_typ = '43' THEN c.clnt_no END) AS responders_target
     FROM cohort c
@@ -251,13 +251,13 @@ success_total AS (
 
 base AS (
     SELECT
-        p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
+        p.wave_dt, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
         p.total_population,
         COALESCE(r.responders,        0) AS responders,
         COALESCE(r.responders_target, 0) AS responders_target
     FROM population p
     LEFT JOIN success_total r
-        ON  r.cohort_month      = p.cohort_month
+        ON  r.wave_dt           = p.wave_dt
         AND r.rpt_grp_cd        = p.rpt_grp_cd
         AND r.test_control_flag = p.test_control_flag
         AND r.cohort_arm        = p.cohort_arm
@@ -265,7 +265,7 @@ base AS (
 
 SELECT
     CAST('O2P' AS VARCHAR(50))     AS campaign,
-    cohort_month                   AS cohort,
+    wave_dt                        AS cohort,
     CAST('ALL'     AS VARCHAR(50)) AS segment,
     CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
     test_control_flag, cohort_arm,
@@ -273,13 +273,13 @@ SELECT
     SUM(responders)         AS responders,
     SUM(responders_target)  AS responders_target
 FROM base
-GROUP BY cohort_month, test_control_flag, cohort_arm
+GROUP BY wave_dt, test_control_flag, cohort_arm
 
 UNION ALL
 
 SELECT
     CAST('O2P' AS VARCHAR(50))          AS campaign,
-    cohort_month                        AS cohort,
+    wave_dt                             AS cohort,
     CAST('REPORT_GROUP' AS VARCHAR(50)) AS segment,
     rpt_grp_cd                          AS segment_level,
     test_control_flag, cohort_arm,
