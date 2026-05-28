@@ -256,10 +256,10 @@ ORDER BY 2, 5, 6, 7
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
--- ║ BLOCK 3 — O2P (using curated dl_mr_prod.nbo_pba_upgrade)                   ║
--- ║ tactic_id filter: SUBSTR(tactic_id,8,3)='O2P'. TG4=TEST, TG7=CONTROL.     ║
--- ║ cohort_arm: ASYNC if chnl_mb=1. ALL grain only (no rpt_grp_cd breakdown).  ║
--- ║ responders = success=1; responders_target = primary_success=1.             ║
+-- ║ BLOCK 3 — O2P                                                              ║
+-- ║ tactic_ids: 2026099O2P, 2026126O2P, 2026132O2P (suffix is letter O).       ║
+-- ║ TG4=TEST, TG7=CONTROL. cohort_arm: ASYNC if RPT_GRP_CD IN (9 PO2P codes).  ║
+-- ║ Both arms get a responder count (CR_APP chain).                            ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -269,87 +269,143 @@ vintage_days AS (
     WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
 ),
 
-cohort AS (
+cohort_raw AS (
     SELECT
         clnt_no,
-        tactic_id,
         treatmt_strt_dt,
         treatmt_end_dt,
         CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month,
-        current_product,
-        target_product,
-        primary_success,
-        secondary_success,
-        success,
-        response_dt,
-        CASE WHEN chnl_mb = 1 THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm,
+        TRIM(rpt_grp_cd) AS rpt_grp_cd,
         CASE
             WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
             WHEN TRIM(tst_grp_cd) = 'TG7' THEN 'CONTROL'
-        END AS test_control_flag
-    FROM dl_mr_prod.nbo_pba_upgrade
+        END AS test_control_flag,
+        CASE
+            WHEN TRIM(rpt_grp_cd) IN (
+                'PO2PNL01','PO2PNL03','PO2PNL07',
+                'PO2POT01','PO2POT03','PO2POT07',
+                'PO2PPR01','PO2PPR03','PO2PPR07'
+            ) THEN 'ASYNC' ELSE 'NON_ASYNC'
+        END AS cohort_arm,
+        CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),
 
-population AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
-           COUNT(DISTINCT clnt_no) AS total_population
-    FROM cohort
-    GROUP BY 1,2,3
+cohort AS (
+    SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt,
+           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+           MAX(is_mobile) AS is_mobile
+    FROM cohort_raw
+    GROUP BY 1,2,3,4,5,6,7
 ),
 
-success_daily AS (
-    SELECT cohort_month, test_control_flag, cohort_arm,
-           (response_dt - treatmt_strt_dt) AS vintage_day,
-           COUNT(DISTINCT CASE WHEN success          = 1 THEN clnt_no END) AS responders,
-           COUNT(DISTINCT CASE WHEN primary_success  = 1 THEN clnt_no END) AS responders_target
+population AS (
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+           COUNT(DISTINCT clnt_no)                                  AS total_population,
+           COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
     FROM cohort
-    WHERE response_dt IS NOT NULL
-      AND (response_dt - treatmt_strt_dt) BETWEEN 0 AND 60
     GROUP BY 1,2,3,4
 ),
 
+applications AS (
+    SELECT a.clnt_no, d.prod_app_dt AS app_dt
+    FROM DDWV01.CR_APP_CLNT_RELTN     AS a
+    JOIN DDWV01.OVRL_CR_APP            AS b
+        ON  b.cr_app_id  = a.cr_app_id
+        AND b.sys_src_id = a.sys_src_id
+    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN AS c
+        ON  c.cr_app_id          = a.cr_app_id
+        AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
+        AND c.sys_src_id         = a.sys_src_id
+    JOIN DDWV01.CR_APP_PROD            AS d
+        ON  d.cr_app_id          = c.cr_app_id
+        AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
+        AND d.sys_src_id         = c.sys_src_id
+    WHERE b.app_typ = 'P'
+      AND d.appl_for_prod_typ IN ('40','41','43')
+      AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
+      AND d.prod_app_compl_dt IS NOT NULL
+      AND d.prod_app_compl_dt >= DATE '2025-01-01'
+),
+
+success_events AS (
+    SELECT c.cohort_month, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
+           c.clnt_no, c.treatmt_strt_dt,
+           MIN(a.app_dt) AS first_app_dt
+    FROM cohort c
+    INNER JOIN applications a
+        ON  a.clnt_no = c.clnt_no
+        AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
+    GROUP BY 1,2,3,4,5,6
+),
+
+success_daily AS (
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+           (first_app_dt - treatmt_strt_dt) AS vintage_day,
+           COUNT(DISTINCT clnt_no) AS responders
+    FROM success_events
+    WHERE (first_app_dt - treatmt_strt_dt) BETWEEN 0 AND 60
+    GROUP BY 1,2,3,4,5
+),
+
 spine AS (
-    SELECT p.cohort_month, p.test_control_flag, p.cohort_arm,
-           v.vintage_day, p.total_population
+    SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
+           v.vintage_day, p.total_population, p.mobile_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
 
 base AS (
     SELECT
-        s.cohort_month, s.test_control_flag, s.cohort_arm, s.vintage_day,
-        s.total_population,
-        COALESCE(r.responders,        0) AS responders,
-        COALESCE(r.responders_target, 0) AS responders_target
+        s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
+        s.total_population, s.mobile_population,
+        COALESCE(r.responders, 0) AS responders
     FROM spine s
     LEFT JOIN success_daily r
         ON  r.cohort_month      = s.cohort_month
+        AND r.rpt_grp_cd        = s.rpt_grp_cd
         AND r.test_control_flag = s.test_control_flag
         AND r.cohort_arm        = s.cohort_arm
         AND r.vintage_day       = s.vintage_day
+),
+
+final_grain AS (
+    SELECT
+        cohort_month                          AS cohort,
+        CAST('ALL'     AS VARCHAR(50))        AS segment,
+        CAST('OVERALL' AS VARCHAR(50))        AS segment_level,
+        test_control_flag, cohort_arm, vintage_day,
+        SUM(total_population)                 AS total_population,
+        SUM(mobile_population)                AS mobile_population,
+        SUM(responders)                       AS responders
+    FROM base
+    GROUP BY cohort_month, test_control_flag, cohort_arm, vintage_day
+
+    UNION ALL
+
+    SELECT
+        cohort_month                          AS cohort,
+        CAST('REPORT_GROUP' AS VARCHAR(50))   AS segment,
+        rpt_grp_cd                            AS segment_level,
+        test_control_flag, cohort_arm, vintage_day,
+        total_population, mobile_population,
+        responders
+    FROM base
 )
 
 SELECT
-    CAST('O2P'     AS VARCHAR(50)) AS campaign,
-    cohort_month                   AS cohort,
-    CAST('ALL'     AS VARCHAR(50)) AS segment,
-    CAST('OVERALL' AS VARCHAR(50)) AS segment_level,
-    test_control_flag, cohort_arm, vintage_day,
-    total_population,
-    responders, responders_target,
+    CAST('O2P' AS VARCHAR(50)) AS campaign,
+    cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
+    total_population, mobile_population,
+    responders,
     SUM(responders) OVER (
-        PARTITION BY cohort_month, test_control_flag, cohort_arm
+        PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
         ORDER BY vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS responders_cum,
-    SUM(responders_target) OVER (
-        PARTITION BY cohort_month, test_control_flag, cohort_arm
-        ORDER BY vintage_day
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS responders_target_cum
-FROM base
-ORDER BY 2, 5, 6, 7
+    ) AS responders_cum
+FROM final_grain
+ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day
 ;
