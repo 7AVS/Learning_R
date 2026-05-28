@@ -53,6 +53,8 @@ cohort AS (
         responder_anyproduct,
         responder_targetproduct,
         responder_upgrade_path,
+        nibt_expected_value,
+        nibt_expec_value_upgradepath,
         -- cohort_arm from the campaign code (same allowlist as position-3 in tactic event)
         CASE
             WHEN strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
