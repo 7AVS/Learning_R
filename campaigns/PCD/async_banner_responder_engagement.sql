@@ -331,7 +331,7 @@ o2p_applications AS (
         AND d.sys_src_id         = c.sys_src_id
     WHERE b.app_typ = 'P'
       AND d.appl_for_prod_typ IN ('40','41','43')
-      AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
+      AND d.prod_app_sts_cd IN ('32','37','45','47','51','56','62')
       AND d.prod_app_compl_dt IS NOT NULL
       AND d.prod_app_compl_dt >= DATE '2025-01-01'
 ),
