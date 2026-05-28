@@ -286,8 +286,7 @@ cohort_raw AS (
                 'PO2POT01','PO2POT03','PO2POT07',
                 'PO2PPR01','PO2PPR03','PO2PPR07'
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
-        END AS cohort_arm,
-        CASE WHEN TRIM(tactic_cell_cd) LIKE '%MB%' THEN 1 ELSE 0 END AS is_mobile
+        END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
@@ -295,17 +294,14 @@ cohort_raw AS (
 ),
 
 cohort AS (
-    SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt,
-           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           MAX(is_mobile) AS is_mobile
+    SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt,
+           cohort_month, rpt_grp_cd, test_control_flag, cohort_arm
     FROM cohort_raw
-    GROUP BY 1,2,3,4,5,6,7
 ),
 
 population AS (
     SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
-           COUNT(DISTINCT clnt_no)                                  AS total_population,
-           COUNT(DISTINCT CASE WHEN is_mobile = 1 THEN clnt_no END) AS mobile_population
+           COUNT(DISTINCT clnt_no) AS total_population
     FROM cohort
     GROUP BY 1,2,3,4
 ),
@@ -343,20 +339,28 @@ success_events AS (
     GROUP BY 1,2,3,4,5,6
 ),
 
-success_daily AS (
+responders_daily AS (
     SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
            (first_app_dt - treatmt_strt_dt) AS vintage_day,
-           COUNT(DISTINCT clnt_no) AS responders,
-           COUNT(DISTINCT CASE WHEN (first_app_dt_target - treatmt_strt_dt) BETWEEN 0 AND 60
-                               THEN clnt_no END) AS responders_target
+           COUNT(DISTINCT clnt_no) AS responders
     FROM success_events
     WHERE (first_app_dt - treatmt_strt_dt) BETWEEN 0 AND 60
     GROUP BY 1,2,3,4,5
 ),
 
+responders_target_daily AS (
+    SELECT cohort_month, rpt_grp_cd, test_control_flag, cohort_arm,
+           (first_app_dt_target - treatmt_strt_dt) AS vintage_day,
+           COUNT(DISTINCT clnt_no) AS responders_target
+    FROM success_events
+    WHERE first_app_dt_target IS NOT NULL
+      AND (first_app_dt_target - treatmt_strt_dt) BETWEEN 0 AND 60
+    GROUP BY 1,2,3,4,5
+),
+
 spine AS (
     SELECT p.cohort_month, p.rpt_grp_cd, p.test_control_flag, p.cohort_arm,
-           v.vintage_day, p.total_population, p.mobile_population
+           v.vintage_day, p.total_population
     FROM population p
     CROSS JOIN vintage_days v
 ),
@@ -364,16 +368,22 @@ spine AS (
 base AS (
     SELECT
         s.cohort_month, s.rpt_grp_cd, s.test_control_flag, s.cohort_arm, s.vintage_day,
-        s.total_population, s.mobile_population,
-        COALESCE(r.responders,        0) AS responders,
-        COALESCE(r.responders_target, 0) AS responders_target
+        s.total_population,
+        COALESCE(r1.responders,        0) AS responders,
+        COALESCE(r2.responders_target, 0) AS responders_target
     FROM spine s
-    LEFT JOIN success_daily r
-        ON  r.cohort_month      = s.cohort_month
-        AND r.rpt_grp_cd        = s.rpt_grp_cd
-        AND r.test_control_flag = s.test_control_flag
-        AND r.cohort_arm        = s.cohort_arm
-        AND r.vintage_day       = s.vintage_day
+    LEFT JOIN responders_daily r1
+        ON  r1.cohort_month      = s.cohort_month
+        AND r1.rpt_grp_cd        = s.rpt_grp_cd
+        AND r1.test_control_flag = s.test_control_flag
+        AND r1.cohort_arm        = s.cohort_arm
+        AND r1.vintage_day       = s.vintage_day
+    LEFT JOIN responders_target_daily r2
+        ON  r2.cohort_month      = s.cohort_month
+        AND r2.rpt_grp_cd        = s.rpt_grp_cd
+        AND r2.test_control_flag = s.test_control_flag
+        AND r2.cohort_arm        = s.cohort_arm
+        AND r2.vintage_day       = s.vintage_day
 ),
 
 final_grain AS (
@@ -383,7 +393,6 @@ final_grain AS (
         CAST('OVERALL' AS VARCHAR(50))        AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
         SUM(total_population)                 AS total_population,
-        SUM(mobile_population)                AS mobile_population,
         SUM(responders)                       AS responders,
         SUM(responders_target)                AS responders_target
     FROM base
@@ -396,7 +405,7 @@ final_grain AS (
         CAST('REPORT_GROUP' AS VARCHAR(50))   AS segment,
         rpt_grp_cd                            AS segment_level,
         test_control_flag, cohort_arm, vintage_day,
-        total_population, mobile_population,
+        total_population,
         responders, responders_target
     FROM base
 )
@@ -404,7 +413,7 @@ final_grain AS (
 SELECT
     CAST('O2P' AS VARCHAR(50)) AS campaign,
     cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day,
-    total_population, mobile_population,
+    total_population,
     responders, responders_target,
     SUM(responders) OVER (
         PARTITION BY cohort, segment, segment_level, test_control_flag, cohort_arm
