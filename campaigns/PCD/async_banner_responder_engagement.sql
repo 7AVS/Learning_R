@@ -15,7 +15,7 @@
 -- ║ Cohort + conversion: dl_mr_prod.cards_pcd_ongoing_decis_resp               ║
 -- ║ Engagement: edl0_im GA4 ecommerce reduced                                  ║
 -- ║ Segments: OVERALL (ALL/ALL) + PRODUCT (product_at_decision) + CHANNEL      ║
--- ║           (fulfillment_channel — candidate field, verify exists on table)  ║
+-- ║           (fulfillment_channel from cards_pcd_ongoing_decis_resp)          ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -23,11 +23,10 @@ WITH
 pcd_cohort AS (
     SELECT
         clnt_no,
-        treatmt_strt_dt,
-        treatmt_strt_dt                  AS wave_dt,
+        response_start,
+        response_start                   AS wave_dt,
         product_at_decision,
         responder_anyproduct,
-        -- fulfillment_channel: varchar(20) candidate — confirm field exists before run
         COALESCE(CAST(fulfillment_channel AS VARCHAR), '(null)') AS fulfillment_channel,
         CASE
             WHEN TRIM(test_groups_period) LIKE '%C' THEN 'CONTROL'
@@ -42,7 +41,6 @@ pcd_cohort AS (
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent IN ('2026111PCD','2026125PCD')
       AND response_start >= DATE '2026-04-01'
-      AND TRIM(test_groups_period) IN ('', '') -- keep NULLs filtered same as success file
 ),
 
 -- NOTE: engagement file filters PCD by it_item_name (not it_item_id). The four
@@ -97,7 +95,7 @@ pcd_converter_events AS (
     FROM pcd_cohort c
     LEFT JOIN pcd_ga4_raw g
         ON  g.clnt_no    = c.clnt_no
-        AND g.event_date BETWEEN c.treatmt_strt_dt AND date_add('day', 60, c.treatmt_strt_dt)
+        AND g.event_date BETWEEN c.response_start AND date_add('day', 60, c.response_start)
     WHERE c.responder_anyproduct = 1
       AND c.test_control_flag IS NOT NULL
     GROUP BY
@@ -172,8 +170,7 @@ ORDER BY campaign, cohort, segment, segment_level, test_control_flag, cohort_arm
 -- ║ BLOCK 2 — CTU                                                              ║
 -- ║ Cohort + conversion: dl_mr_prod.nbo_pba_upgrade                            ║
 -- ║ Engagement: edl0_im GA4 ecommerce reduced, it_item_id = 'i_300102'         ║
--- ║ Segments: OVERALL (ALL/ALL) + CHANNEL (fulfilmnt_chnl — candidate field,   ║
--- ║           char(1), verify exists on nbo_pba_upgrade before run)            ║
+-- ║ Segments: OVERALL (ALL/ALL) + CHANNEL (fulfilmnt_chnl from nbo_pba_upgrade)║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
 WITH
@@ -184,7 +181,6 @@ ctu_cohort AS (
         treatmt_strt_dt,
         treatmt_strt_dt                  AS wave_dt,
         success,
-        -- fulfilmnt_chnl: char(1) candidate — confirm field exists before run
         COALESCE(CAST(fulfilmnt_chnl AS VARCHAR), '(null)') AS fulfilmnt_chnl,
         CAST('ALL' AS VARCHAR)           AS test_control_flag,
         CASE WHEN chnl_mb = 1 THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm
