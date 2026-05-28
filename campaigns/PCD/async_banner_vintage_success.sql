@@ -189,7 +189,7 @@ cohort AS (
         CASE WHEN chnl_mb = 1 THEN 'ASYNC' ELSE 'NON_ASYNC' END AS cohort_arm,
         CAST('ALL' AS VARCHAR(50)) AS test_control_flag
     FROM dl_mr_prod.nbo_pba_upgrade
-    WHERE SUBSTR(tactic_id, 8, 3) = 'CTU'
+    WHERE tactic_id = '2026098CTU'
       AND treatmt_strt_dt >= DATE '2026-04-01'
 ),
 
@@ -288,7 +288,7 @@ cohort AS (
             WHEN TRIM(tst_grp_cd) = 'TG7' THEN 'CONTROL'
         END AS test_control_flag
     FROM dl_mr_prod.nbo_pba_upgrade
-    WHERE SUBSTR(tactic_id, 8, 3) = 'O2P'
+    WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),
