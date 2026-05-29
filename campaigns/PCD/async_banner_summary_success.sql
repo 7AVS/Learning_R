@@ -45,7 +45,7 @@ cohort AS (
             WHEN TRIM(test_groups_period) LIKE '%T' THEN 'TEST'
         END AS test_control_flag
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
-    WHERE tactic_id_parent IN ('2026111PCD','2026125PCD')
+    WHERE tactic_id_parent = '2026111PCD'
       AND response_start >= DATE '2026-04-01'
 ),
 
@@ -210,7 +210,7 @@ cohort_raw AS (
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
         END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
+    WHERE tactic_id = '2026099O2P'
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),

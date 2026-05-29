@@ -33,9 +33,11 @@
 
 WITH
 vintage_days AS (
-    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    -- 0..60 integer series; date anchor is arbitrary, NOT a campaign launch date
+    -- (vintage_day is anchored per cohort downstream via the JOIN condition).
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM sys_calendar.calendar
-    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
+    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-01-01' + 60
 ),
 
 cohort AS (
@@ -67,7 +69,7 @@ cohort AS (
             WHEN TRIM(test_groups_period) LIKE '%T' THEN 'TEST'
         END AS test_control_flag
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
-    WHERE tactic_id_parent IN ('2026111PCD','2026125PCD')
+    WHERE tactic_id_parent = '2026111PCD'
       AND response_start >= DATE '2026-04-01'
 ),
 
@@ -192,9 +194,11 @@ ORDER BY 2, 3, 4, 5, 6, 7
 
 WITH
 vintage_days AS (
-    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    -- 0..60 integer series; date anchor is arbitrary, NOT a campaign launch date
+    -- (vintage_day is anchored per cohort downstream via the JOIN condition).
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM sys_calendar.calendar
-    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
+    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-01-01' + 60
 ),
 
 cohort AS (
@@ -288,9 +292,11 @@ ORDER BY 2, 5, 6, 7
 
 WITH
 vintage_days AS (
-    SELECT (calendar_date - DATE '2026-04-01') AS vintage_day
+    -- 0..60 integer series; date anchor is arbitrary, NOT a campaign launch date
+    -- (vintage_day is anchored per cohort downstream via the JOIN condition).
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM sys_calendar.calendar
-    WHERE calendar_date BETWEEN DATE '2026-04-01' AND DATE '2026-04-01' + 60
+    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-01-01' + 60
 ),
 
 cohort_raw AS (
@@ -312,7 +318,7 @@ cohort_raw AS (
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
         END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
+    WHERE tactic_id = '2026099O2P'
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(tst_grp_cd) IN ('TG4','TG7')
 ),
