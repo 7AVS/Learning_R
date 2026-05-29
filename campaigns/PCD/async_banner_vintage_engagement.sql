@@ -37,7 +37,7 @@ pcd_cohort_raw AS (
             THEN 'ASYNC' ELSE 'NON_ASYNC'
         END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('2026111PCD','2026125PCD')
+    WHERE tactic_id = '2026111PCD'
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND trim(coalesce(tst_grp_cd, '')) LIKE '%T'
 ),
@@ -347,7 +347,7 @@ o2p_cohort_raw AS (
             ) THEN 'ASYNC' ELSE 'NON_ASYNC'
         END AS cohort_arm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE tactic_id IN ('2026099O2P','2026126O2P','2026132O2P')
+    WHERE tactic_id = '2026099O2P'
       AND treatmt_strt_dt >= DATE '2026-04-01'
       AND TRIM(tst_grp_cd) = 'TG4'
 ),
