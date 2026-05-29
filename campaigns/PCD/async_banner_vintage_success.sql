@@ -4,11 +4,10 @@
 --   No engagement columns. Vintage day 0-60, cumulative window functions
 --   partitioned by (cohort, segment, segment_level, test_control_flag, cohort_arm).
 -- Sources:
---   PCD  — DG6V01.TACTIC_EVNT_IP_AR_HIST + D3CV12A.DLY_FULL_PORTFOLIO
---   CTU  — DG6V01.TACTIC_EVNT_IP_AR_HIST + DDWV01.CLNT_AR_RELTN_DLY/AR_STATIC_DLY/
---           DEPOSIT_ACCOUNT_DLY/DEP_ACCT_SW_DLY/PBA_ACCT_LKUP
+--   PCD  — dl_mr_prod.cards_pcd_ongoing_decis_resp (curated)
+--   CTU  — dl_mr_prod.nbo_pba_upgrade (curated)
 --   O2P  — DG6V01.TACTIC_EVNT_IP_AR_HIST + DDWV01.CR_APP_CLNT_RELTN/OVRL_CR_APP/
---           CR_APP_CLNT_PROD_RELTN/CR_APP_PROD
+--           CR_APP_CLNT_PROD_RELTN/CR_APP_PROD (raw CR_APP chain — O2P not in curated)
 -- Sibling: async_banner_vintage_engagement.sql (Trino, engagement only)
 
 
