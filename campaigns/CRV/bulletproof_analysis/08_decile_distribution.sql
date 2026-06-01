@@ -115,9 +115,9 @@ SELECT
     CAST('pli_decile' AS VARCHAR(20)) AS slicer_dim,
     decile                            AS slicer_value,
     cohort,
-    COUNT(*)                          AS n_leads,
+    CAST(COUNT(*) AS BIGINT)           AS n_leads,
     SUM(CAST(responder_cli AS BIGINT)) AS pcl_responders,
-    SUM(crv_responder)                AS crv_responders
+    SUM(CAST(crv_responder AS BIGINT)) AS crv_responders
 FROM labeled
 GROUP BY cohort, decile
 
@@ -128,9 +128,9 @@ SELECT
     CAST('pli_new_decile' AS VARCHAR(20)) AS slicer_dim,
     new_decile                            AS slicer_value,
     cohort,
-    COUNT(*)                          AS n_leads,
+    CAST(COUNT(*) AS BIGINT)           AS n_leads,
     SUM(CAST(responder_cli AS BIGINT)) AS pcl_responders,
-    SUM(crv_responder)                AS crv_responders
+    SUM(CAST(crv_responder AS BIGINT)) AS crv_responders
 FROM labeled
 GROUP BY cohort, new_decile
 
