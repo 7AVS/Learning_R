@@ -7,7 +7,9 @@
 --   arms; a CRV anchor is meaningless for Control (held out, no CRV event). Guarded to dt_cl_change >= pcl_strt_dt
 --   so the CLI is attributed to THIS PCL wave, not an earlier one. NULL for non-responders / out-of-window CLIs.
 -- Now reported overall + per PCL deployment month, so the dose gradient can be checked across waves.
--- Counts + percentile days (Q06/Q10 idiom). Rates computed in Excel.
+-- Counts + mean days only (single-pass aggregates). PERCENTILE_DISC dropped: it sorts the full
+--   population per group twice and blows spool. If a median/distribution is needed, run it separately.
+-- Rates computed in Excel.
 
 WITH pcl_universe AS (
     SELECT acct_no, treatmt_strt_dt AS pcl_strt_dt, treatmt_end_dt AS pcl_end_dt, responder_cli, dt_cl_change,
@@ -81,10 +83,7 @@ SELECT
     COUNT(*)                                                              AS n_leads,
     SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)                    AS pcl_responders,
     SUM(CASE WHEN days_to_convert IS NOT NULL THEN 1 ELSE 0 END)          AS n_timed_responders,
-    AVG(CAST(days_to_convert AS DECIMAL(12,4)))                           AS mean_days_to_convert,
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY days_to_convert)         AS p25_days_to_convert,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY days_to_convert)         AS p50_days_to_convert,
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY days_to_convert)         AS p75_days_to_convert
+    AVG(CAST(days_to_convert AS DECIMAL(12,4)))                           AS mean_days_to_convert
 FROM bucketed
 GROUP BY arm, day_bucket
 
@@ -98,10 +97,7 @@ SELECT
     COUNT(*)                                                              AS n_leads,
     SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)                    AS pcl_responders,
     SUM(CASE WHEN days_to_convert IS NOT NULL THEN 1 ELSE 0 END)          AS n_timed_responders,
-    AVG(CAST(days_to_convert AS DECIMAL(12,4)))                           AS mean_days_to_convert,
-    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY days_to_convert)         AS p25_days_to_convert,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY days_to_convert)         AS p50_days_to_convert,
-    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY days_to_convert)         AS p75_days_to_convert
+    AVG(CAST(days_to_convert AS DECIMAL(12,4)))                           AS mean_days_to_convert
 FROM bucketed
 GROUP BY pcl_month, arm, day_bucket
 
