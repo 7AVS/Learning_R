@@ -34,47 +34,54 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
--- Single scan over pcl_universe with EXISTS flags per arm.
--- Extra EXISTS checks responder=1 on the matching CRV wave(s) for CRV-conversion count.
+-- Teradata-safe: EXISTS is illegal inside CASE. Each arm's overlap is resolved in a
+-- match CTE (non-equi join on acct + window intersection); LEFT JOIN + IS NOT NULL gives
+-- the overlap flag. MAX(responder) over the overlapping waves = the CRV-conversion flag.
+-- Match CTEs are unique on (acct_no, treatmt_strt_dt, treatmt_end_dt) so the join-back
+-- to pcl_universe does not multiply rows. Counts are identical to the EXISTS version.
+action_match AS (
+    SELECT
+        p.acct_no,
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt,
+        MAX(ca.responder) AS crv_action_responder_max
+    FROM pcl_universe p
+    JOIN crv_action ca
+      ON ca.acct_no           = p.acct_no
+     AND ca.offer_start_date <= p.treatmt_end_dt
+     AND ca.offer_end_date   >= p.treatmt_strt_dt
+    GROUP BY p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+),
+control_match AS (
+    SELECT
+        p.acct_no,
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt,
+        MAX(cc.responder) AS crv_control_responder_max
+    FROM pcl_universe p
+    JOIN crv_control cc
+      ON cc.acct_no           = p.acct_no
+     AND cc.offer_start_date <= p.treatmt_end_dt
+     AND cc.offer_end_date   >= p.treatmt_strt_dt
+    GROUP BY p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+),
 pcl_flagged AS (
     SELECT
         p.pcl_month,
         p.responder_cli,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_action ca
-                WHERE ca.acct_no           = p.acct_no
-                  AND ca.offer_start_date <= p.treatmt_end_dt
-                  AND ca.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 1 ELSE 0
-        END AS overlap_action_flag,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_action ca
-                WHERE ca.acct_no           = p.acct_no
-                  AND ca.offer_start_date <= p.treatmt_end_dt
-                  AND ca.offer_end_date   >= p.treatmt_strt_dt
-                  AND ca.responder        = 1
-            ) THEN 1 ELSE 0
-        END AS crv_responded_action_flag,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_control cc
-                WHERE cc.acct_no           = p.acct_no
-                  AND cc.offer_start_date <= p.treatmt_end_dt
-                  AND cc.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 1 ELSE 0
-        END AS overlap_control_flag,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_control cc
-                WHERE cc.acct_no           = p.acct_no
-                  AND cc.offer_start_date <= p.treatmt_end_dt
-                  AND cc.offer_end_date   >= p.treatmt_strt_dt
-                  AND cc.responder        = 1
-            ) THEN 1 ELSE 0
-        END AS crv_responded_control_flag
+        CASE WHEN am.acct_no IS NOT NULL              THEN 1 ELSE 0 END AS overlap_action_flag,
+        CASE WHEN am.crv_action_responder_max  = 1    THEN 1 ELSE 0 END AS crv_responded_action_flag,
+        CASE WHEN cm.acct_no IS NOT NULL              THEN 1 ELSE 0 END AS overlap_control_flag,
+        CASE WHEN cm.crv_control_responder_max = 1    THEN 1 ELSE 0 END AS crv_responded_control_flag
     FROM pcl_universe p
+    LEFT JOIN action_match am
+      ON am.acct_no         = p.acct_no
+     AND am.treatmt_strt_dt = p.treatmt_strt_dt
+     AND am.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN control_match cm
+      ON cm.acct_no         = p.acct_no
+     AND cm.treatmt_strt_dt = p.treatmt_strt_dt
+     AND cm.treatmt_end_dt  = p.treatmt_end_dt
 ),
 agg_overall AS (
     SELECT
