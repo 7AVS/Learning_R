@@ -71,17 +71,17 @@ pcl_flagged AS (
         p.responder_cli,
         CASE WHEN am.acct_no IS NOT NULL              THEN 1 ELSE 0 END AS overlap_action_flag,
         CASE WHEN am.crv_action_responder_max  = 1    THEN 1 ELSE 0 END AS crv_responded_action_flag,
-        CASE WHEN cm.acct_no IS NOT NULL              THEN 1 ELSE 0 END AS overlap_control_flag,
-        CASE WHEN cm.crv_control_responder_max = 1    THEN 1 ELSE 0 END AS crv_responded_control_flag
+        CASE WHEN cm1.acct_no IS NOT NULL              THEN 1 ELSE 0 END AS overlap_control_flag,
+        CASE WHEN cm1.crv_control_responder_max = 1    THEN 1 ELSE 0 END AS crv_responded_control_flag
     FROM pcl_universe p
     LEFT JOIN action_match am
       ON am.acct_no         = p.acct_no
      AND am.treatmt_strt_dt = p.treatmt_strt_dt
      AND am.treatmt_end_dt  = p.treatmt_end_dt
-    LEFT JOIN control_match cm
-      ON cm.acct_no         = p.acct_no
-     AND cm.treatmt_strt_dt = p.treatmt_strt_dt
-     AND cm.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN control_match cm1
+      ON cm1.acct_no         = p.acct_no
+     AND cm1.treatmt_strt_dt = p.treatmt_strt_dt
+     AND cm1.treatmt_end_dt  = p.treatmt_end_dt
 ),
 agg_overall AS (
     SELECT
