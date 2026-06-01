@@ -134,5 +134,5 @@ SELECT
 FROM labeled
 GROUP BY cohort, new_decile
 
-ORDER BY slicer_dim, cohort, slicer_value
+ORDER BY 1, 3, 2
 ;
