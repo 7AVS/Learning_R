@@ -1,6 +1,10 @@
--- PCL decile distribution across three cohorts: Action overlap, Control overlap, no-overlap PCL leads.
--- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account. Match CTEs replace EXISTS-in-CASE.
--- Long format (slicer_dim × slicer_value) with PCL and CRV responder counts. Andre computes shares in Excel.
+-- Cannibalization concentration: PCL conversion + CRV conversion by PCL propensity decile, per cohort.
+-- Cohort = the CRV dimension (action_overlap / control_overlap / no_overlap).
+-- Decile  = the PCL dimension. cards_pli_decision_resp carries TWO PCL scores: decile (from model_score)
+--   and new_decile (from cv_score) -- old vs new PCL model. Both labeled pli_*; carry both, pick empirically.
+-- NOTE: the curated CRV tables have NO decile/score column, so we cannot slice by CRV propensity here.
+-- PCL-LEAD CENTRIC: one PCL-mobile deployment per account. Match CTEs replace EXISTS-in-CASE.
+-- Long format (slicer_dim x slicer_value); counts only, Andre computes rates/shares in Excel.
 
 WITH pcl_universe AS (
     SELECT
@@ -108,7 +112,7 @@ labeled AS (
 
 -- Block 1: distribution by original decile
 SELECT
-    CAST('decile'     AS VARCHAR(20)) AS slicer_dim,
+    CAST('pli_decile' AS VARCHAR(20)) AS slicer_dim,
     decile                            AS slicer_value,
     cohort,
     COUNT(*)                          AS n_leads,
@@ -121,8 +125,8 @@ UNION ALL
 
 -- Block 2: distribution by new_decile
 SELECT
-    CAST('new_decile' AS VARCHAR(20)) AS slicer_dim,
-    new_decile                        AS slicer_value,
+    CAST('pli_new_decile' AS VARCHAR(20)) AS slicer_dim,
+    new_decile                            AS slicer_value,
     cohort,
     COUNT(*)                          AS n_leads,
     SUM(responder_cli)                AS pcl_responders,
