@@ -1,5 +1,5 @@
 -- PCL decile distribution across three cohorts: Action overlap, Control overlap, no-overlap PCL leads.
--- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account. EXISTS flags replace LEFT JOIN + GROUP BY.
+-- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account. Match CTEs replace EXISTS-in-CASE.
 -- Counts only. Andre computes shares in Excel.
 
 WITH pcl_universe AS (
@@ -32,28 +32,48 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
--- Single scan over pcl_universe; EXISTS flags both arms with no fan-out, no intermediate GROUP BY.
+-- Teradata-safe: EXISTS is illegal inside CASE. Overlap is resolved in match CTEs
+-- (non-equi join on acct + window intersection); LEFT JOIN + IS NOT NULL gives the flag.
+-- Unique on (acct_no, treatmt_strt_dt, treatmt_end_dt) so no row multiplication on join-back.
+action_match AS (
+    SELECT
+        p.acct_no,
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt
+    FROM pcl_universe p
+    JOIN crv_action ca
+      ON ca.acct_no           = p.acct_no
+     AND ca.offer_start_date <= p.treatmt_end_dt
+     AND ca.offer_end_date   >= p.treatmt_strt_dt
+    GROUP BY p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+),
+control_match AS (
+    SELECT
+        p.acct_no,
+        p.treatmt_strt_dt,
+        p.treatmt_end_dt
+    FROM pcl_universe p
+    JOIN crv_control cc
+      ON cc.acct_no           = p.acct_no
+     AND cc.offer_start_date <= p.treatmt_end_dt
+     AND cc.offer_end_date   >= p.treatmt_strt_dt
+    GROUP BY p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+),
 pcl_flagged AS (
     SELECT
         p.decile,
         p.new_decile,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_action a
-                WHERE a.acct_no           = p.acct_no
-                  AND a.offer_start_date <= p.treatmt_end_dt
-                  AND a.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 1 ELSE 0
-        END AS has_action_overlap,
-        CASE
-            WHEN EXISTS (
-                SELECT 1 FROM crv_control ct
-                WHERE ct.acct_no           = p.acct_no
-                  AND ct.offer_start_date <= p.treatmt_end_dt
-                  AND ct.offer_end_date   >= p.treatmt_strt_dt
-            ) THEN 1 ELSE 0
-        END AS has_control_overlap
+        CASE WHEN am.acct_no  IS NOT NULL THEN 1 ELSE 0 END AS has_action_overlap,
+        CASE WHEN cm1.acct_no IS NOT NULL THEN 1 ELSE 0 END AS has_control_overlap
     FROM pcl_universe p
+    LEFT JOIN action_match am
+      ON am.acct_no         = p.acct_no
+     AND am.treatmt_strt_dt = p.treatmt_strt_dt
+     AND am.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN control_match cm1
+      ON cm1.acct_no         = p.acct_no
+     AND cm1.treatmt_strt_dt = p.treatmt_strt_dt
+     AND cm1.treatmt_end_dt  = p.treatmt_end_dt
 ),
 labeled AS (
     SELECT
