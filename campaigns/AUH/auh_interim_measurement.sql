@@ -7,7 +7,7 @@
 --   email did not explicitly confirm '_C' = Control. Treat as working
 --   label only.
 --
--- Channel derived via SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 8) per Andre.
+-- Channel derived via SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 8).
 -- Acquired product and card BIN (first 6 of CARD_NO) pulled from success
 -- table. Join is on acct_no only (NOT a.prod_cd = b.prod_cd) so we can
 -- see when offered_prod != acquired_prod.

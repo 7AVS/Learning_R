@@ -3,7 +3,7 @@
 -- =============================================================================
 --
 -- Requested by: Daniel Chin, 2026-03-18
--- Author:       Andre (from Daniel's framework)
+-- Adapted from Daniel's framework
 --
 -- Structure:
 --   Query 1 — Population counts by MNE, fiscal quarter, test group (T vs C)

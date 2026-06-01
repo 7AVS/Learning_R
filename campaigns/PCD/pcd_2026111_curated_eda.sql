@@ -881,7 +881,7 @@ LEFT JOIN banner_viewers bv ON bv.clnt_no = c.clnt_no;
 -- Open questions / things to verify after running
 -- =============================================================================
 -- 1. channel_deploy_* active indicator = 'Y' (confirmed for channel_deploy_mb on
---    cards_pcd_ongoing_decis_resp by Andre 2026-05-26). D3 + Section I assume the
+--    cards_pcd_ongoing_decis_resp 2026-05-26). D3 + Section I assume the
 --    same convention for the other channel_deploy_* columns — verify via D1 output.
 -- 2. E3/E4 now use MIN/MAX/AVG/STDDEV_POP instead of APPROX_PERCENTILE (Trino-only).
 --    Compute percentiles in Excel from raw distribution if needed.

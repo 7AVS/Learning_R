@@ -21,7 +21,7 @@ ORDER BY unique_clients DESC;
 
 -- DIAGNOSTIC (run separately): distinct tst_grp_cd values for the cohort.
 -- Reveals what falls into the 'OTHER' bucket (codes that don't suffix in T/C).
--- Andre has a (campaign_id, tst_grp_cd) -> action_control mapping for the non-T/C codes.
+-- A (campaign_id, tst_grp_cd) -> action_control mapping exists for the non-T/C codes.
 -- Once that mapping is in hand, replace the 'OTHER' branch above with a CASE list.
 /*
 SELECT

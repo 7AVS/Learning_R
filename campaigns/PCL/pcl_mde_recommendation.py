@@ -38,4 +38,3 @@
 #
 # Let me know if you'd like to walk through the details.
 #
-# Andre

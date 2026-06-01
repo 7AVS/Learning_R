@@ -1,5 +1,5 @@
 /*
-Email draft for Andre to send to William (CRV Senior Manager, line-of-business contact).
+Email draft to William (CRV Senior Manager, line-of-business contact) requesting CRV NIBT.
 Purpose: request a CRV NIBT / value-per-conversion figure for value-management measurement.
 Not a query — text carried in a .sql so it can be pulled into the work environment.
 

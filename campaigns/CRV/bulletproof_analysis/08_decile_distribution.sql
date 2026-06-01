@@ -4,7 +4,7 @@
 --   and new_decile (from cv_score) -- old vs new PCL model. Both labeled pli_*; carry both, pick empirically.
 -- NOTE: the curated CRV tables have NO decile/score column, so we cannot slice by CRV propensity here.
 -- PCL-LEAD CENTRIC: one PCL-mobile deployment per account. Match CTEs replace EXISTS-in-CASE.
--- Long format (slicer_dim x slicer_value); counts only, Andre computes rates/shares in Excel.
+-- Long format (slicer_dim x slicer_value); counts only, rates/shares computed in Excel.
 
 WITH pcl_universe AS (
     SELECT
