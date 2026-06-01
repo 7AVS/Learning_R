@@ -133,8 +133,7 @@ SELECT
     n_control,
     resp_action,
     resp_control,
-    CAST(resp_control AS DECIMAL(12,6)) / NULLIF(n_control, 0)
-        - CAST(resp_action  AS DECIMAL(12,6)) / NULLIF(n_action,  0) AS gap_control_minus_action
+    NULL AS gap_control_minus_action   -- counts only; compute the rate gap in Excel
 FROM gap_by_order
 
 ORDER BY 1, 2
