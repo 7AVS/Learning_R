@@ -46,10 +46,14 @@ WITH crv_action_ranked AS (
       AND action_control = 'Action'
 ),
 caps AS (
-    SELECT 2 AS frequency_cap
-    UNION ALL SELECT 3
-    UNION ALL SELECT 4
-    UNION ALL SELECT 5
+    -- frequency_cap values {2,3,4,5} as rows. Teradata rejects a bare "SELECT 2 UNION ALL SELECT 3..."
+    -- (err 3888: each UNION branch must reference a table), so we generate 4 rows off a real CTE.
+    SELECT rn + 1 AS frequency_cap
+    FROM (
+        SELECT ROW_NUMBER() OVER (ORDER BY acct_no) AS rn
+        FROM crv_action_ranked
+        QUALIFY ROW_NUMBER() OVER (ORDER BY acct_no) <= 4
+    ) g
 )
 SELECT
     k.frequency_cap,
@@ -106,10 +110,14 @@ pcl_overlap_leads AS (
     GROUP BY p.acct_no, p.pcl_strt_dt, p.new_decile, p.responder_cli
 ),
 caps AS (
-    SELECT 2 AS frequency_cap
-    UNION ALL SELECT 3
-    UNION ALL SELECT 4
-    UNION ALL SELECT 5
+    -- frequency_cap values {2,3,4,5} as rows. Teradata rejects a bare "SELECT 2 UNION ALL SELECT 3..."
+    -- (err 3888: each UNION branch must reference a table), so we generate 4 rows off a real CTE.
+    SELECT rn + 1 AS frequency_cap
+    FROM (
+        SELECT ROW_NUMBER() OVER (ORDER BY acct_no) AS rn
+        FROM crv_action_ranked
+        QUALIFY ROW_NUMBER() OVER (ORDER BY acct_no) <= 4
+    ) g
 )
 -- Overall (all deciles pooled)
 SELECT
