@@ -5,6 +5,23 @@
 -- (INNER JOIN filters naturally: only converted CRV decisions have install_details rows).
 -- CRV-Action: channels_deployed LIKE '%IM%'.
 -- CRV-Control: NO channel filter (Control is not deployed to any channel).
+--
+-- WHAT THIS ANSWERS
+--   Characterises the CRV installment book among converters, split by PCL overlap.
+--   Two jobs: (1) the VALUE side of the net (CRV $/conversion); (2) guards Q04 by
+--   checking Action vs Control are balanced on product economics, not just headcount.
+--
+-- FINDINGS (2026-06-01)
+--   * Per-unit economics FLAT across all 4 cohorts: ~$980/plan, ~6.6% APR, ~6.6mo term
+--     -> no product-mix/risk confound; the Q04 cannibalization gap is not a selection artifact.
+--   * Overlap propensity even: 40.3% of Action converters overlap PCL vs 39.2% of Control.
+--   * mean_principal_per_acct = total installment $ per CLIENT across all plans (~$6.7k),
+--     NOT per purchase. Clean per-account plan count ~= 6.85 (principal / txn_principal).
+--   * CAVEAT: n_transactions and txns_per_acct are INFLATED ~1.74x by the tactic_id
+--     fanout used to derive n_waves -- do NOT quote them. n_accounts, the means, APR,
+--     and term are clean. Fix before reuse: count n_waves in a separate CTE.
+--   * This query is the CRV-value multiplier only. It does NOT measure cannibalization
+--     (Q04) or the net (needs Q06 incrementality x this value).
 
 WITH pcl_universe AS (
     SELECT
