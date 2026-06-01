@@ -1,6 +1,6 @@
 -- Net economics: counts of PCL leads, PCL responders, and CRV responders in the overlap cohort.
 -- PCL-LEAD CENTRIC: unit = one PCL-mobile deployment per account.
--- Counts only. No rates, no $ math. Andre computes derived metrics in Excel.
+-- Counts only. No rates, no $ math. Derived metrics computed in Excel.
 
 WITH pcl_universe AS (
     SELECT
