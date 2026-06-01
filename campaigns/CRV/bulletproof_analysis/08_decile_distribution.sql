@@ -116,7 +116,7 @@ SELECT
     decile                            AS slicer_value,
     cohort,
     COUNT(*)                          AS n_leads,
-    SUM(responder_cli)                AS pcl_responders,
+    SUM(CAST(responder_cli AS BIGINT)) AS pcl_responders,
     SUM(crv_responder)                AS crv_responders
 FROM labeled
 GROUP BY cohort, decile
@@ -129,7 +129,7 @@ SELECT
     new_decile                            AS slicer_value,
     cohort,
     COUNT(*)                          AS n_leads,
-    SUM(responder_cli)                AS pcl_responders,
+    SUM(CAST(responder_cli AS BIGINT)) AS pcl_responders,
     SUM(crv_responder)                AS crv_responders
 FROM labeled
 GROUP BY cohort, new_decile
