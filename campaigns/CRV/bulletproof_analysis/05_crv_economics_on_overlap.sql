@@ -235,3 +235,75 @@ GROUP BY
 
 ORDER BY 1, 2
 ;
+
+
+-- ============================================================================
+-- STATEMENT 2 (added 2026-06-02) — ACTION CRV PRODUCT MIX + ECONOMICS (converters only)
+--   Answers: in CRV-Action, what is the distribution of products, and do they differ on
+--   economics (principal/APR/term) and transactional behaviour (plans per account)?
+--   Action only: channels_deployed LIKE '%IM%'. Converters only (INNER JOIN install_details).
+--
+--   !!! FIELD TO CONFIRM: product_at_decision is the PCD convention; the CRV decision table's
+--       product column is NOT documented in the repo. If it's named differently
+--       (e.g. product_current, crv_product, prod_at_decisn), swap it in the 3 places marked.
+-- ============================================================================
+WITH crv_action AS (
+    SELECT
+        acct_no,
+        tactic_id,
+        product_at_decision                                       -- <<< confirm column name
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      AND action_control = 'Action'
+),
+keys AS (
+    SELECT DISTINCT acct_no, tactic_id, product_at_decision       -- <<< confirm column name
+    FROM crv_action
+),
+details AS (
+    SELECT
+        k.product_at_decision,                                    -- <<< confirm column name
+        k.acct_no,
+        d.instl_txn_ref_no,
+        d.instl_apr,
+        d.instl_txn_trm,
+        d.instl_txn_prncpl_amt
+    FROM keys k
+    INNER JOIN dl_mr_prod.cards_crv_install_details d
+      ON d.acct_no   = k.acct_no
+     AND d.tactic_id = k.tactic_id
+),
+acct_agg AS (
+    SELECT
+        product_at_decision,
+        acct_no,
+        COUNT(DISTINCT instl_txn_ref_no)         AS acct_plans,
+        SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_principal
+    FROM details
+    GROUP BY product_at_decision, acct_no
+),
+acct_roll AS (
+    SELECT
+        product_at_decision,
+        COUNT(*)              AS n_accounts,
+        SUM(acct_plans)       AS n_plans,
+        AVG(acct_principal)   AS mean_principal_per_acct
+    FROM acct_agg
+    GROUP BY product_at_decision
+)
+SELECT
+    ar.product_at_decision,
+    ar.n_accounts,
+    ar.n_plans,
+    CAST(ar.n_plans AS FLOAT) / NULLIF(ar.n_accounts, 0)          AS plans_per_acct,
+    ar.mean_principal_per_acct,
+    AVG(CAST(d.instl_txn_prncpl_amt AS FLOAT))                    AS mean_txn_principal,
+    AVG(CAST(d.instl_apr AS FLOAT))                               AS mean_apr,
+    AVG(CAST(d.instl_txn_trm AS FLOAT))                           AS mean_term
+FROM acct_roll ar
+INNER JOIN details d
+  ON d.product_at_decision = ar.product_at_decision
+GROUP BY ar.product_at_decision, ar.n_accounts, ar.n_plans, ar.mean_principal_per_acct
+ORDER BY ar.n_accounts DESC
+;
