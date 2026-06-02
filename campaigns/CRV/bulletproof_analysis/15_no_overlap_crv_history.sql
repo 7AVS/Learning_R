@@ -114,12 +114,10 @@ FROM (
         END AS attribute_value
     FROM classified c
     CROSS JOIN (
-        SELECT 1 AS n  UNION ALL SELECT 2  UNION ALL SELECT 3  UNION ALL SELECT 4
-        UNION ALL SELECT 5  UNION ALL SELECT 6  UNION ALL SELECT 7  UNION ALL SELECT 8
-        UNION ALL SELECT 9  UNION ALL SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12
-        UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 UNION ALL SELECT 16
-        UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL SELECT 20
-        UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23
+        -- 23-row tally (1..23), one per attribute. Built from a real table (TOP 23)
+        -- because Teradata UNION branches can't reference bare literals (err 3888).
+        SELECT ROW_NUMBER() OVER (ORDER BY x) AS n
+        FROM (SELECT TOP 23 1 AS x FROM dl_mr_prod.cards_pli_decision_resp) t
     ) a
 ) u
 GROUP BY attribute_name, attribute_value, crv_hist_class
