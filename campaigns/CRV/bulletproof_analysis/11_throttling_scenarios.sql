@@ -11,10 +11,15 @@
 --   (We tested a per-calendar-month frequency cap and it removed NOTHING — customers get ~1 CRV
 --    touch/month, so nothing is ever bunched enough to trim. Frequency is not the lever; duration is.)
 --
--- TWO statements, two accounting grains (run each):
+-- THREE statements, three views (run each):
 --   STATEMENT 1 — CRV COST, grain = one CRV-Action touch, per max_crv_touches.
 --   STATEMENT 2 — PCL BENEFIT, grain = one PCL-mobile lead, per max_crv_touches x PCL decile,
---                 BOTH propensity models (long format: decile_model + decile_value).
+--                 BOTH propensity models (long format: decile_model + decile_value). Gives pcl_leads_freed.
+--   STATEMENT 3 — THE BASIS for pcl_leads_freed. The contact-frequency distribution: for each PCL
+--                 overlap lead, the position of its EARLIEST colliding CRV touch (1st, 2nd, ... 6+),
+--                 per decile. This is where Statement 2's freed counts come from — not a magic number.
+--                 RECONCILES to Statement 2: pcl_leads_freed[cap N] = SUM(n_overlap_leads) over the
+--                 rows where earliest_colliding_touch > N. e.g. cap 3 freed = touches 4 + 5 + 6+.
 --
 -- A touch is REMOVED under cap N iff crv_touch_number > N (it's past the customer's first N).
 -- A PCL lead is FREED under cap N iff ALL its overlapping Action touches are removed, i.e. even
@@ -167,4 +172,107 @@ FROM pcl_overlap_leads o CROSS JOIN caps k
 GROUP BY k.max_crv_touches, o.decile
 
 ORDER BY 2, 1, 3
+;
+
+
+-- ============================================================================
+-- STATEMENT 3 — THE BASIS: contact-frequency distribution behind pcl_leads_freed
+--   For each PCL overlap lead, the position of its EARLIEST colliding CRV touch, bucketed
+--   1,2,3,4,5,'6+', per decile (both models). No caps here — this is the raw distribution.
+--   freed[cap N] (Statement 2) = SUM(n_overlap_leads) where earliest_colliding_touch > N.
+--   Read it: a lead whose earliest collision is touch 1 is NEVER freed (touch 1 survives any cap>=1);
+--   a lead whose earliest collision is '6+' is freed by every cap 2-5. That's the whole mechanism.
+-- ============================================================================
+WITH crv_action_ranked AS (
+    SELECT
+        acct_no,
+        offer_start_date,
+        offer_end_date,
+        ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY offer_start_date) AS crv_touch_number
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      AND action_control = 'Action'
+),
+pcl_universe AS (
+    SELECT
+        acct_no,
+        treatmt_strt_dt AS pcl_strt_dt,
+        treatmt_end_dt  AS pcl_end_dt,
+        new_decile,
+        decile,
+        responder_cli
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-10-01'
+      AND channel LIKE '%MB%'
+),
+pcl_overlap_leads AS (
+    SELECT
+        p.acct_no,
+        p.pcl_strt_dt,
+        p.new_decile,
+        p.decile,
+        p.responder_cli,
+        MIN(c.crv_touch_number) AS earliest_colliding_touch
+    FROM pcl_universe p
+    JOIN crv_action_ranked c
+      ON c.acct_no          = p.acct_no
+     AND c.offer_start_date <= p.pcl_end_dt
+     AND c.offer_end_date   >= p.pcl_strt_dt
+    GROUP BY p.acct_no, p.pcl_strt_dt, p.new_decile, p.decile, p.responder_cli
+),
+pos AS (
+    -- bucket the earliest colliding touch into 1,2,3,4,5,'6+' (sortable label)
+    SELECT
+        new_decile,
+        decile,
+        responder_cli,
+        CASE WHEN earliest_colliding_touch >= 6 THEN CAST('6+' AS VARCHAR(3))
+             ELSE CAST(earliest_colliding_touch AS VARCHAR(3)) END AS earliest_colliding_touch
+    FROM pcl_overlap_leads
+)
+-- new_decile model: overall
+SELECT
+    CAST('new_decile' AS VARCHAR(12))                    AS decile_model,
+    CAST('ALL' AS VARCHAR(6))                            AS decile_value,
+    earliest_colliding_touch,
+    COUNT(*)                                             AS n_overlap_leads,
+    SUM(responder_cli)                                   AS pcl_responders
+FROM pos
+GROUP BY earliest_colliding_touch
+
+UNION ALL
+-- new_decile model: per decile value
+SELECT
+    CAST('new_decile' AS VARCHAR(12)),
+    CAST(new_decile AS VARCHAR(6)),
+    earliest_colliding_touch,
+    COUNT(*),
+    SUM(responder_cli)
+FROM pos
+GROUP BY new_decile, earliest_colliding_touch
+
+UNION ALL
+-- decile model: overall
+SELECT
+    CAST('decile' AS VARCHAR(12)),
+    CAST('ALL' AS VARCHAR(6)),
+    earliest_colliding_touch,
+    COUNT(*),
+    SUM(responder_cli)
+FROM pos
+GROUP BY earliest_colliding_touch
+
+UNION ALL
+-- decile model: per decile value
+SELECT
+    CAST('decile' AS VARCHAR(12)),
+    CAST(decile AS VARCHAR(6)),
+    earliest_colliding_touch,
+    COUNT(*),
+    SUM(responder_cli)
+FROM pos
+GROUP BY decile, earliest_colliding_touch
+
+ORDER BY 1, 2, 3
 ;
