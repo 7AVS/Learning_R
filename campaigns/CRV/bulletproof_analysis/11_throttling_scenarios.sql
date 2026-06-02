@@ -1,47 +1,55 @@
 -- ============================================================================
--- Q11 — THROTTLING SCENARIOS (throttle vs. kill)
+-- Q11 — THROTTLING SCENARIOS (throttle vs. kill)   [ROLLING 30-DAY CAP]
 -- Question: if we capped CRV-Action contacts instead of killing CRV on IM,
 --   what would it cost (CRV conversions forgone) and free up (PCL suppression lifted)?
+--
+-- CAP DEFINITION: ROLLING 30-day frequency cap. frequency_cap = N means an account may
+--   receive at most N CRV-Action contacts within any trailing 30 days; the (N+1)th and later
+--   contact inside a 30-day window is REMOVED. rolling_contacts_30d counts each contact's
+--   position within its own trailing-30-day window (1 = first in window).
+--   (This REPLACES the earlier lifetime-cumulative cap, which over 20 months approximated a
+--    near-kill — a lifetime cap of 2 freed 57% of overlap leads. Rolling = realistic throttle.
+--    Window length is 30 days here; change "30" in both ranked CTEs to model 60/90 days.)
 --
 -- TWO statements, two accounting grains (run each):
 --   STATEMENT 1 — CRV COST, grain = one CRV-Action contact, per frequency_cap.
 --   STATEMENT 2 — PCL BENEFIT, grain = one PCL-mobile lead, per frequency_cap x PCL decile,
---                 for BOTH PCL propensity models (long format: decile_model + decile_value).
+--                 BOTH propensity models (long format: decile_model + decile_value).
+--
+-- A contact is REMOVED under cap N iff rolling_contacts_30d > N.
+-- A PCL lead is FREED under cap N iff ALL its overlapping Action contacts are removed, i.e.
+--   the SMALLEST rolling count among its overlapping contacts is still > N
+--   (min_overlapping_rolling_contacts > N). If any overlapping contact is kept, lead stays suppressed.
 --
 -- WHY DECILE (Statement 2): Q08 showed cannibalization is top-heavy — concentrated in PCL
---   propensity deciles 1-3, ~0 by deciles 8-9. A freed lead's recovery DEPENDS on its decile.
---   Breaking pcl_leads_freed by decile lets you apply the decile-specific gap (not a flat rate)
---   and see that throttling high-propensity accounts recovers more PCL per CRV contact cut.
---   BOTH models reported (Q08 St.1 = new_decile / cv_score; Q08 St.2 = decile / model_score),
---   stacked via decile_model so you can compare them.
---
--- CAP DEFINITION: lifetime-cumulative. frequency_cap = max CRV-Action contacts an account may
---   receive since 2024-10-01; contact #(cap+1) onward is removed. NOT a rolling 30/90-day cap
---   (the more realistic exec policy) — that is a separate model, not built here.
---
--- A PCL lead is "freed" under cap N iff the cap removes ALL its overlapping Action contacts,
---   i.e. even its EARLIEST overlapping contact is beyond the cap (earliest_overlapping_contact_seq > N).
---
--- RECOVERY IS NOT IN THIS QUERY (counts only). Recovered PCL = pcl_leads_freed[decile] x
---   cannibalization_gap[decile], applied in Excel. pcl_responders_already_in_freed_leads is
---   DESCRIPTIVE (baseline converters among freed leads), NOT the recovery.
--- CRV cost (Statement 1) is GROSS; ~28% of overlap-cohort CRV conversions are PCL swaps (Q07)
---   that convert on PCL anyway — net that out in Excel.
+--   propensity deciles 1-3, ~0 by 8-9. Recovery depends on a freed lead's decile.
+--   Recovered PCL = pcl_leads_freed[decile] x cannibalization_gap[decile] (gap from Q08), in Excel.
+--   pcl_responders_already_in_freed_leads is DESCRIPTIVE (already-converted), NOT recovery.
+-- CRV cost (Statement 1) is GROSS; ~28% of overlap CRV conversions are PCL swaps (Q07) — net in Excel.
 -- ============================================================================
 
 
 -- ============================================================================
 -- STATEMENT 1 — CRV COST by frequency_cap (4 rows)
 -- ============================================================================
-WITH crv_action_ranked AS (
+WITH crv_action_raw AS (
     SELECT
         acct_no,
         responder AS crv_responder,
-        ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY offer_start_date) AS contact_seq_in_account
+        (offer_start_date - DATE '2024-10-01') AS day_num
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
       AND action_control = 'Action'
+),
+crv_action_ranked AS (
+    SELECT
+        acct_no,
+        crv_responder,
+        -- how many CRV-Action contacts fell in this contact's trailing 30 days (incl. itself)
+        COUNT(*) OVER (PARTITION BY acct_no ORDER BY day_num
+                       RANGE BETWEEN 30 PRECEDING AND CURRENT ROW) AS rolling_contacts_30d
+    FROM crv_action_raw
 ),
 caps AS (
     -- frequency_cap values {2,3,4,5} as rows. Teradata rejects a bare "SELECT 2 UNION ALL SELECT 3..."
@@ -55,10 +63,10 @@ caps AS (
 )
 SELECT
     k.frequency_cap,
-    COUNT(*)                                                                       AS total_action_contacts,
-    SUM(CASE WHEN c.contact_seq_in_account > k.frequency_cap THEN 1 ELSE 0 END)    AS action_contacts_removed,
-    SUM(CASE WHEN c.contact_seq_in_account > k.frequency_cap AND c.crv_responder = 1
-             THEN 1 ELSE 0 END)                                                    AS crv_responders_in_removed_contacts
+    COUNT(*)                                                                    AS total_action_contacts,
+    SUM(CASE WHEN c.rolling_contacts_30d > k.frequency_cap THEN 1 ELSE 0 END)   AS action_contacts_removed,
+    SUM(CASE WHEN c.rolling_contacts_30d > k.frequency_cap AND c.crv_responder = 1
+             THEN 1 ELSE 0 END)                                                 AS crv_responders_in_removed_contacts
 FROM crv_action_ranked c
 CROSS JOIN caps k
 GROUP BY k.frequency_cap
@@ -68,19 +76,26 @@ ORDER BY k.frequency_cap
 
 -- ============================================================================
 -- STATEMENT 2 — PCL BENEFIT by frequency_cap x decile, BOTH models (long format)
---   decile_model = 'new_decile' (cv_score) | 'decile' (model_score)
---   decile_value = 'ALL' (overall) | the decile value
 -- ============================================================================
-WITH crv_action_ranked AS (
+WITH crv_action_raw AS (
     SELECT
         acct_no,
         offer_start_date,
         offer_end_date,
-        ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY offer_start_date) AS contact_seq_in_account
+        (offer_start_date - DATE '2024-10-01') AS day_num
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND channels_deployed LIKE '%IM%'
       AND action_control = 'Action'
+),
+crv_action_ranked AS (
+    SELECT
+        acct_no,
+        offer_start_date,
+        offer_end_date,
+        COUNT(*) OVER (PARTITION BY acct_no ORDER BY day_num
+                       RANGE BETWEEN 30 PRECEDING AND CURRENT ROW) AS rolling_contacts_30d
+    FROM crv_action_raw
 ),
 pcl_universe AS (
     SELECT
@@ -95,15 +110,15 @@ pcl_universe AS (
       AND channel LIKE '%MB%'
 ),
 pcl_overlap_leads AS (
-    -- One row per PCL lead that overlaps >= 1 CRV-Action contact, carrying BOTH decile models
-    -- and the earliest overlapping contact sequence (the threshold a cap must clear to free it).
+    -- One row per PCL lead overlapping >= 1 CRV-Action contact, carrying both decile models and
+    -- the SMALLEST rolling-30d count among its overlapping contacts (the threshold a cap must clear).
     SELECT
         p.acct_no,
         p.pcl_strt_dt,
         p.new_decile,
         p.decile,
         p.responder_cli,
-        MIN(c.contact_seq_in_account) AS earliest_overlapping_contact_seq
+        MIN(c.rolling_contacts_30d) AS min_overlapping_rolling_contacts
     FROM pcl_universe p
     JOIN crv_action_ranked c
       ON c.acct_no          = p.acct_no
@@ -112,7 +127,6 @@ pcl_overlap_leads AS (
     GROUP BY p.acct_no, p.pcl_strt_dt, p.new_decile, p.decile, p.responder_cli
 ),
 caps AS (
-    -- frequency_cap values {2,3,4,5} as rows (see Statement 1 note on Teradata err 3888).
     SELECT rn + 1 AS frequency_cap
     FROM (
         SELECT ROW_NUMBER() OVER (ORDER BY acct_no) AS rn
@@ -123,12 +137,12 @@ caps AS (
 -- new_decile model: overall
 SELECT
     k.frequency_cap,
-    CAST('new_decile' AS VARCHAR(12))                                                      AS decile_model,
-    CAST('ALL' AS VARCHAR(6))                                                              AS decile_value,
-    COUNT(*)                                                                               AS total_pcl_overlap_leads,
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap THEN 1 ELSE 0 END)  AS pcl_leads_freed,
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap AND o.responder_cli = 1
-             THEN 1 ELSE 0 END)                                                            AS pcl_responders_already_in_freed_leads
+    CAST('new_decile' AS VARCHAR(12))                                                       AS decile_model,
+    CAST('ALL' AS VARCHAR(6))                                                               AS decile_value,
+    COUNT(*)                                                                                AS total_pcl_overlap_leads,
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap THEN 1 ELSE 0 END)   AS pcl_leads_freed,
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap AND o.responder_cli = 1
+             THEN 1 ELSE 0 END)                                                             AS pcl_responders_already_in_freed_leads
 FROM pcl_overlap_leads o CROSS JOIN caps k
 GROUP BY k.frequency_cap
 
@@ -139,8 +153,8 @@ SELECT
     CAST('new_decile' AS VARCHAR(12)),
     CAST(o.new_decile AS VARCHAR(6)),
     COUNT(*),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap THEN 1 ELSE 0 END),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap AND o.responder_cli = 1
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap THEN 1 ELSE 0 END),
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap AND o.responder_cli = 1
              THEN 1 ELSE 0 END)
 FROM pcl_overlap_leads o CROSS JOIN caps k
 GROUP BY k.frequency_cap, o.new_decile
@@ -152,8 +166,8 @@ SELECT
     CAST('decile' AS VARCHAR(12)),
     CAST('ALL' AS VARCHAR(6)),
     COUNT(*),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap THEN 1 ELSE 0 END),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap AND o.responder_cli = 1
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap THEN 1 ELSE 0 END),
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap AND o.responder_cli = 1
              THEN 1 ELSE 0 END)
 FROM pcl_overlap_leads o CROSS JOIN caps k
 GROUP BY k.frequency_cap
@@ -165,8 +179,8 @@ SELECT
     CAST('decile' AS VARCHAR(12)),
     CAST(o.decile AS VARCHAR(6)),
     COUNT(*),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap THEN 1 ELSE 0 END),
-    SUM(CASE WHEN o.earliest_overlapping_contact_seq > k.frequency_cap AND o.responder_cli = 1
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap THEN 1 ELSE 0 END),
+    SUM(CASE WHEN o.min_overlapping_rolling_contacts > k.frequency_cap AND o.responder_cli = 1
              THEN 1 ELSE 0 END)
 FROM pcl_overlap_leads o CROSS JOIN caps k
 GROUP BY k.frequency_cap, o.decile
