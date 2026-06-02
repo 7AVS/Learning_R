@@ -244,6 +244,10 @@ ORDER BY 1, 2
 --   Action only: channels_deployed LIKE '%IM%'. Converters only (INNER JOIN install_details).
 --
 --   Product column = product_name_at_decision (confirmed 2026-06-02) on cards_crv_install_decis_resp.
+--   Output mirrors Statement 1's column set (n_waves, n_accounts, n_transactions, txns_per_acct,
+--   mean_principal_per_acct, APR/term/txn_principal mean+p50+p90) but keyed by product, with an
+--   'ALL' (all products pooled) overall row on top. 'ALL' n_accounts = distinct accounts overall
+--   (not the sum of per-product, since an account can hold more than one product).
 -- ============================================================================
 WITH crv_action AS (
     SELECT
@@ -269,42 +273,90 @@ details AS (
       ON d.acct_no   = k.acct_no
      AND d.tactic_id = k.tactic_id
 ),
-acct_agg AS (
-    SELECT
-        product_name_at_decision,
-        acct_no,
+-- per-account aggregation, split by product AND pooled (all products) for the ALL row.
+acct_agg_byprod AS (
+    SELECT product_name_at_decision, acct_no,
         COUNT(DISTINCT instl_txn_ref_no)         AS acct_plans,
         SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_principal
     FROM details
     GROUP BY product_name_at_decision, acct_no
 ),
-acct_roll AS (
-    SELECT
-        product_name_at_decision,
+acct_agg_all AS (
+    SELECT acct_no,
+        COUNT(DISTINCT instl_txn_ref_no)         AS acct_plans,
+        SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_principal
+    FROM details
+    GROUP BY acct_no
+),
+-- n_waves = distinct CRV-Action deployment waves (tactic_id), per product and overall (from keys).
+waves_byprod AS (
+    SELECT product_name_at_decision, COUNT(DISTINCT tactic_id) AS n_waves
+    FROM keys GROUP BY product_name_at_decision
+),
+waves_all AS (
+    SELECT COUNT(DISTINCT tactic_id) AS n_waves FROM keys
+),
+roll_byprod AS (
+    SELECT ag.product_name_at_decision, wv.n_waves,
         COUNT(*)              AS n_accounts,
-        SUM(acct_plans)       AS n_plans,
-        AVG(acct_principal)   AS mean_principal_per_acct
-    FROM acct_agg
-    GROUP BY product_name_at_decision
+        SUM(ag.acct_plans)    AS n_transactions,
+        AVG(ag.acct_principal) AS mean_principal_per_acct
+    FROM acct_agg_byprod ag
+    LEFT JOIN waves_byprod wv ON wv.product_name_at_decision = ag.product_name_at_decision
+    GROUP BY ag.product_name_at_decision, wv.n_waves
+),
+roll_all AS (
+    SELECT wv.n_waves,
+        COUNT(*)              AS n_accounts,
+        SUM(ag.acct_plans)    AS n_transactions,
+        AVG(ag.acct_principal) AS mean_principal_per_acct
+    FROM acct_agg_all ag CROSS JOIN waves_all wv
+    GROUP BY wv.n_waves
 )
+-- ALL products row (overall)
 SELECT
-    ar.product_name_at_decision,
-    ar.n_accounts,
-    ar.n_plans                                                    AS n_transactions,
-    CAST(ar.n_plans AS FLOAT) / NULLIF(ar.n_accounts, 0)          AS txns_per_acct,
-    ar.mean_principal_per_acct,
-    AVG(CAST(d.instl_txn_prncpl_amt AS FLOAT))                    AS mean_txn_principal,
-    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p50_txn_principal,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p90_txn_principal,
-    AVG(CAST(d.instl_apr AS FLOAT))                               AS mean_apr,
+    CAST('ALL' AS VARCHAR(60))                                   AS product_name_at_decision,
+    r.n_waves,
+    r.n_accounts,
+    r.n_transactions,
+    CAST(r.n_transactions AS FLOAT) / NULLIF(r.n_accounts, 0)    AS txns_per_acct,
+    r.mean_principal_per_acct,
+    AVG(CAST(d.instl_apr AS FLOAT))                              AS mean_apr,
     PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT))   AS p50_apr,
     PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT))   AS p90_apr,
-    AVG(CAST(d.instl_txn_trm AS FLOAT))                           AS mean_term,
+    AVG(CAST(d.instl_txn_trm AS FLOAT))                          AS mean_term,
     PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p50_term,
-    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p90_term
-FROM acct_roll ar
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p90_term,
+    AVG(CAST(d.instl_txn_prncpl_amt AS FLOAT))                   AS mean_txn_principal,
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p50_txn_principal,
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p90_txn_principal
+FROM roll_all r
+CROSS JOIN details d
+GROUP BY r.n_waves, r.n_accounts, r.n_transactions, r.mean_principal_per_acct
+
+UNION ALL
+
+-- per-product rows
+SELECT
+    CAST(ar.product_name_at_decision AS VARCHAR(60)),
+    ar.n_waves,
+    ar.n_accounts,
+    ar.n_transactions,
+    CAST(ar.n_transactions AS FLOAT) / NULLIF(ar.n_accounts, 0),
+    ar.mean_principal_per_acct,
+    AVG(CAST(d.instl_apr AS FLOAT)),
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT)),
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT)),
+    AVG(CAST(d.instl_txn_trm AS FLOAT)),
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)),
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)),
+    AVG(CAST(d.instl_txn_prncpl_amt AS FLOAT)),
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)),
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT))
+FROM roll_byprod ar
 INNER JOIN details d
   ON d.product_name_at_decision = ar.product_name_at_decision
-GROUP BY ar.product_name_at_decision, ar.n_accounts, ar.n_plans, ar.mean_principal_per_acct
-ORDER BY ar.n_accounts DESC
+GROUP BY ar.product_name_at_decision, ar.n_waves, ar.n_accounts, ar.n_transactions, ar.mean_principal_per_acct
+
+ORDER BY 3 DESC
 ;
