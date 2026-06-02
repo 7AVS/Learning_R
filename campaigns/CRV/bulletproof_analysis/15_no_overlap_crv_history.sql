@@ -19,7 +19,7 @@ WITH pcl_universe AS (
            rbc_tenure, age_band, life_stage,
            premier_client, pb_client, student_indicator,
            new_to_campaign, new_comer, newimm_seg, ngen, gu,
-           product_grouping_current, multi_card_ind, vulnrbty_cd,
+           product_grouping_current, multi_card_ind, vulnrblty_cd,
            mobile_active_at_decision, olb_active_90
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01' AND channel LIKE '%MB%'
@@ -95,7 +95,7 @@ FROM (
             WHEN 15 THEN 'new_comer'                 WHEN 16 THEN 'newimm_seg'
             WHEN 17 THEN 'ngen'                      WHEN 18 THEN 'gu'
             WHEN 19 THEN 'product_grouping_current'  WHEN 20 THEN 'multi_card_ind'
-            WHEN 21 THEN 'vulnrbty_cd'               WHEN 22 THEN 'mobile_active_at_decision'
+            WHEN 21 THEN 'vulnrblty_cd'               WHEN 22 THEN 'mobile_active_at_decision'
             WHEN 23 THEN 'olb_active_90'
         END) AS attribute_name,
         CASE a.n
@@ -109,7 +109,7 @@ FROM (
             WHEN 15 THEN CAST(c.new_comer AS VARCHAR(40))                 WHEN 16 THEN CAST(c.newimm_seg AS VARCHAR(40))
             WHEN 17 THEN CAST(c.ngen AS VARCHAR(40))                      WHEN 18 THEN CAST(c.gu AS VARCHAR(40))
             WHEN 19 THEN CAST(c.product_grouping_current AS VARCHAR(40))  WHEN 20 THEN CAST(c.multi_card_ind AS VARCHAR(40))
-            WHEN 21 THEN CAST(c.vulnrbty_cd AS VARCHAR(40))               WHEN 22 THEN CAST(c.mobile_active_at_decision AS VARCHAR(40))
+            WHEN 21 THEN CAST(c.vulnrblty_cd AS VARCHAR(40))               WHEN 22 THEN CAST(c.mobile_active_at_decision AS VARCHAR(40))
             WHEN 23 THEN CAST(c.olb_active_90 AS VARCHAR(40))
         END AS attribute_value
     FROM classified c
