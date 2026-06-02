@@ -84,6 +84,16 @@ crv_decisions_classified AS (
      AND ov.offer_start_date = c.offer_start_date
 ),
 
+-- PATCH 2026-06-02: dedup decision keys to DISTINCT (cohort, acct, tactic, month)
+-- BEFORE joining install_details, so each installment plan is counted ONCE.
+-- The old version joined raw decision rows -> details and fanned each plan out
+-- by the number of decision waves, inflating n_transactions / txns_per_acct.
+-- Plans now reconcile with Q13 (~3 per account).
+crv_keys AS (
+    SELECT DISTINCT crv_cohort, crv_month, acct_no, tactic_id
+    FROM crv_decisions_classified
+),
+
 -- CRV wave joined to installment transactions; cohort + month carried through.
 details AS (
     SELECT
@@ -91,10 +101,11 @@ details AS (
         w.crv_month,
         w.acct_no,
         w.tactic_id,
+        d.instl_txn_ref_no,
         d.instl_apr,
         d.instl_txn_trm,
         d.instl_txn_prncpl_amt
-    FROM crv_decisions_classified w
+    FROM crv_keys w
     INNER JOIN dl_mr_prod.cards_crv_install_details d
       ON d.acct_no   = w.acct_no
      AND d.tactic_id = w.tactic_id
@@ -107,7 +118,7 @@ acct_agg_overall AS (
         crv_cohort,
         CAST('overall' AS VARCHAR(20))  AS slice_val,
         acct_no,
-        COUNT(*)                        AS acct_txn_cnt,
+        COUNT(DISTINCT instl_txn_ref_no) AS acct_txn_cnt,
         SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_total_principal
     FROM details
     GROUP BY crv_cohort, acct_no
@@ -118,51 +129,47 @@ acct_agg_monthly AS (
         crv_cohort,
         crv_month                       AS slice_val,
         acct_no,
-        COUNT(*)                        AS acct_txn_cnt,
+        COUNT(DISTINCT instl_txn_ref_no) AS acct_txn_cnt,
         SUM(CAST(instl_txn_prncpl_amt AS FLOAT)) AS acct_total_principal
     FROM details
     GROUP BY crv_cohort, crv_month, acct_no
 ),
 
 -- Roll up to (crv_cohort, slice) level for account-level metrics.
+-- PATCH 2026-06-02: account metrics come straight from acct_agg (one row per
+-- cohort x acct) — NO join back to tactic keys. The old tactic-fanout join
+-- re-multiplied acct_txn_cnt and acct_total_principal by waves-per-account.
+-- n_waves is now a separate grouped count, joined on cohort only.
 acct_rollup_overall AS (
     SELECT
-        crv_cohort,
-        slice_val,
-        COUNT(DISTINCT tactic_id)           AS n_waves,
-        COUNT(DISTINCT acct_no)             AS n_accounts,
-        SUM(acct_txn_cnt)                   AS n_transactions,
-        AVG(acct_total_principal)           AS mean_principal_per_acct
-    FROM (
-        SELECT a.crv_cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
-               d2.tactic_id
-        FROM acct_agg_overall a
-        INNER JOIN (
-            SELECT DISTINCT crv_cohort, acct_no, tactic_id FROM details
-        ) d2 ON d2.crv_cohort = a.crv_cohort AND d2.acct_no = a.acct_no
-    ) x
-    GROUP BY crv_cohort, slice_val
+        ag.crv_cohort,
+        ag.slice_val,
+        wv.n_waves,
+        COUNT(*)                            AS n_accounts,
+        SUM(ag.acct_txn_cnt)                AS n_transactions,
+        AVG(ag.acct_total_principal)        AS mean_principal_per_acct
+    FROM acct_agg_overall ag
+    LEFT JOIN (
+        SELECT crv_cohort, COUNT(DISTINCT tactic_id) AS n_waves
+        FROM details GROUP BY crv_cohort
+    ) wv ON wv.crv_cohort = ag.crv_cohort
+    GROUP BY ag.crv_cohort, ag.slice_val, wv.n_waves
 ),
 
 acct_rollup_monthly AS (
     SELECT
-        crv_cohort,
-        slice_val,
-        COUNT(DISTINCT tactic_id)           AS n_waves,
-        COUNT(DISTINCT acct_no)             AS n_accounts,
-        SUM(acct_txn_cnt)                   AS n_transactions,
-        AVG(acct_total_principal)           AS mean_principal_per_acct
-    FROM (
-        SELECT a.crv_cohort, a.slice_val, a.acct_no, a.acct_txn_cnt, a.acct_total_principal,
-               d2.tactic_id
-        FROM acct_agg_monthly a
-        INNER JOIN (
-            SELECT DISTINCT crv_cohort, crv_month, acct_no, tactic_id FROM details
-        ) d2 ON d2.crv_cohort = a.crv_cohort
-             AND d2.crv_month  = a.slice_val
-             AND d2.acct_no    = a.acct_no
-    ) x
-    GROUP BY crv_cohort, slice_val
+        ag.crv_cohort,
+        ag.slice_val,
+        wv.n_waves,
+        COUNT(*)                            AS n_accounts,
+        SUM(ag.acct_txn_cnt)                AS n_transactions,
+        AVG(ag.acct_total_principal)        AS mean_principal_per_acct
+    FROM acct_agg_monthly ag
+    LEFT JOIN (
+        SELECT crv_cohort, crv_month, COUNT(DISTINCT tactic_id) AS n_waves
+        FROM details GROUP BY crv_cohort, crv_month
+    ) wv ON wv.crv_cohort = ag.crv_cohort AND wv.crv_month = ag.slice_val
+    GROUP BY ag.crv_cohort, ag.slice_val, wv.n_waves
 )
 
 -- Overall rows (one per crv_cohort)
