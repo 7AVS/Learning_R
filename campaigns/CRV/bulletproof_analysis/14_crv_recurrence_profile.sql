@@ -9,11 +9,12 @@
 --   * How do we classify "recurring"? (two definitions, side by side)
 --   * How spread out is the activity? (distinct active months)
 --
--- TWO "RECURRING" DEFINITIONS (kept separate on purpose):
---   n_recurring_plans   = clients with >=2 installment PLANS (heavier users)
---   n_multi_wave_resp   = clients who CONVERTED on >=2 separate CRV offers
---   (a client can open 2 plans off ONE offer, or 1 plan each off TWO offers —
---    these are different behaviours, so we report both.)
+-- RECURRENCE MEASURE:
+--   n_multi_wave_resp = clients who CONVERTED on >=2 separate CRV offers
+--                       (repeat banner responders — the demand we'd stop generating).
+--   Plan-count buckets (1 / 2 / 3-4 / 5+ distinct plans) show installment intensity.
+--   Note: a multi-wave responder is always a >=2-plan client; the extra >=2-plan
+--   clients who are NOT multi-wave are single-offer stackers.
 --
 -- WINDOW: full cohort window (Oct 2024 -> Apr 2026). To get a strict 12-MONTH
 --   view, uncomment the instl_txn_dt filter in client_plans (one line).
@@ -64,8 +65,7 @@ client_plans AS (
         k.arm,
         k.acct_no,
         COUNT(DISTINCT d.instl_txn_ref_no)  AS n_plans,
-        COUNT(DISTINCT k.tactic_id)         AS n_convert_waves,
-        COUNT(DISTINCT d.year_mon_install)  AS n_active_months
+        COUNT(DISTINCT k.tactic_id)         AS n_convert_waves
     FROM overlap_conv k
     INNER JOIN dl_mr_prod.cards_crv_install_details d
       ON d.acct_no   = k.acct_no
@@ -78,19 +78,14 @@ client_plans AS (
 SELECT
     arm                                                            AS arm,
     COUNT(*)                                                       AS n_converting_clients,
-    -- recurrence (two definitions)
-    SUM(CASE WHEN n_plans         >= 2 THEN 1 ELSE 0 END)          AS n_recurring_plans,
+    -- repeat campaign responders: converted on >=2 separate CRV offers
     SUM(CASE WHEN n_convert_waves >= 2 THEN 1 ELSE 0 END)          AS n_multi_wave_resp,
     -- plans-per-client distribution
     SUM(CASE WHEN n_plans = 1         THEN 1 ELSE 0 END)           AS clients_1_plan,
     SUM(CASE WHEN n_plans = 2         THEN 1 ELSE 0 END)           AS clients_2_plans,
     SUM(CASE WHEN n_plans BETWEEN 3 AND 4 THEN 1 ELSE 0 END)       AS clients_3_4_plans,
     SUM(CASE WHEN n_plans >= 5         THEN 1 ELSE 0 END)          AS clients_5plus_plans,
-    -- central tendency / spread
-    AVG(CAST(n_plans         AS FLOAT))                            AS mean_plans_per_client,
-    MAX(n_plans)                                                   AS max_plans,
-    AVG(CAST(n_active_months AS FLOAT))                            AS mean_active_months,
-    MAX(n_active_months)                                           AS max_active_months
+    AVG(CAST(n_plans AS FLOAT))                                    AS mean_plans_per_client
 FROM client_plans
 GROUP BY arm
 ORDER BY 1
