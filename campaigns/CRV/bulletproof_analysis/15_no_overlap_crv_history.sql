@@ -7,8 +7,9 @@
 --   window, so explain WHO these clients are from their own PCL attributes instead. Each PCL
 --   descriptor is unpivoted into (attribute_name, attribute_value) and counted by class, so any
 --   attribute where never_crv concentrates is the de-facto eligibility boundary CRV applies.
--- Single scan: CROSS JOIN UNNEST explodes one classified row into one row per attribute
---   (refs the join chain ONCE -> no spool blow-up). CASTs to VARCHAR are required for the unpivot.
+-- Single scan (Teradata): CROSS JOIN to a 23-row tally + CASE explodes one classified row into
+--   one row per attribute (refs the join chain ONCE -> no spool blow-up). VARCHAR casts are
+--   required for the unpivot (uniform value type); TRIM on the name avoids CHAR-padding in labels.
 -- Pivot: rows = attribute_name + attribute_value, columns = crv_hist_class, value = Sum of n_leads.
 -- ============================================================================
 WITH pcl_universe AS (
@@ -72,38 +73,55 @@ classified AS (
     LEFT JOIN crv_summary s ON s.acct_no = n.acct_no
 )
 SELECT
-    a.attribute_name,
-    a.attribute_value,
-    c.crv_hist_class,
-    COUNT(*)            AS n_leads,
-    SUM(c.responder_cli) AS n_responders,
-    SUM(c.ever_conv)     AS n_ever_converted_crv
-FROM classified c
-CROSS JOIN UNNEST(ARRAY[
-    ('new_decile',                CAST(c.new_decile AS VARCHAR)),
-    ('decile',                    CAST(c.decile AS VARCHAR)),
-    ('credit_phase',              CAST(c.credit_phase AS VARCHAR)),
-    ('wallet_band',               CAST(c.wallet_band AS VARCHAR)),
-    ('value_for_money',           CAST(c.value_for_money AS VARCHAR)),
-    ('bi_clnt_seg',               CAST(c.bi_clnt_seg AS VARCHAR)),
-    ('lifetm_val_5yr_clnt_cd',    CAST(c.lifetm_val_5yr_clnt_cd AS VARCHAR)),
-    ('rbc_tenure',                CAST(c.rbc_tenure AS VARCHAR)),
-    ('age_band',                  CAST(c.age_band AS VARCHAR)),
-    ('life_stage',                CAST(c.life_stage AS VARCHAR)),
-    ('premier_client',            CAST(c.premier_client AS VARCHAR)),
-    ('pb_client',                 CAST(c.pb_client AS VARCHAR)),
-    ('student_indicator',         CAST(c.student_indicator AS VARCHAR)),
-    ('new_to_campaign',           CAST(c.new_to_campaign AS VARCHAR)),
-    ('new_comer',                 CAST(c.new_comer AS VARCHAR)),
-    ('newimm_seg',                CAST(c.newimm_seg AS VARCHAR)),
-    ('ngen',                      CAST(c.ngen AS VARCHAR)),
-    ('gu',                        CAST(c.gu AS VARCHAR)),
-    ('product_grouping_current',  CAST(c.product_grouping_current AS VARCHAR)),
-    ('multi_card_ind',            CAST(c.multi_card_ind AS VARCHAR)),
-    ('vulnrbty_cd',               CAST(c.vulnrbty_cd AS VARCHAR)),
-    ('mobile_active_at_decision', CAST(c.mobile_active_at_decision AS VARCHAR)),
-    ('olb_active_90',             CAST(c.olb_active_90 AS VARCHAR))
-]) AS a(attribute_name, attribute_value)
-GROUP BY a.attribute_name, a.attribute_value, c.crv_hist_class
-ORDER BY a.attribute_name, a.attribute_value, c.crv_hist_class
+    attribute_name,
+    attribute_value,
+    crv_hist_class,
+    COUNT(*)           AS n_leads,
+    SUM(responder_cli) AS n_responders,
+    SUM(ever_conv)     AS n_ever_converted_crv
+FROM (
+    SELECT
+        c.crv_hist_class,
+        c.responder_cli,
+        c.ever_conv,
+        TRIM(CASE a.n
+            WHEN 1  THEN 'new_decile'                WHEN 2  THEN 'decile'
+            WHEN 3  THEN 'credit_phase'              WHEN 4  THEN 'wallet_band'
+            WHEN 5  THEN 'value_for_money'           WHEN 6  THEN 'bi_clnt_seg'
+            WHEN 7  THEN 'lifetm_val_5yr_clnt_cd'    WHEN 8  THEN 'rbc_tenure'
+            WHEN 9  THEN 'age_band'                  WHEN 10 THEN 'life_stage'
+            WHEN 11 THEN 'premier_client'            WHEN 12 THEN 'pb_client'
+            WHEN 13 THEN 'student_indicator'         WHEN 14 THEN 'new_to_campaign'
+            WHEN 15 THEN 'new_comer'                 WHEN 16 THEN 'newimm_seg'
+            WHEN 17 THEN 'ngen'                      WHEN 18 THEN 'gu'
+            WHEN 19 THEN 'product_grouping_current'  WHEN 20 THEN 'multi_card_ind'
+            WHEN 21 THEN 'vulnrbty_cd'               WHEN 22 THEN 'mobile_active_at_decision'
+            WHEN 23 THEN 'olb_active_90'
+        END) AS attribute_name,
+        CASE a.n
+            WHEN 1  THEN CAST(c.new_decile AS VARCHAR(40))                WHEN 2  THEN CAST(c.decile AS VARCHAR(40))
+            WHEN 3  THEN CAST(c.credit_phase AS VARCHAR(40))              WHEN 4  THEN CAST(c.wallet_band AS VARCHAR(40))
+            WHEN 5  THEN CAST(c.value_for_money AS VARCHAR(40))           WHEN 6  THEN CAST(c.bi_clnt_seg AS VARCHAR(40))
+            WHEN 7  THEN CAST(c.lifetm_val_5yr_clnt_cd AS VARCHAR(40))    WHEN 8  THEN CAST(c.rbc_tenure AS VARCHAR(40))
+            WHEN 9  THEN CAST(c.age_band AS VARCHAR(40))                  WHEN 10 THEN CAST(c.life_stage AS VARCHAR(40))
+            WHEN 11 THEN CAST(c.premier_client AS VARCHAR(40))            WHEN 12 THEN CAST(c.pb_client AS VARCHAR(40))
+            WHEN 13 THEN CAST(c.student_indicator AS VARCHAR(40))         WHEN 14 THEN CAST(c.new_to_campaign AS VARCHAR(40))
+            WHEN 15 THEN CAST(c.new_comer AS VARCHAR(40))                 WHEN 16 THEN CAST(c.newimm_seg AS VARCHAR(40))
+            WHEN 17 THEN CAST(c.ngen AS VARCHAR(40))                      WHEN 18 THEN CAST(c.gu AS VARCHAR(40))
+            WHEN 19 THEN CAST(c.product_grouping_current AS VARCHAR(40))  WHEN 20 THEN CAST(c.multi_card_ind AS VARCHAR(40))
+            WHEN 21 THEN CAST(c.vulnrbty_cd AS VARCHAR(40))               WHEN 22 THEN CAST(c.mobile_active_at_decision AS VARCHAR(40))
+            WHEN 23 THEN CAST(c.olb_active_90 AS VARCHAR(40))
+        END AS attribute_value
+    FROM classified c
+    CROSS JOIN (
+        SELECT 1 AS n  UNION ALL SELECT 2  UNION ALL SELECT 3  UNION ALL SELECT 4
+        UNION ALL SELECT 5  UNION ALL SELECT 6  UNION ALL SELECT 7  UNION ALL SELECT 8
+        UNION ALL SELECT 9  UNION ALL SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12
+        UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 UNION ALL SELECT 16
+        UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL SELECT 20
+        UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23
+    ) a
+) u
+GROUP BY attribute_name, attribute_value, crv_hist_class
+ORDER BY attribute_name, attribute_value, crv_hist_class
 ;
