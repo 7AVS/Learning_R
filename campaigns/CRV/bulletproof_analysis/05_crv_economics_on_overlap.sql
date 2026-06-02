@@ -290,12 +290,18 @@ acct_roll AS (
 SELECT
     ar.product_name_at_decision,
     ar.n_accounts,
-    ar.n_plans,
-    CAST(ar.n_plans AS FLOAT) / NULLIF(ar.n_accounts, 0)          AS plans_per_acct,
+    ar.n_plans                                                    AS n_transactions,
+    CAST(ar.n_plans AS FLOAT) / NULLIF(ar.n_accounts, 0)          AS txns_per_acct,
     ar.mean_principal_per_acct,
     AVG(CAST(d.instl_txn_prncpl_amt AS FLOAT))                    AS mean_txn_principal,
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p50_txn_principal,
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_prncpl_amt AS FLOAT)) AS p90_txn_principal,
     AVG(CAST(d.instl_apr AS FLOAT))                               AS mean_apr,
-    AVG(CAST(d.instl_txn_trm AS FLOAT))                           AS mean_term
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT))   AS p50_apr,
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_apr AS FLOAT))   AS p90_apr,
+    AVG(CAST(d.instl_txn_trm AS FLOAT))                           AS mean_term,
+    PERCENTILE_DISC(0.50) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p50_term,
+    PERCENTILE_DISC(0.90) WITHIN GROUP (ORDER BY CAST(d.instl_txn_trm AS FLOAT)) AS p90_term
 FROM acct_roll ar
 INNER JOIN details d
   ON d.product_name_at_decision = ar.product_name_at_decision
