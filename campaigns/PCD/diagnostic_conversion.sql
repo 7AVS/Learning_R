@@ -81,3 +81,21 @@ LEFT JOIN DDWV01.OVRL_CR_APP b
     ON b.cr_app_id = d.cr_app_id AND b.sys_src_id = d.sys_src_id
 WHERE d.prod_app_dt > DATE '2026-05-05'
 ;
+
+
+-- STATEMENT 6 — OVRL_CR_APP own frontier (date cols confirmed via St4).
+-- CAPTR_DT = load/capture date (ETL recency), APP_CREAT_DT = application created,
+-- APPL_COMPL_DT = completion. MAX of each = where this table ends.
+SELECT
+    MAX(captr_dt)                                                AS max_captr_dt,
+    MAX(app_creat_dt)                                            AS max_app_creat_dt,
+    MAX(appl_compl_dt)                                           AS max_appl_compl_dt,
+    COUNT(*)                                                     AS n_rows,
+    COUNT(CASE WHEN app_creat_dt > DATE '2026-05-05' THEN 1 END) AS rows_after_may5
+FROM DDWV01.OVRL_CR_APP
+WHERE app_creat_dt >= DATE '2026-04-01'
+;
+-- Read:
+--   max_captr_dt ~ today but max_app_creat_dt ~ May 5  -> table fresh, but upstream apps lag
+--   max_captr_dt ~ May 5                               -> table itself not refreshed since then
+--   rows_after_may5 = 0                                -> OVRL_CR_APP caps the join at May 5
