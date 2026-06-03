@@ -1,29 +1,23 @@
--- async_banner_vintage_success_by_engagement.sql
+-- async_banner_summary_success_by_engagement.sql
 -- Engine: Starburst (Trino). Federated: Teradata cohort/conversion + edl0_im GA4.
---   (Sibling async_banner_vintage_success.sql is Teradata-native; this one is Trino because the
---    engagement split needs GA4, so date arithmetic uses date_diff(). O2P blocks hit the
---    federated CR_APP chain -> slow. Run ONE block at a time.)
+--   O2P blocks hit the federated CR_APP chain -> slow. Run ONE block at a time.
 --
--- All the vintage success measures each campaign has, OVERALL grain (no segment), + engagement.
+-- SUMMARY twin of async_banner_vintage_success_by_engagement.sql: same logic, no day axis.
+--   Each campaign's full success measures (PCD any/target/upgrade+NIBT; CTU & O2P any/target),
+--   OVERALL grain, split by engaged_class. Totals over the fixed 60-day window.
 --
--- DENOMINATOR (total_population) = DEPLOYMENT SIZE. It splits ONLY by test_control_flag and
---   cohort_arm -- NOT by engaged_class. Every engaged_class row carries the SAME deployment
---   denominator. Engagement splits the NUMERATOR (responders) only, so the per-class rates are
---   all on one base and add up: PRE/dep + POST/dep + NOT/dep = total conversion rate; ANY/dep.
---
--- engaged_class (numerator split; one exclusive label per client + ANY roll-up):
---   ENGAGED_PRE  = engaged ON/BEFORE first conversion + engaged non-converters
---   ENGAGED_POST = converted THEN engaged (mis-signal)
---   NOT_ENGAGED  = never touched the banner in window
---   ENGAGED_ANY  = roll-up = PRE + POST
---   Timing anchor = client's FIRST/broad conversion (matters only for O2P). Day spine 0..60.
+-- DENOMINATOR (total_population) = DEPLOYMENT SIZE: splits ONLY by test_control_flag + cohort_arm,
+--   constant across engaged_class. Engagement splits the NUMERATOR (responders) only.
+-- engaged_class (numerator; one exclusive label per client + ANY roll-up):
+--   ENGAGED_PRE (engage<=convert + engaged non-converters) / ENGAGED_POST (convert->engage) /
+--   NOT_ENGAGED / ENGAGED_ANY (=PRE+POST). PRE+POST+NOT = cohort; ANY is a roll-up, don't sum all 4.
+--   Timing anchor = client's FIRST/broad conversion (matters only for O2P).
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
 -- ║ BLOCK 1 — PCD   any/target/upgrade + NIBT. arm=ASYNC via strategy_seg_cd.   ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 WITH
-vintage_days AS (SELECT vd FROM UNNEST(sequence(0, 60)) AS t(vd)),
 class_list AS (SELECT engaged_class FROM (VALUES ('ENGAGED_PRE'),('ENGAGED_POST'),('NOT_ENGAGED'),('ENGAGED_ANY')) AS t(engaged_class)),
 pcd_cohort AS (
     SELECT
@@ -64,13 +58,11 @@ pcd_class AS (
              ELSE 'ENGAGED_PRE' END AS engaged_class
     FROM pcd_client cl LEFT JOIN pcd_eng e ON e.clnt_no = cl.clnt_no
 ),
--- DENOMINATOR: plain deployment count, no engaged_class
 pcd_population AS (
     SELECT wave_dt, test_control_flag, cohort_arm, COUNT(DISTINCT clnt_no) AS total_population
     FROM pcd_cohort WHERE test_control_flag IS NOT NULL
     GROUP BY wave_dt, test_control_flag, cohort_arm
 ),
--- NUMERATOR base: cohort + engaged_class, plus ANY roll-up rows
 pcd_cohort_e AS (
     SELECT c.clnt_no, c.wave_dt, c.test_control_flag, c.cohort_arm, c.response_start, c.dt_prod_change,
            c.responder_anyproduct, c.responder_targetproduct, c.responder_upgrade_path,
@@ -84,42 +76,28 @@ pcd_cohort_e AS (
     FROM pcd_cohort c JOIN pcd_class k ON k.clnt_no = c.clnt_no
     WHERE c.test_control_flag IS NOT NULL AND k.engaged_class IN ('ENGAGED_PRE','ENGAGED_POST')
 ),
-pcd_success_daily AS (
+pcd_success AS (
     SELECT wave_dt, test_control_flag, cohort_arm, engaged_class,
-           date_diff('day', response_start, dt_prod_change) AS vintage_day,
-           COUNT(DISTINCT CASE WHEN responder_anyproduct    = 1 THEN clnt_no END) AS responders,
-           COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 THEN clnt_no END) AS responders_target,
-           COUNT(DISTINCT CASE WHEN responder_upgrade_path  = 1 THEN clnt_no END) AS responders_upgrade,
-           SUM(CASE WHEN responder_targetproduct = 1 THEN nibt_expected_value          END) AS nibt_value_target,
-           SUM(CASE WHEN responder_upgrade_path  = 1 THEN nibt_expec_value_upgradepath END) AS nibt_value_upgrade
+        COUNT(DISTINCT CASE WHEN responder_anyproduct = 1 AND date_diff('day',response_start,dt_prod_change) BETWEEN 0 AND 60 THEN clnt_no END) AS responders,
+        COUNT(DISTINCT CASE WHEN responder_targetproduct = 1 AND date_diff('day',response_start,dt_prod_change) BETWEEN 0 AND 60 THEN clnt_no END) AS responders_target,
+        COUNT(DISTINCT CASE WHEN responder_upgrade_path = 1 AND date_diff('day',response_start,dt_prod_change) BETWEEN 0 AND 60 THEN clnt_no END) AS responders_upgrade,
+        SUM(CASE WHEN responder_targetproduct = 1 AND date_diff('day',response_start,dt_prod_change) BETWEEN 0 AND 60 THEN nibt_expected_value END) AS nibt_value_target,
+        SUM(CASE WHEN responder_upgrade_path = 1 AND date_diff('day',response_start,dt_prod_change) BETWEEN 0 AND 60 THEN nibt_expec_value_upgradepath END) AS nibt_value_upgrade
     FROM pcd_cohort_e
-    WHERE dt_prod_change IS NOT NULL AND date_diff('day', response_start, dt_prod_change) BETWEEN 0 AND 60
-    GROUP BY 1,2,3,4,5
-),
-pcd_base AS (
-    SELECT p.wave_dt, p.test_control_flag, p.cohort_arm, cl.engaged_class, v.vd AS vintage_day,
-           p.total_population,
-           COALESCE(r.responders,0) AS responders, COALESCE(r.responders_target,0) AS responders_target,
-           COALESCE(r.responders_upgrade,0) AS responders_upgrade,
-           COALESCE(r.nibt_value_target,0) AS nibt_value_target, COALESCE(r.nibt_value_upgrade,0) AS nibt_value_upgrade
-    FROM pcd_population p
-    CROSS JOIN class_list cl
-    CROSS JOIN vintage_days v
-    LEFT JOIN pcd_success_daily r
-        ON  r.wave_dt = p.wave_dt AND r.test_control_flag = p.test_control_flag
-        AND r.cohort_arm = p.cohort_arm AND r.engaged_class = cl.engaged_class AND r.vintage_day = v.vd
+    GROUP BY 1,2,3,4
 )
 SELECT
     CAST('PCD' AS VARCHAR) AS campaign,
-    wave_dt AS cohort, test_control_flag, cohort_arm, engaged_class, vintage_day,
-    total_population, responders, responders_target, responders_upgrade, nibt_value_target, nibt_value_upgrade,
-    SUM(responders)        OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_cum,
-    SUM(responders_target) OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_target_cum,
-    SUM(responders_upgrade)OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_upgrade_cum,
-    SUM(nibt_value_target) OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nibt_value_target_cum,
-    SUM(nibt_value_upgrade)OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nibt_value_upgrade_cum
-FROM pcd_base
-ORDER BY test_control_flag, cohort_arm, engaged_class, vintage_day
+    p.wave_dt AS cohort, p.test_control_flag, p.cohort_arm, cl.engaged_class, p.total_population,
+    COALESCE(s.responders,0) AS responders, COALESCE(s.responders_target,0) AS responders_target,
+    COALESCE(s.responders_upgrade,0) AS responders_upgrade,
+    COALESCE(s.nibt_value_target,0) AS nibt_value_target, COALESCE(s.nibt_value_upgrade,0) AS nibt_value_upgrade
+FROM pcd_population p
+CROSS JOIN class_list cl
+LEFT JOIN pcd_success s
+    ON s.wave_dt = p.wave_dt AND s.test_control_flag = p.test_control_flag
+   AND s.cohort_arm = p.cohort_arm AND s.engaged_class = cl.engaged_class
+ORDER BY p.test_control_flag, p.cohort_arm, cl.engaged_class
 ;
 
 
@@ -128,7 +106,6 @@ ORDER BY test_control_flag, cohort_arm, engaged_class, vintage_day
 -- ║   arm=ASYNC if chnl_mb=1. test_control='ALL'.                               ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 WITH
-vintage_days AS (SELECT vd FROM UNNEST(sequence(0, 60)) AS t(vd)),
 class_list AS (SELECT engaged_class FROM (VALUES ('ENGAGED_PRE'),('ENGAGED_POST'),('NOT_ENGAGED'),('ENGAGED_ANY')) AS t(engaged_class)),
 ctu_cohort AS (
     SELECT clnt_no, treatmt_strt_dt, treatmt_strt_dt AS wave_dt, primary_success, success, response_dt,
@@ -175,43 +152,31 @@ ctu_cohort_e AS (
     FROM ctu_cohort c JOIN ctu_class k ON k.clnt_no = c.clnt_no
     WHERE k.engaged_class IN ('ENGAGED_PRE','ENGAGED_POST')
 ),
-ctu_success_daily AS (
+ctu_success AS (
     SELECT wave_dt, test_control_flag, cohort_arm, engaged_class,
-           date_diff('day', treatmt_strt_dt, response_dt) AS vintage_day,
-           COUNT(DISTINCT CASE WHEN success         = 1 THEN clnt_no END) AS responders,
-           COUNT(DISTINCT CASE WHEN primary_success = 1 THEN clnt_no END) AS responders_target
+        COUNT(DISTINCT CASE WHEN success = 1 AND date_diff('day',treatmt_strt_dt,response_dt) BETWEEN 0 AND 60 THEN clnt_no END) AS responders,
+        COUNT(DISTINCT CASE WHEN primary_success = 1 AND date_diff('day',treatmt_strt_dt,response_dt) BETWEEN 0 AND 60 THEN clnt_no END) AS responders_target
     FROM ctu_cohort_e
-    WHERE response_dt IS NOT NULL AND date_diff('day', treatmt_strt_dt, response_dt) BETWEEN 0 AND 60
-    GROUP BY 1,2,3,4,5
-),
-ctu_base AS (
-    SELECT p.wave_dt, p.test_control_flag, p.cohort_arm, cl.engaged_class, v.vd AS vintage_day,
-           p.total_population,
-           COALESCE(r.responders,0) AS responders, COALESCE(r.responders_target,0) AS responders_target
-    FROM ctu_population p
-    CROSS JOIN class_list cl
-    CROSS JOIN vintage_days v
-    LEFT JOIN ctu_success_daily r
-        ON  r.wave_dt = p.wave_dt AND r.test_control_flag = p.test_control_flag
-        AND r.cohort_arm = p.cohort_arm AND r.engaged_class = cl.engaged_class AND r.vintage_day = v.vd
+    GROUP BY 1,2,3,4
 )
 SELECT
     CAST('CTU' AS VARCHAR) AS campaign,
-    wave_dt AS cohort, test_control_flag, cohort_arm, engaged_class, vintage_day,
-    total_population, responders, responders_target,
-    SUM(responders)        OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_cum,
-    SUM(responders_target) OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_target_cum
-FROM ctu_base
-ORDER BY test_control_flag, cohort_arm, engaged_class, vintage_day
+    p.wave_dt AS cohort, p.test_control_flag, p.cohort_arm, cl.engaged_class, p.total_population,
+    COALESCE(s.responders,0) AS responders, COALESCE(s.responders_target,0) AS responders_target
+FROM ctu_population p
+CROSS JOIN class_list cl
+LEFT JOIN ctu_success s
+    ON s.wave_dt = p.wave_dt AND s.test_control_flag = p.test_control_flag
+   AND s.cohort_arm = p.cohort_arm AND s.engaged_class = cl.engaged_class
+ORDER BY p.test_control_flag, p.cohort_arm, cl.engaged_class
 ;
 
 
 -- ╔═════════════════════════════════════════════════════════════════════════════╗
--- ║ BLOCK 3 — O2P   responders=apps IN(40,41,43), responders_target=apps='43'   ║
--- ║   (own first-event dates). arm via rpt_grp allowlist. SLOW (CR_APP chain).  ║
+-- ║ BLOCK 3 — O2P   responders=apps IN(40,41,43), responders_target=apps='43'.  ║
+-- ║   SLOW (CR_APP chain). engaged_class anchored to broad first_app_dt.        ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 WITH
-vintage_days AS (SELECT vd FROM UNNEST(sequence(0, 60)) AS t(vd)),
 class_list AS (SELECT engaged_class FROM (VALUES ('ENGAGED_PRE'),('ENGAGED_POST'),('NOT_ENGAGED'),('ENGAGED_ANY')) AS t(engaged_class)),
 o2p_cohort AS (
     SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_strt_dt AS wave_dt,
@@ -303,38 +268,21 @@ o2p_success_events AS (
         AND a.app_dt BETWEEN ce.treatmt_strt_dt AND date_add('day', 60, ce.treatmt_strt_dt)
     GROUP BY 1,2,3,4,5,6
 ),
-o2p_responders_daily AS (
+o2p_success AS (
     SELECT wave_dt, test_control_flag, cohort_arm, engaged_class,
-           date_diff('day', treatmt_strt_dt, first_app_dt) AS vintage_day, COUNT(DISTINCT clnt_no) AS responders
-    FROM o2p_success_events WHERE date_diff('day', treatmt_strt_dt, first_app_dt) BETWEEN 0 AND 60
-    GROUP BY 1,2,3,4,5
-),
-o2p_responders_target_daily AS (
-    SELECT wave_dt, test_control_flag, cohort_arm, engaged_class,
-           date_diff('day', treatmt_strt_dt, first_app_dt_target) AS vintage_day, COUNT(DISTINCT clnt_no) AS responders_target
-    FROM o2p_success_events WHERE first_app_dt_target IS NOT NULL
-      AND date_diff('day', treatmt_strt_dt, first_app_dt_target) BETWEEN 0 AND 60
-    GROUP BY 1,2,3,4,5
-),
-o2p_base AS (
-    SELECT p.wave_dt, p.test_control_flag, p.cohort_arm, cl.engaged_class, v.vd AS vintage_day, p.total_population,
-           COALESCE(r1.responders,0) AS responders, COALESCE(r2.responders_target,0) AS responders_target
-    FROM o2p_population p
-    CROSS JOIN class_list cl
-    CROSS JOIN vintage_days v
-    LEFT JOIN o2p_responders_daily r1
-        ON r1.wave_dt=p.wave_dt AND r1.test_control_flag=p.test_control_flag AND r1.cohort_arm=p.cohort_arm
-       AND r1.engaged_class=cl.engaged_class AND r1.vintage_day=v.vd
-    LEFT JOIN o2p_responders_target_daily r2
-        ON r2.wave_dt=p.wave_dt AND r2.test_control_flag=p.test_control_flag AND r2.cohort_arm=p.cohort_arm
-       AND r2.engaged_class=cl.engaged_class AND r2.vintage_day=v.vd
+        COUNT(DISTINCT CASE WHEN date_diff('day',treatmt_strt_dt,first_app_dt) BETWEEN 0 AND 60 THEN clnt_no END) AS responders,
+        COUNT(DISTINCT CASE WHEN first_app_dt_target IS NOT NULL AND date_diff('day',treatmt_strt_dt,first_app_dt_target) BETWEEN 0 AND 60 THEN clnt_no END) AS responders_target
+    FROM o2p_success_events
+    GROUP BY 1,2,3,4
 )
 SELECT
     CAST('O2P' AS VARCHAR) AS campaign,
-    wave_dt AS cohort, test_control_flag, cohort_arm, engaged_class, vintage_day,
-    total_population, responders, responders_target,
-    SUM(responders)        OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_cum,
-    SUM(responders_target) OVER (PARTITION BY wave_dt,test_control_flag,cohort_arm,engaged_class ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_target_cum
-FROM o2p_base
-ORDER BY test_control_flag, cohort_arm, engaged_class, vintage_day
+    p.wave_dt AS cohort, p.test_control_flag, p.cohort_arm, cl.engaged_class, p.total_population,
+    COALESCE(s.responders,0) AS responders, COALESCE(s.responders_target,0) AS responders_target
+FROM o2p_population p
+CROSS JOIN class_list cl
+LEFT JOIN o2p_success s
+    ON s.wave_dt = p.wave_dt AND s.test_control_flag = p.test_control_flag
+   AND s.cohort_arm = p.cohort_arm AND s.engaged_class = cl.engaged_class
+ORDER BY p.test_control_flag, p.cohort_arm, cl.engaged_class
 ;
