@@ -227,25 +227,24 @@ population AS (
     GROUP BY 1,2,3,4
 ),
 
--- O2P conversion: daily (_DLY) on the two application tables (OVRL + PROD) for freshness; base linkage tables for clnt/prod relation. Each daily table pinned to its latest captr_dt.
+-- O2P conversion: 4 daily (_DLY) tables, no captr_dt pin needed (runs fresh as-is). Cohort-first: apps restricted to the deployment's clients so the downstream vintage/spine stays small.
 applications AS (
     SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
-    FROM DDWV01.CR_APP_CLNT_RELTN          AS a
+    FROM DDWV01.CR_APP_CLNT_RELTN_DLY      AS a
     JOIN DDWV01.OVRL_CR_APP_DLY            AS b
         ON  b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
-    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN     AS c
+    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c
         ON  c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
         AND c.sys_src_id = a.sys_src_id
     JOIN DDWV01.CR_APP_PROD_DLY            AS d
         ON  d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
         AND d.sys_src_id = c.sys_src_id
-    WHERE b.captr_dt = (SELECT MAX(captr_dt) FROM DDWV01.OVRL_CR_APP_DLY WHERE captr_dt >= DATE '2026-06-01')
-      AND d.captr_dt = (SELECT MAX(captr_dt) FROM DDWV01.CR_APP_PROD_DLY WHERE captr_dt >= DATE '2026-06-01')
-      AND b.app_typ = 'P'
+    WHERE b.app_typ = 'P'
       AND d.appl_for_prod_typ IN ('40','41','43')
       AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
       AND d.prod_app_compl_dt IS NOT NULL
-      AND d.prod_app_dt >= DATE '2026-04-01'
+      AND d.prod_app_compl_dt >= DATE '2026-01-01'
+      AND a.clnt_no IN (SELECT clnt_no FROM cohort)
 ),
 
 success_total AS (
