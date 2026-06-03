@@ -46,3 +46,15 @@ WHERE b.app_typ = 'P'
 GROUP BY 1
 ORDER BY 1
 ;
+
+
+-- STATEMENT 3 — RAW frontier: CR_APP_PROD alone, no join, no app_typ / product-type filters.
+-- Isolates whether May-5 is a table-wide load frontier or just the P / 40-41-43 subset.
+-- If max_app_dt_raw runs past May 5, the cap is the filter/product mix, not table recency.
+SELECT
+    MAX(prod_app_dt)       AS max_app_dt_raw,
+    MAX(prod_app_compl_dt) AS max_compl_dt_raw,
+    COUNT(*)               AS n_rows
+FROM DDWV01.CR_APP_PROD
+WHERE prod_app_dt >= DATE '2026-04-01'
+;
