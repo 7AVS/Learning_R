@@ -435,3 +435,167 @@ SELECT campaign, cohort, segment, segment_level, test_control_flag, cohort_arm,
 FROM o2p_final
 ORDER BY campaign, cohort, segment, segment_level, test_control_flag, cohort_arm
 ;
+
+
+-- ╔═════════════════════════════════════════════════════════════════════════════╗
+-- ║ BLOCK 4 — O2P_NONASYNC_MB                                                  ║
+-- ║ Same O2P cohort + CR_APP conversion + 60-day window as BLOCK 3, but        ║
+-- ║   engagement is measured against the OLB banner creatives instead of the   ║
+-- ║   async MB banner (it_item_id 'i_298045').                                 ║
+-- ║ Engagement: edl0_im GA4 ecommerce reduced, creative = OD_OLB / OD_XOLB.    ║
+-- ║ FLAGGED: filter written as lower(it_creative_id) IN ('od_olb','od_xolb').  ║
+-- ║   The other blocks key on it_item_id / it_item_name; OD_OLB looks like a   ║
+-- ║   creative code, not an item id. CONFIRM the exact column (it_creative_id  ║
+-- ║   vs creative_id) and stored casing before relying on the counts.          ║
+-- ╚═════════════════════════════════════════════════════════════════════════════╝
+
+WITH
+
+o2pna_cohort_raw AS (
+    SELECT
+        clnt_no,
+        treatmt_strt_dt,
+        treatmt_strt_dt                  AS wave_dt,
+        TRIM(rpt_grp_cd)                 AS rpt_grp_cd,
+        CASE
+            WHEN TRIM(tst_grp_cd) = 'TG4' THEN 'TEST'
+            WHEN TRIM(tst_grp_cd) = 'TG7' THEN 'CONTROL'
+        END AS test_control_flag,
+        CASE
+            WHEN TRIM(rpt_grp_cd) IN (
+                'PO2PNL01','PO2PNL03','PO2PNL07',
+                'PO2POT01','PO2POT03','PO2POT07',
+                'PO2PPR01','PO2PPR03','PO2PPR07'
+            ) THEN 'ASYNC' ELSE 'NON_ASYNC'
+        END AS cohort_arm
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+    WHERE tactic_id = '2026099O2P'
+      AND treatmt_strt_dt >= DATE '2026-04-01'
+      AND TRIM(tst_grp_cd) IN ('TG4','TG7')
+),
+
+o2pna_cohort AS (
+    SELECT DISTINCT clnt_no, treatmt_strt_dt, wave_dt, rpt_grp_cd, test_control_flag, cohort_arm
+    FROM o2pna_cohort_raw
+),
+
+o2pna_applications AS (
+    SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
+    FROM DDWV01.CR_APP_CLNT_RELTN        AS a
+    JOIN DDWV01.OVRL_CR_APP              AS b
+        ON  b.cr_app_id  = a.cr_app_id
+        AND b.sys_src_id = a.sys_src_id
+    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN   AS c
+        ON  c.cr_app_id          = a.cr_app_id
+        AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
+        AND c.sys_src_id         = a.sys_src_id
+    JOIN DDWV01.CR_APP_PROD              AS d
+        ON  d.cr_app_id          = c.cr_app_id
+        AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
+        AND d.sys_src_id         = c.sys_src_id
+    WHERE b.app_typ = 'P'
+      AND d.appl_for_prod_typ IN ('40','41','43')
+      AND d.prod_app_sts_cd IN ('32','37','45','47','51','56','62')
+      AND d.prod_app_compl_dt IS NOT NULL
+      AND d.prod_app_compl_dt >= DATE '2025-01-01'
+),
+
+-- First approved app per client within fixed 60-day window
+o2pna_first_apps AS (
+    SELECT
+        c.wave_dt,
+        c.rpt_grp_cd,
+        c.test_control_flag,
+        c.cohort_arm,
+        c.clnt_no,
+        c.treatmt_strt_dt,
+        MIN(a.app_dt) AS first_app_dt
+    FROM o2pna_cohort c
+    INNER JOIN o2pna_applications a
+        ON  a.clnt_no = c.clnt_no
+        AND a.app_dt  BETWEEN c.treatmt_strt_dt AND date_add('day', 60, c.treatmt_strt_dt)
+    GROUP BY c.wave_dt, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm, c.clnt_no, c.treatmt_strt_dt
+),
+
+o2pna_ga4_raw AS (
+    SELECT
+        event_date,
+        TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+        CASE
+            WHEN lower(event_name) = 'view_promotion' THEN 'view'
+            WHEN lower(event_name) = 'select_promotion' AND it_creative_name IN (
+                'n_Non intéressé','n_Not interested','n_Not now','n_Pas maintenant',
+                'Not now','Pas maintenant','n_close','Close'
+            ) THEN 'click_n'
+            WHEN lower(event_name) = 'select_promotion' AND it_creative_name IN (
+                'p_Chat to learn more','p_Chat with us','p_Clavarder avec nous',
+                'p_Clavardez pour en savoir plus','Chat to learn more',
+                'Clavardez pour en savoir plus','VSA_OFFER_SF'
+            ) THEN 'click_p'
+        END AS lead_class
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+    WHERE year = '2026' AND month IN ('04','05','06')
+      AND event_date >= DATE '2026-04-01'
+      AND lower(it_creative_id) IN ('od_olb','od_xolb')
+      AND lower(event_name) IN ('view_promotion','select_promotion')
+),
+
+o2pna_converter_events AS (
+    SELECT
+        f.wave_dt,
+        f.rpt_grp_cd,
+        f.test_control_flag,
+        f.cohort_arm,
+        f.clnt_no,
+        MAX(CASE WHEN g.lead_class IN ('view','click_p','click_n') THEN 1 ELSE 0 END) AS had_engagement,
+        MAX(CASE WHEN g.lead_class = 'click_p'                     THEN 1 ELSE 0 END) AS had_click_p
+    FROM o2pna_first_apps f
+    LEFT JOIN o2pna_ga4_raw g
+        ON  g.clnt_no    = f.clnt_no
+        AND g.event_date BETWEEN f.treatmt_strt_dt AND date_add('day', 60, f.treatmt_strt_dt)
+    GROUP BY f.wave_dt, f.rpt_grp_cd, f.test_control_flag, f.cohort_arm, f.clnt_no
+),
+
+o2pna_overall AS (
+    SELECT
+        wave_dt,
+        CAST('ALL'     AS VARCHAR) AS segment,
+        CAST('OVERALL' AS VARCHAR) AS segment_level,
+        test_control_flag,
+        cohort_arm,
+        COUNT(DISTINCT clnt_no)                             AS converters,
+        COUNT(DISTINCT CASE WHEN had_engagement = 1 THEN clnt_no END) AS engaged_converters,
+        COUNT(DISTINCT CASE WHEN had_click_p    = 1 THEN clnt_no END) AS engaged_converters_clicked
+    FROM o2pna_converter_events
+    GROUP BY wave_dt, test_control_flag, cohort_arm
+),
+
+o2pna_report_group AS (
+    SELECT
+        wave_dt,
+        CAST('REPORT_GROUP' AS VARCHAR) AS segment,
+        rpt_grp_cd                      AS segment_level,
+        test_control_flag,
+        cohort_arm,
+        COUNT(DISTINCT clnt_no)                             AS converters,
+        COUNT(DISTINCT CASE WHEN had_engagement = 1 THEN clnt_no END) AS engaged_converters,
+        COUNT(DISTINCT CASE WHEN had_click_p    = 1 THEN clnt_no END) AS engaged_converters_clicked
+    FROM o2pna_converter_events
+    GROUP BY wave_dt, rpt_grp_cd, test_control_flag, cohort_arm
+),
+
+o2pna_final AS (
+    SELECT CAST('O2P_NONASYNC_MB' AS VARCHAR) AS campaign, wave_dt AS cohort, segment, segment_level,
+           test_control_flag, cohort_arm, converters, engaged_converters, engaged_converters_clicked
+    FROM o2pna_overall
+    UNION ALL
+    SELECT CAST('O2P_NONASYNC_MB' AS VARCHAR), wave_dt, segment, segment_level,
+           test_control_flag, cohort_arm, converters, engaged_converters, engaged_converters_clicked
+    FROM o2pna_report_group
+)
+
+SELECT campaign, cohort, segment, segment_level, test_control_flag, cohort_arm,
+       converters, engaged_converters, engaged_converters_clicked
+FROM o2pna_final
+ORDER BY campaign, cohort, segment, segment_level, test_control_flag, cohort_arm
+;
