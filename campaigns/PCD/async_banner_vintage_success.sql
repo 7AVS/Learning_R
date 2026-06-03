@@ -460,3 +460,6 @@ SELECT
 FROM final_grain
 ORDER BY cohort, segment, segment_level, test_control_flag, cohort_arm, vintage_day
 ;
+
+-- Step C: drop the volatile table so you can rerun this block cleanly.
+DROP TABLE o2p_conv_vt;

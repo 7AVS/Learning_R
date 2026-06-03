@@ -189,6 +189,30 @@ ORDER BY 2, 5, 6
 -- ║ BLOCK 3 — O2P                                                              ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 
+-- Step A: materialize O2P converters ONCE into a volatile table (runs clean standalone;
+--   folding the daily join into the full query spools). Run CREATE, then the SELECT, then
+--   the DROP at the bottom -- all in the same session. DROP lets you rerun cleanly.
+CREATE VOLATILE TABLE o2p_conv_vt AS (
+    SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
+    FROM DDWV01.CR_APP_CLNT_RELTN_DLY      AS a
+    JOIN DDWV01.OVRL_CR_APP_DLY            AS b
+        ON  b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
+    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c
+        ON  c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
+        AND c.sys_src_id = a.sys_src_id
+    JOIN DDWV01.CR_APP_PROD_DLY            AS d
+        ON  d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
+        AND d.sys_src_id = c.sys_src_id
+    WHERE b.app_typ = 'P'
+      AND d.appl_for_prod_typ IN ('40','41','43')
+      AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
+      AND d.prod_app_compl_dt IS NOT NULL
+      AND d.prod_app_compl_dt >= DATE '2026-01-01'
+) WITH DATA
+PRIMARY INDEX (clnt_no)
+ON COMMIT PRESERVE ROWS;
+
+-- Step B: the summary, reading the materialized converters.
 WITH
 cohort_raw AS (
     SELECT
@@ -227,33 +251,13 @@ population AS (
     GROUP BY 1,2,3,4
 ),
 
--- O2P conversion: 4 daily (_DLY) tables, no captr_dt pin needed (runs fresh as-is). Cohort-first: apps restricted to the deployment's clients so the downstream vintage/spine stays small.
-applications AS (
-    SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
-    FROM DDWV01.CR_APP_CLNT_RELTN_DLY      AS a
-    JOIN DDWV01.OVRL_CR_APP_DLY            AS b
-        ON  b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
-    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c
-        ON  c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
-        AND c.sys_src_id = a.sys_src_id
-    JOIN DDWV01.CR_APP_PROD_DLY            AS d
-        ON  d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
-        AND d.sys_src_id = c.sys_src_id
-    WHERE b.app_typ = 'P'
-      AND d.appl_for_prod_typ IN ('40','41','43')
-      AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
-      AND d.prod_app_compl_dt IS NOT NULL
-      AND d.prod_app_compl_dt >= DATE '2026-01-01'
-      AND a.clnt_no IN (SELECT clnt_no FROM cohort)
-),
-
 success_total AS (
     SELECT
         c.wave_dt, c.rpt_grp_cd, c.test_control_flag, c.cohort_arm,
         COUNT(DISTINCT c.clnt_no)                                          AS responders,
         COUNT(DISTINCT CASE WHEN a.appl_for_prod_typ = '43' THEN c.clnt_no END) AS responders_target
     FROM cohort c
-    INNER JOIN applications a
+    INNER JOIN o2p_conv_vt a
         ON  a.clnt_no = c.clnt_no
         AND a.app_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
     GROUP BY 1,2,3,4
@@ -298,3 +302,6 @@ SELECT
 FROM base
 ORDER BY 2, 3, 4, 5, 6
 ;
+
+-- Step C: drop the volatile table so you can rerun this block cleanly.
+DROP TABLE o2p_conv_vt;
