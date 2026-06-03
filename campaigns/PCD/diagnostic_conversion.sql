@@ -139,12 +139,15 @@ WHERE DatabaseName = 'DDWV01' AND TableName = 'CR_APP_PROD_DLY'
 ORDER BY ColumnId
 ;
 
--- STATEMENT 10 — is captr_dt a DELTA or CUMULATIVE? app-date spread within the latest captr_dt.
---   min_app_dt ~ latest day  -> DELTA (must accumulate; current ROW_NUMBER-over-range = spool)
---   min_app_dt back months    -> CUMULATIVE (just use latest captr_dt; no window, no spool)
-SELECT COUNT(*)          AS rows_on_latest_captr,
+-- STATEMENT 10 — is captr_dt a DELTA or CUMULATIVE? app-date spread per recent captr_dt.
+--   (bounded to June; the unbounded MAX-over-whole-table subquery spooled, so it's removed)
+--   for the latest day: min_app_dt ~ same day -> DELTA;  min_app_dt back months -> CUMULATIVE
+SELECT captr_dt,
+       COUNT(*)          AS rows_on_captr,
        MIN(prod_app_dt)  AS min_app_dt,
        MAX(prod_app_dt)  AS max_app_dt
 FROM DDWV01.CR_APP_PROD_DLY
-WHERE captr_dt = (SELECT MAX(captr_dt) FROM DDWV01.CR_APP_PROD_DLY)
+WHERE captr_dt >= DATE '2026-06-01'
+GROUP BY captr_dt
+ORDER BY captr_dt
 ;
