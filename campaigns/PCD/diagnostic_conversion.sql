@@ -99,3 +99,34 @@ WHERE app_creat_dt >= DATE '2026-04-01'
 --   max_captr_dt ~ today but max_app_creat_dt ~ May 5  -> table fresh, but upstream apps lag
 --   max_captr_dt ~ May 5                               -> table itself not refreshed since then
 --   rows_after_may5 = 0                                -> OVRL_CR_APP caps the join at May 5
+
+
+-- STATEMENT 7 — DAILY (_DLY) frontier. These should be ~yesterday (the fix).
+SELECT 'OVRL_CR_APP_DLY' AS tbl,
+       MAX(captr_dt)      AS max_captr_dt,
+       MAX(app_creat_dt)  AS max_app_creat_dt,
+       MAX(appl_compl_dt) AS max_appl_compl_dt
+FROM DDWV01.OVRL_CR_APP_DLY
+WHERE captr_dt >= DATE '2026-05-01'
+;
+SELECT 'CR_APP_PROD_DLY' AS tbl,
+       MAX(captr_dt)          AS max_captr_dt,
+       MAX(prod_app_dt)       AS max_prod_app_dt,
+       MAX(prod_app_compl_dt) AS max_prod_app_compl_dt
+FROM DDWV01.CR_APP_PROD_DLY
+WHERE captr_dt >= DATE '2026-05-01'
+;
+
+
+-- STATEMENT 8 — snapshot grain + PERSISTENCE: does a completed April app still appear in the
+-- LATEST daily snapshot? Decides the dedup strategy for the production rewrite.
+--   april_apps_in_latest > 0 (≈ April volume) -> apps persist -> dedup = latest captr_dt snapshot
+--   april_apps_in_latest ~ 0                   -> apps drop out -> dedup = latest captr_dt PER app
+SELECT
+    (SELECT MAX(captr_dt) FROM DDWV01.OVRL_CR_APP_DLY)                       AS latest_snap,
+    COUNT(*)                                                                AS rows_in_latest_snap,
+    COUNT(DISTINCT cr_app_id)                                               AS distinct_apps_in_latest_snap,
+    COUNT(CASE WHEN app_creat_dt BETWEEN DATE '2026-04-01' AND DATE '2026-04-30' THEN 1 END) AS april_apps_in_latest
+FROM DDWV01.OVRL_CR_APP_DLY
+WHERE captr_dt = (SELECT MAX(captr_dt) FROM DDWV01.OVRL_CR_APP_DLY)
+;
