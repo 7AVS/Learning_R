@@ -58,3 +58,26 @@ SELECT
 FROM DDWV01.CR_APP_PROD
 WHERE prod_app_dt >= DATE '2026-04-01'
 ;
+
+
+-- STATEMENT 4 — discover OVRL_CR_APP's columns (find its date field; not guessing the name).
+-- Look for an app/decision/submit date column, then MAX() it for that table's own frontier.
+SELECT ColumnName, ColumnType
+FROM DBC.ColumnsV
+WHERE DatabaseName = 'DDWV01' AND TableName = 'OVRL_CR_APP'
+ORDER BY ColumnId
+;
+
+
+-- STATEMENT 5 — is OVRL_CR_APP the join limiter?  (no date column needed)
+-- Of CR_APP_PROD rows submitted AFTER May 5, how many have a matching OVRL_CR_APP row.
+-- If prod_rows_after_may5 > 0 but matched_in_ovrl ~ 0 -> OVRL_CR_APP lacks the recent rows
+--   and is what caps the joined query at May 5.
+SELECT
+    COUNT(*)            AS prod_rows_after_may5,
+    COUNT(b.cr_app_id)  AS matched_in_ovrl
+FROM DDWV01.CR_APP_PROD d
+LEFT JOIN DDWV01.OVRL_CR_APP b
+    ON b.cr_app_id = d.cr_app_id AND b.sys_src_id = d.sys_src_id
+WHERE d.prod_app_dt > DATE '2026-05-05'
+;
