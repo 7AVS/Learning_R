@@ -177,6 +177,9 @@ ORDER BY p.test_control_flag, p.cohort_arm, cl.engaged_class
 -- ║   SLOW (CR_APP chain). engaged_class anchored to broad first_app_dt.        ║
 -- ╚═════════════════════════════════════════════════════════════════════════════╝
 WITH
+snap_anchor AS (
+    SELECT MAX(captr_dt) AS cd FROM DDWV01.CR_APP_PROD_DLY WHERE captr_dt >= DATE '2026-06-01'
+),
 class_list AS (SELECT engaged_class FROM (VALUES ('ENGAGED_PRE'),('ENGAGED_POST'),('NOT_ENGAGED'),('ENGAGED_ANY')) AS t(engaged_class)),
 o2p_cohort AS (
     SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_strt_dt AS wave_dt,
@@ -191,14 +194,17 @@ o2p_apps AS (
     SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
     FROM DDWV01.CR_APP_CLNT_RELTN_DLY      AS a
     JOIN DDWV01.OVRL_CR_APP_DLY            AS b
-        ON  b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id AND b.captr_dt = a.captr_dt
+        ON  b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
     JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c
         ON  c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
-        AND c.sys_src_id = a.sys_src_id AND c.captr_dt = a.captr_dt
+        AND c.sys_src_id = a.sys_src_id
     JOIN DDWV01.CR_APP_PROD_DLY            AS d
         ON  d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
-        AND d.sys_src_id = c.sys_src_id AND d.captr_dt = c.captr_dt
-    WHERE a.captr_dt = (SELECT MAX(captr_dt) FROM DDWV01.CR_APP_PROD_DLY WHERE captr_dt >= DATE '2026-06-01')
+        AND d.sys_src_id = c.sys_src_id
+    WHERE a.captr_dt = (SELECT cd FROM snap_anchor)
+      AND b.captr_dt = (SELECT cd FROM snap_anchor)
+      AND c.captr_dt = (SELECT cd FROM snap_anchor)
+      AND d.captr_dt = (SELECT cd FROM snap_anchor)
       AND b.app_typ = 'P'
       AND d.appl_for_prod_typ IN ('40','41','43')
       AND d.prod_app_sts_cd IN ('32','37','45','47','51','56','62')
