@@ -227,17 +227,43 @@ population AS (
     GROUP BY 1,2,3,4
 ),
 
+-- O2P conversion now reads the DAILY (_DLY) snapshots (base tables lag ~4 weeks). Latest captr_dt
+-- per app (rolling snapshot, apps age out). ASSUMPTION: the two _RELTN_DLY tables also carry captr_dt.
 applications AS (
     SELECT a.clnt_no, d.prod_app_dt AS app_dt, d.appl_for_prod_typ
-    FROM DDWV01.CR_APP_CLNT_RELTN     AS a
-    JOIN DDWV01.OVRL_CR_APP            AS b
+    FROM (
+        SELECT z.* FROM (
+            SELECT t.*, ROW_NUMBER() OVER (PARTITION BY t.cr_app_id, t.sys_src_id, t.cr_app_clnt_seq_no ORDER BY t.captr_dt DESC) AS dly_rn
+            FROM DDWV01.CR_APP_CLNT_RELTN_DLY t
+            WHERE t.captr_dt >= DATE '2026-04-01'
+        ) z WHERE z.dly_rn = 1
+    ) AS a
+    JOIN (
+        SELECT z.* FROM (
+            SELECT t.*, ROW_NUMBER() OVER (PARTITION BY t.cr_app_id, t.sys_src_id ORDER BY t.captr_dt DESC) AS dly_rn
+            FROM DDWV01.OVRL_CR_APP_DLY t
+            WHERE t.captr_dt >= DATE '2026-04-01'
+        ) z WHERE z.dly_rn = 1
+    ) AS b
         ON  b.cr_app_id  = a.cr_app_id
         AND b.sys_src_id = a.sys_src_id
-    JOIN DDWV01.CR_APP_CLNT_PROD_RELTN AS c
+    JOIN (
+        SELECT z.* FROM (
+            SELECT t.*, ROW_NUMBER() OVER (PARTITION BY t.cr_app_id, t.sys_src_id, t.cr_app_clnt_seq_no, t.cr_app_prod_seq_no ORDER BY t.captr_dt DESC) AS dly_rn
+            FROM DDWV01.CR_APP_CLNT_PROD_RELTN_DLY t
+            WHERE t.captr_dt >= DATE '2026-04-01'
+        ) z WHERE z.dly_rn = 1
+    ) AS c
         ON  c.cr_app_id          = a.cr_app_id
         AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no
         AND c.sys_src_id         = a.sys_src_id
-    JOIN DDWV01.CR_APP_PROD            AS d
+    JOIN (
+        SELECT z.* FROM (
+            SELECT t.*, ROW_NUMBER() OVER (PARTITION BY t.cr_app_id, t.sys_src_id, t.cr_app_prod_seq_no ORDER BY t.captr_dt DESC) AS dly_rn
+            FROM DDWV01.CR_APP_PROD_DLY t
+            WHERE t.captr_dt >= DATE '2026-04-01'
+        ) z WHERE z.dly_rn = 1
+    ) AS d
         ON  d.cr_app_id          = c.cr_app_id
         AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no
         AND d.sys_src_id         = c.sys_src_id
