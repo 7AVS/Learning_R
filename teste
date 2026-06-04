@@ -8,9 +8,7 @@ cohort AS (
     SELECT
         clnt_no,
         CAST(TACTIC_EVNT_ID AS BIGINT) AS acct_no,
-        treatmt_strt_dt,
-        treatmt_end_dt,
-        tst_grp_cd,
+        treatmt_strt_dt, treatmt_end_dt, tst_grp_cd,
         CASE WHEN RIGHT(trim(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
         treatmt_strt_dt AS wave_dt,
         CASE WHEN SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') THEN 'NonReward'
@@ -25,11 +23,21 @@ cohort AS (
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id='2026119AUH'
 ),
+-- SUCCESS = authorized-user ADD event, real event date
+au_event AS (
+    SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
+    FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY a
+    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO c
+        ON a.clnt_no = c.clnt_no
+       AND a.evnt_dt = c.DT_RECORD_EXT
+       AND a.acct_no = c.acct_no
+       AND c.visa_prod_cd IN ('PLT','CLO','MC1','MCP','VPR')
+    WHERE a.dtl_evnt_typ_cd = 191   -- user added
+      AND a.ADD_RELTN_CD  = 3       -- AUH indicator
+),
 new_owner AS (
-    SELECT acct_no, prod_cd, MIN(captr_dt) AS first_owned_dt
-    FROM D3CV12A.ACCT_CRD_OWN_DLY_DELTA
-    WHERE RELATIONSHIP_CD='2' AND card_sts IN ('A','')
-    GROUP BY acct_no, prod_cd
+    SELECT acct_no, prod_cd, MIN(evnt_dt) AS first_owned_dt
+    FROM au_event GROUP BY acct_no, prod_cd
 ),
 pop_sm AS (
     SELECT wave_dt,strategy_arm,model_arm,test_group,COUNT(DISTINCT acct_no) AS total_population
