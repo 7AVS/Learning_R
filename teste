@@ -1,3 +1,13 @@
+/* =====================================================================
+   AU-ADD RESPONSE — SUMMARY (not vintage)
+   Two AUH deployments, by Test/Control, strategy arm, model arm,
+   channel (TACTIC_CELL_CD) and product code. Response measured within
+   the 0–30 day window. Success = an authorized user actually added,
+   read from the event table.
+   Excel formulas for statistical significance and SRM are documented
+   at the bottom of this file.
+   ===================================================================== */
+
 WITH
 cohort AS (
     SELECT
@@ -7,6 +17,8 @@ cohort AS (
         treatmt_strt_dt, treatmt_end_dt, tst_grp_cd,
         CASE WHEN RIGHT(trim(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
         treatmt_strt_dt AS wave_dt,
+
+        /* strategy_arm — one mapping per deployment */
         CASE
           WHEN tactic_id='2026042AUH' THEN
                CASE WHEN trim(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C') THEN 'NonReward'
@@ -18,6 +30,8 @@ cohort AS (
                     ELSE 'Unknown' END
           ELSE 'Unknown'
         END AS strategy_arm,
+
+        /* model_arm — one mapping per deployment */
         CASE
           WHEN tactic_id='2026042AUH' THEN
                CASE WHEN trim(tst_grp_cd) IN ('NRGA','NRGA_C') THEN 'Web'
@@ -31,16 +45,20 @@ cohort AS (
                     ELSE 'Unknown' END
           ELSE 'Unknown'
         END AS model_arm,
+
         TACTIC_CELL_CD AS channel,
         substr(tactic_decisn_vrb_info,21,3) AS prod_cd
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH','2026119AUH')
-    /* one row per account per wave — this is what stops the double-count */
+    /* one row per account per wave — stops the population double-count */
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY tactic_id, CAST(TACTIC_EVNT_ID AS BIGINT)
         ORDER BY treatmt_strt_dt
     ) = 1
 ),
+
+/* SUCCESS = authorized-user add event, real event date, no product
+   allow-list. Date floor keeps the scan bounded for the governor. */
 au_event AS (
     SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
     FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY a
@@ -56,6 +74,8 @@ new_owner AS (
     SELECT acct_no, prod_cd, MIN(evnt_dt) AS first_owned_dt
     FROM au_event GROUP BY acct_no, prod_cd
 ),
+
+/* attribute each account's first add (any + target) inside its window */
 success_events AS (
     SELECT c.wave_dt,c.tactic_id,c.strategy_arm,c.model_arm,c.test_group,c.channel,c.prod_cd,
            c.acct_no,c.treatmt_strt_dt,
@@ -67,6 +87,7 @@ success_events AS (
        AND n.first_owned_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
     GROUP BY 1,2,3,4,5,6,7,8,9
 ),
+
 pop AS (
     SELECT wave_dt,tactic_id,strategy_arm,model_arm,test_group,channel,prod_cd,
            COUNT(DISTINCT acct_no) AS total_population
@@ -93,3 +114,45 @@ LEFT JOIN resp r
    AND r.model_arm=p.model_arm AND r.test_group=p.test_group
    AND r.channel=p.channel AND r.prod_cd=p.prod_cd
 ORDER BY p.wave_dt, p.strategy_arm, p.model_arm, p.test_group, p.channel, p.prod_cd;
+
+
+/* =====================================================================
+   EXCEL FORMULAS — paste these next to the pivot (like the Lift column)
+   ---------------------------------------------------------------------
+   Inputs per row (adjust the column letters to match the sheet):
+     Test population        -> P     Test responders_target    -> Q
+     Control population      -> S     Control responders_target -> T
+   Example uses row 5; drag the formulas down.
+
+   --------------------------------------------------------------------
+   1) STATISTICAL SIGNIFICANCE  (two-proportion z-test, Test vs Control)
+   --------------------------------------------------------------------
+   p-value (two-sided):
+     =2*(1-NORM.S.DIST(ABS((Q5/P5 - T5/S5)
+        /SQRT(((Q5+T5)/(P5+S5))*(1-((Q5+T5)/(P5+S5)))*(1/P5+1/S5))),TRUE))
+
+   Flag (point at the p-value cell, here called PV5):
+     =IF(PV5<0.05,"Significant","Not sig")
+
+   Note: rows with single-digit responders are directional only — the
+   normal approximation is weak at small counts. Trust the Total rows.
+
+   --------------------------------------------------------------------
+   2) SRM  (Sample Ratio Mismatch, chi-square vs the PLANNED split)
+   --------------------------------------------------------------------
+   Put the planned Test share in one cell, e.g. $W$1 = 0.70 (=70/30).
+   Set this per the actual experiment design for each wave.
+
+   SRM p-value:
+     =CHISQ.DIST.RT(
+         (P5-(P5+S5)*$W$1)^2/((P5+S5)*$W$1)
+       + (S5-(P5+S5)*(1-$W$1))^2/((P5+S5)*(1-$W$1)), 1)
+
+   Flag (point at the SRM p-value cell, here called SR5):
+     =IF(SR5<0.001,"SRM!","OK")
+
+   Note: SRM uses a strict threshold (~0.001). "SRM!" means the actual
+   split deviates from the plan enough that the randomization is suspect
+   and the lift on that row should not be trusted. The planned ratio is
+   required — without the true designed split the SRM is meaningless.
+   ===================================================================== */
