@@ -31,10 +31,15 @@ cohort AS (
                     ELSE 'Unknown' END
           ELSE 'Unknown'
         END AS model_arm,
+        TACTIC_CELL_CD AS channel,
         substr(tactic_decisn_vrb_info,21,3) AS prod_cd
-        -- ,substr(tactic_decisn_vrb_info, ?, ?) AS channel   -- add once we locate it (see peek query below)
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH','2026119AUH')
+    /* one row per account per wave — this is what stops the double-count */
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY tactic_id, CAST(TACTIC_EVNT_ID AS BIGINT)
+        ORDER BY treatmt_strt_dt
+    ) = 1
 ),
 au_event AS (
     SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
@@ -52,7 +57,7 @@ new_owner AS (
     FROM au_event GROUP BY acct_no, prod_cd
 ),
 success_events AS (
-    SELECT c.wave_dt,c.tactic_id,c.strategy_arm,c.model_arm,c.test_group,c.prod_cd,
+    SELECT c.wave_dt,c.tactic_id,c.strategy_arm,c.model_arm,c.test_group,c.channel,c.prod_cd,
            c.acct_no,c.treatmt_strt_dt,
         MIN(n.first_owned_dt) AS first_app_dt,
         MIN(CASE WHEN trim(c.prod_cd)=trim(n.prod_cd) THEN n.first_owned_dt END) AS first_app_dt_target
@@ -60,23 +65,23 @@ success_events AS (
     INNER JOIN new_owner n
         ON n.acct_no=c.acct_no
        AND n.first_owned_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
-    GROUP BY 1,2,3,4,5,6,7,8
+    GROUP BY 1,2,3,4,5,6,7,8,9
 ),
 pop AS (
-    SELECT wave_dt,tactic_id,strategy_arm,model_arm,test_group,prod_cd,
+    SELECT wave_dt,tactic_id,strategy_arm,model_arm,test_group,channel,prod_cd,
            COUNT(DISTINCT acct_no) AS total_population
-    FROM cohort GROUP BY 1,2,3,4,5,6
+    FROM cohort GROUP BY 1,2,3,4,5,6,7
 ),
 resp AS (
-    SELECT wave_dt,tactic_id,strategy_arm,model_arm,test_group,prod_cd,
+    SELECT wave_dt,tactic_id,strategy_arm,model_arm,test_group,channel,prod_cd,
         COUNT(DISTINCT CASE WHEN (first_app_dt-treatmt_strt_dt) BETWEEN 0 AND 30
                             THEN acct_no END) AS responders,
         COUNT(DISTINCT CASE WHEN first_app_dt_target IS NOT NULL
                              AND (first_app_dt_target-treatmt_strt_dt) BETWEEN 0 AND 30
                             THEN acct_no END) AS responders_target
-    FROM success_events GROUP BY 1,2,3,4,5,6
+    FROM success_events GROUP BY 1,2,3,4,5,6,7
 )
-SELECT p.wave_dt, p.tactic_id, p.strategy_arm, p.model_arm, p.test_group, p.prod_cd,
+SELECT p.wave_dt, p.tactic_id, p.strategy_arm, p.model_arm, p.test_group, p.channel, p.prod_cd,
        p.total_population,
        COALESCE(r.responders,0)        AS responders,
        COALESCE(r.responders_target,0) AS responders_target,
@@ -85,5 +90,6 @@ SELECT p.wave_dt, p.tactic_id, p.strategy_arm, p.model_arm, p.test_group, p.prod
 FROM pop p
 LEFT JOIN resp r
     ON r.wave_dt=p.wave_dt AND r.tactic_id=p.tactic_id AND r.strategy_arm=p.strategy_arm
-   AND r.model_arm=p.model_arm AND r.test_group=p.test_group AND r.prod_cd=p.prod_cd
-ORDER BY p.wave_dt, p.strategy_arm, p.model_arm, p.test_group, p.prod_cd;
+   AND r.model_arm=p.model_arm AND r.test_group=p.test_group
+   AND r.channel=p.channel AND r.prod_cd=p.prod_cd
+ORDER BY p.wave_dt, p.strategy_arm, p.model_arm, p.test_group, p.channel, p.prod_cd;
