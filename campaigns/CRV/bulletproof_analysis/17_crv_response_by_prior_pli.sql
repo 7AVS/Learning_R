@@ -171,18 +171,20 @@ ORDER BY decile, pli_status, gap_bucket
 ;
 
 -- =============================================================================
--- Q17d -- THE CONFOUND GATE, printed directly (no pivot needed). 10 rows.
--- One row per decile: converter vs non-converter CRV offers + responders side by side.
--- READ: per decile, conv rate = conv_responders/conv_offers vs
---       nonconv rate = nonconv_responders/nonconv_offers.
---   Converter still well above non-converter inside every decile -> more than decile
---   composition (Option A). Gap closes within decile -> it was just decile (Option B).
--- decile = the client's LATEST prior PLI lead's decile (same definition for both groups).
+-- Q17d -- ONE wide table: converter / non-converter  x  Action / Control, by decile.
+-- One row per decile (clients WITH a prior PLI only; no_prior has no decile -> see Q17).
+-- Answers everything in a single scan, per decile -- compute rates from the columns:
+--   confound gate     -> conv_act rate  vs  nonconv_act rate
+--   banner lift       -> conv_act  vs  conv_ctl   (and nonconv_act vs nonconv_ctl)
+--   organic affinity  -> conv_ctl  vs  nonconv_ctl   (do converters take CRV organically more?)
+-- decile = the client's LATEST prior PLI lead's decile. Counts only (rates in Excel).
+-- NOTE: Control columns are only informative if held-out Control has a non-zero organic
+--   CRV response; if Control responders ~ 0, there's no organic/lift signal to read.
 -- =============================================================================
 WITH crv_offers AS (
-    SELECT acct_no, offer_start_date, responder AS crv_resp
+    SELECT acct_no, offer_start_date, responder AS crv_resp, action_control
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Action'
+    WHERE offer_start_date >= DATE '2024-10-01'
 ),
 pli_leads AS (
     SELECT acct_no, treatmt_end_dt, responder_cli, decile
@@ -191,6 +193,7 @@ pli_leads AS (
 ),
 ranked AS (
     SELECT c.crv_resp,
+           c.action_control,
            p.decile,
            ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date ORDER BY p.treatmt_end_dt DESC) AS rn_any,
            MAX(p.responder_cli) OVER (PARTITION BY c.acct_no, c.offer_start_date) AS any_conv
@@ -201,60 +204,16 @@ ranked AS (
 )
 SELECT
     decile,
-    SUM(CASE WHEN any_conv = 1 THEN 1 ELSE 0 END)        AS conv_offers,
-    SUM(CASE WHEN any_conv = 1 THEN crv_resp ELSE 0 END) AS conv_responders,
-    SUM(CASE WHEN any_conv = 0 THEN 1 ELSE 0 END)        AS nonconv_offers,
-    SUM(CASE WHEN any_conv = 0 THEN crv_resp ELSE 0 END) AS nonconv_responders
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS conv_act_offers,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS conv_act_resp,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS conv_ctl_offers,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS conv_ctl_resp,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS nonconv_act_offers,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS nonconv_act_resp,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS nonconv_ctl_offers,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS nonconv_ctl_resp
 FROM ranked
 WHERE rn_any = 1
 GROUP BY decile
 ORDER BY decile
-;
-
--- =============================================================================
--- Q17e -- Bring CRV CONTROL (held-out) back in: prior_pli_status x action_control.
--- Q17/a-d were Action-ONLY (gross CRV response). This keeps BOTH arms so you can read the
--- CRV banner's INCREMENTAL lift = (Action rate - Control rate) WITHIN each prior-PLI group
--- -- a randomisation-grounded read (CRV's Action/Control is the one randomised lever we have).
--- CAVEAT: only meaningful if held-out Control clients have a NON-ZERO organic CRV response.
---   If Control = never offered = responder ~ 0 by construction, Action - Control collapses
---   to the gross Action rate and this adds nothing. The output shows which case we're in.
--- =============================================================================
-WITH crv_offers AS (
-    SELECT acct_no, offer_start_date, responder AS crv_resp, action_control
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01'
-),
-pli_leads AS (
-    SELECT acct_no, treatmt_end_dt, responder_cli
-    FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2024-01-01'
-),
-crv_prior_pli AS (
-    SELECT c.crv_resp,
-           c.action_control,
-           COUNT(p.acct_no)     AS n_prior_pli,
-           MAX(p.responder_cli) AS any_prior_pli_conv
-    FROM crv_offers c
-    LEFT JOIN pli_leads p
-      ON p.acct_no = c.acct_no
-     AND p.treatmt_end_dt < c.offer_start_date
-    GROUP BY c.acct_no, c.offer_start_date, c.crv_resp, c.action_control
-),
-classified AS (
-    SELECT crv_resp,
-           action_control,
-           CASE WHEN n_prior_pli = 0        THEN 'no_prior_pli'
-                WHEN any_prior_pli_conv = 1 THEN 'prior_pli_converter'
-                ELSE 'prior_pli_nonconverter' END AS pli_status
-    FROM crv_prior_pli
-)
-SELECT
-    pli_status,
-    action_control,
-    COUNT(*)      AS n_crv_offers,
-    SUM(crv_resp) AS n_crv_responders
-FROM classified
-GROUP BY pli_status, action_control
-ORDER BY pli_status, action_control
 ;
