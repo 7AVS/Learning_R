@@ -210,3 +210,51 @@ WHERE rn_any = 1
 GROUP BY decile
 ORDER BY decile
 ;
+
+-- =============================================================================
+-- Q17e -- Bring CRV CONTROL (held-out) back in: prior_pli_status x action_control.
+-- Q17/a-d were Action-ONLY (gross CRV response). This keeps BOTH arms so you can read the
+-- CRV banner's INCREMENTAL lift = (Action rate - Control rate) WITHIN each prior-PLI group
+-- -- a randomisation-grounded read (CRV's Action/Control is the one randomised lever we have).
+-- CAVEAT: only meaningful if held-out Control clients have a NON-ZERO organic CRV response.
+--   If Control = never offered = responder ~ 0 by construction, Action - Control collapses
+--   to the gross Action rate and this adds nothing. The output shows which case we're in.
+-- =============================================================================
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, responder AS crv_resp, action_control
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+),
+pli_leads AS (
+    SELECT acct_no, treatmt_end_dt, responder_cli
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+),
+crv_prior_pli AS (
+    SELECT c.crv_resp,
+           c.action_control,
+           COUNT(p.acct_no)     AS n_prior_pli,
+           MAX(p.responder_cli) AS any_prior_pli_conv
+    FROM crv_offers c
+    LEFT JOIN pli_leads p
+      ON p.acct_no = c.acct_no
+     AND p.treatmt_end_dt < c.offer_start_date
+    GROUP BY c.acct_no, c.offer_start_date, c.crv_resp, c.action_control
+),
+classified AS (
+    SELECT crv_resp,
+           action_control,
+           CASE WHEN n_prior_pli = 0        THEN 'no_prior_pli'
+                WHEN any_prior_pli_conv = 1 THEN 'prior_pli_converter'
+                ELSE 'prior_pli_nonconverter' END AS pli_status
+    FROM crv_prior_pli
+)
+SELECT
+    pli_status,
+    action_control,
+    COUNT(*)      AS n_crv_offers,
+    SUM(crv_resp) AS n_crv_responders
+FROM classified
+GROUP BY pli_status, action_control
+ORDER BY pli_status, action_control
+;
