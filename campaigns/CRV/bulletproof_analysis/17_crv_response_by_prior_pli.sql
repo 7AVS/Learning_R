@@ -174,9 +174,9 @@ ORDER BY decile, pli_status, gap_bucket
 -- Q17d -- ONE wide table: converter / non-converter  x  Action / Control, by decile.
 -- One row per decile (clients WITH a prior PLI only; no_prior has no decile -> see Q17).
 -- Answers everything in a single scan, per decile -- compute rates from the columns:
---   confound gate     -> conv_act rate  vs  nonconv_act rate
---   banner lift       -> conv_act  vs  conv_ctl   (and nonconv_act vs nonconv_ctl)
---   organic affinity  -> conv_ctl  vs  nonconv_ctl   (do converters take CRV organically more?)
+--   confound gate     -> converter_action rate   vs  nonconverter_action rate
+--   banner lift       -> converter_action        vs  converter_control   (same for nonconverter)
+--   organic affinity  -> converter_control       vs  nonconverter_control   (organic CRV uptake?)
 -- decile = the client's LATEST prior PLI lead's decile. Counts only (rates in Excel).
 -- NOTE: Control columns are only informative if held-out Control has a non-zero organic
 --   CRV response; if Control responders ~ 0, there's no organic/lift signal to read.
@@ -204,14 +204,14 @@ ranked AS (
 )
 SELECT
     decile,
-    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS conv_act_offers,
-    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS conv_act_resp,
-    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS conv_ctl_offers,
-    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS conv_ctl_resp,
-    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS nonconv_act_offers,
-    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS nonconv_act_resp,
-    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS nonconv_ctl_offers,
-    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS nonconv_ctl_resp
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS converter_action_offers,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS converter_action_responders,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS converter_control_offers,
+    SUM(CASE WHEN any_conv = 1 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS converter_control_responders,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN 1 ELSE 0 END)        AS nonconverter_action_offers,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Action'  THEN crv_resp ELSE 0 END) AS nonconverter_action_responders,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN 1 ELSE 0 END)        AS nonconverter_control_offers,
+    SUM(CASE WHEN any_conv = 0 AND action_control = 'Control' THEN crv_resp ELSE 0 END) AS nonconverter_control_responders
 FROM ranked
 WHERE rn_any = 1
 GROUP BY decile
