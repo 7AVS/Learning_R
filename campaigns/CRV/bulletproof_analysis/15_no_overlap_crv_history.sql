@@ -123,3 +123,73 @@ FROM (
 GROUP BY attribute_name, attribute_value, crv_hist_class
 ORDER BY attribute_name, attribute_value, crv_hist_class
 ;
+
+-- ============================================================================
+-- Q15b — Timing diagnostic: later_crv gap buckets
+-- Gap (whole months) between PCL treatmt_end_dt and the client's first CRV offer.
+-- Reverse causation (PCL limit increase -> later CRV uptake) would concentrate
+-- responders in the 0-1/2-3 buckets. Self-contained: CTEs above are scoped to the
+-- prior statement (closed at the ;), so the chain is re-declared here.
+-- later_crv condition (s.min_start > pcl_end_dt) is mutually exclusive with prior_crv,
+-- so the WHERE alone reproduces the classified='later_crv' subset.
+-- ============================================================================
+WITH pcl_universe AS (
+    SELECT acct_no, treatmt_strt_dt AS pcl_strt_dt, treatmt_end_dt AS pcl_end_dt, responder_cli
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-10-01' AND channel LIKE '%MB%'
+),
+crv_im_action AS (
+    SELECT acct_no, offer_start_date, offer_end_date
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
+),
+crv_control AS (
+    SELECT acct_no, offer_start_date, offer_end_date
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
+),
+oa_keys AS (
+    SELECT DISTINCT p.acct_no, p.pcl_strt_dt, p.pcl_end_dt
+    FROM pcl_universe p JOIN crv_im_action c
+      ON c.acct_no=p.acct_no AND c.offer_start_date<=p.pcl_end_dt AND c.offer_end_date>=p.pcl_strt_dt
+),
+oc_keys AS (
+    SELECT DISTINCT p.acct_no, p.pcl_strt_dt, p.pcl_end_dt
+    FROM pcl_universe p JOIN crv_control c
+      ON c.acct_no=p.acct_no AND c.offer_start_date<=p.pcl_end_dt AND c.offer_end_date>=p.pcl_strt_dt
+),
+no_overlap AS (
+    SELECT p.*
+    FROM pcl_universe p
+    LEFT JOIN oa_keys oa ON oa.acct_no=p.acct_no AND oa.pcl_strt_dt=p.pcl_strt_dt AND oa.pcl_end_dt=p.pcl_end_dt
+    LEFT JOIN oc_keys oc ON oc.acct_no=p.acct_no AND oc.pcl_strt_dt=p.pcl_strt_dt AND oc.pcl_end_dt=p.pcl_end_dt
+    WHERE oa.acct_no IS NULL AND oc.acct_no IS NULL
+),
+crv_summary AS (
+    SELECT acct_no, MIN(offer_start_date) AS min_start
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-01-01'
+    GROUP BY acct_no
+),
+later_crv AS (
+    SELECT n.responder_cli,
+           ((CAST(EXTRACT(YEAR  FROM s.min_start) AS INTEGER) - CAST(EXTRACT(YEAR  FROM n.pcl_end_dt) AS INTEGER)) * 12)
+           + (CAST(EXTRACT(MONTH FROM s.min_start) AS INTEGER) - CAST(EXTRACT(MONTH FROM n.pcl_end_dt) AS INTEGER)) AS months_gap
+    FROM no_overlap n
+    JOIN crv_summary s ON s.acct_no = n.acct_no
+    WHERE s.min_start > n.pcl_end_dt
+)
+SELECT
+    CASE
+        WHEN months_gap BETWEEN 0 AND 1  THEN '0-1'
+        WHEN months_gap BETWEEN 2 AND 3  THEN '2-3'
+        WHEN months_gap BETWEEN 4 AND 6  THEN '4-6'
+        WHEN months_gap BETWEEN 7 AND 12 THEN '7-12'
+        ELSE '13+'
+    END                  AS gap_bucket,
+    COUNT(*)             AS n_leads,
+    SUM(responder_cli)   AS n_responders
+FROM later_crv
+GROUP BY gap_bucket
+ORDER BY gap_bucket
+;
