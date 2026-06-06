@@ -56,3 +56,99 @@ FROM classified
 GROUP BY pli_status
 ORDER BY pli_status
 ;
+
+-- =============================================================================
+-- Q17a -- CONFOUND GATE: converter vs non-converter WITHIN PLI decile.
+-- If converters still out-respond non-converters inside the SAME new_decile, the
+-- 3.5x is more than decile composition. If the gap collapses within decile, it was
+-- selection (top-decile clients respond to everything) and H2 = H1 restated.
+-- Decile = the client's LATEST prior PLI lead's new_decile. Prior-PLI clients only
+-- (inner join drops no_prior_pli). Self-contained (CTEs don't survive the ; above).
+-- Heavier than Q17 (fans out each offer to its prior PLI leads then ranks) -- watch spool.
+-- =============================================================================
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, responder AS crv_resp
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Action'
+),
+pli_leads AS (
+    SELECT acct_no, treatmt_end_dt, responder_cli, new_decile
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+),
+ranked AS (
+    SELECT c.crv_resp,
+           p.new_decile,
+           ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date ORDER BY p.treatmt_end_dt DESC) AS rn,
+           MAX(p.responder_cli) OVER (PARTITION BY c.acct_no, c.offer_start_date) AS any_conv
+    FROM crv_offers c
+    JOIN pli_leads p
+      ON p.acct_no = c.acct_no
+     AND p.treatmt_end_dt < c.offer_start_date
+),
+classified_d AS (
+    SELECT new_decile,
+           CASE WHEN any_conv = 1 THEN 'prior_pli_converter' ELSE 'prior_pli_nonconverter' END AS pli_status,
+           crv_resp
+    FROM ranked
+    WHERE rn = 1
+)
+SELECT
+    new_decile,
+    pli_status,
+    COUNT(*)      AS n_crv_offers,
+    SUM(crv_resp) AS n_crv_responders
+FROM classified_d
+GROUP BY new_decile, pli_status
+ORDER BY new_decile, pli_status
+;
+
+-- =============================================================================
+-- Q17b -- TIMING WINDOW among converters: days from latest prior PLI conversion to
+-- the CRV offer, bucketed (0-30 ... 151-180, 180+), also by decile. Shows whether
+-- CRV response peaks shortly after a limit increase (a real sequencing window) or not.
+-- Conversion-date proxy = treatmt_end_dt of the latest prior CONVERTED PLI lead.
+--   (dt_cl_change is the actual limit-change date per Q10 -- swap it in for precision
+--    if it's reliably populated for responders.)
+-- =============================================================================
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, responder AS crv_resp
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Action'
+),
+pli_conv AS (
+    SELECT acct_no, treatmt_end_dt AS pli_conv_dt, new_decile
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01' AND responder_cli = 1
+),
+ranked AS (
+    SELECT c.crv_resp,
+           p.new_decile,
+           date_diff('day', p.pli_conv_dt, c.offer_start_date) AS gap_days,
+           ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date ORDER BY p.pli_conv_dt DESC) AS rn
+    FROM crv_offers c
+    JOIN pli_conv p
+      ON p.acct_no = c.acct_no
+     AND p.pli_conv_dt < c.offer_start_date
+),
+bucketed AS (
+    SELECT new_decile, crv_resp,
+           CASE WHEN gap_days <= 30  THEN '000-030'
+                WHEN gap_days <= 60  THEN '031-060'
+                WHEN gap_days <= 90  THEN '061-090'
+                WHEN gap_days <= 120 THEN '091-120'
+                WHEN gap_days <= 150 THEN '121-150'
+                WHEN gap_days <= 180 THEN '151-180'
+                ELSE '180+' END AS gap_bucket
+    FROM ranked
+    WHERE rn = 1
+)
+SELECT
+    new_decile,
+    gap_bucket,
+    COUNT(*)      AS n_crv_offers,
+    SUM(crv_resp) AS n_crv_responders
+FROM bucketed
+GROUP BY new_decile, gap_bucket
+ORDER BY new_decile, gap_bucket
+;
