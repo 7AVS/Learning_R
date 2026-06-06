@@ -125,3 +125,44 @@ FROM labeled
 GROUP BY decile, pli_status, gap_bucket
 ORDER BY decile, pli_status, gap_bucket
 ;
+
+-- =============================================================================
+-- Q17d -- THE CONFOUND GATE, printed directly (no pivot needed). 10 rows.
+-- One row per decile: converter vs non-converter CRV offers + responders side by side.
+-- READ: per decile, conv rate = conv_responders/conv_offers vs
+--       nonconv rate = nonconv_responders/nonconv_offers.
+--   Converter still well above non-converter inside every decile -> more than decile
+--   composition (Option A). Gap closes within decile -> it was just decile (Option B).
+-- decile = the client's LATEST prior PLI lead's decile (same definition for both groups).
+-- =============================================================================
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, responder AS crv_resp
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Action'
+),
+pli_leads AS (
+    SELECT acct_no, treatmt_end_dt, responder_cli, decile
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+),
+ranked AS (
+    SELECT c.crv_resp,
+           p.decile,
+           ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date ORDER BY p.treatmt_end_dt DESC) AS rn_any,
+           MAX(p.responder_cli) OVER (PARTITION BY c.acct_no, c.offer_start_date) AS any_conv
+    FROM crv_offers c
+    JOIN pli_leads p
+      ON p.acct_no = c.acct_no
+     AND p.treatmt_end_dt < c.offer_start_date
+)
+SELECT
+    decile,
+    SUM(CASE WHEN any_conv = 1 THEN 1 ELSE 0 END)        AS conv_offers,
+    SUM(CASE WHEN any_conv = 1 THEN crv_resp ELSE 0 END) AS conv_responders,
+    SUM(CASE WHEN any_conv = 0 THEN 1 ELSE 0 END)        AS nonconv_offers,
+    SUM(CASE WHEN any_conv = 0 THEN crv_resp ELSE 0 END) AS nonconv_responders
+FROM ranked
+WHERE rn_any = 1
+GROUP BY decile
+ORDER BY decile
+;
