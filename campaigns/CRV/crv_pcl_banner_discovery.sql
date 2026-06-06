@@ -65,14 +65,18 @@
 -- the mobile banner, join them to GA4, strip the banners we already know, and
 -- hope a single residual banner dominates — that one is PCL.
 --
--- THE THREE TIGHTENING FILTERS (all on dl_mr_prod.cards_pli_decision_resp):
---   1. channel_mb = 1              -> deployed on the mobile-banner channel
+-- THE TIGHTENING FILTERS (all on dl_mr_prod.cards_pli_decision_resp):
+--   1. response_channel = 'Mobile' -> the client RESPONDED on the mobile channel
 --   2. responder_cli = 1           -> responded (best proxy that they saw it)
 --   3. mobile_active_at_decision = 'Y' -> mobile-eligible at decision time (could
---      render). NOTE: this is a 'Y'/NULL flag, NOT a 1/0 smallint. = 'Y' excludes
---      NULLs automatically (NULL = not eligible).
--- All three together = the cleanest "almost certainly saw the PCL mobile banner"
--- subset we can build. (See A5: this is a DISCOVERY cut only, not for measurement.)
+--      render). NOTE: 'Y'/NULL flag, NOT 1/0. = 'Y' excludes NULLs (NULL = not eligible).
+-- PLUS a TEMPORAL window — the single biggest noise-killer:
+--   the GA4 banner event (view_promotion / select_promotion) must fall WITHIN the
+--   PCL treatment window [treatmt_strt_dt, treatmt_end_dt]. This ties the
+--   impression/click to the actual deployment, dropping banners the client saw at
+--   unrelated times. event_date is cast to DATE to compare against the Teradata dates.
+-- Together = the cleanest "almost certainly saw the PCL mobile banner" subset we can
+-- build. (See A5: this is a DISCOVERY cut only, not for measurement.)
 
 -- ---------------------------------------------------------------------------
 -- Q1) PCL banner by elimination on the triple-filtered PCL population.
@@ -94,10 +98,12 @@ SELECT
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
 INNER JOIN dl_mr_prod.cards_pli_decision_resp p
     ON CAST(p.clnt_no AS BIGINT) = CAST(g.up_srf_id2_value AS BIGINT)
-   AND p.channel_mb               = 1     -- (1) mobile-banner channel
-   AND p.responder_cli            = 1     -- (2) responded
-   AND p.mobile_active_at_decision = 'Y'    -- (3) mobile-eligible at decision
+   AND p.response_channel          = 'Mobile'  -- (1) responded on mobile channel
+   AND p.responder_cli             = 1         -- (2) responded
+   AND p.mobile_active_at_decision = 'Y'       -- (3) mobile-eligible at decision
    AND p.treatmt_strt_dt >= DATE '2026-01-01'
+   -- exposure must land INSIDE the PCL treatment window
+   AND CAST(g.event_date AS DATE) BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
 WHERE g.year = '2026'
   AND lower(g.event_name) IN ('view_promotion', 'select_promotion')
   -- strip already-attributed banners so the PCL residual stands out
@@ -126,10 +132,11 @@ SELECT
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
 INNER JOIN dl_mr_prod.cards_pli_decision_resp p
     ON CAST(p.clnt_no AS BIGINT) = CAST(g.up_srf_id2_value AS BIGINT)
-   AND p.channel_mb               = 1
-   AND p.responder_cli            = 1
+   AND p.response_channel          = 'Mobile'
+   AND p.responder_cli             = 1
    AND p.mobile_active_at_decision = 'Y'
    AND p.treatmt_strt_dt >= DATE '2026-01-01'
+   AND CAST(g.event_date AS DATE) BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
 WHERE g.year = '2026'
   AND lower(g.event_name) = 'view_promotion'
   AND COALESCE(g.it_item_id, '') NOT IN ('i_300102', 'i_298045')
@@ -213,58 +220,4 @@ SELECT
                         THEN g.up_srf_id2_value END) AS view_users,
     COUNT(DISTINCT CASE WHEN lower(g.event_name) = 'select_promotion'
                         THEN g.up_srf_id2_value END) AS click_users,
-    COUNT(*)                                         AS events
-FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
-INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-    ON t.CLNT_NO = g.up_srf_id2_value
-   AND substr(t.TACTIC_ID, 8, 3) = 'CRV'
-   AND substr(t.TACTIC_DECISN_VRB_INFO, 121, 8) LIKE '%IM%'  -- CRV mobile quirk
-   AND t.TST_GRP_CD <> 'TG8'                                 -- exclude CRV Control
-   AND t.TREATMT_STRT_DT >= DATE '2026-01-01'
-WHERE g.year = '2026'
-  AND lower(g.event_name) IN ('view_promotion', 'select_promotion')
-  -- exclude already-attributed banners (PCD by name, others by id)
-  AND COALESCE(g.it_item_id, '') NOT IN ('i_300102', 'i_298045' /* , '<PCL_id_from_Q1>' */ )
-  AND lower(COALESCE(g.it_item_name, '')) NOT LIKE 'pb_cc_all_26_02_rbc_pcd%'
-GROUP BY g.it_item_id, g.it_item_name, g.ip_sf_campaign_mnemonic, g.platform
-ORDER BY events DESC
-LIMIT 100;
-
-
--- ---------------------------------------------------------------------------
--- Q6) CRV banner CROSS-CHECK — concentration test.
---     Once Q5 names a candidate CRV it_item_id, confirm it concentrates in the
---     CRV population vs the general base. A real CRV banner should show a much
---     higher per-user incidence among CRV-tactic clients than among all users.
---     Replace '<CRV_id_candidate>' before running.
--- ---------------------------------------------------------------------------
--- SELECT
---     'crv_population' AS cohort,
---     COUNT(DISTINCT g.up_srf_id2_value) AS users_seeing_candidate
--- FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
--- INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
---     ON t.CLNT_NO = g.up_srf_id2_value
---    AND substr(t.TACTIC_ID, 8, 3) = 'CRV'
---    AND substr(t.TACTIC_DECISN_VRB_INFO, 121, 8) LIKE '%IM%'
---    AND t.TST_GRP_CD <> 'TG8'
--- WHERE g.year = '2026'
---   AND lower(g.event_name) = 'view_promotion'
---   AND g.it_item_id = '<CRV_id_candidate>'
--- UNION ALL
--- SELECT
---     'all_base' AS cohort,
---     COUNT(DISTINCT up_srf_id2_value) AS users_seeing_candidate
--- FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
--- WHERE year = '2026'
---   AND lower(event_name) = 'view_promotion'
---   AND it_item_id = '<CRV_id_candidate>';
-
-
--- =============================================================================
--- AFTER DISCOVERY — record findings here, then wire into the impression query
--- =============================================================================
---   PCL banner:  it_item_id = ____________  it_item_name = ____________________
---   CRV banner:  it_item_id = ____________  it_item_name = ____________________
---   Mobile cut confirmed consistent (A1)?  Y / N  ___________________________
---   Notes: _________________________________________________________________
--- =============================================================================
+    COUNT(*)                               
