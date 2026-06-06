@@ -173,13 +173,17 @@ crv_summary AS (
 ),
 later_crv AS (
     SELECT n.responder_cli,
+           n.pcl_strt_dt - (EXTRACT(DAY FROM n.pcl_strt_dt) - 1) AS pcl_month,
            ((CAST(EXTRACT(YEAR  FROM s.min_start) AS INTEGER) - CAST(EXTRACT(YEAR  FROM n.pcl_end_dt) AS INTEGER)) * 12)
            + (CAST(EXTRACT(MONTH FROM s.min_start) AS INTEGER) - CAST(EXTRACT(MONTH FROM n.pcl_end_dt) AS INTEGER)) AS months_gap
     FROM no_overlap n
     JOIN crv_summary s ON s.acct_no = n.acct_no
     WHERE s.min_start > n.pcl_end_dt
 )
+-- pcl_month added so gap buckets can be read WITHIN a calendar month (controls for the
+-- mechanical entanglement: the 13+ bucket can only contain early, lower-responding leads).
 SELECT
+    pcl_month,
     CASE
         WHEN months_gap BETWEEN 0 AND 1  THEN '0-1'
         WHEN months_gap BETWEEN 2 AND 3  THEN '2-3'
@@ -190,6 +194,6 @@ SELECT
     COUNT(*)             AS n_leads,
     SUM(responder_cli)   AS n_responders
 FROM later_crv
-GROUP BY gap_bucket
-ORDER BY gap_bucket
+GROUP BY pcl_month, gap_bucket
+ORDER BY pcl_month, gap_bucket
 ;
