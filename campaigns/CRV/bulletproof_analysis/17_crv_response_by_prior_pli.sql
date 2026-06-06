@@ -19,7 +19,8 @@
 --   * No channel filter on PLI (a limit increase primes CRV regardless of which
 --     channel delivered it). "prior_pli_converter" = converted ANY prior PLI.
 --   * "Prior" = PLI ended strictly before the CRV offer started (no overlap).
--- Starburst-safe: no QUALIFY, no NULLIFZERO, no TOP. Counts only (rate in Excel).
+-- Teradata (curated dl_mr_prod.* run via Teradata Studio): no QUALIFY (rank in CTE,
+-- filter rn=1 outside), no date_diff (use DATE - DATE = int days). Counts only (rate in Excel).
 -- =============================================================================
 WITH crv_offers AS (
     SELECT acct_no, offer_start_date, responder AS crv_resp
@@ -124,7 +125,7 @@ pli_conv AS (
 ranked AS (
     SELECT c.crv_resp,
            p.new_decile,
-           date_diff('day', p.pli_conv_dt, c.offer_start_date) AS gap_days,
+           (c.offer_start_date - p.pli_conv_dt) AS gap_days,   -- Teradata: DATE - DATE = integer days
            ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date ORDER BY p.pli_conv_dt DESC) AS rn
     FROM crv_offers c
     JOIN pli_conv p
