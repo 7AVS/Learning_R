@@ -25,9 +25,11 @@
 --   CTU  -> it_item_id = 'i_300102'                       (async_combined_tracker.sql)
 --   O2P  -> it_item_id = 'i_298045'                       (async_combined_tracker.sql)
 --   PCD  -> it_item_name LIKE 'PB_CC_ALL_26_02_RBC_PCD_%' (pcd_async_banner_explore.sql)
---   PCL  -> ip_sf_campaign_mnemonic = 'PCL' present (836K events, ga4_ecommerce_field_mapping.sql)
---           but the it_item_id / it_item_name is NOT yet captured  <-- DISCOVER (Q1)
---   CRV  -> NOT present in the ip_sf_campaign_mnemonic top list at all <-- DISCOVER BY ELIMINATION (Q3-Q5)
+--   PCL  -> NO reliable GA4 tag. ip_sf_campaign_mnemonic = 'PCL' does NOT dependably
+--           map to the PCL banner, so the mnemonic path is OUT.
+--           DISCOVER BY ELIMINATION on a tightened PCL population (Q1-Q2).
+--   CRV  -> NOT present in the ip_sf_campaign_mnemonic top list at all.
+--           DISCOVER BY ELIMINATION on the CRV mobile population (Q3-Q6).
 --
 -- =============================================================================
 -- OPEN ASSUMPTIONS TO VALIDATE WHILE RUNNING (flagged, not silently assumed)
@@ -36,9 +38,15 @@
 --      The overlap analysis cut mobile via the TACTIC channel stamp
 --      (PCL '%MB%' on curated; CRV '%IM%' backend quirk). These are different
 --      lenses on "mobile" — confirm they agree before locking the impression query.
---  A2. Multi-banner contamination. A CRV-population client also sees PCL/CTU/etc.
---      banners. Elimination (Q5) must EXCLUDE all known item_ids before naming
---      the residual as CRV's — otherwise we mis-attribute another campaign's banner.
+--  A2. Multi-banner contamination. A CRV/PCL-population client also sees other
+--      campaigns' banners. Elimination must EXCLUDE all known item_ids and then
+--      HOPE a single residual banner dominates the tightened cohort. If two-plus
+--      banners are close, the population isn't tight enough / the banner isn't
+--      isolable from GA4 alone — flag it, don't guess.
+--  A5. Discovery filters are NOT measurement filters. The responder_cli = 1 cut
+--      (Q1) deliberately biases toward people who engaged, purely to raise the
+--      odds of catching the banner. The eventual IMPRESSION measurement must use
+--      the FULL exposed population, NOT this responder-only subset.
 --  A3. GA4 retention. ga4_ecommerce field-mapping EDA used 2026 data. The overlap
 --      window starts 2024-10-01; GA4 may not reach that far back. Discovery uses
 --      recent partitions (2026) — sufficient to NAME the banner. Widen later only
@@ -49,50 +57,33 @@
 
 
 -- =============================================================================
--- PART 1 — PLI / PCL BANNER DISCOVERY
+-- PART 1 — PLI / PCL BANNER DISCOVERY (BY ELIMINATION)
 -- =============================================================================
-
--- ---------------------------------------------------------------------------
--- Q1) PCL banner by campaign mnemonic — the direct path.
---     ip_sf_campaign_mnemonic = 'PCL' is already known to be populated (836K).
---     Group by the identifier fields to surface the PCL banner it_item_id /
---     it_item_name, split by event type and platform.
---     EXPECT: one (or a few) dominant it_item_name rows = the PLI mobile banner.
--- ---------------------------------------------------------------------------
-SELECT
-    ip_sf_campaign_mnemonic,
-    event_name,
-    it_item_id,
-    it_item_name,
-    it_creative_name,
-    platform,
-    COUNT(DISTINCT up_srf_id2_value) AS unique_users,
-    COUNT(*)                         AS events
-FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
-WHERE year = '2026'
-  AND ip_sf_campaign_mnemonic = 'PCL'
-  AND lower(event_name) IN ('view_promotion', 'select_promotion')
-GROUP BY
-    ip_sf_campaign_mnemonic, event_name, it_item_id, it_item_name,
-    it_creative_name, platform
-ORDER BY events DESC
-LIMIT 100;
-
-
--- ---------------------------------------------------------------------------
--- Q2) PCL banner CROSS-CHECK against the PCL mobile population.
---     Confirms the Q1 banner is actually being served to the clients we count
---     as PCL-mobile in the overlap analysis (not some unrelated 'PCL' tagging).
---     Joins GA4 -> tactic hist on clnt_no for PCL-tactic clients.
+-- The mnemonic path is OUT. We cannot detect the PCL banner via
+-- ip_sf_campaign_mnemonic = 'PCL'. Instead we tighten the PCL curated
+-- population down to clients with the HIGHEST chance of having actually seen
+-- the mobile banner, join them to GA4, strip the banners we already know, and
+-- hope a single residual banner dominates — that one is PCL.
 --
---     NOTE (A1): channel stamp for PCL in the tactic event hist is NOT yet
---     confirmed. The curated overlap used channel '%MB%'. Here we leave the
---     tactic-side channel filter OUT first (just substr(tactic_id,8,3)='PCL')
---     to see the full banner picture, then narrow once the stamp is confirmed.
+-- THE THREE TIGHTENING FILTERS (all on dl_mr_prod.cards_pli_decision_resp):
+--   1. channel_mb = 1              -> deployed on the mobile-banner channel
+--   2. responder_cli = 1           -> responded (best proxy that they saw it)
+--   3. mobile_active_at_decision = 'Y' -> mobile-eligible at decision time (could
+--      render). NOTE: this is a 'Y'/NULL flag, NOT a 1/0 smallint. = 'Y' excludes
+--      NULLs automatically (NULL = not eligible).
+-- All three together = the cleanest "almost certainly saw the PCL mobile banner"
+-- subset we can build. (See A5: this is a DISCOVERY cut only, not for measurement.)
+
+-- ---------------------------------------------------------------------------
+-- Q1) PCL banner by elimination on the triple-filtered PCL population.
+--     Join the tightened PCL clients to GA4 banner events, exclude known
+--     banners (CTU / O2P / PCD), and rank what's left. The dominant residual
+--     it_item_id = the PCL mobile banner.
 -- ---------------------------------------------------------------------------
 SELECT
     g.it_item_id,
     g.it_item_name,
+    g.it_creative_name,
     g.ip_sf_campaign_mnemonic,
     g.platform,
     COUNT(DISTINCT CASE WHEN lower(g.event_name) = 'view_promotion'
@@ -101,16 +92,51 @@ SELECT
                         THEN g.up_srf_id2_value END) AS click_users,
     COUNT(*)                                         AS events
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
-INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-    ON t.CLNT_NO = g.up_srf_id2_value
-   AND substr(t.TACTIC_ID, 8, 3) = 'PCL'
-   AND t.TREATMT_STRT_DT >= DATE '2026-01-01'
+INNER JOIN dl_mr_prod.cards_pli_decision_resp p
+    ON CAST(p.clnt_no AS BIGINT) = CAST(g.up_srf_id2_value AS BIGINT)
+   AND p.channel_mb               = 1     -- (1) mobile-banner channel
+   AND p.responder_cli            = 1     -- (2) responded
+   AND p.mobile_active_at_decision = 'Y'    -- (3) mobile-eligible at decision
+   AND p.treatmt_strt_dt >= DATE '2026-01-01'
 WHERE g.year = '2026'
   AND lower(g.event_name) IN ('view_promotion', 'select_promotion')
+  -- strip already-attributed banners so the PCL residual stands out
+  AND COALESCE(g.it_item_id, '') NOT IN ('i_300102', 'i_298045')
+  AND lower(COALESCE(g.it_item_name, '')) NOT LIKE 'pb_cc_all_26_02_rbc_pcd%'
 GROUP BY
-    g.it_item_id, g.it_item_name, g.ip_sf_campaign_mnemonic, g.platform
-ORDER BY events DESC
+    g.it_item_id, g.it_item_name, g.it_creative_name,
+    g.ip_sf_campaign_mnemonic, g.platform
+ORDER BY view_users DESC
 LIMIT 100;
+
+
+-- ---------------------------------------------------------------------------
+-- Q2) SINGLE-BANNER CHECK — does one banner really dominate? (A2)
+--     The whole method rests on "hope there's only one banner for these guys."
+--     This counts how concentrated the tightened cohort's banner views are.
+--     If the top it_item_id dwarfs the rest -> safe to name it PCL.
+--     If two-plus are close -> population isn't isolating PCL; do NOT guess.
+-- ---------------------------------------------------------------------------
+SELECT
+    g.it_item_id,
+    g.it_item_name,
+    COUNT(DISTINCT g.up_srf_id2_value)                                   AS view_users,
+    CAST(COUNT(DISTINCT g.up_srf_id2_value) AS DOUBLE)
+        / NULLIF(SUM(COUNT(DISTINCT g.up_srf_id2_value)) OVER (), 0)     AS share_of_cohort_views
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce g
+INNER JOIN dl_mr_prod.cards_pli_decision_resp p
+    ON CAST(p.clnt_no AS BIGINT) = CAST(g.up_srf_id2_value AS BIGINT)
+   AND p.channel_mb               = 1
+   AND p.responder_cli            = 1
+   AND p.mobile_active_at_decision = 'Y'
+   AND p.treatmt_strt_dt >= DATE '2026-01-01'
+WHERE g.year = '2026'
+  AND lower(g.event_name) = 'view_promotion'
+  AND COALESCE(g.it_item_id, '') NOT IN ('i_300102', 'i_298045')
+  AND lower(COALESCE(g.it_item_name, '')) NOT LIKE 'pb_cc_all_26_02_rbc_pcd%'
+GROUP BY g.it_item_id, g.it_item_name
+ORDER BY view_users DESC
+LIMIT 50;
 
 
 -- =============================================================================
