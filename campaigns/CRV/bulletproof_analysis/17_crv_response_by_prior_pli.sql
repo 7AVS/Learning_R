@@ -1,50 +1,45 @@
 -- #############################################################################
--- CRV x PLI -- "sequence CRV after PLI, don't kill it" (Q17 series)   [deck notes]
+-- CRV x PLI -- Hypothesis test: does a prior PLI conversion predict CRV response?
+-- (Q17 series)   [finding notes]
 -- #############################################################################
 --
--- ONE-LINE TAKEAWAY: CRV isn't a bad product, it's mis-timed and mis-targeted --
---   stop running it concurrently with PLI (where it cannibalises ~42K conversions)
---   and aim it at clients right after they convert a PLI (who respond 2-8x more).
+-- FINDING (one line) -- a prior PLI conversion is a strong predictor of CRV response:
+--   clients who had converted a PLI respond to CRV 2-8x more than same-decile clients
+--   who had a PLI but didn't convert, and the lift tracks the CONVERSION, not the decile.
 --
--- SCOPE -- the ENTIRE CRV Action population: every CRV Action offer from 2024-10-01
---   on (~23.4M offers). This is NOT the overlap slice. Each CRV offer is labelled by
---   the client's PRIOR PLI history, where "prior" = a PLI that ENDED BEFORE the CRV
---   offer started (SEQUENTIAL, not concurrent). Outcome measured = CRV response;
---   PLI is used only to label the client. Three labels:
+-- HYPOTHESIS TESTED -- "CRV response is higher among clients who previously converted a
+--   PLI than among those who didn't." This is the SEQUENTIAL (after-PLI) direction --
+--   distinct from the concurrent cannibalisation question (H1).
+--
+-- WHAT THE TEST LOOKS AT (scope) -- the ENTIRE CRV Action population: every CRV Action
+--   offer from 2024-10-01 on (~23.4M). NOT the overlap slice. Each CRV offer is labelled
+--   by the client's PRIOR PLI history, where "prior" = a PLI that ENDED BEFORE the CRV
+--   offer started (sequential, not concurrent). Outcome = CRV response; PLI only labels:
 --     no_prior_pli            = no PLI before this CRV offer
 --     prior_pli_converter     = had a prior PLI and CONVERTED it
 --     prior_pli_nonconverter  = had a prior PLI but did NOT convert
 --
--- WHY -- execs asked whether CRV should be discontinued. H1 showed CRV hurts PLI when
---   the two run CONCURRENTLY. This asks the other direction: does CRV do BETTER after a
---   PLI conversion -- i.e. should CRV be re-timed to follow PLI, not killed?
---
--- WHAT WE FOUND (SQL = counts; rates done in Excel) --
+-- WHAT THE TEST SHOWS (SQL = counts; rates in Excel) --
 --   Full CRV split:  no_prior_pli 12.59M = 0.89% | converter 4.56M = 2.73%
---                    | nonconverter 6.22M = 0.77%
---     -> prior-PLI CONVERTERS respond ~3.5x non-converters, ~3x the no-prior group.
---   Confound check (Q17d) -- converters vs non-converters WITHIN each decile:
---     converters win in ALL 10 deciles (gap 1.9x at decile 5, up to 7.9x at decile 1,
---     5.4x at decile 10). Non-converters ~flat 0.45-0.91% across deciles; converters
---     swing 1.7-3.9%. So the lift is the CONVERSION, not the decile.
---   Timing (Q17c) -- CRV response is ~flat for 0-180 days after the conversion, then
---     drops past 180 days. Broad window, not a sharp early peak.
+--                    | nonconverter 6.22M = 0.77%   -> converters ~3.5x non-converters.
+--   Confound check (Q17d) -- converters vs non-converters WITHIN each decile: converters
+--     higher in ALL 10 deciles (1.9x at decile 5, up to 7.9x at decile 1, 5.4x at 10).
+--     Non-converters ~flat 0.45-0.91% across deciles; converters swing 1.7-3.9%
+--     -> the difference is not explained by converters being higher-decile clients.
+--   Timing (Q17c) -- CRV response is ~flat 0-180 days after the conversion, then drops
+--     past 180 days.
 --
--- WHAT IT MEANS -- of everyone CRV could be sent to, PLI converters are the best
---   audience, at every quality tier. "It's just top-decile clients" is rejected.
+-- WHAT IT DOES / DOESN'T ESTABLISH -- supports the hypothesis as an ASSOCIATION (and one
+--   not explained by decile composition): a prior PLI conversion predicts higher CRV
+--   response. It does NOT establish causation -- PLI was never randomised and converting
+--   is itself a client choice within a decile, so "the limit increase causes/primes CRV
+--   demand" is an untested explanation, not a result of this test.
 --
--- LIMITS (state these on the deck) -- this is a TARGETING claim (PLI conversion predicts
---   CRV response), NOT proven causal. PLI was never randomised, and converting is itself
---   a client choice within a decile, so "the limit increase PRIMES installment demand"
---   is a hypothesis, not a result.
---
--- TIES TO H1 (the full story) --
---   H1: CRV CONCURRENT with PLI cannibalises it -- 1.08pp gap (Action vs Control,
---       randomised), ~42K PLI conversions lost. -> STOP the in-window overlap.
---   H2: CRV AFTER a PLI conversion thrives -- converters 2-8x. -> SEQUENCE CRV after
---       PLI and target converters.
---   NET: CRV is mis-timed / mis-targeted, not bad. Don't discontinue -- stop overlapping
---        it with live PLI, move it downstream of PLI conversions.
+-- CONTEXT (separate finding, for interpretation only -- not a recommendation) -- H1 tested
+--   the concurrent direction: CRV running AT THE SAME TIME as PLI is associated with lower
+--   PLI response (1.08pp Action-vs-Control gap, randomised; ~42K PLI conversions). H1
+--   (concurrent) and this test (sequential) describe two different timing relationships
+--   between the same two campaigns.
 -- #############################################################################
 
 -- =============================================================================
