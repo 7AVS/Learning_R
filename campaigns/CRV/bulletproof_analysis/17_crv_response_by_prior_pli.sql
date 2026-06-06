@@ -1,58 +1,62 @@
 -- #############################################################################
--- CRV x PLI -- Hypothesis test: does a prior PLI conversion predict CRV response?
--- (Q17 series)   [finding notes]
+-- CRV x PLI -- Hypothesis test: does taking a PLI predict CRV take-up?  (Q17 series)
 -- #############################################################################
 --
--- FINDING (one line) -- a prior PLI conversion is a strong predictor of CRV response:
---   clients who had converted a PLI respond to CRV 2-8x more than same-decile clients
---   who had a PLI but didn't convert, and the lift tracks the CONVERSION, not the decile.
+-- ANSWER (one line) -- yes: clients who TOOK a PLI ("PLI takers") take up CRV ~2-8x more
+--   than clients offered a PLI who DIDN'T ("PLI decliners") at the same decile, and they
+--   do it even when held out of the CRV banner -- so it's largely organic, not banner-made.
+--   This is an association (strong and decile-robust), not a proven cause.
 --
--- HYPOTHESIS TESTED -- "CRV response is higher among clients who previously converted a
---   PLI than among those who didn't." This is the SEQUENTIAL (after-PLI) direction --
---   distinct from the concurrent cannibalisation question (H1).
+-- WORDS (two products -- keep their conversions apart) --
+--   PLI taker    = took the PLI limit increase     PLI decliner = offered PLI, declined
+--   CRV take-up  = took a CRV installment plan  (the OUTCOME we count)
+--   shown        = shown the CRV banner (Action)   held-out     = held out of it (Control)
+--   In the columns: converter = PLI taker, nonconverter = PLI decliner, action = shown,
+--                   control = held-out, responders = CRV take-up, offers = CRV offers.
 --
--- WHAT THE TEST LOOKS AT (scope) -- the ENTIRE CRV Action population: every CRV Action
---   offer from 2024-10-01 on (~23.4M). NOT the overlap slice. Each CRV offer is labelled
---   by the client's PRIOR PLI history, where "prior" = a PLI that ENDED BEFORE the CRV
---   offer started (sequential, not concurrent). Outcome = CRV response; PLI only labels:
---     no_prior_pli            = no PLI before this CRV offer
---     prior_pli_converter     = had a prior PLI and CONVERTED it
---     prior_pli_nonconverter  = had a prior PLI but did NOT convert
+-- HYPOTHESIS -- "CRV take-up is higher among PLI takers than PLI decliners." Sequential
+--   (after-PLI) direction; the concurrent overlap question is H1, separate.
 --
--- WHAT THE TEST SHOWS (SQL = counts; rates in Excel) --
---   Full CRV split:  no_prior_pli 12.59M = 0.89% | converter 4.56M = 2.73%
---                    | nonconverter 6.22M = 0.77%   -> converters ~3.5x non-converters.
---   Confound check (Q17d) -- converters vs non-converters WITHIN each decile: converters
---     higher in ALL 10 deciles (1.9x at decile 5, up to 7.9x at decile 1, 5.4x at 10).
---     Non-converters ~flat 0.45-0.91% across deciles; converters swing 1.7-3.9%
---     -> the difference is not explained by converters being higher-decile clients.
---   Timing (Q17c) -- CRV response is ~flat 0-180 days after the conversion, then drops
---     past 180 days.
+-- SCOPE -- the ENTIRE CRV population (every CRV offer from 2024-10-01, ~23.4M). NOT the
+--   overlap slice. Each CRV offer is labelled by the client's PRIOR PLI (a PLI that ENDED
+--   before the CRV offer started -- sequential, not concurrent).
 --
--- WHAT IT DOES / DOESN'T ESTABLISH -- supports the hypothesis as an ASSOCIATION (and one
---   not explained by decile composition): a prior PLI conversion predicts higher CRV
---   response. It does NOT establish causation -- PLI was never randomised and converting
---   is itself a client choice within a decile, so "the limit increase causes/primes CRV
---   demand" is an untested explanation, not a result of this test.
+-- WHAT WE FOUND (SQL = counts; rates in Excel) --
+--   Overall (shown):  no-prior-PLI 0.89% | PLI takers 2.73% | PLI decliners 0.77%
+--     -> PLI takers ~3.5x PLI decliners.
+--   Within decile (Q17d): PLI takers > PLI decliners in ALL 10 deciles (1.9-7.9x)
+--     -> not just that takers sit in better deciles.
+--   Organic (held-out): even with NO banner, PLI takers take up CRV more than PLI
+--     decliners in all 10 deciles (1.6-9x) -> the appetite is largely intrinsic.
+--   Banner is a small add-on: for PLI takers, held-out take-up is close to shown
+--     (~75-85% of their take-up is organic); the banner adds the rest.
+--   Banner works harder on PLI takers: shown-minus-held-out lift ~+0.5-0.9pp for takers
+--     vs ~+0.1-0.25pp for decliners (~3-5x). This piece is randomised -> clean.
+--   Timing (Q17c): take-up ~flat 0-180 days after the PLI take, then drops past 180.
 --
--- CONTEXT (separate finding, for interpretation only -- not a recommendation) -- H1 tested
---   the concurrent direction: CRV running AT THE SAME TIME as PLI is associated with lower
---   PLI response (1.08pp Action-vs-Control gap, randomised; ~42K PLI conversions). H1
---   (concurrent) and this test (sequential) describe two different timing relationships
---   between the same two campaigns.
+-- WHERE IT POINTS / WHAT IT DOESN'T SETTLE -- a PLI take strongly marks CRV appetite, and
+--   the marker survives decile control AND shows up organically (no banner). It does NOT
+--   prove the PLI take CAUSES the appetite: PLI was never randomised and taking it is a
+--   client choice, so "the limit increase drives CRV demand" stays an untested read.
+--   (The banner-works-harder-on-takers piece IS randomised, so that part is causal.)
+--
+-- CONTEXT (separate finding, not a recommendation) -- H1 tested the concurrent direction:
+--   CRV running AT THE SAME TIME as PLI is associated with lower PLI response (1.08pp
+--   shown-vs-held-out gap, randomised; ~42K PLI conversions). Concurrent (H1) and
+--   sequential (this) are two different timing relationships between the same campaigns.
 -- #############################################################################
 
 -- =============================================================================
 -- Q17 -- CRV response by prior-PLI status   (mirror of Q15; tests Hypothesis B)
--- Hypothesis B: CRV converts better AFTER a PLI conversion -> sequence CRV after
---   PLI, don't discontinue. Classify each CRV OFFER by the client's PLI history
---   BEFORE that offer, then compare CRV response rate per group (counts only).
+-- Hypothesis: is CRV take-up higher AFTER a PLI take than after a PLI decline?
+--   (sequential direction; concurrent overlap = H1.) Classify each CRV OFFER by the
+--   client's PLI history BEFORE that offer, then compare CRV take-up per group (counts).
 -- Grain: one row per (acct x CRV offer wave) = CRV-offer-centric (mirror of Q15's
 --   PLI-lead grain). LEFT JOIN to PLI history is collapsed by GROUP BY -> no fanout.
 --
 -- KEY COMPARISON: prior_pli_converter vs prior_pli_nonconverter. BOTH were PLI-
 --   targeted (controls for "engaged enough to get a PLI offer"); they differ only
---   in whether they took it. That isolates the PRIMING effect of the conversion.
+--   in whether they took it -- isolates the PLI-take itself from merely being targeted.
 --   no_prior_pli is the outer reference, but it mixes in a different population.
 --
 -- FLAGGED CHOICES (change if you disagree):
