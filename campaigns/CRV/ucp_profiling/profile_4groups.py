@@ -41,6 +41,10 @@ NUMERIC_FIELDS = [
     "OFI_L_PROD_CNT",    # confirmed (UCP OFI reference: Lending at OFI)
     "OFI_I_PROD_CNT",    # confirmed (UCP OFI reference: Investment at OFI)
     "OFI_M_PROD_CNT",    # confirmed (UCP OFI reference: Mutual fund at OFI)
+    # BALANCE per T/I/B/C category — the curated extract has COUNTS (T_TOT_CNT etc.),
+    # NOT balances. Balance fields, if they exist in the full UCP table, are a different
+    # name. CONFIRM the exact field names and uncomment / fix below:
+    # "T_TOT_BAL", "I_TOT_BAL", "B_TOT_BAL", "C_TOT_BAL",
 ]
 
 CATEGORICAL_FIELDS = [
@@ -52,6 +56,12 @@ CATEGORICAL_FIELDS = [
     "INCOME_AFTER_TAX_RNG", # [UNCONFIRMED] — income-after-tax range; plausible UCP4 field, not in cards docs
     "PROF_SEG_CD",          # [UNCONFIRMED] — profession segment code; plausible, not in cards docs
     "OLB_ENROLLED_IND",     # confirmed (VBA UCP eligibility list)
+    # preferred channels of engagement (Day-to-Day channel-preference seg codes)
+    "D2D_BILL_PYMT_CHNL_PREF_SEG_CD",  # bill payment
+    "D2D_DEP_CHNL_PREF_SEG_CD",        # deposit
+    "D2D_INFO_SEEK_CHNL_PREF_SEG_CD",  # info-seeking
+    "D2D_TRF_CHNL_PREF_SEG_CD",        # transfer
+    "D2D_MQ_CHNL_PREF_SEG_CD",         # MQ
 ]
 
 ALL_UCP_FIELDS = NUMERIC_FIELDS + CATEGORICAL_FIELDS
@@ -159,32 +169,34 @@ GROUPS_ORDER = ["crv_action", "crv_control", "no_overlap_ever_crv", "never_crv"]
 
 def build_profile_table(ucp_joined):
     """
-    One-hot encodes categoricals, then computes group means + overall mean.
+    Numeric fields -> mean AND median rows (median catches skew).
+    Categoricals -> one-hot to 0/1; mean of dummy = proportion (read as %).
     Returns a wide DataFrame: rows=features, cols=groups + 'overall'.
     """
-    # One-hot encode categoricals
     cat_lower = [f.lower() for f in CATEGORICAL_FIELDS]
-    num_lower  = [f.lower() for f in NUMERIC_FIELDS]
+    num_lower = [c for c in (f.lower() for f in NUMERIC_FIELDS) if c in ucp_joined.columns]
 
-    # Collect distinct values per categorical to build dummies
+    # one-hot the categoricals (mean of each dummy = proportion in that category)
     dummy_cols = []
     for cat in cat_lower:
         if cat not in ucp_joined.columns:
             continue
-        vals = ucp_joined[cat].dropna().unique()
-        for v in sorted(vals):
-            col_name = f"{cat}__{v}"
-            ucp_joined[col_name] = (ucp_joined[cat] == v).astype(int)
-            dummy_cols.append(col_name)
+        for v in sorted(ucp_joined[cat].dropna().unique()):
+            cname = f"{cat}__{v}"
+            ucp_joined[cname] = (ucp_joined[cat] == v).astype(int)
+            dummy_cols.append(cname)
 
-    feature_cols = [c for c in num_lower if c in ucp_joined.columns] + dummy_cols
+    def grp_stats(df):
+        s = {}
+        for n in num_lower:                       # numeric: mean + median (skipna)
+            s[f"{n}_mean"]   = df[n].mean()
+            s[f"{n}_median"] = df[n].median()
+        for d in dummy_cols:                       # dummy: proportion
+            s[d] = df[d].mean()
+        return pd.Series(s)
 
-    rows = {}
-    for grp in GROUPS_ORDER:
-        sub = ucp_joined[ucp_joined["grp"] == grp]
-        rows[grp] = sub[feature_cols].mean()
-
-    rows["overall"] = ucp_joined[feature_cols].mean()
+    rows = {grp: grp_stats(ucp_joined[ucp_joined["grp"] == grp]) for grp in GROUPS_ORDER}
+    rows["overall"] = grp_stats(ucp_joined)
 
     profile = pd.DataFrame(rows)
     profile.index.name = "feature"
@@ -234,10 +246,18 @@ for cohort_label, mo_start, mo_end, ucp_partition in COHORTS:
     joined_pd = joined.toPandas()
     print(f"  UCP matched: {len(joined_pd):,} of {len(grp_pd):,} leads")
 
-    # sanity: % missing per selected field in the matched rows (lean, in-cell only)
+    # sanity (per group): coverage = UCP-matched vs leads, and missing % by group.
+    # Catches the "this group only matched 20% / is mostly null" bias before profiling.
+    cov = pd.DataFrame({"leads": grp_pd["grp"].value_counts(),
+                        "matched": joined_pd["grp"].value_counts()})
+    cov["match_pct"] = (cov["matched"] / cov["leads"] * 100).round(1)
+    print(f"  Coverage by group:\n{cov.to_string()}")
+
     miss_cols = [f.lower() for f in ALL_UCP_FIELDS if f.lower() in joined_pd.columns]
-    miss = joined_pd[miss_cols].isnull().mean().mul(100).round(1)
-    print(f"  Missing % per field:\n{miss.to_string()}")
+    null_ind = joined_pd[miss_cols].isnull()
+    null_ind["grp"] = joined_pd["grp"].values
+    miss_by_grp = null_ind.groupby("grp").mean().mul(100).round(1).T
+    print(f"  Missing % by group:\n{miss_by_grp.to_string()}")
 
     # STEP 4 — profile table
     profile = build_profile_table(joined_pd)
