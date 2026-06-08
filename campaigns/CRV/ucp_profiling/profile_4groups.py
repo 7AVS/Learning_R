@@ -66,6 +66,14 @@ CATEGORICAL_FIELDS = [
 
 ALL_UCP_FIELDS = NUMERIC_FIELDS + CATEGORICAL_FIELDS
 
+# ── ONE-OFF FIELD DISCOVERY (uncomment, run once to find real UCP field names) ────
+# We don't have documented BALANCE field names (the catalog is counts/indicators only).
+# This prints the actual UCP columns matching balance/card/credit patterns — use it to
+# find the per-TIBC balance + overall-card-balance fields, then add them to the lists above.
+# _u = spark.read.option("basePath", UCP_BASE).parquet(f"{UCP_BASE}MONTH_END_DATE=2026-03-31")
+# print(sorted(c for c in _u.columns if any(k in c.upper()
+#       for k in ["BAL", "CARD", "CRD", "CC_", "CREDIT", "_AMT", "OUTST", "TOT_BAL"])))
+
 # ── COHORTS ──────────────────────────────────────────────────────────────────
 # (cohort_label, cohort_month_start, cohort_month_end, ucp_partition)
 COHORTS = [
@@ -169,14 +177,15 @@ GROUPS_ORDER = ["crv_action", "crv_control", "no_overlap_ever_crv", "never_crv"]
 
 def build_profile_table(ucp_joined):
     """
-    Numeric fields -> mean AND median rows (median catches skew).
-    Categoricals -> one-hot to 0/1; mean of dummy = proportion (read as %).
-    Returns a wide DataFrame: rows=features, cols=groups + 'overall'.
+    ONE row per feature. Columns = for each group (+ overall) a _mean AND a _median,
+    paired side by side. Numerics: both populated (compare them to spot skew).
+    Categoricals: one-hot -> _mean = proportion (read as %), _median = NaN (a proportion
+    has no meaningful median).
     """
     cat_lower = [f.lower() for f in CATEGORICAL_FIELDS]
     num_lower = [c for c in (f.lower() for f in NUMERIC_FIELDS) if c in ucp_joined.columns]
 
-    # one-hot the categoricals (mean of each dummy = proportion in that category)
+    # one-hot the categoricals (mean of each 0/1 dummy = proportion in that category)
     dummy_cols = []
     for cat in cat_lower:
         if cat not in ucp_joined.columns:
@@ -186,19 +195,20 @@ def build_profile_table(ucp_joined):
             ucp_joined[cname] = (ucp_joined[cat] == v).astype(int)
             dummy_cols.append(cname)
 
-    def grp_stats(df):
-        s = {}
-        for n in num_lower:                       # numeric: mean + median (skipna)
-            s[f"{n}_mean"]   = df[n].mean()
-            s[f"{n}_median"] = df[n].median()
-        for d in dummy_cols:                       # dummy: proportion
-            s[d] = df[d].mean()
-        return pd.Series(s)
+    out = {}
+    for grp in GROUPS_ORDER + ["overall"]:
+        sub = ucp_joined if grp == "overall" else ucp_joined[ucp_joined["grp"] == grp]
+        mean_s, med_s = {}, {}
+        for n in num_lower:
+            mean_s[n] = sub[n].mean()
+            med_s[n]  = sub[n].median()
+        for d in dummy_cols:
+            mean_s[d] = sub[d].mean()       # proportion
+            med_s[d]  = float("nan")        # median N/A for a proportion
+        out[f"{grp}_mean"]   = pd.Series(mean_s)
+        out[f"{grp}_median"] = pd.Series(med_s)
 
-    rows = {grp: grp_stats(ucp_joined[ucp_joined["grp"] == grp]) for grp in GROUPS_ORDER}
-    rows["overall"] = grp_stats(ucp_joined)
-
-    profile = pd.DataFrame(rows)
+    profile = pd.DataFrame(out)
     profile.index.name = "feature"
     return profile
 
