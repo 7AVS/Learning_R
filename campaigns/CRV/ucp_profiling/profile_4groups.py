@@ -4,14 +4,29 @@
 
 import pandas as pd
 import time
-from pathlib import Path
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col, trim
 
-OUT_DIR = Path("/home/jovyan/Cards/CRV/ucp_profiling")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+# OUTPUT NOTE (AI Farm / YARN-Spark): the local Jupyter FS is NOT writable from the
+# Spark kernel, so pandas .to_csv() to a local path FAILS. ALL saves go through Spark
+# to HDFS. HDFS_BASE = Andre's HDFS user folder — CONFIRM the ID matches your config
+# (it's the "/user/<id>" part of the HDFS path used in the existing UCP/EDW notebook).
+HDFS_BASE = "/user/427966379/ucp_profiling"
 
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
+
+# ── HDFS WRITE TEST — RUN THIS FIRST ─────────────────────────────────────────
+# Confirms Spark can write to + read back from HDFS before running the full job.
+# If it ERRORS, HDFS save isn't available -> we switch the final output to an
+# in-notebook download link instead (no disk save at all).
+def test_hdfs_write():
+    test_path = f"{HDFS_BASE}/_write_test"
+    (spark.createDataFrame([(1, "ok")], ["id", "status"])
+        .coalesce(1).write.mode("overwrite").option("header", True).csv(test_path))
+    back = spark.read.option("header", True).csv(test_path).collect()
+    print(f"HDFS write/read OK at {test_path} -> {back}")
+
+test_hdfs_write()
 
 # ── EDITABLE FIELD LISTS ─────────────────────────────────────────────────────
 # Confirmed against UCP reference documentation and memory notes.
@@ -234,6 +249,10 @@ for cohort_label, mo_start, mo_end, ucp_partition in COHORTS:
     with pd.option_context("display.max_rows", 200, "display.width", 140, "display.float_format", "{:.4f}".format):
         print(profile.to_string())
 
-    out_path = OUT_DIR / f"ucp_profile_{cohort_label}.csv"
-    profile.to_csv(out_path)
-    print(f"\n  Saved: {out_path}")
+    # Save final table to HDFS via Spark (pandas .to_csv writes to the local FS, which
+    # AI Farm can't reach). reset_index() turns the feature names into a column.
+    # NB: Spark writes a FOLDER of part-files at this path, not a single .csv.
+    out_path = f"{HDFS_BASE}/ucp_profile_{cohort_label}"
+    (spark.createDataFrame(profile.reset_index())
+        .coalesce(1).write.mode("overwrite").option("header", True).csv(out_path))
+    print(f"\n  Saved to HDFS: {out_path}")
