@@ -7,6 +7,11 @@ import time
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col, trim
 
+# pandas 2.0 removed DataFrame.iteritems(); the AI Farm PySpark still calls it inside
+# spark.createDataFrame(pandas_df). Alias it back so pandas->Spark conversions work.
+if not hasattr(pd.DataFrame, "iteritems"):
+    pd.DataFrame.iteritems = pd.DataFrame.items
+
 # OUTPUT NOTE (AI Farm / YARN-Spark): the local Jupyter FS is NOT writable from the
 # Spark kernel, so pandas .to_csv() to a local path FAILS. ALL saves go through Spark
 # to HDFS. HDFS_BASE = Andre's HDFS user folder — CONFIRM the ID matches your config
@@ -241,6 +246,11 @@ for cohort_label, mo_start, mo_end, ucp_partition in COHORTS:
     joined = ucp_sel.join(grp_spark, on="clnt_no", how="inner")
     joined_pd = joined.toPandas()
     print(f"  UCP matched: {len(joined_pd):,} of {len(grp_pd):,} leads")
+
+    # sanity: % missing per selected field in the matched rows (lean, in-cell only)
+    miss_cols = [f.lower() for f in ALL_UCP_FIELDS if f.lower() in joined_pd.columns]
+    miss = joined_pd[miss_cols].isnull().mean().mul(100).round(1)
+    print(f"  Missing % per field:\n{miss.to_string()}")
 
     # STEP 4 — profile table
     profile = build_profile_table(joined_pd)
