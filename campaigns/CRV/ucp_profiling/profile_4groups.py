@@ -20,19 +20,6 @@ HDFS_BASE = "/user/427966379/ucp_profiling"
 
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
 
-# ── HDFS WRITE TEST — RUN THIS FIRST ─────────────────────────────────────────
-# Confirms Spark can write to + read back from HDFS before running the full job.
-# If it ERRORS, HDFS save isn't available -> we switch the final output to an
-# in-notebook download link instead (no disk save at all).
-def test_hdfs_write():
-    test_path = f"{HDFS_BASE}/_write_test"
-    (spark.createDataFrame([(1, "ok")], ["id", "status"])
-        .coalesce(1).write.mode("overwrite").option("header", True).csv(test_path))
-    back = spark.read.option("header", True).csv(test_path).collect()
-    print(f"HDFS write/read OK at {test_path} -> {back}")
-
-test_hdfs_write()
-
 # ── EDITABLE FIELD LISTS ─────────────────────────────────────────────────────
 # Confirmed against UCP reference documentation and memory notes.
 # Fields marked [UNCONFIRMED] exist in the UCP4 personal schema by convention
