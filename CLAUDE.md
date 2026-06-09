@@ -8,7 +8,7 @@ Measurement and analytics infrastructure for the Cards pod (NBA). Contains schem
 |--------|-----|----------|--------|
 | CLI | TBD | Credit Limit Increase | Always-on, Priority #1. Barely catalogued — EDA only |
 | AUH | AUH | Authorized Users | Phase 1 complete. Phase 2 (Apr 30): organic baseline built, recommendation emails drafted, second deployment recommended |
-| PCD | TBD | Product Card Upgrade | Async banner tracking blocked on GA tag codes from Melissa Baker |
+| PCD | TBD | Product Card Upgrade | Async banner interim deck (PCD/O2P/CTU) built — conservative/OBF framing locked 2026-05-29. Awaiting real query output; CTU randomised A/C DoE launches 9 Jun. |
 | PCL | PCL | Pre-Approved Limit Increase (PLI) | MDE calculators delivered (v1+v2), recommendation email sent, mobile expansion DOE finalized |
 | PCQ | PCQ | Credit Card Acquisition (TPA) | DM test designed, MDE calculators built (v1+v2), recommendation email drafted, awaiting business decision on decile scope |
 | IMT | IPC/IRI | International Money Transfer | Not Cards pod — different team. Folder exists for IPC/IRI results reference only |
@@ -52,6 +52,23 @@ Each campaign under `/campaigns/<CODE>/` should have:
 
 ---
 
+## Operating Philosophy — The Value-Finder Workbench
+
+**Mission:** find cross-campaign, client-level value and ship defensible causal findings fast. This is not a reporting function — it's the team that turns campaign data into *"here's the next test, here's where the value is."*
+
+**The method** *(detail in `career_strategy/02_strategy_test_catalogue.md`)*:
+- **Borrowed randomization is the primitive.** Any campaign with a randomized control is a natural experiment we repurpose to measure what it wasn't designed for — causal value without waiting to design and deploy a new RCT. Ships paired with its guard: *never condition on a post-treatment variable.*
+- **Run the menu, don't reinvent.** A standing catalogue of causal levers (overlap, sequencing, channel, rank, saturation) + an explanatory layer (descriptive trees, decile concentration, selection guards). Point a known pattern at a new campaign; don't hand-build a 1,000-line one-off.
+- **The loop:** borrowed randomization → causal lever → explanatory pass → next hypothesis. Every finding seeds the next.
+
+**Test velocity is the product.** Bias to more tests, not more validation. Validate just enough to design a precise experiment or protect a real decision — then ship. Over-proving on data is the trap that kills throughput.
+
+**Build for handoff, not for hoarding.** Every harness and analysis is built to be run by someone else: parameterized, documented, self-serve. We own the *method*, not the *execution* — so the work scales past one person's hours and never becomes a single point of failure on critical-path delivery.
+
+**Standardize the repeatable.** Cohort building, success lookups (Success Library), vintage, MDE calculators — harnesses with editable parameters, not code retyped per campaign.
+
+---
+
 ## Intent (Layer 3 — Why This Workbench Exists)
 
 **Purpose:** Experiment design and campaign measurement for the NBA Cards pod. We work both ends of the campaign workflow — designing experiments up front, measuring outcomes at the end — to provide statistically sound recommendations that drive iteration speed.
@@ -62,7 +79,7 @@ Each campaign under `/campaigns/<CODE>/` should have:
 3. **Timely** — delivered within the sprint window. We are on the critical path — late work is a showstopper for other teams.
 
 **Tradeoffs (Pre-decided):**
-- Rigor > Speed — always. Rigor is what this team sells as a service. A wrong answer on time is worse than a right answer late.
+- Rigor where it protects a decision, speed everywhere else. High-scrutiny or irreversible calls (experiment design, success definition, exec-facing numbers) get full rigor — a wrong answer there is worse than a right answer late. Directional internal reads ship fast; over-proving on data is the trap that kills test velocity. (See Operating Philosophy above.)
 - Breadth/Depth is not a binary — all campaigns run in parallel at different lifecycle stages. Each gets attention proportional to its current sprint needs.
 - Templates are semi-reusable — same philosophy, different parameters per campaign. Build harnesses with editable variables, not rigid pipelines.
 
