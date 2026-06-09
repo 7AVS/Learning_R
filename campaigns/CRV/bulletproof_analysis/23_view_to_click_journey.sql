@@ -97,6 +97,7 @@ client_roll AS (
         CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
              WHEN MAX(control_flag) = 1 THEN 'overlap_control'
              ELSE                            'no_overlap' END AS overlap_status,
+        MAX(responder_cli) AS responded,
         MAX(crv_click) AS crv_click,
         MAX(crv_view)  AS crv_view,
         MAX(pcl_click) AS pcl_click,
@@ -104,19 +105,23 @@ client_roll AS (
     FROM dep_eng
     GROUP BY clnt_no
 )
+-- JOINT view x click table = the pivot source. One row per client's (view pattern, click pattern).
+-- Pivot: view_category -> rows, click_category -> columns, clients -> values, overlap_status -> filter.
+-- Isolate view_category='CRV only' to see, among CRV-only viewers, how many clicked each label.
+-- (A viewer can only click what they saw, so e.g. CRV-only viewers never land in click PCL/Both.)
 SELECT
     overlap_status,
     CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
          WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
          WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
          ELSE 'Neither' END AS view_category,
-    COUNT(*) AS clients_in_view_group,   -- denominator: clients with this viewing pattern
-    -- what those viewers CLICKED (sums to clients_in_view_group)
-    SUM(CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_both,
-    SUM(CASE WHEN crv_click = 1 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_crv_only,
-    SUM(CASE WHEN crv_click = 0 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_pcl_only,
-    SUM(CASE WHEN crv_click = 0 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_neither
+    CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
+         WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
+         WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
+         ELSE 'Neither' END AS click_category,
+    COUNT(*)           AS clients,
+    SUM(responded)     AS converters
 FROM client_roll
-GROUP BY 1, 2
-ORDER BY 1, 2
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3
 ;
