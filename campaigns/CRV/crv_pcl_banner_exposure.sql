@@ -12,32 +12,67 @@
 -- RUN #1 FIRST to validate the banner selection.
 -- =============================================================================
 
--- ── #1 STRESS TEST: which it_item_names get tagged CRV / PLI / DROP / OTHER? ──────────
--- Eyeball: CRV rows really installments? PLI rows really CC limit-increase? loan/cheq
--- correctly dropped? anything important sitting in OTHER (= a CLI banner we're missing)?
+-- ── #1 PRECISION VALIDATION: tag every GA4 banner against the EXACT code lists the
+--    digital team handed us (pics 20260608_185618 + 185634). NO catch-all LIKE-net.
+--    Goal: be able to point back to "this is the list they gave us" and SEE, from the data:
+--      (a) which given codes actually appear in GA4 (exact match, lowercased), and
+--      (b) what GA4 carries that is NOT on their list — the deployment-vs-GA4 naming gap.
+--    NB: their PCL names are DEPLOYMENT names (NBO-PB_CC_PCL_...). GA4 it_item_name does NOT
+--    use that namespace (GA4 = pb-cc_all_..._vcl..._ppcn). So 'PCL_given_exact' is expected
+--    to come back EMPTY and the PCL banners land in 'PCL_like_UNMATCHED' — that bucket IS the
+--    finding (GA4's real PCL naming). CRV names, by contrast, match GA4 lowercased 1:1.
 SELECT
     CASE
-        WHEN lower(it_item_name) LIKE '%cc-instalments%'                                THEN 'CRV'
-        WHEN lower(it_item_name) LIKE '%ln_rcl%' OR lower(it_item_name) LIKE '%dgt_ln%' THEN 'DROP_loan'
-        WHEN lower(it_item_name) LIKE '%cheq%'                                          THEN 'DROP_cheq'
-        WHEN lower(it_item_name) LIKE '%pcd_ccpij%'                                     THEN 'DROP_pcd'
-        WHEN ( lower(it_item_name) LIKE '%vcl%' OR lower(it_item_name) LIKE '%pcl%'
-            OR lower(it_item_name) LIKE '%limit%increase%' )                            THEN 'PLI'
+        -- CRV — exact list, union of both source images (5 installments variants)
+        WHEN item_name IN (
+             'pb_cc_all_21_06_rbc_cc-instalments-int_only',
+             'pb_cc_all_21_06_rbc_cc-instalments-int_otf',
+             'pb_cc_all_21_06_rbc_cc-instalments-howitworks',
+             'pb_cc_all_21_06_rbc_cc-instalments-otf_only',
+             'pb_cc_all_21_06_rbc_cc-instalments-noint_nofee-piv'
+        )                                                  THEN 'CRV_given_exact'
+        -- PCL (credit-card) — exact deployment list from 185618 NBO-PCL group (7)
+        WHEN item_name IN (
+             'nbo-pb_cc_pcl_21_11_rbc_credit-limit-increase',
+             'nbo-pb_cc_pcl_25_03_rbccmptgto_pli-cli_pa-intercepts',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-intercepts',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_pa-inline',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-inline',
+             'nbo-pb_cc_pcl_26_03_rbc_vcl-joint-inline',
+             'nbo-pb_cc_pcl_26_03_rbccmptgto_vcl_joint-intercepts'
+        )                                                  THEN 'PCL_given_exact'
+        -- Lending "PLI" — exact list from 185618 (LN/DGT group, 4). Separate product.
+        WHEN item_name IN (
+             'pb_ln_rcl_22_12_rbccmptgto_lend_rcu-pli',
+             'pb_ln_rcl_23_04_rbccmptgto_lend_rcuq_pli-pq',
+             'pb-mb_dgt_ln_26_06_rbccmptgto_lend_rcu-pli_ppcn',
+             'pb-mb_dgt_ln_26_06_rbccmptgto_lend_rcuq-pliq_ppcn'
+        )                                                  THEN 'PLI_lending_given_exact'
+        -- not on any given list, but clearly the same families → the naming-gap buckets:
+        WHEN item_name LIKE '%cc-instalments%'             THEN 'CRV_like_UNMATCHED'
+        WHEN item_name LIKE '%vcl%' OR item_name LIKE '%pcl%'
+          OR item_name LIKE '%limit%increase%'
+          OR item_name LIKE '%pli-cli%'                    THEN 'PCL_like_UNMATCHED'
+        WHEN item_name LIKE '%ln_rcl%' OR item_name LIKE '%dgt_ln%' THEN 'PLI_lending_like_UNMATCHED'
         ELSE 'OTHER'
-    END                 AS family,
-    lower(it_item_name) AS item_name,
-    MIN(event_date)     AS first_seen,
-    MAX(event_date)     AS last_seen,
-    COUNT(*)            AS n_impressions
-FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-WHERE year IN ('2025', '2026')
-  AND lower(event_name) = 'view_promotion'
-  AND platform IN ('IOS', 'ANDROID')
-  AND ( lower(it_item_name) LIKE '%vcl%'   OR lower(it_item_name) LIKE '%pcl%'
-     OR lower(it_item_name) LIKE '%limit%increase%' OR lower(it_item_name) LIKE '%cc-instalments%'
-     OR lower(it_item_name) LIKE '%ln_rcl%' OR lower(it_item_name) LIKE '%dgt_ln%'
-     OR lower(it_item_name) LIKE '%cheq%' )
-GROUP BY 1, 2
+    END             AS family,
+    item_name,
+    first_seen, last_seen, n_impressions
+FROM (
+    SELECT lower(it_item_name) AS item_name,
+           MIN(event_date)     AS first_seen,
+           MAX(event_date)     AS last_seen,
+           COUNT(*)            AS n_impressions
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+    WHERE year IN ('2025', '2026')
+      AND lower(event_name) = 'view_promotion'
+      AND platform IN ('IOS', 'ANDROID')
+      AND ( lower(it_item_name) LIKE '%cc-instalments%'
+         OR lower(it_item_name) LIKE '%vcl%'   OR lower(it_item_name) LIKE '%pcl%'
+         OR lower(it_item_name) LIKE '%limit%increase%' OR lower(it_item_name) LIKE '%pli%'
+         OR lower(it_item_name) LIKE '%ln_rcl%' OR lower(it_item_name) LIKE '%dgt_ln%' )
+    GROUP BY lower(it_item_name)
+) b
 ORDER BY family, n_impressions DESC
 ;
 
