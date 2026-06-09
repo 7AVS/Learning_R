@@ -99,7 +99,10 @@ ga4_events AS (
          OR lower(it_item_name) LIKE '%vcl-joint%' )
       AND lower(it_item_name) NOT LIKE '%finoffershub%'
 ),
--- one row per PCL lead, GA4 engagement counted ONLY inside the lead's treatment window
+-- one row per PCL lead. BINARY per-lead flags (MAX, not SUM): did this lead see / click the
+-- banner AT LEAST ONCE inside its treatment window. Same 0/1 unit as Q18's impression_mb /
+-- clicked_mb -> when summed per arm below, every number = NUMBER OF LEADS (<= leads), so
+-- "exposed < targeted" is visible. NOT event volume.
 lead_eng AS (
     SELECT
         f.pcl_month,
@@ -107,10 +110,10 @@ lead_eng AS (
         f.overlap_control_flag,
         f.responder_cli,
         f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
-        SUM(CASE WHEN g.is_pli = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS pli_impr,
-        SUM(CASE WHEN g.is_pli = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS pli_click,
-        SUM(CASE WHEN g.is_crv = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS crv_impr,
-        SUM(CASE WHEN g.is_crv = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS crv_click
+        MAX(CASE WHEN g.is_pli = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS pli_impr,
+        MAX(CASE WHEN g.is_pli = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS pli_click,
+        MAX(CASE WHEN g.is_crv = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS crv_impr,
+        MAX(CASE WHEN g.is_crv = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS crv_click
     FROM pcl_flagged f
     LEFT JOIN ga4_events g
       ON g.clnt_no    = f.clnt_no
@@ -130,19 +133,19 @@ SELECT
     SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)                     AS overlap_action_responders,
     SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)                     AS overlap_control_responders,
     SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN responder_cli ELSE 0 END) AS no_overlap_responders,
-    -- PCL clicks (GA4) — primary outcome
+    -- LEADS WHO CLICKED PLI (GA4, >=1 in window) — primary outcome
     SUM(CASE WHEN overlap_action_flag  = 1 THEN pli_click ELSE 0 END)                         AS overlap_action_pli_clicks,
     SUM(CASE WHEN overlap_control_flag = 1 THEN pli_click ELSE 0 END)                         AS overlap_control_pli_clicks,
     SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN pli_click ELSE 0 END) AS no_overlap_pli_clicks,
-    -- PCL impressions (GA4)
+    -- LEADS WHO SAW PLI (GA4, >=1 impression in window)
     SUM(CASE WHEN overlap_action_flag  = 1 THEN pli_impr ELSE 0 END)                          AS overlap_action_pli_impr,
     SUM(CASE WHEN overlap_control_flag = 1 THEN pli_impr ELSE 0 END)                          AS overlap_control_pli_impr,
     SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN pli_impr ELSE 0 END) AS no_overlap_pli_impr,
-    -- CRV clicks (GA4) — added
+    -- LEADS WHO CLICKED CRV (GA4, >=1 in window) — added
     SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_click ELSE 0 END)                         AS overlap_action_crv_clicks,
     SUM(CASE WHEN overlap_control_flag = 1 THEN crv_click ELSE 0 END)                         AS overlap_control_crv_clicks,
     SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN crv_click ELSE 0 END) AS no_overlap_crv_clicks,
-    -- CRV impressions (GA4) — added
+    -- LEADS WHO SAW CRV (GA4, >=1 impression in window) — added
     SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_impr ELSE 0 END)                          AS overlap_action_crv_impr,
     SUM(CASE WHEN overlap_control_flag = 1 THEN crv_impr ELSE 0 END)                          AS overlap_control_crv_impr,
     SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN crv_impr ELSE 0 END) AS no_overlap_crv_impr
