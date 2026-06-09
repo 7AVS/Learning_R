@@ -35,7 +35,7 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
 ),
 pli AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt BETWEEN DATE '2026-03-01' AND DATE '2026-05-30'
       AND channel LIKE '%MB%'
@@ -43,7 +43,8 @@ pli AS (
 pli_flagged AS (
     SELECT p.clnt_no,
            MAX(CASE WHEN a.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_action,
-           MAX(CASE WHEN c.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_control
+           MAX(CASE WHEN c.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_control,
+           MAX(p.responder_cli)                                   AS responded
     FROM pli p
     LEFT JOIN crv_action  a ON a.acct_no = p.acct_no
                            AND a.offer_start_date <= p.treatmt_end_dt AND a.offer_end_date >= p.treatmt_strt_dt
@@ -51,9 +52,10 @@ pli_flagged AS (
                            AND c.offer_start_date <= p.treatmt_end_dt AND c.offer_end_date >= p.treatmt_strt_dt
     GROUP BY p.clnt_no
 ),
--- the ENTIRE PCL population for the window, tagged by arm
+-- the ENTIRE PCL population for the window, tagged by arm, carrying conversion
 roster AS (
     SELECT clnt_no,
+           responded,
            CASE WHEN any_action  = 1 THEN 'overlap_action'
                 WHEN any_control = 1 THEN 'overlap_control'
                 ELSE                      'no_overlap' END AS overlap_status
@@ -87,7 +89,8 @@ SELECT
          WHEN COALESCE(g.crv_view,0) = 1 AND COALESCE(g.pcl_view,0) = 0 THEN 'CRV only'
          WHEN COALESCE(g.crv_view,0) = 0 AND COALESCE(g.pcl_view,0) = 1 THEN 'PCL only'
          ELSE 'Neither' END AS view_category,
-    COUNT(*) AS counts
+    COUNT(*)         AS counts,        -- clients in this cell (sum over a cell's arm = total population / leads)
+    SUM(r.responded) AS converters     -- of those, how many converted (responder_cli)
 FROM roster r
 LEFT JOIN ga4_eng g ON g.clnt_no = r.clnt_no
 GROUP BY 1, 2, 3
