@@ -4,13 +4,11 @@
 -- its ~90-day life. The three groups (overlap_action / overlap_control / no_overlap) are ALL this
 -- SAME cohort, split only by whether a CRV offer was CONCURRENT with the PCL deployment window.
 --
--- READABLE OUTPUT (format from pic 20260609_115156): one row per (pcl_month x overlap_status),
--- with population as the denominator and TWO mutually-exclusive breakdowns:
---   VIEWS  table  -> view_both / view_crv_only / view_pcl_only / view_neither   (sum = population)
---   CLICKS table  -> click_both / click_crv_only / click_pcl_only / click_neither (sum = population)
---   converters   = # who converted (responder_cli)
--- Every % = column / population. Build the VIEWS table from the view_* columns and the CLICKS table
--- from the click_* columns, per group. Compare overlap_action vs overlap_control (= H1 contrast).
+-- OUTPUT shaped like pic 20260609_115156 — LONG/STACKED: rows are (pcl_month, metric, overlap_status,
+-- category) where metric = VIEW or CLICK and category = Both / CRV only / PCL only / Neither (mutually
+-- exclusive). Pivot in Excel: category down the rows, overlap_status across, one table per metric ->
+-- the VIEWS table and the CLICKS table. The 4 categories in a group sum to that group's population,
+-- so % = counts / (group total). Compare overlap_action vs overlap_control (= H1 contrast).
 --
 -- Engagement counted AFTER each deployment, inside its OWN window (event_date BETWEEN
 -- treatmt_strt_dt AND treatmt_end_dt). Grain = PCL deployment. Banner key = it_promotion_id (Excel
@@ -95,22 +93,33 @@ dep_eng AS (
      AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
     GROUP BY f.pcl_month, f.overlap_status, f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
 )
+-- LONG / STACKED output (shape of pic 115156): a VIEWS block and a CLICKS block, each with the
+-- four categories per group. Pivot: rows = category, columns = overlap_status, one table per metric.
+-- % within a group = counts / (sum of the group's 4 category counts) = counts / population.
 SELECT
     pcl_month,
+    'VIEW'         AS metric,
     overlap_status,
-    COUNT(*) AS population,    -- denominator. % of any column below = column / population.
-    -- VIEWS breakdown (mutually exclusive, sums to population) -> the VIEWS table
-    SUM(CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_both,
-    SUM(CASE WHEN crv_view = 1 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_crv_only,
-    SUM(CASE WHEN crv_view = 0 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_pcl_only,
-    SUM(CASE WHEN crv_view = 0 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_neither,
-    -- CLICKS breakdown (mutually exclusive, sums to population) -> the CLICKS table
-    SUM(CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_both,
-    SUM(CASE WHEN crv_click = 1 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_crv_only,
-    SUM(CASE WHEN crv_click = 0 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_pcl_only,
-    SUM(CASE WHEN crv_click = 0 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_neither,
+    CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
+         WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
+         WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
+         ELSE 'Neither' END AS category,
+    COUNT(*)           AS counts,
     SUM(responder_cli) AS converters
 FROM dep_eng
-GROUP BY 1, 2
-ORDER BY 1, 2
+GROUP BY 1, 3, 4
+UNION ALL
+SELECT
+    pcl_month,
+    'CLICK'        AS metric,
+    overlap_status,
+    CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
+         WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
+         WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
+         ELSE 'Neither' END AS category,
+    COUNT(*)           AS counts,
+    SUM(responder_cli) AS converters
+FROM dep_eng
+GROUP BY 1, 3, 4
+ORDER BY pcl_month, metric, overlap_status, category
 ;
