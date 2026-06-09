@@ -11,10 +11,15 @@
 --      one row, its own 60-day window, bucketed by the month it fired (pcl_month). Same model
 --      as Q18's per-deployment clicked_mb/impression_mb. Window length is editable (the 60).
 --
--- Banner set (locked, validated by crv_pcl_banner_exposure.sql #1, pics 215605/215642):
---   PCL = vcl-limitincrease + vcl-joint  (trace to digital team's CLI + Joint codes)
---   CRV = cc-instalments
---   finoffershub (not on list) + lending (separate product) EXCLUDED.
+-- Banner set = the EXACT creative codes from the digital team's list (pics 185618 / 185634).
+-- Exact it_item_name equality only — NO substring matching, nothing substituted. These are the
+-- creatives Andre asked to test; the query reports how THEY performed in GA4 (impr/clicks).
+-- PCL = the 7 NBO-PB_CC_PCL_* codes (the card-PCL group). The 4 lending PB_LN_RCL / DGT_LN
+--       "PLI" codes are a separate product and are NOT included — say the word to add them.
+-- HONEST FLAG: in banner_exposure #1, these exact NBO-PB_CC_PCL_* codes returned 0 rows in
+--   GA4 (GA4 logs a different it_item_name than the deployment label). So PCL columns may read
+--   ~0. That is the true result of testing the exact list — not a bug. If PCL = 0, it is the
+--   definitive proof that the deployment names don't live in GA4, and we move to a crosswalk.
 -- GA4: view_promotion = impression, select_promotion = click.
 --
 -- Roster + randomised ARM from curated; engagement from GA4. Join CLNT_NO = up_srf_id2_value
@@ -82,22 +87,49 @@ pcl_flagged AS (
      AND oc.treatmt_strt_dt = p.treatmt_strt_dt
      AND oc.treatmt_end_dt  = p.treatmt_end_dt
 ),
+-- EXACT creative codes from the digital team's list (pics 185618 / 185634), lowercased.
+-- NO substrings. Tag a GA4 banner only if it_item_name EXACTLY equals one of these.
 ga4_events AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN lower(it_item_name) LIKE '%vcl-limitincrease%'
-              OR  lower(it_item_name) LIKE '%vcl-joint%'    THEN 1 ELSE 0 END AS is_pli,
-        CASE WHEN lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END AS is_crv,
-        CASE WHEN lower(event_name) = 'select_promotion'      THEN 1 ELSE 0 END AS is_click
+        CASE WHEN lower(it_item_name) IN (
+                 'nbo-pb_cc_pcl_21_11_rbc_credit-limit-increase',
+                 'nbo-pb_cc_pcl_25_03_rbccmptgto_pli-cli_pa-intercepts',
+                 'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-intercepts',
+                 'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_pa-inline',
+                 'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-inline',
+                 'nbo-pb_cc_pcl_26_03_rbc_vcl-joint-inline',
+                 'nbo-pb_cc_pcl_26_03_rbccmptgto_vcl_joint-intercepts'
+             ) THEN 1 ELSE 0 END AS is_pli,
+        CASE WHEN lower(it_item_name) IN (
+                 'pb_cc_all_21_06_rbc_cc-instalments-int_only',
+                 'pb_cc_all_21_06_rbc_cc-instalments-int_otf',
+                 'pb_cc_all_21_06_rbc_cc-instalments-howitworks',
+                 'pb_cc_all_21_06_rbc_cc-instalments-otf_only',
+                 'pb_cc_all_21_06_rbc_cc-instalments-noint_nofee-piv'
+             ) THEN 1 ELSE 0 END AS is_crv,
+        CASE WHEN lower(event_name) = 'select_promotion' THEN 1 ELSE 0 END AS is_click
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year IN ('2025', '2026')
       AND lower(event_name) IN ('view_promotion', 'select_promotion')
       AND platform IN ('IOS', 'ANDROID')
-      AND ( lower(it_item_name) LIKE '%cc-instalments%'
-         OR lower(it_item_name) LIKE '%vcl-limitincrease%'
-         OR lower(it_item_name) LIKE '%vcl-joint%' )
-      AND lower(it_item_name) NOT LIKE '%finoffershub%'
+      AND lower(it_item_name) IN (
+             -- PCL creatives (digital team list)
+             'nbo-pb_cc_pcl_21_11_rbc_credit-limit-increase',
+             'nbo-pb_cc_pcl_25_03_rbccmptgto_pli-cli_pa-intercepts',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-intercepts',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_pa-inline',
+             'nbo-pb_cc_pcl_24_04_rbccmptgto_pli-cli_q-inline',
+             'nbo-pb_cc_pcl_26_03_rbc_vcl-joint-inline',
+             'nbo-pb_cc_pcl_26_03_rbccmptgto_vcl_joint-intercepts',
+             -- CRV creatives (digital team list)
+             'pb_cc_all_21_06_rbc_cc-instalments-int_only',
+             'pb_cc_all_21_06_rbc_cc-instalments-int_otf',
+             'pb_cc_all_21_06_rbc_cc-instalments-howitworks',
+             'pb_cc_all_21_06_rbc_cc-instalments-otf_only',
+             'pb_cc_all_21_06_rbc_cc-instalments-noint_nofee-piv'
+      )
 ),
 -- one row per PCL lead. BINARY per-lead flags (MAX, not SUM): did this lead see / click the
 -- banner AT LEAST ONCE inside its treatment window. Same 0/1 unit as Q18's impression_mb /
