@@ -2,28 +2,25 @@
 --
 -- ONE deployment cohort: PCL deployments that STARTED Feb-Apr 2026 (treatmt_strt_dt), each running
 -- its ~90-day life. The three groups (overlap_action / overlap_control / no_overlap) are ALL this
--- SAME cohort, just split by whether a CRV offer was CONCURRENT with the PCL deployment window.
--- They are NOT different-date populations and no_overlap cannot exceed the cohort.
+-- SAME cohort, split only by whether a CRV offer was CONCURRENT with the PCL deployment window.
 --
--- Reconciles the dates:
---   * PCL cohort pinned to Feb-Apr 2026 starts.
---   * CRV offers bounded to those active in/after the cohort (offer_end_date >= 2026-02-01); the
---     window-intersection join does the precise per-deployment overlap test (CRV active during the
---     PCL deployment window).
---   * Engagement measured AFTER each deployment, inside its OWN window
---     (event_date BETWEEN treatmt_strt_dt AND treatmt_end_dt) — every group measured identically
---     relative to its own start, NOT a fixed calendar window.
+-- READABLE OUTPUT: one row per (pcl_month x overlap_status). Columns are plain counts:
+--   population   = # PCL deployments in that month+group  <- THE DENOMINATOR
+--   saw_pcl      = # whose client viewed a PCL banner in the deployment window
+--   clicked_pcl  = # whose client clicked a PCL banner
+--   saw_crv      = # who viewed a CRV banner
+--   clicked_crv  = # who clicked a CRV banner
+--   converters   = # who converted (responder_cli)
+-- Every percentage = column / population. e.g. PCL reach = saw_pcl/population; conversion rate =
+-- converters/population; compare overlap_action vs overlap_control (the randomised contrast = H1).
 --
--- Per deployment: did the client VIEW / CLICK the CRV banners and the PCL banners within its window
--- (binary), cross-tabbed Both / CRV only / PCL only / Neither, + converters (responder_cli).
--- Grain = PCL deployment. Banner key = it_promotion_id (= Excel Id). Table = _reduced.
--- Join up_srf_id2_value = CLNT_NO (cast GA4 side only). Starburst/Trino. Counts only.
+-- Engagement counted AFTER each deployment, inside its OWN window (event_date BETWEEN
+-- treatmt_strt_dt AND treatmt_end_dt). Grain = PCL deployment. Banner key = it_promotion_id (Excel
+-- Id). Table = _reduced. Join up_srf_id2_value = CLNT_NO (cast GA4 side only). Counts only.
 --
--- FLAGS: (1) CRV id list uses '87348' — Excel showed '87340'; kept yours, confirm.
---        (2) impression event = 'view_item' (your query); reference says 'view_promotion'.
---        (3) CENSORING: GA4 data currently runs to ~2026-06; an Apr-2026 deployment's 90-day window
---            extends to ~Jul, so Apr (and late-Mar) deployments are RIGHT-CENSORED (window not fully
---            observed). Feb deployments are complete. Read the cohort with that in mind.
+-- FLAGS: (1) CRV id list uses '87348' — Excel showed '87340'; confirm. (2) impression event =
+-- 'view_item' (your query) vs 'view_promotion' (reference). (3) CENSORING: GA4 runs to ~2026-06, so
+-- Apr (and late-Mar) deployments' 90-day windows are RIGHT-CENSORED; Feb is complete.
 
 WITH
 crv_action AS (
@@ -37,7 +34,8 @@ crv_control AS (
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
 pcl_universe AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli,
+           date_trunc('month', treatmt_strt_dt) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
       AND channel LIKE '%MB%'
@@ -58,7 +56,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli,
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli, p.pcl_month,
         CASE WHEN oa.acct_no IS NOT NULL THEN 'overlap_action'
              WHEN oc.acct_no IS NOT NULL THEN 'overlap_control'
              ELSE                             'no_overlap' END AS overlap_status
@@ -85,10 +83,10 @@ ga4_events AS (
       AND it_promotion_id IN ('87348','87342','87343','87344',
                               '156764','156788','162326','289661','289662','289664','289665','289666')
 ),
--- one row per PCL deployment; engagement counted only AFTER its start, inside its own window
+-- one row per PCL deployment; engagement counted only inside its own window
 dep_eng AS (
     SELECT
-        f.overlap_status, f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
+        f.pcl_month, f.overlap_status, f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
         COALESCE(MAX(g.crv_click_e), 0) AS crv_click,
         COALESCE(MAX(g.crv_view_e),  0) AS crv_view,
         COALESCE(MAX(g.pcl_click_e), 0) AS pcl_click,
@@ -97,21 +95,18 @@ dep_eng AS (
     LEFT JOIN ga4_events g
       ON g.clnt_no    = f.clnt_no
      AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
-    GROUP BY f.overlap_status, f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
+    GROUP BY f.pcl_month, f.overlap_status, f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
 )
 SELECT
+    pcl_month,
     overlap_status,
-    CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
-         WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
-         WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
-         ELSE 'Neither' END AS click_category,
-    CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
-         WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
-         WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
-         ELSE 'Neither' END AS view_category,
-    COUNT(*)              AS counts,      -- deployments in this cell (Σ over an arm = arm population/leads)
-    SUM(responder_cli)    AS converters   -- of those, how many converted
+    COUNT(*)            AS population,    -- denominator: PCL deployments in this month+group
+    SUM(pcl_view)       AS saw_pcl,
+    SUM(pcl_click)      AS clicked_pcl,
+    SUM(crv_view)       AS saw_crv,
+    SUM(crv_click)      AS clicked_crv,
+    SUM(responder_cli)  AS converters
 FROM dep_eng
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3
+GROUP BY 1, 2
+ORDER BY 1, 2
 ;
