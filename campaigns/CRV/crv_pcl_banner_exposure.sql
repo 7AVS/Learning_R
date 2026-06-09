@@ -123,26 +123,23 @@ roster AS (
     FROM pli_flagged
 ),
 -- per client: did they see the PLI banner / the CRV banner at all (window)?
+-- BANNER LOCK (validated by #1, pics 20260608_215605/215642): only banners that trace to
+-- a code on the digital team's list. PCL = GA4 creatives 'vcl-limitincrease' (their CLI codes
+-- 1-5) + 'vcl-joint' (their Joint codes 6-7). finoffershub is NOT on their list -> EXCLUDED.
+-- CRV = cc-instalments (their list; one banner actually runs). lending/OTHER not included.
 ga4 AS (
     SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
-           MAX(CASE WHEN lower(it_item_name) NOT LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS got_pli,
-           MAX(CASE WHEN lower(it_item_name) LIKE '%cc-instalments%'     THEN 1 ELSE 0 END) AS got_crv
+           MAX(CASE WHEN lower(it_item_name) LIKE '%vcl-limitincrease%'
+                     OR  lower(it_item_name) LIKE '%vcl-joint%'    THEN 1 ELSE 0 END) AS got_pli,
+           MAX(CASE WHEN lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS got_crv
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year IN ('2025', '2026')
       AND lower(event_name) = 'view_promotion'
       AND platform IN ('IOS', 'ANDROID')
-      AND (
-            lower(it_item_name) LIKE '%cc-instalments%'
-         OR (
-                ( lower(it_item_name) LIKE '%vcl%'
-               OR lower(it_item_name) LIKE '%pcl%'
-               OR lower(it_item_name) LIKE '%limit%increase%' )
-            AND lower(it_item_name) NOT LIKE '%ln_rcl%'
-            AND lower(it_item_name) NOT LIKE '%dgt_ln%'
-            AND lower(it_item_name) NOT LIKE '%cheq%'
-            AND lower(it_item_name) NOT LIKE '%pcd_ccpij%'
-         )
-          )
+      AND ( lower(it_item_name) LIKE '%cc-instalments%'
+         OR lower(it_item_name) LIKE '%vcl-limitincrease%'
+         OR lower(it_item_name) LIKE '%vcl-joint%' )
+      AND lower(it_item_name) NOT LIKE '%finoffershub%'
     GROUP BY 1
 ),
 flags AS (
