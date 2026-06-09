@@ -4,15 +4,13 @@
 -- its ~90-day life. The three groups (overlap_action / overlap_control / no_overlap) are ALL this
 -- SAME cohort, split only by whether a CRV offer was CONCURRENT with the PCL deployment window.
 --
--- READABLE OUTPUT: one row per (pcl_month x overlap_status). Columns are plain counts:
---   population   = # PCL deployments in that month+group  <- THE DENOMINATOR
---   saw_pcl      = # whose client viewed a PCL banner in the deployment window
---   clicked_pcl  = # whose client clicked a PCL banner
---   saw_crv      = # who viewed a CRV banner
---   clicked_crv  = # who clicked a CRV banner
+-- READABLE OUTPUT (format from pic 20260609_115156): one row per (pcl_month x overlap_status),
+-- with population as the denominator and TWO mutually-exclusive breakdowns:
+--   VIEWS  table  -> view_both / view_crv_only / view_pcl_only / view_neither   (sum = population)
+--   CLICKS table  -> click_both / click_crv_only / click_pcl_only / click_neither (sum = population)
 --   converters   = # who converted (responder_cli)
--- Every percentage = column / population. e.g. PCL reach = saw_pcl/population; conversion rate =
--- converters/population; compare overlap_action vs overlap_control (the randomised contrast = H1).
+-- Every % = column / population. Build the VIEWS table from the view_* columns and the CLICKS table
+-- from the click_* columns, per group. Compare overlap_action vs overlap_control (= H1 contrast).
 --
 -- Engagement counted AFTER each deployment, inside its OWN window (event_date BETWEEN
 -- treatmt_strt_dt AND treatmt_end_dt). Grain = PCL deployment. Banner key = it_promotion_id (Excel
@@ -100,12 +98,18 @@ dep_eng AS (
 SELECT
     pcl_month,
     overlap_status,
-    COUNT(*)            AS population,    -- denominator: PCL deployments in this month+group
-    SUM(pcl_view)       AS saw_pcl,
-    SUM(pcl_click)      AS clicked_pcl,
-    SUM(crv_view)       AS saw_crv,
-    SUM(crv_click)      AS clicked_crv,
-    SUM(responder_cli)  AS converters
+    COUNT(*) AS population,    -- denominator. % of any column below = column / population.
+    -- VIEWS breakdown (mutually exclusive, sums to population) -> the VIEWS table
+    SUM(CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_both,
+    SUM(CASE WHEN crv_view = 1 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_crv_only,
+    SUM(CASE WHEN crv_view = 0 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_pcl_only,
+    SUM(CASE WHEN crv_view = 0 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_neither,
+    -- CLICKS breakdown (mutually exclusive, sums to population) -> the CLICKS table
+    SUM(CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_both,
+    SUM(CASE WHEN crv_click = 1 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_crv_only,
+    SUM(CASE WHEN crv_click = 0 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_pcl_only,
+    SUM(CASE WHEN crv_click = 0 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_neither,
+    SUM(responder_cli) AS converters
 FROM dep_eng
 GROUP BY 1, 2
 ORDER BY 1, 2
