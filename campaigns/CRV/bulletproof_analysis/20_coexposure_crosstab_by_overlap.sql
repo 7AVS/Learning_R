@@ -10,9 +10,9 @@
 --     anchored to real deployment windows, no calendar box, no double-count of the client).
 --   * pcl_month: the client's FIRST deployment month (so each client sits in one month, no spill).
 --
--- OUTPUT shaped like pic 115156 (long/stacked): rows = (pcl_month, metric, overlap_status, category),
--- metric = VIEW or CLICK, category = Both / CRV only / PCL only / Neither (mutually exclusive).
--- counts = CLIENTS. The 4 categories in a group sum to its population, so % = counts / group total.
+-- OUTPUT (wide): one row per (pcl_month x overlap_status). population = unique CLIENTS (denominator),
+-- then the VIEWS breakdown (view_both/view_crv_only/view_pcl_only/view_neither) and the CLICKS
+-- breakdown (click_*), each summing to population, plus converters. % = any column / population.
 -- Compare overlap_action vs overlap_control (= H1 contrast).
 --
 -- Banner key = it_promotion_id (Excel Id). Table = _reduced. Join up_srf_id2_value = CLNT_NO
@@ -112,40 +112,23 @@ client_roll AS (
         MAX(pcl_view)      AS pcl_view
     FROM dep_eng
     GROUP BY clnt_no
-),
-long AS (
-    SELECT
-        pcl_month, 'VIEW' AS metric, overlap_status,
-        CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
-             WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
-             WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
-             ELSE 'Neither' END AS category,
-        COUNT(*)       AS counts,
-        SUM(responded) AS converters
-    FROM client_roll
-    GROUP BY 1, 3, 4
-    UNION ALL
-    SELECT
-        pcl_month, 'CLICK' AS metric, overlap_status,
-        CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
-             WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
-             WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
-             ELSE 'Neither' END AS category,
-        COUNT(*)       AS counts,
-        SUM(responded) AS converters
-    FROM client_roll
-    GROUP BY 1, 3, 4
 )
 SELECT
     pcl_month,
-    metric,
     overlap_status,
-    category,
-    counts,                                                                          -- clients in this category
-    SUM(counts)  OVER (PARTITION BY pcl_month, metric, overlap_status) AS population, -- total clients in the group
-    ROUND(100.0 * counts
-          / NULLIF(SUM(counts) OVER (PARTITION BY pcl_month, metric, overlap_status), 0), 2) AS pct, -- % of the group
-    converters
-FROM long
-ORDER BY pcl_month, metric, overlap_status, category
+    COUNT(*) AS population,    -- unique clients in this month+group  <- denominator; % = column/population
+    -- VIEWS breakdown (mutually exclusive, sums to population)
+    SUM(CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_both,
+    SUM(CASE WHEN crv_view = 1 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_crv_only,
+    SUM(CASE WHEN crv_view = 0 AND pcl_view = 1 THEN 1 ELSE 0 END) AS view_pcl_only,
+    SUM(CASE WHEN crv_view = 0 AND pcl_view = 0 THEN 1 ELSE 0 END) AS view_neither,
+    -- CLICKS breakdown (mutually exclusive, sums to population)
+    SUM(CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_both,
+    SUM(CASE WHEN crv_click = 1 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_crv_only,
+    SUM(CASE WHEN crv_click = 0 AND pcl_click = 1 THEN 1 ELSE 0 END) AS click_pcl_only,
+    SUM(CASE WHEN crv_click = 0 AND pcl_click = 0 THEN 1 ELSE 0 END) AS click_neither,
+    SUM(responded) AS converters
+FROM client_roll
+GROUP BY 1, 2
+ORDER BY 1, 2
 ;
