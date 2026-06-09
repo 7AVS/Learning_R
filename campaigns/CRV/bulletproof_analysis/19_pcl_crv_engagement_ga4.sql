@@ -1,160 +1,95 @@
 -- 19_pcl_crv_engagement_ga4.sql
 --
--- GA4 rebuild of Q18 (18_pcl_clicks_cannibalization): PCL banner IMPRESSIONS + CLICKS by
--- CRV arm, now sourced from GA4 instead of curated clicked_mb/impression_mb (which Andre
--- distrusts — downward trend), and ADDING the CRV engagement side alongside PCL.
+-- GA4 rebuild of Q18 (18_pcl_clicks_cannibalization) — SAME SHAPE as Q18:
+-- ONE output, GROUP BY pcl_month (PCL deployment / treatment-start month), arm splits.
+-- The only changes vs Q18:
+--   1. PCL clicks/impressions come from GA4 (locked on-list banners) instead of curated
+--      clicked_mb / impression_mb (which Andre distrusts — downward trend).
+--   2. CRV clicks/impressions ADDED alongside PCL.
+--   3. GA4 engagement is WINDOWED to each PCL lead's treatment dates
+--      (event_date BETWEEN treatmt_strt_dt AND treatmt_end_dt) — the PCL deployment / overlap
+--      window. Engagement is attributed to the lead it happened during, same spirit as Q18's
+--      per-lead clicked_mb/impression_mb.
 --
--- Banner set = the locked, on-list banners validated by crv_pcl_banner_exposure.sql #1
--- (pics 20260608_215605/215642):
---   PCL  = vcl-limitincrease + vcl-joint   (trace to the digital team's CLI + Joint codes)
---   CRV  = cc-instalments
---   finoffershub (not on list) and lending (separate product) are EXCLUDED.
+-- Banner set (locked, validated by crv_pcl_banner_exposure.sql #1, pics 215605/215642):
+--   PCL = vcl-limitincrease + vcl-joint  (trace to digital team's CLI + Joint codes)
+--   CRV = cc-instalments
+--   finoffershub (not on list) + lending (separate product) EXCLUDED.
 -- GA4: view_promotion = impression, select_promotion = click.
 --
--- Roster + randomised ARM still come from curated (GA4 carries no arm). Engagement = GA4.
--- Join CLNT_NO (curated) = up_srf_id2_value (GA4). Cast ONLY the GA4 side (federation ROUND
--- gotcha, err 9981). Starburst/Trino. Counts only — no rates/CTR.
---
--- Clean causal comparison = overlap_action vs overlap_control (randomised CRV assignment).
--- no_overlap = continuity only, NOT causal (those clients were never CRV-eligible).
---
--- WINDOW NOTE: PCL leads pinned to >= 2025-02-01 to match GA4 _reduced coverage (Feb-2025+).
--- Q18 used 2024-10-01; pre-Feb-2025 leads can't have GA4 events, so they'd dilute. Editable.
--- ENGAGEMENT NOTE: GA4 events are counted over 2025-2026, NOT windowed to each client's PCL
--- treatment dates (roster is deduped to clnt_no). This is "ever saw the banner", same as the
--- block test. Tighten to per-treatment-window if a precise in-flight read is needed.
+-- Roster + randomised ARM from curated; engagement from GA4. Join CLNT_NO = up_srf_id2_value
+-- (cast GA4 side only — federation ROUND gotcha). Starburst/Trino. Counts only — no rates.
+-- Causal contrast = overlap_action vs overlap_control (randomised). no_overlap = continuity only.
+-- WINDOW: PCL leads >= 2025-02-01 to match GA4 _reduced coverage (Feb-2025+). Editable.
 
--- =============================================================================
--- #1  PER-ARM TOTALS — the clean causal read (Action vs Control).
--- =============================================================================
 WITH
-crv_action AS (
-    SELECT acct_no, offer_start_date, offer_end_date
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
-),
-crv_control AS (
-    SELECT acct_no, offer_start_date, offer_end_date
-    FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
-),
-pli AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
+pcl_universe AS (
+    SELECT
+        clnt_no,
+        acct_no,
+        treatmt_strt_dt,
+        treatmt_end_dt,
+        responder_cli,
+        date_trunc('month', treatmt_strt_dt) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
+    WHERE treatmt_strt_dt >= DATE '2025-02-01'
+      AND channel LIKE '%MB%'
 ),
-pli_flagged AS (
-    SELECT p.clnt_no,
-           MAX(CASE WHEN a.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_action,
-           MAX(CASE WHEN c.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_control
-    FROM pli p
-    LEFT JOIN crv_action  a ON a.acct_no = p.acct_no
-                           AND a.offer_start_date <= p.treatmt_end_dt AND a.offer_end_date >= p.treatmt_strt_dt
-    LEFT JOIN crv_control c ON c.acct_no = p.acct_no
-                           AND c.offer_start_date <= p.treatmt_end_dt AND c.offer_end_date >= p.treatmt_strt_dt
-    GROUP BY p.clnt_no
-),
-roster AS (
-    SELECT clnt_no,
-           CASE WHEN any_action  = 1 THEN 'overlap_action'
-                WHEN any_control = 1 THEN 'overlap_control'
-                ELSE                      'no_overlap' END AS grp
-    FROM pli_flagged
-),
--- GA4 per client: impression + click counts for PCL and CRV (on-list banners only)
-ga4 AS (
-    SELECT clnt_no,
-           SUM(CASE WHEN is_pli = 1 AND is_click = 0 THEN 1 ELSE 0 END) AS pli_impr,
-           SUM(CASE WHEN is_pli = 1 AND is_click = 1 THEN 1 ELSE 0 END) AS pli_click,
-           SUM(CASE WHEN is_crv = 1 AND is_click = 0 THEN 1 ELSE 0 END) AS crv_impr,
-           SUM(CASE WHEN is_crv = 1 AND is_click = 1 THEN 1 ELSE 0 END) AS crv_click,
-           MAX(CASE WHEN is_pli = 1 AND is_click = 0 THEN 1 ELSE 0 END) AS any_pli_impr,
-           MAX(CASE WHEN is_pli = 1 AND is_click = 1 THEN 1 ELSE 0 END) AS any_pli_click,
-           MAX(CASE WHEN is_crv = 1 AND is_click = 0 THEN 1 ELSE 0 END) AS any_crv_impr,
-           MAX(CASE WHEN is_crv = 1 AND is_click = 1 THEN 1 ELSE 0 END) AS any_crv_click
-    FROM (
-        SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
-               CASE WHEN lower(it_item_name) LIKE '%vcl-limitincrease%'
-                     OR  lower(it_item_name) LIKE '%vcl-joint%'    THEN 1 ELSE 0 END AS is_pli,
-               CASE WHEN lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END AS is_crv,
-               CASE WHEN lower(event_name) = 'select_promotion'      THEN 1 ELSE 0 END AS is_click
-        FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-        WHERE year IN ('2025', '2026')
-          AND lower(event_name) IN ('view_promotion', 'select_promotion')
-          AND platform IN ('IOS', 'ANDROID')
-          AND ( lower(it_item_name) LIKE '%cc-instalments%'
-             OR lower(it_item_name) LIKE '%vcl-limitincrease%'
-             OR lower(it_item_name) LIKE '%vcl-joint%' )
-          AND lower(it_item_name) NOT LIKE '%finoffershub%'
-    ) e
-    GROUP BY clnt_no
-)
-SELECT
-    r.grp,
-    COUNT(*)                  AS n_clients,
-    -- PCL engagement (GA4) — clients reached, then total events
-    SUM(g.any_pli_impr)       AS n_clients_pli_impr,
-    SUM(g.any_pli_click)      AS n_clients_pli_click,
-    SUM(g.pli_impr)           AS pli_impressions,
-    SUM(g.pli_click)          AS pli_clicks,
-    -- CRV engagement (GA4) — the added CRV side
-    SUM(g.any_crv_impr)       AS n_clients_crv_impr,
-    SUM(g.any_crv_click)      AS n_clients_crv_click,
-    SUM(g.crv_impr)           AS crv_impressions,
-    SUM(g.crv_click)          AS crv_clicks
-FROM roster r
-LEFT JOIN ga4 g ON g.clnt_no = r.clnt_no
-GROUP BY r.grp
-ORDER BY r.grp
-;
-
-
--- =============================================================================
--- #2  PER-ARM x GA4 EVENT-MONTH — the trend (faithful to Q18's monthly grain).
---     Lets us read GA4's PCL impression/click trend against curated's downward trend.
---     Volume counts only (no per-month distinct-client denominators).
--- =============================================================================
-WITH
-crv_action AS (
+crv_im_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND channels_deployed LIKE '%IM%'
+      AND action_control = 'Action'
 ),
-crv_control AS (
+crv_control_pool AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND action_control = 'Control'
 ),
-pli AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
-    FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
+overlap_action_keys AS (
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_im_action c
+      ON c.acct_no           = p.acct_no
+     AND c.offer_start_date <= p.treatmt_end_dt
+     AND c.offer_end_date   >= p.treatmt_strt_dt
 ),
-pli_flagged AS (
-    SELECT p.clnt_no,
-           MAX(CASE WHEN a.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_action,
-           MAX(CASE WHEN c.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS any_control
-    FROM pli p
-    LEFT JOIN crv_action  a ON a.acct_no = p.acct_no
-                           AND a.offer_start_date <= p.treatmt_end_dt AND a.offer_end_date >= p.treatmt_strt_dt
-    LEFT JOIN crv_control c ON c.acct_no = p.acct_no
-                           AND c.offer_start_date <= p.treatmt_end_dt AND c.offer_end_date >= p.treatmt_strt_dt
-    GROUP BY p.clnt_no
+overlap_control_keys AS (
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM pcl_universe p
+    INNER JOIN crv_control_pool c
+      ON c.acct_no           = p.acct_no
+     AND c.offer_start_date <= p.treatmt_end_dt
+     AND c.offer_end_date   >= p.treatmt_strt_dt
 ),
-roster AS (
-    SELECT clnt_no,
-           CASE WHEN any_action  = 1 THEN 'overlap_action'
-                WHEN any_control = 1 THEN 'overlap_control'
-                ELSE                      'no_overlap' END AS grp
-    FROM pli_flagged
+pcl_flagged AS (
+    SELECT
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt,
+        p.responder_cli, p.pcl_month,
+        CASE WHEN oa.acct_no IS NOT NULL
+             THEN 1 ELSE 0 END AS overlap_action_flag,
+        CASE WHEN oa.acct_no IS NULL AND oc.acct_no IS NOT NULL
+             THEN 1 ELSE 0 END AS overlap_control_flag
+    FROM pcl_universe p
+    LEFT JOIN overlap_action_keys oa
+      ON oa.acct_no         = p.acct_no
+     AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oa.treatmt_end_dt  = p.treatmt_end_dt
+    LEFT JOIN overlap_control_keys oc
+      ON oc.acct_no         = p.acct_no
+     AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+     AND oc.treatmt_end_dt  = p.treatmt_end_dt
 ),
-ga4_evt AS (
-    SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
-           date_trunc('month', event_date) AS evt_month,
-           CASE WHEN lower(it_item_name) LIKE '%vcl-limitincrease%'
-                 OR  lower(it_item_name) LIKE '%vcl-joint%'    THEN 1 ELSE 0 END AS is_pli,
-           CASE WHEN lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END AS is_crv,
-           CASE WHEN lower(event_name) = 'select_promotion'      THEN 1 ELSE 0 END AS is_click
+ga4_events AS (
+    SELECT
+        TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+        event_date,
+        CASE WHEN lower(it_item_name) LIKE '%vcl-limitincrease%'
+              OR  lower(it_item_name) LIKE '%vcl-joint%'    THEN 1 ELSE 0 END AS is_pli,
+        CASE WHEN lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END AS is_crv,
+        CASE WHEN lower(event_name) = 'select_promotion'      THEN 1 ELSE 0 END AS is_click
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year IN ('2025', '2026')
       AND lower(event_name) IN ('view_promotion', 'select_promotion')
@@ -163,16 +98,55 @@ ga4_evt AS (
          OR lower(it_item_name) LIKE '%vcl-limitincrease%'
          OR lower(it_item_name) LIKE '%vcl-joint%' )
       AND lower(it_item_name) NOT LIKE '%finoffershub%'
+),
+-- one row per PCL lead, GA4 engagement counted ONLY inside the lead's treatment window
+lead_eng AS (
+    SELECT
+        f.pcl_month,
+        f.overlap_action_flag,
+        f.overlap_control_flag,
+        f.responder_cli,
+        f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
+        SUM(CASE WHEN g.is_pli = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS pli_impr,
+        SUM(CASE WHEN g.is_pli = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS pli_click,
+        SUM(CASE WHEN g.is_crv = 1 AND g.is_click = 0 THEN 1 ELSE 0 END) AS crv_impr,
+        SUM(CASE WHEN g.is_crv = 1 AND g.is_click = 1 THEN 1 ELSE 0 END) AS crv_click
+    FROM pcl_flagged f
+    LEFT JOIN ga4_events g
+      ON g.clnt_no    = f.clnt_no
+     AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
+    GROUP BY
+        f.pcl_month, f.overlap_action_flag, f.overlap_control_flag,
+        f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
 )
 SELECT
-    r.grp,
-    e.evt_month,
-    SUM(CASE WHEN e.is_pli = 1 AND e.is_click = 0 THEN 1 ELSE 0 END) AS pli_impressions,
-    SUM(CASE WHEN e.is_pli = 1 AND e.is_click = 1 THEN 1 ELSE 0 END) AS pli_clicks,
-    SUM(CASE WHEN e.is_crv = 1 AND e.is_click = 0 THEN 1 ELSE 0 END) AS crv_impressions,
-    SUM(CASE WHEN e.is_crv = 1 AND e.is_click = 1 THEN 1 ELSE 0 END) AS crv_clicks
-FROM roster r
-INNER JOIN ga4_evt e ON e.clnt_no = r.clnt_no
-GROUP BY r.grp, e.evt_month
-ORDER BY r.grp, e.evt_month
+    pcl_month,
+    -- leads (denominators)
+    COUNT(*)                                                                                  AS total_pcl_leads,
+    SUM(overlap_action_flag)                                                                  AS overlap_action_leads,
+    SUM(overlap_control_flag)                                                                 AS overlap_control_leads,
+    SUM(CASE WHEN overlap_action_flag = 0 AND overlap_control_flag = 0 THEN 1 ELSE 0 END)     AS no_overlap_leads,
+    -- responders (conversion twin — kept for comparability with H1)
+    SUM(CASE WHEN overlap_action_flag  = 1 THEN responder_cli ELSE 0 END)                     AS overlap_action_responders,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN responder_cli ELSE 0 END)                     AS overlap_control_responders,
+    SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN responder_cli ELSE 0 END) AS no_overlap_responders,
+    -- PCL clicks (GA4) — primary outcome
+    SUM(CASE WHEN overlap_action_flag  = 1 THEN pli_click ELSE 0 END)                         AS overlap_action_pli_clicks,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN pli_click ELSE 0 END)                         AS overlap_control_pli_clicks,
+    SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN pli_click ELSE 0 END) AS no_overlap_pli_clicks,
+    -- PCL impressions (GA4)
+    SUM(CASE WHEN overlap_action_flag  = 1 THEN pli_impr ELSE 0 END)                          AS overlap_action_pli_impr,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN pli_impr ELSE 0 END)                          AS overlap_control_pli_impr,
+    SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN pli_impr ELSE 0 END) AS no_overlap_pli_impr,
+    -- CRV clicks (GA4) — added
+    SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_click ELSE 0 END)                         AS overlap_action_crv_clicks,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN crv_click ELSE 0 END)                         AS overlap_control_crv_clicks,
+    SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN crv_click ELSE 0 END) AS no_overlap_crv_clicks,
+    -- CRV impressions (GA4) — added
+    SUM(CASE WHEN overlap_action_flag  = 1 THEN crv_impr ELSE 0 END)                          AS overlap_action_crv_impr,
+    SUM(CASE WHEN overlap_control_flag = 1 THEN crv_impr ELSE 0 END)                          AS overlap_control_crv_impr,
+    SUM(CASE WHEN overlap_action_flag  = 0 AND overlap_control_flag = 0 THEN crv_impr ELSE 0 END) AS no_overlap_crv_impr
+FROM lead_eng
+GROUP BY pcl_month
+ORDER BY pcl_month
 ;
