@@ -21,6 +21,9 @@ ga4 AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
+        event_timestamp,          -- DIAGNOSTIC: if this differs across "duplicate" rows = separate events
+        ep_ga_session_id,         -- DIAGNOSTIC: same session or different visit
+        it_item_id,               -- DIAGNOSTIC: item-array (same promo repeated within one event)
         event_name,
         it_promotion_id,
         CASE WHEN it_promotion_id IN ('87348','87342','87343','87344') THEN 'CRV'
@@ -35,7 +38,8 @@ ga4 AS (
 client_events AS (
     SELECT
         p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt,
-        g.event_date, g.banner, g.event_name, g.it_promotion_id
+        g.event_date, g.event_timestamp, g.ep_ga_session_id, g.it_item_id,
+        g.banner, g.event_name, g.it_promotion_id
     FROM pcl p
     JOIN ga4 g
       ON g.clnt_no    = p.clnt_no
@@ -58,11 +62,14 @@ SELECT
     ce.acct_no,
     ce.treatmt_strt_dt,                 -- window start
     ce.treatmt_end_dt,                  -- window end
-    ce.event_date,                      -- when the interaction happened (inside the window)
+    ce.event_date,                      -- day of the interaction (inside the window)
+    ce.event_timestamp,                 -- exact event time: differs => separate impressions, not dupes
+    ce.ep_ga_session_id,                -- session: same visit vs different visit
     ce.banner,                          -- CRV or PCL
     ce.event_name,                      -- view_item (impression) / select_promotion (click)
-    ce.it_promotion_id
+    ce.it_promotion_id,
+    ce.it_item_id                       -- item-array: same promo repeated within one event
 FROM client_events ce
 JOIN sample_clients s ON s.clnt_no = ce.clnt_no
-ORDER BY ce.clnt_no, ce.event_date, ce.banner, ce.event_name
+ORDER BY ce.clnt_no, ce.event_date, ce.event_timestamp, ce.banner
 ;
