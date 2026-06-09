@@ -27,19 +27,24 @@ SELECT 'full' AS tbl, MIN(event_date) AS earliest, MAX(event_date) AS latest
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
 WHERE year IN ('2024','2025','2026');
 
--- 5) does the campaign mnemonic carry VCL/CRV cleanly? (could be a cleaner filter)
+-- NOTE (from running #4): the SF fields (ip_sf_*) are NOT in the _reduced table —
+-- #5/#6 errored "column cannot be resolved" on _reduced. They live in the FULL table
+-- tsz_00198_data_ga4_ecommerce, which holds only ~2 weeks (2026-05-27+). So #5/#6 now run
+-- on the FULL table just to INSPECT these fields on recent data; they can't be used over the
+-- historical window (that's _reduced, which has Feb-2025+ but only the basic fields).
+
+-- 5) does the campaign mnemonic carry VCL/CRV cleanly? (FULL table — ~2wk of data)
 SELECT ip_sf_campaign_mnemonic, COUNT(*) AS n
-FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-WHERE year = '2026' AND month = '06'
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE year = '2026' AND month IN ('05','06')
   AND lower(event_name) IN ('view_promotion','select_promotion')
 GROUP BY ip_sf_campaign_mnemonic
 ORDER BY n DESC;
 
--- 6) does ip_sf_treatment_code carry Action/Control? (would skip the tactic join!)
---    peek at its values on a known VCL (PCL) banner. SKIP if col absent per DESCRIBE.
+-- 6) does ip_sf_treatment_code carry Action/Control? (FULL table — ~2wk; the make-or-break)
 SELECT ip_sf_treatment_code, COUNT(*) AS n
-FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-WHERE year = '2026' AND month = '06'
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce
+WHERE year = '2026' AND month IN ('05','06')
   AND lower(it_item_name) LIKE '%vcl-limitincrease%'
 GROUP BY ip_sf_treatment_code
 ORDER BY n DESC;
