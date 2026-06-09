@@ -112,31 +112,40 @@ client_roll AS (
         MAX(pcl_view)      AS pcl_view
     FROM dep_eng
     GROUP BY clnt_no
+),
+long AS (
+    SELECT
+        pcl_month, 'VIEW' AS metric, overlap_status,
+        CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
+             WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
+             WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
+             ELSE 'Neither' END AS category,
+        COUNT(*)       AS counts,
+        SUM(responded) AS converters
+    FROM client_roll
+    GROUP BY 1, 3, 4
+    UNION ALL
+    SELECT
+        pcl_month, 'CLICK' AS metric, overlap_status,
+        CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
+             WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
+             WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
+             ELSE 'Neither' END AS category,
+        COUNT(*)       AS counts,
+        SUM(responded) AS converters
+    FROM client_roll
+    GROUP BY 1, 3, 4
 )
 SELECT
     pcl_month,
-    'VIEW'         AS metric,
+    metric,
     overlap_status,
-    CASE WHEN crv_view = 1 AND pcl_view = 1 THEN 'Both'
-         WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
-         WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
-         ELSE 'Neither' END AS category,
-    COUNT(*)           AS counts,        -- CLIENTS
-    SUM(responded)     AS converters
-FROM client_roll
-GROUP BY 1, 3, 4
-UNION ALL
-SELECT
-    pcl_month,
-    'CLICK'        AS metric,
-    overlap_status,
-    CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
-         WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
-         WHEN crv_click = 0 AND pcl_click = 1 THEN 'PCL only'
-         ELSE 'Neither' END AS category,
-    COUNT(*)           AS counts,
-    SUM(responded)     AS converters
-FROM client_roll
-GROUP BY 1, 3, 4
+    category,
+    counts,                                                                          -- clients in this category
+    SUM(counts)  OVER (PARTITION BY pcl_month, metric, overlap_status) AS population, -- total clients in the group
+    ROUND(100.0 * counts
+          / NULLIF(SUM(counts) OVER (PARTITION BY pcl_month, metric, overlap_status), 0), 2) AS pct, -- % of the group
+    converters
+FROM long
 ORDER BY pcl_month, metric, overlap_status, category
 ;
