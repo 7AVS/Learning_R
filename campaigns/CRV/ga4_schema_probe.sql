@@ -1,15 +1,15 @@
 -- =============================================================================
--- GA4 schema probe (Trino / Starburst) — get the FULL field list + event types.
--- We only have the ~8 fields the existing trackers USE, NOT the whole schema.
--- Run these to see everything available — especially DATE/TIMESTAMP fields needed
--- to look at the ORDER of impressions/clicks, and to compare reduced vs full table.
+-- GA4 schema probe (Trino / Starburst) — TRIMMED.
+-- The FULL non-reduced schema (~130 fields) is already cataloged from Andre's
+-- screenshots at schemas/ga4_ecommerce_schema.md — so DESCRIBE-ing the full table is
+-- dropped. What's left answers only the still-OPEN questions: what _reduced keeps,
+-- history depth, and validating the two promising fields (mnemonic, treatment_code).
 -- =============================================================================
 
--- 1) full column list — production (_reduced) table
+-- 1) column list of the _reduced table — the one schema we DON'T have. Tells us whether
+--    _reduced KEEPS event_timestamp / ip_sf_treatment_code (if it drops them, we must
+--    query the full table for those instead of _reduced).
 DESCRIBE edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced;
-
--- 2) full column list — NON-reduced table (compare field count / extra fields)
-DESCRIBE edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce;
 
 -- 3) what event types exist (beyond view_promotion / select_promotion)?
 SELECT event_name, COUNT(*) AS n_events
