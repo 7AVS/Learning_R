@@ -6,10 +6,10 @@
 --   1. PCL clicks/impressions come from GA4 (locked on-list banners) instead of curated
 --      clicked_mb / impression_mb (which Andre distrusts — downward trend).
 --   2. CRV clicks/impressions ADDED alongside PCL.
---   3. GA4 engagement is WINDOWED to each PLI deployment's 60-DAY window
---      (event_date BETWEEN treatmt_strt_dt AND treatmt_strt_dt + 60 days). One deployment =
---      one row, its own 60-day window, bucketed by the month it fired (pcl_month). Same model
---      as Q18's per-deployment clicked_mb/impression_mb. Window length is editable (the 60).
+--   3. GA4 engagement is WINDOWED to each PLI deployment's OWN window
+--      (event_date BETWEEN treatmt_strt_dt AND treatmt_end_dt) — the same window that defines
+--      the CRV overlap. One deployment = one row, bucketed by the month it fired (pcl_month),
+--      exactly like Q18. NOT a fixed 60-day box (that construct is for vintage curves).
 --
 -- Banner set = the EXACT creative codes from the digital team's list (pics 185618 / 185634).
 -- Exact it_item_name equality only — NO substring matching, nothing substituted. These are the
@@ -149,9 +149,9 @@ lead_eng AS (
     FROM pcl_flagged f
     LEFT JOIN ga4_events g
       ON g.clnt_no    = f.clnt_no
-     -- 60-DAY DEPLOYMENT WINDOW from the deployment date (edit the 60 if the campaign uses a
-     -- different measurement window). Fixed length => identical for every lead, every arm.
-     AND g.event_date BETWEEN f.treatmt_strt_dt AND date_add('day', 60, f.treatmt_strt_dt)
+     -- engagement inside the deployment's OWN window (treatmt_strt_dt .. treatmt_end_dt) — the
+     -- same window that defines the CRV overlap. NOT a fixed 60-day box (that's vintage curves).
+     AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
     GROUP BY
         f.pcl_month, f.overlap_action_flag, f.overlap_control_flag,
         f.responder_cli, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
