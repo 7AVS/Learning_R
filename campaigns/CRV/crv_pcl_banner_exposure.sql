@@ -30,9 +30,11 @@ crv_control AS (
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
 ),
--- PLI mobile leads in the GA4 window (Feb-2025+), with clnt_no for the GA4 join
+-- PLI mobile leads in the GA4 window (Feb-2025+), with clnt_no for the GA4 join.
+-- DO NOT cast clnt_no here: a CAST on a Teradata column gets pushed down as ROUND and
+-- Teradata rejects it (err 9981). Cast only the GA4 side (below), per the async pattern.
 pli AS (
-    SELECT CAST(clnt_no AS BIGINT) AS clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
 ),
