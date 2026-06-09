@@ -40,17 +40,29 @@ WHERE year IN ('2024', '2025', '2026')
 ORDER BY it_item_name
 ;
 
--- ── Q1 — per-banner lifecycle summary: first/last seen, span, volume ──────────
--- "When can we start trusting this?" first_seen = GA4's earliest record (also a
--- GA4-retention check — GA4 may not reach back to 2024).
+-- ── Q1 — lifecycle summary, CASE-COLLAPSED + campaign-tagged ──────────────────
+-- GA4 stores the same banner under multiple casings (each a different it_item_id),
+-- so GROUP BY lower(name) collapses them. n_ids = distinct it_item_id under that name
+-- (>1 = recycled/reassigned). campaign_tag lets you keep CRV + PCL_CARD and drop the
+-- over-catch (loan / chequing). first_seen also = GA4 retention floor (turns out 2025-02).
 SELECT
-    it_item_name,
-    MIN(event_date)                  AS first_seen,
-    MAX(event_date)                  AS last_seen,
-    COUNT(DISTINCT year || month)    AS n_months_active,
+    CASE
+        WHEN lower(it_item_name) LIKE '%cc-instalments%'                          THEN 'CRV'
+        WHEN lower(it_item_name) LIKE '%ln_rcl%' OR lower(it_item_name) LIKE '%dgt_ln%'
+                                                                                 THEN 'zz_LOAN_overcatch'
+        WHEN lower(it_item_name) LIKE '%cheq%'                                    THEN 'zz_CHEQ_overcatch'
+        WHEN lower(it_item_name) LIKE '%pb_cc%vcl%' OR lower(it_item_name) LIKE '%pb_cc_pcl%'
+          OR lower(it_item_name) LIKE '%credit-limit-increase%'                   THEN 'PCL_CARD'
+        ELSE 'zz_OTHER'
+    END                                       AS campaign_tag,
+    lower(it_item_name)                       AS item_name,
+    COUNT(DISTINCT it_item_id)                AS n_ids,
+    MIN(event_date)                           AS first_seen,
+    MAX(event_date)                           AS last_seen,
+    COUNT(DISTINCT year || month)             AS n_months_active,
     SUM(CASE WHEN lower(event_name) = 'view_promotion'   THEN 1 ELSE 0 END) AS n_views,
     SUM(CASE WHEN lower(event_name) = 'select_promotion' THEN 1 ELSE 0 END) AS n_clicks,
-    COUNT(DISTINCT up_srf_id2_value) AS n_users
+    COUNT(DISTINCT up_srf_id2_value)          AS n_users
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year IN ('2024', '2025', '2026')
   AND lower(event_name) IN ('view_promotion', 'select_promotion')
@@ -60,18 +72,27 @@ WHERE year IN ('2024', '2025', '2026')
        OR lower(it_item_name) LIKE '%rcu%pli%'
        OR lower(it_item_name) LIKE '%instalment%' )
   AND lower(it_item_name) NOT LIKE '%pcd_ccpij%'
-GROUP BY it_item_name
-ORDER BY first_seen, it_item_name
+GROUP BY 1, 2
+ORDER BY campaign_tag, first_seen
 ;
 
--- ── Q2 — monthly detail (pivot in Excel: see the lifecycle, gaps, recycling) ──
+-- ── Q2 — monthly detail, case-collapsed + tagged (pivot in Excel; filter by tag) ──
 SELECT
-    it_item_name,
+    CASE
+        WHEN lower(it_item_name) LIKE '%cc-instalments%'                          THEN 'CRV'
+        WHEN lower(it_item_name) LIKE '%ln_rcl%' OR lower(it_item_name) LIKE '%dgt_ln%'
+                                                                                 THEN 'zz_LOAN_overcatch'
+        WHEN lower(it_item_name) LIKE '%cheq%'                                    THEN 'zz_CHEQ_overcatch'
+        WHEN lower(it_item_name) LIKE '%pb_cc%vcl%' OR lower(it_item_name) LIKE '%pb_cc_pcl%'
+          OR lower(it_item_name) LIKE '%credit-limit-increase%'                   THEN 'PCL_CARD'
+        ELSE 'zz_OTHER'
+    END                                       AS campaign_tag,
+    lower(it_item_name)                       AS item_name,
     year,
     month,
     SUM(CASE WHEN lower(event_name) = 'view_promotion'   THEN 1 ELSE 0 END) AS n_views,
     SUM(CASE WHEN lower(event_name) = 'select_promotion' THEN 1 ELSE 0 END) AS n_clicks,
-    COUNT(DISTINCT up_srf_id2_value) AS n_users
+    COUNT(DISTINCT up_srf_id2_value)          AS n_users
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year IN ('2024', '2025', '2026')
   AND lower(event_name) IN ('view_promotion', 'select_promotion')
@@ -81,6 +102,6 @@ WHERE year IN ('2024', '2025', '2026')
        OR lower(it_item_name) LIKE '%rcu%pli%'
        OR lower(it_item_name) LIKE '%instalment%' )
   AND lower(it_item_name) NOT LIKE '%pcd_ccpij%'
-GROUP BY it_item_name, year, month
-ORDER BY it_item_name, year, month
+GROUP BY 1, 2, 3, 4
+ORDER BY campaign_tag, item_name, year, month
 ;
