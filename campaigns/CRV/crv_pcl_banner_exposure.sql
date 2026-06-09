@@ -1,19 +1,20 @@
 -- =============================================================================
--- CRV x PCL banner EXPOSURE — (1) banner-selection STRESS TEST, (2) MONTHLY by arm.
+-- CRV x PCL banner EXPOSURE — (1) banner-selection STRESS TEST, (2) the BLOCK test.
 -- =============================================================================
--- Goal: does CRV's banner crowd PLI off the mobile surface? Impression-level twin of
--- Q18's click gap, from the GA4 SOURCE, randomised (CRV Action vs Control).
--- GA4 `_reduced` (Feb-2025+) = engagement; curated PLI/CRV = overlap roster + arm.
--- Join CLNT_NO (curated) = up_srf_id2_value (GA4). Starburst/Trino. Counts only.
+-- THE QUESTION (corrected): not "do CRV-shown clients see FEWER PLI impressions" (volume),
+-- but does CRV exposure BLOCK PLI — shut a client out of the PLI banner entirely (the
+-- decisioning serves one banner per slot, so CRV winning = PLI never shown)?
+-- Measure: classify each overlap client by what they actually saw — both / only-PLI /
+-- only-CRV (= shut out of PLI) / neither — and compare PLI-REACH (got PLI at all) by arm.
 --
--- RUN #1 FIRST — validate WHICH banners the filter calls CRV vs PLI before trusting #2.
--- EDIT before final: swap the banner LIKE blocks for the locked it_item_id IN-list once
--- #1 confirms the set; confirm platform scoping (mobile = IOS/ANDROID).
+-- GA4 `_reduced` (Feb-2025+) = what was seen; curated PLI/CRV = overlap roster + arm.
+-- Join CLNT_NO (curated) = up_srf_id2_value (GA4). Starburst/Trino. Counts only.
+-- RUN #1 FIRST to validate the banner selection.
 -- =============================================================================
 
 -- ── #1 STRESS TEST: which it_item_names get tagged CRV / PLI / DROP / OTHER? ──────────
--- Eyeball: are the CRV rows really installments, the PLI rows really CC limit-increase,
--- the loan/cheq correctly dropped, and is anything important sitting in OTHER (= missed)?
+-- Eyeball: CRV rows really installments? PLI rows really CC limit-increase? loan/cheq
+-- correctly dropped? anything important sitting in OTHER (= a CLI banner we're missing)?
 SELECT
     CASE
         WHEN lower(it_item_name) LIKE '%cc-instalments%'                                THEN 'CRV'
@@ -41,9 +42,16 @@ ORDER BY family, n_impressions DESC
 ;
 
 
--- ── #2 MONTHLY exposure: PLI/CRV impressions & clicks per CRV arm x GA4 event-month ──
--- The trend you wanted — how each month reacts. Read: PLI impressions/client, Action vs
--- Control, month by month (impr / n_clients_with_banner in Excel). Action < Control = crowd-out.
+-- ── #2 THE BLOCK TEST: does CRV exposure shut overlap clients OUT of PLI? ──────────────
+-- Per arm, every overlap client classified by what they SAW (impression = view_promotion):
+--   n_got_pli  : saw the PLI banner at all
+--   n_got_crv  : saw the CRV banner at all
+--   n_both     : saw BOTH (co-exposed)
+--   n_only_pli : PLI only
+--   n_only_crv : CRV only  <- the BLOCKED clients (got CRV, never got PLI)
+--   n_neither  : saw neither
+-- READ: PLI-reach = n_got_pli / n_clients, Action vs Control. Action < Control => CRV is
+--   blocking PLI. And n_only_crv / n_got_crv = of CRV-exposed clients, the share shut out of PLI.
 WITH
 crv_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
@@ -55,8 +63,7 @@ crv_control AS (
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
 ),
--- PLI mobile leads in the GA4 window. DO NOT cast clnt_no here (a CAST on a Teradata col
--- gets pushed down as ROUND -> Teradata err 9981); cast only the GA4 side below.
+-- DO NOT cast clnt_no here (Teradata-side CAST pushes down as ROUND, err 9981).
 pli AS (
     SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
     FROM dl_mr_prod.cards_pli_decision_resp
@@ -80,19 +87,14 @@ roster AS (
                 ELSE                      'no_overlap' END AS grp
     FROM pli_flagged
 ),
+-- per client: did they see the PLI banner / the CRV banner at all (window)?
 ga4 AS (
-    SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no, year, month,
-           SUM(CASE WHEN lower(event_name) = 'view_promotion'
-                     AND lower(it_item_name) NOT LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS pli_impr,
-           SUM(CASE WHEN lower(event_name) = 'select_promotion'
-                     AND lower(it_item_name) NOT LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS pli_clk,
-           SUM(CASE WHEN lower(event_name) = 'view_promotion'
-                     AND lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS crv_impr,
-           SUM(CASE WHEN lower(event_name) = 'select_promotion'
-                     AND lower(it_item_name) LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS crv_clk
+    SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+           MAX(CASE WHEN lower(it_item_name) NOT LIKE '%cc-instalments%' THEN 1 ELSE 0 END) AS got_pli,
+           MAX(CASE WHEN lower(it_item_name) LIKE '%cc-instalments%'     THEN 1 ELSE 0 END) AS got_crv
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year IN ('2025', '2026')
-      AND lower(event_name) IN ('view_promotion', 'select_promotion')
+      AND lower(event_name) = 'view_promotion'
       AND platform IN ('IOS', 'ANDROID')
       AND (
             lower(it_item_name) LIKE '%cc-instalments%'
@@ -106,19 +108,25 @@ ga4 AS (
             AND lower(it_item_name) NOT LIKE '%pcd_ccpij%'
          )
           )
-    GROUP BY 1, 2, 3
+    GROUP BY 1
+),
+flags AS (
+    SELECT r.grp,
+           COALESCE(g.got_pli, 0) AS got_pli,
+           COALESCE(g.got_crv, 0) AS got_crv
+    FROM roster r
+    LEFT JOIN ga4 g ON g.clnt_no = r.clnt_no
 )
 SELECT
-    r.grp,
-    g.year,
-    g.month,
-    COUNT(DISTINCT g.clnt_no)        AS n_clients_with_banner,
-    SUM(g.pli_impr)                  AS pli_impressions,
-    SUM(g.pli_clk)                   AS pli_clicks,
-    SUM(g.crv_impr)                  AS crv_impressions,
-    SUM(g.crv_clk)                   AS crv_clicks
-FROM roster r
-JOIN ga4 g ON g.clnt_no = r.clnt_no
-GROUP BY r.grp, g.year, g.month
-ORDER BY r.grp, g.year, g.month
+    grp,
+    COUNT(*)                                                        AS n_clients,
+    SUM(got_pli)                                                    AS n_got_pli,
+    SUM(got_crv)                                                    AS n_got_crv,
+    SUM(CASE WHEN got_pli = 1 AND got_crv = 1 THEN 1 ELSE 0 END)    AS n_both,
+    SUM(CASE WHEN got_pli = 1 AND got_crv = 0 THEN 1 ELSE 0 END)    AS n_only_pli,
+    SUM(CASE WHEN got_pli = 0 AND got_crv = 1 THEN 1 ELSE 0 END)    AS n_only_crv,   -- BLOCKED from PLI
+    SUM(CASE WHEN got_pli = 0 AND got_crv = 0 THEN 1 ELSE 0 END)    AS n_neither
+FROM flags
+GROUP BY grp
+ORDER BY grp
 ;
