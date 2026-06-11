@@ -1,4 +1,5 @@
 -- ============================================================================
+-- ENGINE: Starburst/Trino (GA4 = EDL table in the query) — Trino syntax.
 -- Q24 — PCL CONTACT FREQUENCY x CRV OVERLAP STATUS (Feb-Apr 2026, two statements)
 -- Statement 1: contact frequency = CUMULATIVE touch number over the FULL 20-month
 --   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
