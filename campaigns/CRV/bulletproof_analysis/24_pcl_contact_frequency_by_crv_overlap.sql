@@ -5,14 +5,13 @@
 --   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
 --   measured deployments — "how many times contacted by the time we measured them"
 --   (1..5+) — plus engagement overlay: viewed / clicked / view-days in-window.
--- Statement 2: engagement-level frequency — distribution of PCL banner view-days
---   per client (0..5+) within the measured windows, same overlap slices.
+-- Statement 2: CHANNEL-side contact frequency — clients by number of deployments where
+--   the banner actually reached them (0..3+, ~= months seen), clicks + converters per bucket.
 -- NOT CRV frequency: counts PCL contacts/engagement, sliced by CRV exposure:
 --   overlap_action / overlap_control / no_overlap (action > control precedence, Q20).
 -- GA4: it_promotion_id PCL list + view_item/select_promotion (Q20 conventions —
 --   impression-event question view_item vs view_promotion still open).
--- CAVEAT (open): CRV co-applicant targeting may create spurious overlap (CRV
---   contacts co-applicant, PCL the primary, same acct ids). Pending CRV tech spec.
+-- Co-applicant accounts EXCLUDED in both statements (Section E2 convention).
 -- ============================================================================
 
 -- Statement 1: contact frequency x engagement overlay
@@ -127,7 +126,11 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 
 
--- Statement 2: engagement-level frequency — clients by PCL banner view-days (0..5+)
+-- Statement 2: CHANNEL-SIDE contact frequency — mirror of Statement 1 with the banner as
+-- the frequency source: in how many of their Feb-Apr deployments did the banner actually
+-- reach the client (>=1 view inside that deployment's own window)? Clients bucketed by
+-- banner-reached deployments (0..3+ — one PCL deployment per month, so this ~= months seen),
+-- with click interaction and converters per bucket.
 -- Co-applicant accounts EXCLUDED (Section E2 convention).
 WITH coapp_accts AS (
     SELECT acct_no
@@ -170,7 +173,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.responder_cli,
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli,
         CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS action_flag,
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
@@ -179,45 +182,52 @@ pcl_flagged AS (
     LEFT JOIN overlap_control_keys oc
       ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt
 ),
-client_status AS (
-    SELECT
-        clnt_no,
-        CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
-             WHEN MAX(control_flag) = 1 THEN 'overlap_control'
-             ELSE                            'no_overlap' END AS overlap_status,
-        MAX(responder_cli) AS responded
-    FROM pcl_flagged
-    GROUP BY clnt_no
-),
 ga4 AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN event_name = 'view_item' THEN 1 ELSE 0 END AS view_e
+        CASE WHEN event_name = 'view_item'        THEN 1 ELSE 0 END AS view_e,
+        CASE WHEN event_name = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
       AND it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-      AND event_name = 'view_item'
+      AND event_name IN ('view_item','select_promotion')
 ),
-client_eng AS (
+dep_eng AS (   -- deployment grain: did the banner reach / get clicked inside THIS deployment's window
     SELECT
-        f.clnt_no,
-        COUNT(DISTINCT g.event_date) AS view_days
-    FROM (SELECT DISTINCT clnt_no, treatmt_strt_dt, treatmt_end_dt FROM pcl_universe) f
-    INNER JOIN ga4 g
+        f.clnt_no, f.acct_no, f.treatmt_strt_dt, f.responder_cli,
+        f.action_flag, f.control_flag,
+        COALESCE(MAX(g.view_e),  0) AS dep_viewed,
+        COALESCE(MAX(g.click_e), 0) AS dep_clicked
+    FROM pcl_flagged f
+    LEFT JOIN ga4 g
       ON g.clnt_no = f.clnt_no
      AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
-    GROUP BY 1
+    GROUP BY 1, 2, 3, 4, 5, 6
+),
+client_roll AS (
+    SELECT
+        clnt_no,
+        CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
+             WHEN MAX(control_flag) = 1 THEN 'overlap_control'
+             ELSE                            'no_overlap' END AS overlap_status,
+        COUNT(*)           AS deployments,
+        SUM(dep_viewed)    AS deployments_banner_seen,
+        SUM(dep_clicked)   AS deployments_banner_clicked,
+        MAX(responder_cli) AS responded
+    FROM dep_eng
+    GROUP BY clnt_no
 )
 SELECT
-    s.overlap_status,
-    CASE WHEN COALESCE(e.view_days, 0) >= 5 THEN '5+'
-         ELSE CAST(COALESCE(e.view_days, 0) AS VARCHAR) END AS pcl_view_day_freq,
-    COUNT(*)         AS clients,
-    SUM(s.responded) AS converters
-FROM client_status s
-LEFT JOIN client_eng e ON e.clnt_no = s.clnt_no
+    overlap_status,
+    CASE WHEN deployments_banner_seen >= 3 THEN '3+'
+         ELSE CAST(deployments_banner_seen AS VARCHAR) END AS banner_contact_freq,
+    COUNT(*)                                               AS clients,
+    SUM(deployments)                                       AS deployments_total,
+    SUM(CASE WHEN deployments_banner_clicked >= 1 THEN 1 ELSE 0 END) AS click_users,
+    SUM(responded)                                         AS converters
+FROM client_roll
 GROUP BY 1, 2
 ORDER BY 1, 2;
