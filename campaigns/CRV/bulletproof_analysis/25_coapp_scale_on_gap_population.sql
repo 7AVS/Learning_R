@@ -76,3 +76,18 @@ LEFT JOIN cidm c
     ON c.acct_no = l.acct_no AND c.rn = 1
 GROUP BY 1, 2, 3
 ORDER BY 1, 3, 2;
+
+
+-- Q25b: CIDM profile — do primary and co-applicant carry DIFFERENT client numbers,
+-- and what does PRIMARY_COAPP_IDENTICAL_IND actually encode? (whole-table profile,
+-- validates the premise + learns the indicator decode empirically)
+SELECT
+    PRIMARY_COAPP_IDENTICAL_IND,
+    CASE WHEN CLNT_NO_A IS NULL      THEN 'coapp_null'
+         WHEN CLNT_NO_A = CLNT_NO    THEN 'same_clnt_no'
+         ELSE                             'different_clnt_no' END AS clnt_no_compare,
+    COUNT(*)                 AS rows_,
+    COUNT(DISTINCT acct_no)  AS accts
+FROM DTZTAU.CIDM_CARDS_ACCT_ATTRS
+GROUP BY 1, 2
+ORDER BY 1, 2;
