@@ -1,9 +1,11 @@
 -- ============================================================================
 -- Q24 — PCL CONTACT FREQUENCY x CRV OVERLAP STATUS (Feb-Apr 2026, two statements)
--- Statement 1: deployment-level frequency + engagement overlay — per client: PCL
---   deployments received (1..5+), did they view / click the PCL banner, view-days.
+-- Statement 1: contact frequency = CUMULATIVE touch number over the FULL 20-month
+--   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
+--   measured deployments — "how many times contacted by the time we measured them"
+--   (1..5+) — plus engagement overlay: viewed / clicked / view-days in-window.
 -- Statement 2: engagement-level frequency — distribution of PCL banner view-days
---   per client (0..5+), same overlap slices.
+--   per client (0..5+) within the measured windows, same overlap slices.
 -- NOT CRV frequency: counts PCL contacts/engagement, sliced by CRV exposure:
 --   overlap_action / overlap_control / no_overlap (action > control precedence, Q20).
 -- GA4: it_promotion_id PCL list + view_item/select_promotion (Q20 conventions —
@@ -23,11 +25,17 @@ crv_control AS (
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
-pcl_universe AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
+pcl_history AS (   -- full 20-month history ranks every touch (Q11 convention, per acct)
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt,
+           ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY treatmt_strt_dt) AS pcl_touch_number
     FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
+    WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
+),
+pcl_universe AS (   -- measured leads = Feb-Apr 2026, carrying their cumulative touch number
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, pcl_touch_number
+    FROM pcl_history
+    WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
 ),
 overlap_action_keys AS (
     SELECT DISTINCT p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
@@ -45,7 +53,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.clnt_no, p.acct_no, p.treatmt_strt_dt,
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.pcl_touch_number,
         CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS action_flag,
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
@@ -60,7 +68,8 @@ client_freq AS (
         CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
              WHEN MAX(control_flag) = 1 THEN 'overlap_control'
              ELSE                            'no_overlap' END AS overlap_status,
-        COUNT(*) AS pcl_deployments
+        MAX(pcl_touch_number) AS pcl_contacts_20mo,   -- cumulative contacts by end of measured window
+        COUNT(*)              AS deployments_in_window
     FROM pcl_flagged
     GROUP BY clnt_no
 ),
@@ -91,10 +100,10 @@ client_eng AS (
 )
 SELECT
     cf.overlap_status,
-    CASE WHEN cf.pcl_deployments >= 5 THEN '5+'
-         ELSE CAST(cf.pcl_deployments AS VARCHAR) END AS pcl_contact_freq,
+    CASE WHEN cf.pcl_contacts_20mo >= 5 THEN '5+'
+         ELSE CAST(cf.pcl_contacts_20mo AS VARCHAR) END AS pcl_contact_freq_20mo,
     COUNT(*)                          AS clients,
-    SUM(cf.pcl_deployments)           AS pcl_deployments_total,
+    SUM(cf.deployments_in_window)     AS deployments_in_window_total,
     SUM(COALESCE(e.viewed, 0))        AS view_users,
     SUM(COALESCE(e.clicked, 0))       AS click_users,
     SUM(COALESCE(e.view_days, 0))     AS view_days_total
