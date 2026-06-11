@@ -34,7 +34,7 @@ crv_control AS (
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
 pcl_history AS (   -- full 20-month history ranks every touch (Q11 convention, per acct)
-    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt,
+    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli,
            ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.treatmt_strt_dt) AS pcl_touch_number
     FROM dl_mr_prod.cards_pli_decision_resp p
     LEFT JOIN coapp_accts x
@@ -44,7 +44,7 @@ pcl_history AS (   -- full 20-month history ranks every touch (Q11 convention, p
       AND x.acct_no IS NULL
 ),
 pcl_universe AS (   -- measured leads = Feb-Apr 2026, carrying their cumulative touch number
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, pcl_touch_number
+    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli, pcl_touch_number
     FROM pcl_history
     WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
 ),
@@ -64,7 +64,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.pcl_touch_number,
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.responder_cli, p.pcl_touch_number,
         CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS action_flag,
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
@@ -80,7 +80,8 @@ client_freq AS (
              WHEN MAX(control_flag) = 1 THEN 'overlap_control'
              ELSE                            'no_overlap' END AS overlap_status,
         MAX(pcl_touch_number) AS pcl_contacts_20mo,   -- cumulative contacts by end of measured window
-        COUNT(*)              AS deployments_in_window
+        COUNT(*)              AS deployments_in_window,
+        MAX(responder_cli)    AS responded
     FROM pcl_flagged
     GROUP BY clnt_no
 ),
@@ -115,9 +116,11 @@ SELECT
          ELSE CAST(cf.pcl_contacts_20mo AS VARCHAR) END AS pcl_contact_freq_20mo,
     COUNT(*)                          AS clients,
     SUM(cf.deployments_in_window)     AS deployments_in_window_total,
+    SUM(cf.responded)                 AS converters,
     SUM(COALESCE(e.viewed, 0))        AS view_users,
     SUM(COALESCE(e.clicked, 0))       AS click_users,
-    SUM(COALESCE(e.view_days, 0))     AS view_days_total
+    SUM(COALESCE(e.view_days, 0))     AS view_days_total,
+    SUM(CASE WHEN COALESCE(e.viewed, 0) = 1 THEN cf.responded ELSE 0 END) AS converters_viewed
 FROM client_freq cf
 LEFT JOIN client_eng e ON e.clnt_no = cf.clnt_no
 GROUP BY 1, 2
@@ -143,7 +146,7 @@ crv_control AS (
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
 pcl_universe AS (
-    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli
     FROM dl_mr_prod.cards_pli_decision_resp p
     LEFT JOIN coapp_accts x
       ON x.acct_no = p.acct_no
@@ -167,7 +170,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.clnt_no, p.acct_no, p.treatmt_strt_dt,
+        p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.responder_cli,
         CASE WHEN oa.acct_no IS NOT NULL THEN 1 ELSE 0 END AS action_flag,
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
@@ -181,7 +184,8 @@ client_status AS (
         clnt_no,
         CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
              WHEN MAX(control_flag) = 1 THEN 'overlap_control'
-             ELSE                            'no_overlap' END AS overlap_status
+             ELSE                            'no_overlap' END AS overlap_status,
+        MAX(responder_cli) AS responded
     FROM pcl_flagged
     GROUP BY clnt_no
 ),
@@ -211,7 +215,8 @@ SELECT
     s.overlap_status,
     CASE WHEN COALESCE(e.view_days, 0) >= 5 THEN '5+'
          ELSE CAST(COALESCE(e.view_days, 0) AS VARCHAR) END AS pcl_view_day_freq,
-    COUNT(*) AS clients
+    COUNT(*)         AS clients,
+    SUM(s.responded) AS converters
 FROM client_status s
 LEFT JOIN client_eng e ON e.clnt_no = s.clnt_no
 GROUP BY 1, 2
