@@ -1,6 +1,10 @@
 -- AUH Phase 2 OLB banner engagement (Starburst/Trino)
--- Cohort: tactic 2026119AUH (deployed 2026-04-30). Success block = auh_interim_measurement.sql params
--- (RELATIONSHIP_CD='2' confirmed vs Phase 1 live screenshots; 'Z' in auh_tracking.sql is stale).
+-- Cohort: tactic 2026119AUH (deployed 2026-04-30).
+-- Success carried TWO ways so the gap is measurable:
+--   converters_event    = AU-add EVENT in treatment window (AUH_vintage.sql definition:
+--                         CR_CRD_ACCT_EVNT_DLY 191/3 — true adds only). PRIMARY.
+--   converters_snapshot = ownership snapshot, CAPTR_DT > start (auh_interim_measurement.sql
+--                         definition — vintage author found it counts long-time holders; expect it higher).
 -- GA4 it_item_id list assumes 'i_' || Salesforce offer id — CONFIRM via auh_ga4_banner_discovery.sql
 -- before trusting output; swap IN-list if discovery lands on it_promotion_id / it_item_name instead.
 -- Both view_promotion and view_item carried until discovery settles which event is the impression.
@@ -45,15 +49,27 @@ ga4 AS (
       AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                          'i_308333','i_308334','i_308335','i_308336')
 ),
+au_first AS (   -- first true AU-add per account (AUH_vintage.sql semantics, any product)
+    SELECT acct_no, MIN(evnt_dt) AS first_add_dt
+    FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY
+    WHERE dtl_evnt_typ_cd = 191
+      AND ADD_RELTN_CD = 3
+      AND evnt_dt >= DATE '2026-04-30'
+    GROUP BY acct_no
+),
 dep AS (
     SELECT
         c.clnt_no, c.acct_no, c.treatmt_strt_dt, c.treatmt_end_dt,
         c.arm_label, c.model_label, c.ac_temp,
-        MAX(CASE WHEN s.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS au_add,
+        MAX(CASE WHEN e.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS au_add_event,
+        MAX(CASE WHEN s.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS au_add_snapshot,
         COALESCE(MAX(g.view_promo_e), 0)                       AS view_promo,
         COALESCE(MAX(g.view_item_e),  0)                       AS view_item,
         COALESCE(MAX(g.click_e),      0)                       AS click
     FROM cohort c
+    LEFT JOIN au_first e
+        ON  e.acct_no = c.acct_no
+        AND e.first_add_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
     LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA s
         ON  s.acct_no         = c.acct_no
         AND s.CHG_DT          = DATE '9999-12-31'
@@ -69,10 +85,11 @@ dep AS (
 client_roll AS (
     SELECT
         clnt_no, arm_label, model_label, ac_temp,
-        MAX(au_add)     AS au_add,
-        MAX(view_promo) AS view_promo,
-        MAX(view_item)  AS view_item,
-        MAX(click)      AS click
+        MAX(au_add_event)    AS au_add_event,
+        MAX(au_add_snapshot) AS au_add_snapshot,
+        MAX(view_promo)      AS view_promo,
+        MAX(view_item)       AS view_item,
+        MAX(click)           AS click
     FROM dep
     GROUP BY 1, 2, 3, 4
 )
@@ -85,8 +102,9 @@ SELECT
     SUM(view_item)                                      AS view_item_users,
     SUM(click)                                          AS click_users,
     SUM(CASE WHEN view_promo = 1 OR view_item = 1
-             THEN au_add ELSE 0 END)                    AS converters_viewed,
-    SUM(au_add)                                         AS converters
+             THEN au_add_event ELSE 0 END)              AS converters_event_viewed,
+    SUM(au_add_event)                                   AS converters_event,
+    SUM(au_add_snapshot)                                AS converters_snapshot
 FROM client_roll
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
