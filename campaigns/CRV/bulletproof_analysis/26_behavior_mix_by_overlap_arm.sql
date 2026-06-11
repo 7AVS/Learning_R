@@ -13,7 +13,8 @@
 -- (if higher, CR_CRD_RPTS_ACCT has >1 row per acct x ME_DT and needs a dedup first).
 -- ============================================================================
 WITH pcl_universe AS (
-    SELECT acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
+    SELECT acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli,
+           treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS pcl_month   -- Q04 month logic
     FROM dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01'
       AND channel LIKE '%MB%'
@@ -49,7 +50,7 @@ overlap_control_keys AS (
 ),
 pcl_flagged AS (
     SELECT
-        p.acct_no, p.treatmt_strt_dt, p.responder_cli,
+        p.acct_no, p.treatmt_strt_dt, p.pcl_month, p.responder_cli,
         CASE WHEN oa.acct_no IS NOT NULL THEN 'overlap_action'
              WHEN oc.acct_no IS NOT NULL THEN 'overlap_control'
              ELSE 'no_overlap' END AS arm
@@ -66,6 +67,7 @@ bhvr AS (
 )
 SELECT
     f.arm,
+    f.pcl_month,
     b.usg_bhvr_seg_at_cyc_cd,
     COUNT(*)                      AS leads,
     COUNT(DISTINCT f.acct_no)     AS accts,
@@ -74,5 +76,5 @@ FROM pcl_flagged f
 LEFT JOIN bhvr b
     ON  b.acct_no = f.acct_no
     AND b.ME_DT   = f.treatmt_strt_dt - EXTRACT(DAY FROM f.treatmt_strt_dt)   -- month-end BEFORE treatment
-GROUP BY 1, 2
-ORDER BY 1, 2;
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
