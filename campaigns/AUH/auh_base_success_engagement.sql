@@ -103,8 +103,9 @@ SELECT
     phase, strategy_arm, model_arm, test_group, prod_cd,
     COUNT(*)                                                       AS population,
     SUM(viewed)                                                    AS view_users,
-    SUM(clicked)                                                   AS click_users,
-    SUM(clicked_neg)                                               AS click_n_users,
+    SUM(clicked)                                                   AS click_any_users,   -- ANY select_promotion (contains neg)
+    SUM(clicked_neg)                                               AS click_neg_users,   -- negative-label subset of click_any
+    -- click_pos_users comes after Q4 locks AUH's positive labels
     SUM(converted)                                                 AS converters,
     SUM(add_events)                                                AS au_add_events,
     SUM(CASE WHEN converted = 1 AND viewed = 1 THEN 1 ELSE 0 END)  AS conv_viewed,
