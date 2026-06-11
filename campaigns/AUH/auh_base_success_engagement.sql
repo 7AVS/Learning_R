@@ -3,6 +3,8 @@
 --   success    = AU-add EVENT (CR_CRD_ACCT_EVNT_DLY 191/3), first add inside treatment window
 --   engagement = GA4 OLB banner (Phase 2 only; Phase 1 was email-only so cols read 0)
 --   usage      = DLY_FULL_PORTFOLIO monthly spend/balance post-add (converters only)
+-- PRIMARY SUCCESS = first AU add, ANY product, inside the campaign window. converters_target /
+-- acquired_prod columns are descriptive only — off-product behavior unverified, never redefine success.
 -- it_item_id list assumes 'i_' || Salesforce offer id — confirm via auh_ga4_banner_discovery.sql.
 -- click_p for AUH is PENDING: positive labels are campaign-specific. Run Q4 diagnostic to find
 -- AUH's it_creative_name values, then lock the IN-list. click_n labels are generic and reused.
@@ -187,12 +189,36 @@ WITH base AS (
         TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
         CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
         treatmt_strt_dt, treatmt_end_dt,
-        CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group
+        CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
+        CASE
+            WHEN tactic_id='2026042AUH' THEN
+                CASE WHEN TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
+                     THEN 'NonReward' ELSE 'Unknown' END
+            WHEN tactic_id='2026119AUH' THEN
+                CASE WHEN SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') THEN 'NonReward'
+                     WHEN SUBSTR(tst_grp_cd,1,3) IN ('RNR','RNM','RNW') THEN 'Rewards_No_Offer'
+                     WHEN SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') THEN 'Rewards_Offer'
+                     ELSE 'Unknown' END
+            ELSE 'Unknown'
+        END AS strategy_arm,
+        CASE
+            WHEN tactic_id='2026042AUH' THEN
+                CASE WHEN TRIM(tst_grp_cd) IN ('NRGA','NRGA_C') THEN 'Web'
+                     WHEN TRIM(tst_grp_cd) IN ('NRR','NRR_C') THEN 'Random'
+                     WHEN TRIM(tst_grp_cd) IN ('NRS','NRS_C') THEN 'Model'
+                     ELSE 'Unknown' END
+            WHEN tactic_id='2026119AUH' THEN
+                CASE WHEN SUBSTR(tst_grp_cd,3,1)='R' THEN 'Random'
+                     WHEN SUBSTR(tst_grp_cd,3,1)='M' THEN 'Model'
+                     WHEN SUBSTR(tst_grp_cd,3,1)='W' THEN 'Web'
+                     ELSE 'Unknown' END
+            ELSE 'Unknown'
+        END AS model_arm
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH','2026119AUH')
 ),
 converters AS (
-    SELECT b.acct_no, b.phase, b.test_group, MIN(a.evnt_dt) AS first_add_dt
+    SELECT b.acct_no, b.phase, b.strategy_arm, b.model_arm, b.test_group, MIN(a.evnt_dt) AS first_add_dt
     FROM base b
     INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY a
         ON  a.acct_no = b.acct_no
@@ -200,11 +226,11 @@ converters AS (
     WHERE a.dtl_evnt_typ_cd = 191
       AND a.ADD_RELTN_CD = 3
       AND a.evnt_dt >= DATE '2026-01-01'
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4, 5
 ),
 dfp AS (
     SELECT
-        v.acct_no, v.phase, v.test_group, v.first_add_dt,
+        v.acct_no, v.phase, v.strategy_arm, v.model_arm, v.test_group, v.first_add_dt,
         p.me_dt, p.dt_record_ext, p.net_prch_amt_dly, p.bal_current, p.status
     FROM converters v
     INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
@@ -218,13 +244,15 @@ ranked AS (
     FROM dfp
 )
 SELECT
-    phase, test_group, acct_no, first_add_dt, me_dt,
+    phase, strategy_arm, model_arm, test_group, acct_no, first_add_dt, me_dt,
     SUM(net_prch_amt_dly)                       AS monthly_spend,
     MAX(CASE WHEN rn = 1 THEN bal_current END)  AS month_end_balance,
     MAX(CASE WHEN rn = 1 THEN status END)       AS month_end_status
 FROM ranked
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 5;
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+ORDER BY 1, 2, 3, 4, 5, 7;
+-- CAUTION: tracks the TARGETED acct_no. If the AU card opens a NEW account (Q5 will tell),
+-- this misses the new card's spend — do not read as AU-card usage until Q5 confirms.
 
 
 -- Q4: click-classification diagnostic — surface AUH's actual it_creative_name values
@@ -242,3 +270,45 @@ WHERE year = '2026'
   AND lower(event_name) IN ('view_promotion','select_promotion')
 GROUP BY 1, 2
 ORDER BY 2, 3 DESC;
+
+
+-- Q5: success-table exploration — does the AU add create a NEW account number?
+-- 5a: raw event rows landing on the TARGETED account (all columns — carry everything, derive empirically)
+WITH base AS (
+    SELECT
+        clnt_no,
+        TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
+        CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
+        treatmt_strt_dt, treatmt_end_dt
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE tactic_id IN ('2026042AUH','2026119AUH')
+)
+SELECT b.phase, b.acct_no AS targeted_acct_no, a.*
+FROM base b
+INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY a
+    ON  a.acct_no = b.acct_no
+    AND a.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+WHERE a.dtl_evnt_typ_cd = 191
+  AND a.ADD_RELTN_CD = 3
+LIMIT 200;
+
+-- 5b: AU-add events for OUR CLIENTS landing on a DIFFERENT account than targeted
+-- (if this returns volume, AU cards get their own acct_no and Q3 must follow the new account)
+WITH base AS (
+    SELECT
+        clnt_no,
+        TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
+        CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
+        treatmt_strt_dt, treatmt_end_dt
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE tactic_id IN ('2026042AUH','2026119AUH')
+)
+SELECT b.phase, b.acct_no AS targeted_acct_no, a.*
+FROM base b
+INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY a
+    ON  a.clnt_no = b.clnt_no
+    AND a.acct_no <> b.acct_no
+    AND a.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+WHERE a.dtl_evnt_typ_cd = 191
+  AND a.ADD_RELTN_CD = 3
+LIMIT 200;
