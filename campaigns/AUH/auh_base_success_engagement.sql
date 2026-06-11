@@ -5,10 +5,67 @@
 --   usage      = DLY_FULL_PORTFOLIO monthly spend/balance post-add (converters only)
 -- PRIMARY SUCCESS = first AU add, ANY product, inside the campaign window. converters_target /
 -- acquired_prod columns are descriptive only — off-product behavior unverified, never redefine success.
--- it_item_id list assumes 'i_' || Salesforce offer id — confirm via auh_ga4_banner_discovery.sql.
+-- it_item_id list assumes 'i_' || Salesforce offer id — confirm via Q0 below before trusting Q1/Q2/Q6.
 -- click_p for AUH is PENDING: positive labels are campaign-specific. Run Q4 diagnostic to find
 -- AUH's it_creative_name values, then lock the IN-list. click_n labels are generic and reused.
 -- Phase 2 arm IN-list spellings inferred from pattern (prefix NR/RN/RO + 3rd char R/M/W).
+-- Run order: Q0 + Q4 + Q5 diagnostics first, then Q1; Q2/Q3 once volumes known; Q6/Q7 validations.
+
+
+-- Q0: GA4 banner-ID discovery (one-time) — which field carries the 8 Salesforce offer IDs?
+-- Source: Auth user offer salesforce info.xlsx (2026-06-11). All creatives OLB_Account_SummaryOMNI.
+-- Q0a: it_item_id = 'i_' || offer_id (CTU i_300102 / O2P i_298045 convention)
+SELECT it_item_id, it_item_name, event_name,
+       COUNT(*) AS events, COUNT(DISTINCT up_srf_id2_value) AS users,
+       MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+WHERE year = '2026'
+  AND event_date >= DATE '2026-04-30'
+  AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
+                     'i_308333','i_308334','i_308335','i_308336')
+GROUP BY 1, 2, 3
+ORDER BY 1, 3;
+
+-- Q0b: bare offer_id in it_promotion_id (CRV/PCL convention)
+SELECT it_promotion_id, it_item_id, it_item_name, event_name,
+       COUNT(*) AS events, COUNT(DISTINCT up_srf_id2_value) AS users,
+       MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+WHERE year = '2026'
+  AND event_date >= DATE '2026-04-30'
+  AND it_promotion_id IN ('300108','308317','308314','308315',
+                          '308333','308334','308335','308336')
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 4;
+
+-- Q0c: exact Salesforce item names (lowercased exact match, no substrings)
+SELECT it_item_id, it_item_name, event_name,
+       COUNT(*) AS events, COUNT(DISTINCT up_srf_id2_value) AS users,
+       MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+WHERE year = '2026'
+  AND event_date >= DATE '2026-04-30'
+  AND lower(it_item_name) IN (
+      'pb-dm_cc_all_26_04_rbccmptgt_auh_nonrewards_olb',
+      'pb-dm_cc_all_26_04_rbccmptgt_auh_rewardsnonoffer_olb',
+      'pb-dm_cc_iav_26_04_rbccmptgto_auh_offeriav_olb',
+      'pb-dm_cc_gcp_26_04_rbccmptgto_auh_offergcp_olb',
+      'pb-dm_cc_mc4_26_04_rbccmptgto_auh_offermc4_olb',
+      'pb-dm_cc_mc2_26_04_rbccmptgto_auh_offermc2_olb',
+      'pb-dm_cc_avp_26_04_rbccmptgto_auh_offeravp_olb',
+      'pb-dm_cc_gpr_26_04_rbccmptgto_auh_offergpr_olb')
+GROUP BY 1, 2, 3
+ORDER BY 2, 3;
+
+-- Q0d: wide net fallback — anything tagged AUH in the Salesforce mnemonic
+SELECT ip_sf_campaign_mnemonic, it_item_id, it_promotion_id, it_item_name, event_name,
+       COUNT(*) AS events, COUNT(DISTINCT up_srf_id2_value) AS users
+FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+WHERE year = '2026'
+  AND event_date >= DATE '2026-04-30'
+  AND ip_sf_campaign_mnemonic = 'AUH'
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 6 DESC;
 
 
 -- Q1: aggregated crosstab — phase x arm x model x test_group x offered product
