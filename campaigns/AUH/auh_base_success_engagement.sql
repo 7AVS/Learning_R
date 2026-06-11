@@ -20,6 +20,7 @@ SELECT it_item_id, it_item_name, event_name,
        MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
+  AND month >= '04'
   AND event_date >= DATE '2026-04-30'
   AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                      'i_308333','i_308334','i_308335','i_308336')
@@ -32,6 +33,7 @@ SELECT it_promotion_id, it_item_id, it_item_name, event_name,
        MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
+  AND month >= '04'
   AND event_date >= DATE '2026-04-30'
   AND it_promotion_id IN ('300108','308317','308314','308315',
                           '308333','308334','308335','308336')
@@ -44,6 +46,7 @@ SELECT it_item_id, it_item_name, event_name,
        MIN(event_date) AS first_dt, MAX(event_date) AS last_dt
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
+  AND month >= '04'
   AND event_date >= DATE '2026-04-30'
   AND lower(it_item_name) IN (
       'pb-dm_cc_all_26_04_rbccmptgt_auh_nonrewards_olb',
@@ -62,6 +65,7 @@ SELECT ip_sf_campaign_mnemonic, it_item_id, it_promotion_id, it_item_name, event
        COUNT(*) AS events, COUNT(DISTINCT up_srf_id2_value) AS users
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
+  AND month >= '04'
   AND event_date >= DATE '2026-04-30'
   AND ip_sf_campaign_mnemonic = 'AUH'
 GROUP BY 1, 2, 3, 4, 5
@@ -105,27 +109,19 @@ WITH base AS (
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH','2026119AUH')
 ),
-au_event AS (
-    SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
-    FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY a
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO c
-        ON  a.clnt_no = c.clnt_no
-        AND a.evnt_dt = c.dt_record_ext
-        AND a.acct_no = c.acct_no
-    WHERE a.dtl_evnt_typ_cd = 191
-      AND a.ADD_RELTN_CD = '3'
-      AND a.evnt_dt >= DATE '2026-01-01'
-),
+-- success straight off the event table — NO DLY_FULL_PORTFOLIO join here (that scan is what
+-- makes federated runs crawl). Product detail lives in Q2, joined only for converters.
 success AS (
     SELECT b.acct_no, b.treatmt_strt_dt,
-           MIN(e.evnt_dt)                                                          AS first_add_dt,
-           COUNT(*)                                                                AS add_events,
-           COUNT(DISTINCT e.prod_cd)                                               AS add_products,
-           MIN(CASE WHEN TRIM(e.prod_cd) = TRIM(b.prod_cd) THEN e.evnt_dt END)     AS first_target_add_dt
+           MIN(e.evnt_dt) AS first_add_dt,
+           COUNT(*)       AS add_events
     FROM base b
-    INNER JOIN au_event e
+    INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY e
         ON  e.acct_no = b.acct_no
         AND e.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+    WHERE e.dtl_evnt_typ_cd = 191
+      AND e.ADD_RELTN_CD = '3'
+      AND e.evnt_dt >= DATE '2026-01-01'
     GROUP BY 1, 2
 ),
 ga4 AS (
@@ -141,6 +137,7 @@ ga4 AS (
         -- click_p_e: pending AUH-specific positive labels (Q4 diagnostic)
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
+      AND month >= '04'
       AND event_date >= DATE '2026-04-30'
       AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                          'i_308333','i_308334','i_308335','i_308336')
@@ -149,7 +146,6 @@ dep AS (
     SELECT
         b.clnt_no, b.acct_no, b.phase, b.strategy_arm, b.model_arm, b.test_group, b.prod_cd,
         MAX(CASE WHEN s.acct_no IS NOT NULL THEN 1 ELSE 0 END)            AS converted,
-        MAX(CASE WHEN s.first_target_add_dt IS NOT NULL THEN 1 ELSE 0 END) AS converted_target,
         MAX(COALESCE(s.add_events, 0))                                    AS add_events,
         COALESCE(MAX(g.view_e),   0)                                      AS viewed,
         COALESCE(MAX(g.click_e),  0)                                      AS clicked,
@@ -169,7 +165,6 @@ SELECT
     SUM(clicked)                                                   AS click_users,
     SUM(clicked_neg)                                               AS click_n_users,
     SUM(converted)                                                 AS converters,
-    SUM(converted_target)                                          AS converters_target,
     SUM(add_events)                                                AS au_add_events,
     SUM(CASE WHEN converted = 1 AND viewed = 1 THEN 1 ELSE 0 END)  AS conv_viewed,
     SUM(CASE WHEN converted = 1 AND viewed = 0 THEN 1 ELSE 0 END)  AS conv_not_viewed,
@@ -193,16 +188,17 @@ WITH base AS (
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH','2026119AUH')
 ),
-au_event AS (
-    SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
-    FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY a
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO c
-        ON  a.clnt_no = c.clnt_no
-        AND a.evnt_dt = c.dt_record_ext
-        AND a.acct_no = c.acct_no
-    WHERE a.dtl_evnt_typ_cd = 191
-      AND a.ADD_RELTN_CD = '3'
-      AND a.evnt_dt >= DATE '2026-01-01'
+-- converters FIRST (small), DLY_FULL_PORTFOLIO joined only for those (acct, day) pairs.
+adds AS (
+    SELECT b.phase, b.tst_grp_cd, b.test_group, b.prod_cd, b.clnt_no, b.acct_no,
+           b.treatmt_strt_dt, b.treatmt_end_dt, e.evnt_dt
+    FROM base b
+    INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY e
+        ON  e.acct_no = b.acct_no
+        AND e.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+    WHERE e.dtl_evnt_typ_cd = 191
+      AND e.ADD_RELTN_CD = '3'
+      AND e.evnt_dt >= DATE '2026-01-01'
 ),
 ga4 AS (
     SELECT
@@ -212,27 +208,30 @@ ga4 AS (
         CASE WHEN lower(event_name) = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
+      AND month >= '04'
       AND event_date >= DATE '2026-04-30'
       AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                          'i_308333','i_308334','i_308335','i_308336')
 )
+-- add_products / acquired_target: DFP may carry multiple product rows per acct-day, so product
+-- attribution of the add is approximate — descriptive only, never feeds primary success.
 SELECT
-    b.phase, b.tst_grp_cd, b.test_group, b.prod_cd                AS offered_prod,
-    b.clnt_no, b.acct_no, b.treatmt_strt_dt,
-    MIN(e.evnt_dt)                                                AS first_add_dt,
-    COUNT(*)                                                      AS add_events,
-    COUNT(DISTINCT e.prod_cd)                                     AS add_products,
-    MIN(e.prod_cd)                                                AS acquired_prod_first,
-    MAX(CASE WHEN TRIM(e.prod_cd) = TRIM(b.prod_cd) THEN 1 ELSE 0 END) AS acquired_target,
+    a.phase, a.tst_grp_cd, a.test_group, a.prod_cd                AS offered_prod,
+    a.clnt_no, a.acct_no, a.treatmt_strt_dt,
+    MIN(a.evnt_dt)                                                AS first_add_dt,
+    COUNT(DISTINCT a.evnt_dt)                                     AS add_event_days,
+    COUNT(DISTINCT p.visa_prod_cd)                                AS add_products,
+    MAX(CASE WHEN TRIM(p.visa_prod_cd) = TRIM(a.prod_cd) THEN 1 ELSE 0 END) AS acquired_target,
     COALESCE(MAX(g.view_e),  0)                                   AS viewed,
     COALESCE(MAX(g.click_e), 0)                                   AS clicked
-FROM base b
-INNER JOIN au_event e
-    ON  e.acct_no = b.acct_no
-    AND e.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+FROM adds a
+LEFT JOIN D3CV12A.DLY_FULL_PORTFOLIO p
+    ON  p.acct_no = a.acct_no
+    AND p.dt_record_ext = a.evnt_dt
+    AND p.dt_record_ext >= DATE '2026-01-01'
 LEFT JOIN ga4 g
-    ON g.clnt_no = b.clnt_no
-   AND g.event_date BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+    ON g.clnt_no = a.clnt_no
+   AND g.event_date BETWEEN a.treatmt_strt_dt AND a.treatmt_end_dt
 GROUP BY 1, 2, 3, 4, 5, 6, 7
 ORDER BY 1, 2, 7;
 
@@ -292,6 +291,7 @@ dfp AS (
     FROM converters v
     INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO p
         ON  p.acct_no = v.acct_no
+        AND p.dt_record_ext >= DATE '2026-01-01'   -- static floor: pushes down to Teradata
         AND p.dt_record_ext >= v.first_add_dt - INTERVAL '30' DAY   -- one pre-add month for contrast
         AND p.dt_record_ext <  v.first_add_dt + INTERVAL '180' DAY
 ),
@@ -321,6 +321,7 @@ SELECT
     COUNT(DISTINCT up_srf_id2_value)  AS users
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
+  AND month >= '04'
   AND event_date >= DATE '2026-04-30'
   AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                      'i_308333','i_308334','i_308335','i_308336')
@@ -389,6 +390,7 @@ ga4 AS (
     SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no, event_date, it_item_id, event_name
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
+      AND month >= '04'
       AND event_date >= DATE '2026-04-30'
       AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
                          'i_308333','i_308334','i_308335','i_308336')
@@ -434,6 +436,7 @@ flagged AS (
         AND s.CHG_DT          = DATE '9999-12-31'
         AND s.RELATIONSHIP_CD = '2'
         AND s.card_sts IN ('A', '')
+        AND s.CAPTR_DT        > DATE '2026-02-01'   -- static floor: pushes down (earliest wave 2026-02-12)
         AND s.CAPTR_DT        > b.treatmt_strt_dt
     GROUP BY 1, 2, 3, 4
 )
