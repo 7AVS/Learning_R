@@ -49,7 +49,7 @@ pcl_flagged AS (
     FROM pcl_universe p
 ),
 overlap_leads AS (
-    SELECT *,
+    SELECT acct_no, clnt_no, treatmt_strt_dt, responder_cli,
            CASE WHEN overlap_action_flag = 1 THEN 'overlap_action'
                 ELSE 'overlap_control' END AS arm
     FROM pcl_flagged
