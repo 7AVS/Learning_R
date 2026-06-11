@@ -10,7 +10,7 @@
 -- Raw segment values carried through (incl. null). responders per cell so the
 -- gap can be recomputed within each behavior segment (stratified read).
 -- SANITY before reading: leads summed across segments must equal Q04 arm totals
--- (if higher, CR_CRD_RPTS_ACCT has >1 row per acct x ME_DT — tell Claude).
+-- (if higher, CR_CRD_RPTS_ACCT has >1 row per acct x ME_DT and needs a dedup first).
 -- ============================================================================
 WITH pcl_universe AS (
     SELECT acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
@@ -31,23 +31,33 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
+overlap_action_keys AS (   -- Teradata: no EXISTS inside CASE — semi-join keys + LEFT JOIN instead
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt
+    FROM pcl_universe p
+    INNER JOIN crv_action ca
+      ON ca.acct_no = p.acct_no
+     AND ca.offer_start_date <= p.treatmt_end_dt
+     AND ca.offer_end_date   >= p.treatmt_strt_dt
+),
+overlap_control_keys AS (
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt
+    FROM pcl_universe p
+    INNER JOIN crv_control cc
+      ON cc.acct_no = p.acct_no
+     AND cc.offer_start_date <= p.treatmt_end_dt
+     AND cc.offer_end_date   >= p.treatmt_strt_dt
+),
 pcl_flagged AS (
     SELECT
         p.acct_no, p.treatmt_strt_dt, p.responder_cli,
-        CASE WHEN EXISTS (
-            SELECT 1 FROM crv_action ca
-            WHERE ca.acct_no = p.acct_no
-              AND ca.offer_start_date <= p.treatmt_end_dt
-              AND ca.offer_end_date   >= p.treatmt_strt_dt
-        ) THEN 'overlap_action'
-        WHEN EXISTS (
-            SELECT 1 FROM crv_control cc
-            WHERE cc.acct_no = p.acct_no
-              AND cc.offer_start_date <= p.treatmt_end_dt
-              AND cc.offer_end_date   >= p.treatmt_strt_dt
-        ) THEN 'overlap_control'
-        ELSE 'no_overlap' END AS arm
+        CASE WHEN oa.acct_no IS NOT NULL THEN 'overlap_action'
+             WHEN oc.acct_no IS NOT NULL THEN 'overlap_control'
+             ELSE 'no_overlap' END AS arm
     FROM pcl_universe p
+    LEFT JOIN overlap_action_keys oa
+      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+    LEFT JOIN overlap_control_keys oc
+      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt
 ),
 bhvr AS (
     SELECT acct_no, ME_DT, usg_bhvr_seg_at_cyc_cd
