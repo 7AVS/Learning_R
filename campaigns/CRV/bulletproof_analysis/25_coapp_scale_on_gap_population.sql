@@ -32,29 +32,32 @@ crv_control AS (
     WHERE offer_start_date >= DATE '2024-10-01'
       AND action_control = 'Control'
 ),
-pcl_flagged AS (
-    SELECT
-        p.acct_no, p.clnt_no, p.treatmt_strt_dt, p.responder_cli,
-        CASE WHEN EXISTS (
-            SELECT 1 FROM crv_action ca
-            WHERE ca.acct_no = p.acct_no
-              AND ca.offer_start_date <= p.treatmt_end_dt
-              AND ca.offer_end_date   >= p.treatmt_strt_dt
-        ) THEN 1 ELSE 0 END AS overlap_action_flag,
-        CASE WHEN EXISTS (
-            SELECT 1 FROM crv_control cc
-            WHERE cc.acct_no = p.acct_no
-              AND cc.offer_start_date <= p.treatmt_end_dt
-              AND cc.offer_end_date   >= p.treatmt_strt_dt
-        ) THEN 1 ELSE 0 END AS overlap_control_flag
+overlap_action_keys AS (   -- Teradata: no EXISTS inside CASE — semi-join keys + LEFT JOIN instead
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt
     FROM pcl_universe p
+    INNER JOIN crv_action ca
+      ON ca.acct_no = p.acct_no
+     AND ca.offer_start_date <= p.treatmt_end_dt
+     AND ca.offer_end_date   >= p.treatmt_strt_dt
+),
+overlap_control_keys AS (
+    SELECT DISTINCT p.acct_no, p.treatmt_strt_dt
+    FROM pcl_universe p
+    INNER JOIN crv_control cc
+      ON cc.acct_no = p.acct_no
+     AND cc.offer_start_date <= p.treatmt_end_dt
+     AND cc.offer_end_date   >= p.treatmt_strt_dt
 ),
 overlap_leads AS (
-    SELECT acct_no, clnt_no, treatmt_strt_dt, responder_cli,
-           CASE WHEN overlap_action_flag = 1 THEN 'overlap_action'
+    SELECT p.acct_no, p.clnt_no, p.treatmt_strt_dt, p.responder_cli,
+           CASE WHEN oa.acct_no IS NOT NULL THEN 'overlap_action'
                 ELSE 'overlap_control' END AS arm
-    FROM pcl_flagged
-    WHERE overlap_action_flag = 1 OR overlap_control_flag = 1
+    FROM pcl_universe p
+    LEFT JOIN overlap_action_keys oa
+      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+    LEFT JOIN overlap_control_keys oc
+      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+    WHERE oa.acct_no IS NOT NULL OR oc.acct_no IS NOT NULL
 ),
 cidm AS (
     SELECT acct_no, CLNT_NO AS cidm_primary, CLNT_NO_A AS cidm_coapp, PRIMARY_COAPP_IDENTICAL_IND,
