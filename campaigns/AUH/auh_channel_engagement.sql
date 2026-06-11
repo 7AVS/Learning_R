@@ -15,7 +15,7 @@
 WITH cohort AS (
     SELECT
         CLNT_NO                                 AS clnt_no,
-        CAST(TACTIC_EVNT_ID AS DECIMAL(20,0))   AS acct_no,
+        TRY_CAST(TRIM(TACTIC_EVNT_ID) AS DECIMAL(20,0))   AS acct_no,
         TREATMT_STRT_DT                         AS treatmt_strt_dt,
         TREATMT_END_DT                          AS treatmt_end_dt,
         CASE SUBSTR(TRIM(TST_GRP_CD), 1, 2)
