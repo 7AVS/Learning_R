@@ -1,4 +1,5 @@
 -- ============================================================================
+-- ENGINE: Teradata-direct (no EDL table) — Teradata syntax.
 -- Q26 — BEHAVIOR MIX (Dormant/Transactor/Revolver) BY OVERLAP ARM — fairness check
 -- Question: is the Q04 action-vs-control comparison balanced on client behavior,
 -- and does behavior explain any of the gap? Both sides profiled + no_overlap.
@@ -62,6 +63,6 @@ SELECT
 FROM pcl_flagged f
 LEFT JOIN bhvr b
     ON  b.acct_no = f.acct_no
-    AND b.ME_DT   = date_add('day', -1, date_trunc('month', f.treatmt_strt_dt))   -- month-end BEFORE treatment
+    AND b.ME_DT   = f.treatmt_strt_dt - EXTRACT(DAY FROM f.treatmt_strt_dt)   -- month-end BEFORE treatment
 GROUP BY 1, 2
 ORDER BY 1, 2;

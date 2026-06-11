@@ -1,4 +1,5 @@
 -- ============================================================================
+-- ENGINE: Teradata-direct (no EDL table) — Teradata syntax.
 -- Q25 — CO-APPLICANT SCALE ON THE Q04 GAP POPULATION (overlap leads, by arm)
 -- Question: how much of the overlap that produced the 1.08pp gap sits on accounts
 -- that HAVE a distinct co-applicant (where CRV may have contacted a different
