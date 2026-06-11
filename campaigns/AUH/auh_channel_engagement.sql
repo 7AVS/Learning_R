@@ -125,7 +125,8 @@ WITH cohort AS (
         END                                     AS arm_label,
         CASE WHEN TRIM(TST_GRP_CD) LIKE '%\_C' ESCAPE '\'
              THEN 'Control' ELSE 'Action'
-        END                                     AS ac_temp
+        END                                     AS ac_temp,
+        SUBSTR(TACTIC_DECISN_VRB_INFO, 21, 3)   AS offered_prod
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE TACTIC_ID = '2026119AUH'
 ),
@@ -142,8 +143,11 @@ ga4 AS (
                          'i_308333','i_308334','i_308335','i_308336')
       AND event_name IN ('view_promotion', 'view_item', 'select_promotion')
 )
+-- creative IDs encode product (IAV/GCP/MC4/MC2/AVP/GPR) — crossing them against
+-- offered_prod from the base confirms serving alignment, banner vs decision record
 SELECT
     g.it_item_id,
+    c.offered_prod,
     c.arm_label,
     c.ac_temp,
     COUNT(DISTINCT CASE WHEN g.event_name = 'view_promotion'   THEN c.clnt_no END) AS view_promo_users,
@@ -153,5 +157,5 @@ FROM cohort c
 INNER JOIN ga4 g
     ON  g.clnt_no = c.clnt_no
     AND g.event_date BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
