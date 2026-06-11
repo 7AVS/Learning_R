@@ -16,7 +16,14 @@
 -- ============================================================================
 
 -- Statement 1: contact frequency x engagement overlay
-WITH crv_action AS (
+-- Co-applicant accounts EXCLUDED (Section E2 convention: CIDM CLNT_NO_A present and <> CLNT_NO).
+WITH coapp_accts AS (
+    SELECT acct_no
+    FROM DTZTAU.CIDM_CARDS_ACCT_ATTRS
+    WHERE CLNT_NO_A IS NOT NULL
+      AND CLNT_NO_A <> CLNT_NO
+),
+crv_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_end_date >= DATE '2026-02-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
@@ -27,11 +34,14 @@ crv_control AS (
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
 pcl_history AS (   -- full 20-month history ranks every touch (Q11 convention, per acct)
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt,
-           ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY treatmt_strt_dt) AS pcl_touch_number
-    FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2024-10-01'
-      AND channel LIKE '%MB%'
+    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt,
+           ROW_NUMBER() OVER (PARTITION BY p.acct_no ORDER BY p.treatmt_strt_dt) AS pcl_touch_number
+    FROM dl_mr_prod.cards_pli_decision_resp p
+    LEFT JOIN coapp_accts x
+      ON x.acct_no = p.acct_no
+    WHERE p.treatmt_strt_dt >= DATE '2024-10-01'
+      AND p.channel LIKE '%MB%'
+      AND x.acct_no IS NULL
 ),
 pcl_universe AS (   -- measured leads = Feb-Apr 2026, carrying their cumulative touch number
     SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt, pcl_touch_number
@@ -115,7 +125,14 @@ ORDER BY 1, 2;
 
 
 -- Statement 2: engagement-level frequency — clients by PCL banner view-days (0..5+)
-WITH crv_action AS (
+-- Co-applicant accounts EXCLUDED (Section E2 convention).
+WITH coapp_accts AS (
+    SELECT acct_no
+    FROM DTZTAU.CIDM_CARDS_ACCT_ATTRS
+    WHERE CLNT_NO_A IS NOT NULL
+      AND CLNT_NO_A <> CLNT_NO
+),
+crv_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_end_date >= DATE '2026-02-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
@@ -126,10 +143,13 @@ crv_control AS (
     WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
 ),
 pcl_universe AS (
-    SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt
-    FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
-      AND channel LIKE '%MB%'
+    SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
+    FROM dl_mr_prod.cards_pli_decision_resp p
+    LEFT JOIN coapp_accts x
+      ON x.acct_no = p.acct_no
+    WHERE p.treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
+      AND p.channel LIKE '%MB%'
+      AND x.acct_no IS NULL
 ),
 overlap_action_keys AS (
     SELECT DISTINCT p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt
