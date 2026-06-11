@@ -19,7 +19,7 @@ WITH base AS (
         tactic_id,
         CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
         treatmt_strt_dt, treatmt_end_dt,
-        CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
+        CASE WHEN TRIM(tst_grp_cd) LIKE '%\_C' ESCAPE '\' THEN 'Control' ELSE 'Test' END AS test_group,
         CASE
             WHEN tactic_id='2026042AUH' THEN
                 CASE WHEN TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
@@ -130,7 +130,7 @@ WITH base AS (
         TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
         CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
         treatmt_strt_dt, treatmt_end_dt,
-        CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
+        CASE WHEN TRIM(tst_grp_cd) LIKE '%\_C' ESCAPE '\' THEN 'Control' ELSE 'Test' END AS test_group,
         TRIM(tst_grp_cd) AS tst_grp_cd,
         SUBSTR(tactic_decisn_vrb_info,21,3) AS prod_cd
     FROM DG6V01.tactic_evnt_ip_ar_hist
@@ -189,7 +189,7 @@ WITH base AS (
         TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
         CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
         treatmt_strt_dt, treatmt_end_dt,
-        CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
+        CASE WHEN TRIM(tst_grp_cd) LIKE '%\_C' ESCAPE '\' THEN 'Control' ELSE 'Test' END AS test_group,
         CASE
             WHEN tactic_id='2026042AUH' THEN
                 CASE WHEN TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
