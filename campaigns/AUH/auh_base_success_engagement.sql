@@ -56,7 +56,7 @@ au_event AS (
         AND a.evnt_dt = c.dt_record_ext
         AND a.acct_no = c.acct_no
     WHERE a.dtl_evnt_typ_cd = 191
-      AND a.ADD_RELTN_CD = 3
+      AND a.ADD_RELTN_CD = '3'
       AND a.evnt_dt >= DATE '2026-01-01'
 ),
 success AS (
@@ -144,7 +144,7 @@ au_event AS (
         AND a.evnt_dt = c.dt_record_ext
         AND a.acct_no = c.acct_no
     WHERE a.dtl_evnt_typ_cd = 191
-      AND a.ADD_RELTN_CD = 3
+      AND a.ADD_RELTN_CD = '3'
       AND a.evnt_dt >= DATE '2026-01-01'
 ),
 ga4 AS (
@@ -224,7 +224,7 @@ converters AS (
         ON  a.acct_no = b.acct_no
         AND a.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
     WHERE a.dtl_evnt_typ_cd = 191
-      AND a.ADD_RELTN_CD = 3
+      AND a.ADD_RELTN_CD = '3'
       AND a.evnt_dt >= DATE '2026-01-01'
     GROUP BY 1, 2, 3, 4, 5
 ),
@@ -289,7 +289,7 @@ INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY a
     ON  a.acct_no = b.acct_no
     AND a.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
 WHERE a.dtl_evnt_typ_cd = 191
-  AND a.ADD_RELTN_CD = 3
+  AND a.ADD_RELTN_CD = '3'
 LIMIT 200;
 
 -- 5b: AU-add events for OUR CLIENTS landing on a DIFFERENT account than targeted
@@ -310,5 +310,86 @@ INNER JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY a
     AND a.acct_no <> b.acct_no
     AND a.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
 WHERE a.dtl_evnt_typ_cd = 191
-  AND a.ADD_RELTN_CD = 3
+  AND a.ADD_RELTN_CD = '3'
 LIMIT 200;
+
+
+-- Q6: creative x offered-product x arm alignment (Phase 2). Creative IDs encode product
+-- (IAV/GCP/MC4/MC2/AVP/GPR) — crossing against the decision record confirms serving alignment.
+WITH base AS (
+    SELECT
+        clnt_no, treatmt_strt_dt, treatmt_end_dt,
+        CASE WHEN TRIM(tst_grp_cd) LIKE '%\_C' ESCAPE '\' THEN 'Control' ELSE 'Test' END AS test_group,
+        CASE WHEN SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') THEN 'NonReward'
+             WHEN SUBSTR(tst_grp_cd,1,3) IN ('RNR','RNM','RNW') THEN 'Rewards_No_Offer'
+             WHEN SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') THEN 'Rewards_Offer'
+             ELSE 'Unknown' END AS strategy_arm,
+        SUBSTR(tactic_decisn_vrb_info,21,3) AS offered_prod
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE tactic_id = '2026119AUH'
+),
+ga4 AS (
+    SELECT TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no, event_date, it_item_id, event_name
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+    WHERE year = '2026'
+      AND event_date >= DATE '2026-04-30'
+      AND it_item_id IN ('i_300108','i_308317','i_308314','i_308315',
+                         'i_308333','i_308334','i_308335','i_308336')
+      AND lower(event_name) IN ('view_promotion','select_promotion')
+)
+SELECT
+    g.it_item_id, b.offered_prod, b.strategy_arm, b.test_group,
+    COUNT(DISTINCT CASE WHEN lower(g.event_name) = 'view_promotion'   THEN b.clnt_no END) AS view_users,
+    COUNT(DISTINCT CASE WHEN lower(g.event_name) = 'select_promotion' THEN b.clnt_no END) AS click_users
+FROM base b
+INNER JOIN ga4 g
+    ON  g.clnt_no = b.clnt_no
+    AND g.event_date BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
+
+
+-- Q7: success-source gap — event (true adds, primary) vs ownership snapshot (legacy interim
+-- measurement). snapshot_only = the long-time-holder inflation the vintage author flagged.
+WITH base AS (
+    SELECT
+        TRY_CAST(TRIM(TACTIC_EVNT_ID) AS BIGINT) AS acct_no,
+        CASE tactic_id WHEN '2026042AUH' THEN 'Phase1' WHEN '2026119AUH' THEN 'Phase2' END AS phase,
+        treatmt_strt_dt, treatmt_end_dt,
+        CASE WHEN TRIM(tst_grp_cd) LIKE '%\_C' ESCAPE '\' THEN 'Control' ELSE 'Test' END AS test_group
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE tactic_id IN ('2026042AUH','2026119AUH')
+),
+flagged AS (
+    SELECT
+        b.phase, b.test_group, b.acct_no, b.treatmt_strt_dt,
+        MAX(CASE WHEN e.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS conv_event,
+        MAX(CASE WHEN s.acct_no IS NOT NULL THEN 1 ELSE 0 END) AS conv_snapshot
+    FROM base b
+    LEFT JOIN D3CV12A.CR_CRD_ACCT_EVNT_DLY e
+        ON  e.acct_no = b.acct_no
+        AND e.evnt_dt BETWEEN b.treatmt_strt_dt AND b.treatmt_end_dt
+        AND e.dtl_evnt_typ_cd = 191
+        AND e.ADD_RELTN_CD = '3'
+        AND e.evnt_dt >= DATE '2026-01-01'
+    LEFT JOIN D3CV12A.ACCT_CRD_OWN_DLY_DELTA s
+        ON  s.acct_no         = b.acct_no
+        AND s.CHG_DT          = DATE '9999-12-31'
+        AND s.RELATIONSHIP_CD = '2'
+        AND s.card_sts IN ('A', '')
+        AND s.CAPTR_DT        > b.treatmt_strt_dt
+    GROUP BY 1, 2, 3, 4
+)
+SELECT
+    phase, test_group,
+    COUNT(*)                                                          AS population,
+    SUM(conv_event)                                                   AS converters_event,
+    SUM(conv_snapshot)                                                AS converters_snapshot,
+    SUM(CASE WHEN conv_event = 1 AND conv_snapshot = 1 THEN 1 ELSE 0 END) AS conv_both,
+    SUM(CASE WHEN conv_event = 0 AND conv_snapshot = 1 THEN 1 ELSE 0 END) AS snapshot_only,
+    SUM(CASE WHEN conv_event = 1 AND conv_snapshot = 0 THEN 1 ELSE 0 END) AS event_only
+FROM flagged
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
