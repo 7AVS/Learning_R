@@ -1,4 +1,5 @@
 -- s1_banner_code_profile.sql
+-- ID allowlist updated 2026-06-12 (digital team list): CRV 87348→87340 corrected; PCL +167715/167716/167717/289698
 -- STEP 1 — run this first; nothing else in this track runs before its output is reviewed.
 -- PURPOSE: For our PCL and CRV banner codes: everything GA4 records about them.
 --   No event filter — the data tells us what exists.
@@ -14,10 +15,10 @@
 SELECT
     CASE
         WHEN it_promotion_id IN (
-            '156764','156788','162326','289661','289662','289664','289665','289666'
+            '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698'
         ) THEN 'PCL'
         WHEN it_promotion_id IN (
-            '87348','87342','87343','87344'
+            '87340','87342','87343','87344'
         ) THEN 'CRV'
     END                                                                  AS banner_family,
     it_promotion_id,
@@ -28,8 +29,8 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year  IN ('2026')
   AND month IN ('02', '03', '04')
   AND it_promotion_id IN (
-        '156764','156788','162326','289661','289662','289664','289665','289666',   -- PCL
-        '87348','87342','87343','87344'                                            -- CRV
+        '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698',   -- PCL
+        '87340','87342','87343','87344'                                                                               -- CRV
   )
 GROUP BY 1, 2, 3
 ORDER BY banner_family, it_promotion_id, n_events DESC
@@ -45,10 +46,10 @@ ORDER BY banner_family, it_promotion_id, n_events DESC
 SELECT
     CASE
         WHEN it_promotion_id IN (
-            '156764','156788','162326','289661','289662','289664','289665','289666'
+            '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698'
         ) THEN 'PCL'
         WHEN it_promotion_id IN (
-            '87348','87342','87343','87344'
+            '87340','87342','87343','87344'
         ) THEN 'CRV'
     END                                                                  AS banner_family,
     event_name,
@@ -62,8 +63,8 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year  IN ('2026')
   AND month IN ('02', '03', '04')
   AND it_promotion_id IN (
-        '156764','156788','162326','289661','289662','289664','289665','289666',   -- PCL
-        '87348','87342','87343','87344'                                            -- CRV
+        '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698',   -- PCL
+        '87340','87342','87343','87344'                                                                               -- CRV
   )
 GROUP BY 1, 2, 3, 4, 5, 6
 ORDER BY n_events DESC
