@@ -1,6 +1,8 @@
 -- ============================================================================
 -- ENGINE: Starburst/Trino (GA4 = EDL table in the query) — Trino syntax.
--- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12): impression = view_promotion (view_item = co-fired twin artifact, discarded); ID allowlist updated. CAVEAT: GA4 engagement is effectively iOS-only (Android app does not fire these events).
+-- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12): impression = view_promotion (view_item = co-fired twin artifact, discarded); ID allowlist updated.
+-- Android coverage RESTORED via numeric-id cast (prior runs = iOS-only; rerun needed)
+-- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
 -- Q24 — PCL CONTACT FREQUENCY x CRV OVERLAP STATUS (Feb-Apr 2026, two statements)
 -- Statement 1: contact frequency = CUMULATIVE touch number over the FULL 20-month
 --   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
@@ -97,7 +99,7 @@ ga4 AS (
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
       AND event_name IN ('view_promotion','select_promotion')
 ),
 client_eng AS (
@@ -195,7 +197,7 @@ ga4 AS (
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
       AND event_name IN ('view_promotion','select_promotion')
 ),
 dep_eng AS (   -- deployment grain: did the banner reach / get clicked inside THIS deployment's window

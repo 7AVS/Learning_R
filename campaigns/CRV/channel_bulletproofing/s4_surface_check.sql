@@ -3,10 +3,11 @@
 -- Rerun photos hinted web rows under the expanded lists. If yes, web must be split from
 -- mobile in every downstream query (four-surface rule, see s2_code_selection.md).
 -- ID allowlist updated 2026-06-12 (digital team list).
+-- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
 
 SELECT
     CASE
-        WHEN it_promotion_id IN ('87340','87342','87343','87344') THEN 'CRV'
+        WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344) THEN 'CRV'
         ELSE 'PCL'
     END AS banner_family,
     it_promotion_id,
@@ -17,10 +18,10 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
   AND month IN ('02','03','04')
   AND event_name = 'view_promotion'
-  AND it_promotion_id IN (
-        '87340','87342','87343','87344',
-        '156764','156788','162326','167715','167716','167717',
-        '289661','289662','289664','289665','289666','289698'
+  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
+        87340,87342,87343,87344,
+        156764,156788,162326,167715,167716,167717,
+        289661,289662,289664,289665,289666,289698
   )
 GROUP BY 1, 2, 3
 ORDER BY banner_family, it_promotion_id, n_events DESC

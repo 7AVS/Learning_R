@@ -25,7 +25,8 @@
 -- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12):
 --   impression = view_promotion (view_item = co-fired twin artifact, discarded);
 --   ID allowlist updated 2026-06-12 (new ids inactive in Feb-Apr -- zero effect this window).
--- CAVEAT: GA4 engagement effectively iOS-only (Android gap, see s5).
+-- Android coverage RESTORED via numeric-id cast (prior runs = iOS-only; rerun needed)
+-- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
 
 WITH
 crv_action AS (
@@ -74,18 +75,18 @@ ga4_events AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN it_promotion_id IN ('87340','87342','87343','87344')
+        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344)
               AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS crv_click_e,
-        CASE WHEN it_promotion_id IN ('87340','87342','87343','87344')
+        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344)
               AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS crv_view_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
               AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS pcl_click_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
               AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS pcl_view_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('87340','87342','87343','87344',
-                              '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344,
+                              156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
 ),
 -- engagement per deployment window first (keeps it anchored to real windows)
 dep_eng AS (
