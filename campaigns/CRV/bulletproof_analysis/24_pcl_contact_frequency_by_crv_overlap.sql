@@ -9,6 +9,9 @@
 --   the banner actually reached them (0..3+, ~= months seen), clicks + converters per bucket.
 -- NOT CRV frequency: counts PCL contacts/engagement, sliced by CRV exposure:
 --   overlap_action / overlap_control / no_overlap (action > control precedence, Q20).
+-- CRV offer window: restricted to offer_end_date 2026-02-01..2026-04-30 (matched to PCL
+--   Feb–Apr cohort window); CRV offers still running past Apr 30 are excluded → those
+--   clients classify as no_overlap.
 -- GA4: it_promotion_id PCL list + view_item/select_promotion (Q20 conventions —
 --   impression-event question view_item vs view_promotion still open).
 -- Co-applicant accounts EXCLUDED in both statements (Section E2 convention).
@@ -25,12 +28,12 @@ WITH coapp_accts AS (
 crv_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_end_date >= DATE '2026-02-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
+    WHERE offer_end_date BETWEEN DATE '2026-02-01' AND DATE '2026-04-30' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
 ),
 crv_control AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
+    WHERE offer_end_date BETWEEN DATE '2026-02-01' AND DATE '2026-04-30' AND action_control = 'Control'
 ),
 pcl_history AS (   -- full 20-month history ranks every touch (Q11 convention, per acct)
     SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli,
@@ -141,12 +144,12 @@ WITH coapp_accts AS (
 crv_action AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_end_date >= DATE '2026-02-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
+    WHERE offer_end_date BETWEEN DATE '2026-02-01' AND DATE '2026-04-30' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
 ),
 crv_control AS (
     SELECT acct_no, offer_start_date, offer_end_date
     FROM dl_mr_prod.cards_crv_install_decis_resp
-    WHERE offer_end_date >= DATE '2026-02-01' AND action_control = 'Control'
+    WHERE offer_end_date BETWEEN DATE '2026-02-01' AND DATE '2026-04-30' AND action_control = 'Control'
 ),
 pcl_universe AS (
     SELECT p.clnt_no, p.acct_no, p.treatmt_strt_dt, p.treatmt_end_dt, p.responder_cli
