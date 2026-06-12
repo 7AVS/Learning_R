@@ -1,8 +1,7 @@
 -- ============================================================================
 -- ENGINE: Starburst/Trino (GA4 = EDL table in the query) — Trino syntax.
 -- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12): impression = view_promotion (view_item = co-fired twin artifact, discarded); ID allowlist updated.
--- Android coverage RESTORED via numeric-id cast (prior runs = iOS-only; rerun needed)
--- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
+-- Identity key = it_item_id ('i_'+offer id) per s7 2026-06-12: format-stable all platforms, zero disagreement, catches rows where promotion_id is absent.
 -- Q24 — PCL CONTACT FREQUENCY x CRV OVERLAP STATUS (Feb-Apr 2026, two statements)
 -- Statement 1: contact frequency = CUMULATIVE touch number over the FULL 20-month
 --   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
@@ -99,7 +98,7 @@ ga4 AS (
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
+      AND it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
       AND event_name IN ('view_promotion','select_promotion')
 ),
 client_eng AS (
@@ -197,7 +196,7 @@ ga4 AS (
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
+      AND it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
       AND event_name IN ('view_promotion','select_promotion')
 ),
 dep_eng AS (   -- deployment grain: did the banner reach / get clicked inside THIS deployment's window

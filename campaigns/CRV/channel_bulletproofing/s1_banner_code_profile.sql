@@ -1,6 +1,5 @@
 -- s1_banner_code_profile.sql
--- ID allowlist updated 2026-06-12 (digital team list): CRV 87348→87340 corrected; PCL +167715/167716/167717/289698
--- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
+-- Identity key = it_item_id ('i_'+offer id) per s7 2026-06-12: format-stable all platforms, zero disagreement, catches rows where promotion_id is absent.
 -- STEP 1 — run this first; nothing else in this track runs before its output is reviewed.
 -- PURPOSE: For our PCL and CRV banner codes: everything GA4 records about them.
 --   No event filter — the data tells us what exists.
@@ -15,26 +14,22 @@
 
 SELECT
     CASE
-        WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698
-        ) THEN 'PCL'
-        WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            87340,87342,87343,87344
-        ) THEN 'CRV'
+        WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698') THEN 'PCL'
+        WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344') THEN 'CRV'
     END                                                                  AS banner_family,
-    it_promotion_id,
+    it_item_id,
     event_name,
     COUNT(*)                                                             AS n_events,
     COUNT(DISTINCT TRY_CAST(up_srf_id2_value AS BIGINT))                 AS n_clients
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year  IN ('2026')
   AND month IN ('02', '03', '04')
-  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-        156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698,   -- PCL
-        87340,87342,87343,87344                                                                 -- CRV
+  AND it_item_id IN (
+        'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698',   -- PCL
+        'i_87340','i_87342','i_87343','i_87344'                                                                                               -- CRV
   )
 GROUP BY 1, 2, 3
-ORDER BY banner_family, it_promotion_id, n_events DESC
+ORDER BY banner_family, it_item_id, n_events DESC
 ;
 
 -- ============================================================
@@ -46,12 +41,8 @@ ORDER BY banner_family, it_promotion_id, n_events DESC
 
 SELECT
     CASE
-        WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698
-        ) THEN 'PCL'
-        WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            87340,87342,87343,87344
-        ) THEN 'CRV'
+        WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698') THEN 'PCL'
+        WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344') THEN 'CRV'
     END                                                                  AS banner_family,
     event_name,
     it_item_name,
@@ -63,9 +54,9 @@ SELECT
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year  IN ('2026')
   AND month IN ('02', '03', '04')
-  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-        156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698,   -- PCL
-        87340,87342,87343,87344                                                                 -- CRV
+  AND it_item_id IN (
+        'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698',   -- PCL
+        'i_87340','i_87342','i_87343','i_87344'                                                                                               -- CRV
   )
 GROUP BY 1, 2, 3, 4, 5, 6
 ORDER BY n_events DESC

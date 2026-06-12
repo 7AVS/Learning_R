@@ -15,8 +15,8 @@
 -- breakdown (click_*), each summing to population, plus converters. % = any column / population.
 -- Compare overlap_action vs overlap_control (= H1 contrast).
 --
--- Banner key = it_promotion_id (Excel Id). Table = _reduced. Join up_srf_id2_value = CLNT_NO
--- (cast GA4 side only). Counts only.
+-- Identity key = it_item_id ('i_'+offer id) per s7 2026-06-12: format-stable all platforms, zero disagreement, catches rows where promotion_id is absent.
+-- Table = _reduced. Join up_srf_id2_value = CLNT_NO (cast GA4 side only). Counts only.
 -- FLAGS [RESOLVED]: (1) CRV id '87348' was a typo — correct id is '87340' (confirmed 2026-06-12).
 -- (2) impression event = 'view_item' vs 'view_promotion' — RESOLVED: view_item is a co-fired twin
 --     artifact (fires 1:1 with view_promotion, carries no creative/location fields); view_item
@@ -25,8 +25,6 @@
 -- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12):
 --   impression = view_promotion (view_item = co-fired twin artifact, discarded);
 --   ID allowlist updated 2026-06-12 (new ids inactive in Feb-Apr -- zero effect this window).
--- Android coverage RESTORED via numeric-id cast (prior runs = iOS-only; rerun needed)
--- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
 
 WITH
 crv_action AS (
@@ -75,18 +73,18 @@ ga4_events AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344)
+        CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
               AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS crv_click_e,
-        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344)
+        CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
               AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS crv_view_e,
-        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
+        CASE WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
               AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS pcl_click_e,
-        CASE WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
+        CASE WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
               AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS pcl_view_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE event_date >= DATE '2026-02-01'
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (87340,87342,87343,87344,
-                              156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698)
+      AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344',
+                         'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
 ),
 -- engagement per deployment window first (keeps it anchored to real windows)
 dep_eng AS (
