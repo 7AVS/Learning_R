@@ -1,6 +1,5 @@
 -- s3_event_timestamp_test.sql
--- ID allowlist updated 2026-06-12 (digital team list): CRV 87348→87340 corrected; PCL +167715/167716/167717/289698
--- 2026-06-12: promotion-id matching switched to numeric cast (Android stores ids as '87342.0' float strings; string IN-lists excluded Android)
+-- Identity key = it_item_id ('i_'+offer id) per s7 2026-06-12: format-stable all platforms, zero disagreement, catches rows where promotion_id is absent.
 -- PURPOSE: Are view_item and view_promotion twins? s1 showed 1:1 volumes; this proves/refutes
 --   at the timestamp level — same client, same session, same banner code.
 -- Trino syntax. _reduced table. Counts only.
@@ -18,25 +17,21 @@
 WITH raw AS (
     SELECT
         CASE
-            WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-                156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698
-            ) THEN 'PCL'
-            WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-                87340,87342,87343,87344
-            ) THEN 'CRV'
+            WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698') THEN 'PCL'
+            WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344') THEN 'CRV'
         END                                                             AS banner_family,
         ep_ga_session_id,
         TRY_CAST(up_srf_id2_value AS BIGINT)                           AS clnt_no,
-        it_promotion_id,
+        it_item_id,
         MIN(CASE WHEN event_name = 'view_promotion' THEN event_timestamp END) AS ts_vp,
         MIN(CASE WHEN event_name = 'view_item'      THEN event_timestamp END) AS ts_vi
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year  IN ('2026')
       AND month IN ('02', '03', '04')
       AND event_name IN ('view_promotion', 'view_item')
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698,   -- PCL
-            87340,87342,87343,87344                                                                 -- CRV
+      AND it_item_id IN (
+            'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698',   -- PCL
+            'i_87340','i_87342','i_87343','i_87344'                                                                                               -- CRV
       )
       AND ep_ga_session_id IS NOT NULL
       AND TRY_CAST(up_srf_id2_value AS BIGINT) IS NOT NULL
@@ -73,25 +68,21 @@ ORDER BY banner_family, sessions DESC
 WITH raw AS (
     SELECT
         CASE
-            WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-                156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698
-            ) THEN 'PCL'
-            WHEN TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-                87340,87342,87343,87344
-            ) THEN 'CRV'
+            WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698') THEN 'PCL'
+            WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344') THEN 'CRV'
         END                                                             AS banner_family,
         ep_ga_session_id,
         TRY_CAST(up_srf_id2_value AS BIGINT)                           AS clnt_no,
-        it_promotion_id,
+        it_item_id,
         MIN(CASE WHEN event_name = 'view_promotion'   THEN event_timestamp END) AS ts_vp,
         MIN(CASE WHEN event_name = 'select_promotion' THEN event_timestamp END) AS ts_sp
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year  IN ('2026')
       AND month IN ('02', '03', '04')
       AND event_name IN ('view_promotion', 'select_promotion')
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-            156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698,   -- PCL
-            87340,87342,87343,87344                                                                 -- CRV
+      AND it_item_id IN (
+            'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698',   -- PCL
+            'i_87340','i_87342','i_87343','i_87344'                                                                                               -- CRV
       )
       AND ep_ga_session_id IS NOT NULL
       AND TRY_CAST(up_srf_id2_value AS BIGINT) IS NOT NULL
@@ -134,9 +125,9 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year  IN ('2026')
   AND month IN ('02', '03', '04')
   AND event_name IN ('view_promotion', 'view_item', 'select_promotion')
-  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) IN (
-        156764,156788,162326,167715,167716,167717,289661,289662,289664,289665,289666,289698,   -- PCL
-        87340,87342,87343,87344                                                                 -- CRV
+  AND it_item_id IN (
+        'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698',   -- PCL
+        'i_87340','i_87342','i_87343','i_87344'                                                                                               -- CRV
   )
   AND TRY_CAST(up_srf_id2_value AS BIGINT) = 123456789   -- SET CLIENT HERE
 ORDER BY event_timestamp
