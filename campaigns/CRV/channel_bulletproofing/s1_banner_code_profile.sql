@@ -1,4 +1,5 @@
--- cb05_banner_code_profile.sql
+-- s1_banner_code_profile.sql
+-- STEP 1 — run this first; nothing else in this track runs before its output is reviewed.
 -- PURPOSE: For our PCL and CRV banner codes: everything GA4 records about them.
 --   No event filter — the data tells us what exists.
 -- Run Stmt 1 first (tiny), then Stmt 2.
