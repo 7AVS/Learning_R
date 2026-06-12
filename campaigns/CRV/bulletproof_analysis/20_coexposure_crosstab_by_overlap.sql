@@ -17,9 +17,15 @@
 --
 -- Banner key = it_promotion_id (Excel Id). Table = _reduced. Join up_srf_id2_value = CLNT_NO
 -- (cast GA4 side only). Counts only.
--- FLAGS: (1) CRV id list uses '87348' — Excel showed '87340'; confirm. (2) impression event =
--- 'view_item' (your query) vs 'view_promotion' (reference). (3) CENSORING: Apr/late-Mar deployments'
--- 90-day windows run past GA4's ~2026-06 data; Feb is complete.
+-- FLAGS [RESOLVED]: (1) CRV id '87348' was a typo — correct id is '87340' (confirmed 2026-06-12).
+-- (2) impression event = 'view_item' vs 'view_promotion' — RESOLVED: view_item is a co-fired twin
+--     artifact (fires 1:1 with view_promotion, carries no creative/location fields); view_item
+--     discarded, view_promotion is the correct impression event. (3) CENSORING: Apr/late-Mar
+--     deployments' 90-day windows run past GA4's ~2026-06 data; Feb is complete.
+-- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12):
+--   impression = view_promotion (view_item = co-fired twin artifact, discarded);
+--   ID allowlist updated 2026-06-12 (new ids inactive in Feb-Apr -- zero effect this window).
+-- CAVEAT: GA4 engagement effectively iOS-only (Android gap, see s5).
 
 WITH
 crv_action AS (
@@ -68,18 +74,18 @@ ga4_events AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN it_promotion_id IN ('87348','87342','87343','87344')
-              AND event_name = 'select_promotion' THEN 1 ELSE 0 END AS crv_click_e,
-        CASE WHEN it_promotion_id IN ('87348','87342','87343','87344')
-              AND event_name = 'view_item'        THEN 1 ELSE 0 END AS crv_view_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-              AND event_name = 'select_promotion' THEN 1 ELSE 0 END AS pcl_click_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-              AND event_name = 'view_item'        THEN 1 ELSE 0 END AS pcl_view_e
+        CASE WHEN it_promotion_id IN ('87340','87342','87343','87344')
+              AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS crv_click_e,
+        CASE WHEN it_promotion_id IN ('87340','87342','87343','87344')
+              AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS crv_view_e,
+        CASE WHEN it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+              AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS pcl_click_e,
+        CASE WHEN it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+              AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS pcl_view_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('87348','87342','87343','87344',
-                              '156764','156788','162326','289661','289662','289664','289665','289666')
+      AND it_promotion_id IN ('87340','87342','87343','87344',
+                              '156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
 ),
 -- engagement per deployment window first (keeps it anchored to real windows)
 dep_eng AS (
