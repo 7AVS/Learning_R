@@ -14,7 +14,9 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
   AND month IN ('02','03','04')
   AND event_name = 'view_promotion'
-  AND LOWER(it_location_id) IN ('android_credit_card_details_m1', 'ios_credit_card_details_m1', 'i_ios_credit_card_details_m1')
+  -- separator-agnostic: '%' spans underscores/spaces/hyphens (exact IN-list returned 0 rows -
+  -- the true separators are unknown from photos; this also reveals the exact strings)
+  AND LOWER(it_location_id) LIKE '%credit%card%details%'
 GROUP BY 1, 2, 3, 4
 ORDER BY n_events DESC
 LIMIT 30
