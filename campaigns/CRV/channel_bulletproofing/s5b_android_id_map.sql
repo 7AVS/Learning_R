@@ -7,6 +7,7 @@ SELECT
     it_location_id,
     platform,
     it_promotion_id,
+    it_item_id,
     it_item_name,
     COUNT(*) AS n_events,
     COUNT(DISTINCT TRY_CAST(up_srf_id2_value AS BIGINT)) AS n_clients
@@ -17,6 +18,6 @@ WHERE year = '2026'
   -- separator-agnostic: '%' spans underscores/spaces/hyphens (exact IN-list returned 0 rows -
   -- the true separators are unknown from photos; this also reveals the exact strings)
   AND LOWER(it_location_id) LIKE '%credit%card%details%'
-GROUP BY 1, 2, 3, 4
+GROUP BY 1, 2, 3, 4, 5
 ORDER BY n_events DESC
 LIMIT 30
