@@ -1,5 +1,6 @@
 -- ============================================================================
 -- ENGINE: Starburst/Trino (GA4 = EDL table in the query) — Trino syntax.
+-- GA4 events per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12): impression = view_promotion (view_item = co-fired twin artifact, discarded); ID allowlist updated. CAVEAT: GA4 engagement is effectively iOS-only (Android app does not fire these events).
 -- Q24 — PCL CONTACT FREQUENCY x CRV OVERLAP STATUS (Feb-Apr 2026, two statements)
 -- Statement 1: contact frequency = CUMULATIVE touch number over the FULL 20-month
 --   history (Oct-2024+, Q11 crv_touch_number convention) read at the Feb-Apr 2026
@@ -12,8 +13,7 @@
 -- CRV offer window: restricted to offer_end_date 2026-02-01..2026-04-30 (matched to PCL
 --   Feb–Apr cohort window); CRV offers still running past Apr 30 are excluded → those
 --   clients classify as no_overlap.
--- GA4: it_promotion_id PCL list + view_item/select_promotion (Q20 conventions —
---   impression-event question view_item vs view_promotion still open).
+-- GA4: it_promotion_id PCL 12-id allowlist + view_promotion/select_promotion (s2_code_selection.md FINAL).
 -- Co-applicant accounts EXCLUDED in both statements (Section E2 convention).
 -- ============================================================================
 
@@ -91,14 +91,14 @@ ga4 AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN event_name = 'view_item'        THEN 1 ELSE 0 END AS view_e,
+        CASE WHEN event_name = 'view_promotion'    THEN 1 ELSE 0 END AS view_e,
         CASE WHEN event_name = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-      AND event_name IN ('view_item','select_promotion')
+      AND it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+      AND event_name IN ('view_promotion','select_promotion')
 ),
 client_eng AS (
     SELECT
@@ -189,14 +189,14 @@ ga4 AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN event_name = 'view_item'        THEN 1 ELSE 0 END AS view_e,
+        CASE WHEN event_name = 'view_promotion'    THEN 1 ELSE 0 END AS view_e,
         CASE WHEN event_name = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
       AND month >= '02'
       AND event_date >= DATE '2026-02-01'
-      AND it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-      AND event_name IN ('view_item','select_promotion')
+      AND it_promotion_id IN ('156764','156788','162326','167715','167716','167717','289661','289662','289664','289665','289666','289698')
+      AND event_name IN ('view_promotion','select_promotion')
 ),
 dep_eng AS (   -- deployment grain: did the banner reach / get clicked inside THIS deployment's window
     SELECT
