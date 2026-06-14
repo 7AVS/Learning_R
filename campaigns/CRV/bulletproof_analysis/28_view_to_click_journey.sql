@@ -62,6 +62,8 @@ ga4_events AS (
               AND event_name = 'select_promotion' THEN 1 ELSE 0 END AS pcl_click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE event_date >= DATE '2026-02-01'
+      AND year = '2026'                                              -- partition prune: PCL deployments START Feb-Apr 2026; their ~90-day engagement windows reach into Jun/Jul, so scan event-partitions 02-07 (the per-deployment BETWEEN join below keeps only in-window events). Cohort itself stays Feb-Apr via treatmt_strt_dt.
+      AND month IN ('02','03','04','05','06','07')
       AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344',
                          'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717',
                          'i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
