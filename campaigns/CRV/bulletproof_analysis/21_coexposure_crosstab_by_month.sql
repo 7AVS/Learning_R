@@ -92,7 +92,6 @@ dep_eng AS (
     GROUP BY f.pcl_month, f.overlap_status, f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
 )
 SELECT
-    pcl_month,
     overlap_status,
     CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 'Both'
          WHEN crv_click = 1 AND pcl_click = 0 THEN 'CRV only'
@@ -104,6 +103,6 @@ SELECT
          ELSE 'Neither' END AS view_category,
     COUNT(*) AS counts
 FROM dep_eng
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 3, 4
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3
 ;
