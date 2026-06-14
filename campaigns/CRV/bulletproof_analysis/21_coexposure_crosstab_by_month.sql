@@ -31,7 +31,7 @@ pcl_universe AS (
     SELECT clnt_no, acct_no, treatmt_strt_dt, treatmt_end_dt,
            date_trunc('month', treatmt_strt_dt) AS pcl_month
     FROM dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2025-02-01'
+    WHERE treatmt_strt_dt BETWEEN DATE '2026-02-01' AND DATE '2026-04-30'
       AND channel LIKE '%MB%'
 ),
 overlap_action_keys AS (
@@ -73,7 +73,7 @@ ga4_events AS (
         CASE WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
               AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS pcl_view_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-    WHERE event_date >= DATE '2025-02-01'
+    WHERE event_date >= DATE '2026-02-01'
       AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344',
                          'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
 ),
