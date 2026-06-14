@@ -14,7 +14,7 @@
 -- CRV offer window: restricted to offer_end_date 2026-02-01..2026-04-30 (matched to PCL
 --   Feb–Apr cohort window); CRV offers still running past Apr 30 are excluded → those
 --   clients classify as no_overlap.
--- GA4: it_promotion_id PCL 12-id allowlist + view_promotion/select_promotion (s2_code_selection.md FINAL).
+-- GA4: it_item_id PCL 12-id allowlist + view_promotion/select_promotion (s2_code_selection.md FINAL).
 -- Co-applicant accounts EXCLUDED in both statements (Section E2 convention).
 -- ============================================================================
 
@@ -72,9 +72,9 @@ pcl_flagged AS (
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
     LEFT JOIN overlap_action_keys oa
-      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt AND oa.treatmt_end_dt = p.treatmt_end_dt
     LEFT JOIN overlap_control_keys oc
-      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt AND oc.treatmt_end_dt = p.treatmt_end_dt
 ),
 client_freq AS (
     SELECT
@@ -96,7 +96,7 @@ ga4 AS (
         CASE WHEN event_name = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
-      AND month >= '02'
+      AND month IN ('02','03','04','05','06','07')
       AND event_date >= DATE '2026-02-01'
       AND it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
       AND event_name IN ('view_promotion','select_promotion')
@@ -182,9 +182,9 @@ pcl_flagged AS (
         CASE WHEN oc.acct_no IS NOT NULL THEN 1 ELSE 0 END AS control_flag
     FROM pcl_universe p
     LEFT JOIN overlap_action_keys oa
-      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt
+      ON oa.acct_no = p.acct_no AND oa.treatmt_strt_dt = p.treatmt_strt_dt AND oa.treatmt_end_dt = p.treatmt_end_dt
     LEFT JOIN overlap_control_keys oc
-      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt
+      ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt AND oc.treatmt_end_dt = p.treatmt_end_dt
 ),
 ga4 AS (
     SELECT
@@ -194,7 +194,7 @@ ga4 AS (
         CASE WHEN event_name = 'select_promotion' THEN 1 ELSE 0 END AS click_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year = '2026'
-      AND month >= '02'
+      AND month IN ('02','03','04','05','06','07')
       AND event_date >= DATE '2026-02-01'
       AND it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
       AND event_name IN ('view_promotion','select_promotion')
