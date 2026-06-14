@@ -12,12 +12,9 @@
 -- Population = every PCL deployment in the month (LEFT JOIN GA4 => non-engagers = Neither), so the
 -- counts sum to the full deployment population per month per arm.
 --
--- Banner key = it_promotion_id (= digital-team Excel Id), verbatim from Andre's Q20 query.
 -- Table = ..._reduced (Feb-2025+ history; the full table retains only ~2 weeks).
 -- Join up_srf_id2_value = CLNT_NO (cast GA4 side only). Starburst/Trino. Counts only.
--- FLAGS: (1) CRV id list uses '87348' — Excel showed '87340'; kept yours, confirm.
---        (2) impression event = 'view_item' (your query); validated reference says 'view_promotion'
---            — if view_category looks empty/wrong, switch view_item -> view_promotion.
+-- Conventions per s2_code_selection.md (channel_bulletproofing, FINAL 2026-06-12): identity key = it_item_id ('i_'+offer id, format-stable all platforms, supersedes it_promotion_id which is float-formatted on Android); impression = view_promotion (view_item = discarded co-fired twin artifact); ID allowlist updated (87340 not 87348; +4 PCL ids). Android volume now included.
 
 WITH
 crv_action AS (
@@ -67,18 +64,18 @@ ga4_events AS (
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
-        CASE WHEN it_promotion_id IN ('87348','87342','87343','87344')
-              AND event_name = 'select_promotion' THEN 1 ELSE 0 END AS crv_click_e,
-        CASE WHEN it_promotion_id IN ('87348','87342','87343','87344')
-              AND event_name = 'view_item'        THEN 1 ELSE 0 END AS crv_view_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-              AND event_name = 'select_promotion' THEN 1 ELSE 0 END AS pcl_click_e,
-        CASE WHEN it_promotion_id IN ('156764','156788','162326','289661','289662','289664','289665','289666')
-              AND event_name = 'view_item'        THEN 1 ELSE 0 END AS pcl_view_e
+        CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
+              AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS crv_click_e,
+        CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
+              AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS crv_view_e,
+        CASE WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
+              AND event_name = 'select_promotion'  THEN 1 ELSE 0 END AS pcl_click_e,
+        CASE WHEN it_item_id IN ('i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
+              AND event_name = 'view_promotion'    THEN 1 ELSE 0 END AS pcl_view_e
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE event_date >= DATE '2025-02-01'
-      AND it_promotion_id IN ('87348','87342','87343','87344',
-                              '156764','156788','162326','289661','289662','289664','289665','289666')
+      AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344',
+                         'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717','i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
 ),
 -- one row per PCL deployment, engagement counted only inside that deployment's window
 dep_eng AS (
