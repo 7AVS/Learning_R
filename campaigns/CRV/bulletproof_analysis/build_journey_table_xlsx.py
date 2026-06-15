@@ -16,8 +16,8 @@ DATA = {
             {
                 "path": "A  CRV-action -> Both",
                 "viewers": 102296,
-                "crv_clicks": 45199,
-                "pcl_clicks": 21430,
+                "crv_clicks": 21430,
+                "pcl_clicks": 45199,
                 "show_view_mix": True,
             },
             {
@@ -42,8 +42,8 @@ DATA = {
             {
                 "path": "A  CRV-action -> Both",
                 "viewers": 390972,
-                "crv_clicks": 130326,
-                "pcl_clicks": 67177,
+                "crv_clicks": 67177,
+                "pcl_clicks": 130326,
                 "show_view_mix": True,
             },
             {

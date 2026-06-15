@@ -18,7 +18,7 @@ import os
 data = {
     'iOS': {
         'overlap_action': {
-            'Viewed Both':     {'Clicked both': 52692, 'Clicked CRV only': 77634, 'Clicked PCL only': 14485, 'Clicked neither': 246161},
+            'Viewed Both':     {'Clicked both': 52692, 'Clicked CRV only': 14485, 'Clicked PCL only': 77634, 'Clicked neither': 246161},
             'Viewed PCL only': {'Clicked both': 0,     'Clicked CRV only': 0,     'Clicked PCL only': 15517, 'Clicked neither': 31992},   # total 47509 uncertain (one source said 62509)
             'Viewed CRV only': {'Clicked both': 0,     'Clicked CRV only': 4812,  'Clicked PCL only': 0,     'Clicked neither': 24890},
         },
@@ -33,7 +33,7 @@ data = {
     },
     'Android': {
         'overlap_action': {
-            'Viewed Both':     {'Clicked both': 18749, 'Clicked CRV only': 26450, 'Clicked PCL only': 2681,  'Clicked neither': 54416},
+            'Viewed Both':     {'Clicked both': 18749, 'Clicked CRV only': 2681,  'Clicked PCL only': 26450, 'Clicked neither': 54416},
             'Viewed PCL only': {'Clicked both': 0,     'Clicked CRV only': 0,     'Clicked PCL only': 8757,  'Clicked neither': 56926},
             'Viewed CRV only': {'Clicked both': 0,     'Clicked CRV only': 1219,  'Clicked PCL only': 0,     'Clicked neither': 5960},   # total 7179 uncertain (raw OCR showed 71)
         },
