@@ -114,8 +114,7 @@ client_roll AS (   -- client grain: aggregate across all deployments in the wind
 )
 SELECT
     overlap_status,
-    CASE WHEN pcl_touch_number >= 5 THEN '5+'
-         ELSE CAST(pcl_touch_number AS varchar) END AS pcl_touch_bucket,
+    pcl_touch_number AS pcl_deployment_freq,
     COUNT(DISTINCT clnt_no)   AS n_clients,
     SUM(responded)            AS converters,
     SUM(any_pcl_view)         AS clients_any_pcl_view,
@@ -229,8 +228,8 @@ SELECT
         WHEN pcl_view_days = 3                    THEN '3'
         WHEN pcl_view_days = 4                    THEN '4'
         WHEN pcl_view_days = 5                    THEN '5'
-        WHEN pcl_view_days BETWEEN 6  AND 10      THEN '06-10'
-        WHEN pcl_view_days BETWEEN 11 AND 20      THEN '11-20'
+        WHEN pcl_view_days BETWEEN 6  AND 10      THEN '06_10'
+        WHEN pcl_view_days BETWEEN 11 AND 20      THEN '11_20'
         ELSE                                           '21+'
     END AS view_day_bucket,
     CASE
