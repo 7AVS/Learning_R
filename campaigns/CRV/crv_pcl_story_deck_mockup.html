@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRV × PCL — Story Deck Mockup (v2)</title>
+<style>
+  :root{
+    --navy:#0b2e63; --navy2:#16498c; --ink:#1b2330; --slate:#5d6a7a;
+    --line:#dde3ea; --paper:#fff; --bg:#eceff3;
+    --gain:#1f7a55; --loss:#b23a23; --accent:#c79330; --shade:rgba(178,58,35,.12);
+    --chip:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.45}
+  .wrap{display:flex;gap:24px;max-width:1320px;margin:0 auto;padding:24px}
+  .rail{position:sticky;top:24px;align-self:flex-start;width:248px;flex:none;
+    background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:18px}
+  .rail h4{margin:0 0 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--slate)}
+  .rail .sub{font-size:11px;color:var(--slate);margin-bottom:14px}
+  .rail ol{margin:0;padding-left:18px}
+  .rail li{font-size:12.5px;margin-bottom:10px;cursor:pointer;color:var(--ink)}
+  .rail li:hover{color:var(--navy2);text-decoration:underline}
+  .rail .mk{display:inline-block;margin-top:14px;font-size:10.5px;color:var(--slate);
+    border-top:1px dashed var(--line);padding-top:10px}
+  .deck{flex:1;min-width:0;display:flex;flex-direction:column;gap:22px}
+  .slide{background:var(--paper);border:1px solid var(--line);border-radius:10px;
+    aspect-ratio:16/9;padding:30px 34px;display:flex;flex-direction:column;
+    box-shadow:0 1px 3px rgba(16,30,54,.05);position:relative;overflow:hidden}
+  .kick{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  .atitle{font-size:21px;font-weight:700;color:var(--navy);margin:5px 0 0;line-height:1.25}
+  .atitle .em{color:var(--loss)} .atitle .emg{color:var(--gain)}
+  .rule{height:3px;width:54px;background:var(--accent);margin:12px 0 16px;border-radius:2px}
+  .body{flex:1;min-height:0;display:flex;gap:24px}
+  .col{flex:1;min-width:0;display:flex;flex-direction:column}
+  .foot{border-top:1px solid var(--line);margin-top:14px;padding-top:8px;
+    font-size:10px;color:var(--slate);display:flex;justify-content:space-between;gap:12px}
+  .pg{color:var(--slate);font-weight:600}
+  .take{background:#f4f7fb;border-left:4px solid var(--navy2);border-radius:6px;
+    padding:12px 14px;font-size:13px;color:var(--ink)}
+  .take b{color:var(--navy)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:20px;
+    padding:5px 11px;font-size:11.5px;color:var(--ink)}
+  .chip b{color:var(--navy2)}
+  .chip.q{background:#fbf6ec;border-color:#ecdcb8}
+  .tiles{display:flex;gap:14px;flex-wrap:wrap}
+  .tile{flex:1;min-width:120px;background:#f7f9fc;border:1px solid var(--line);
+    border-radius:8px;padding:12px 14px}
+  .tile .n{font-size:25px;font-weight:800;color:var(--navy);line-height:1}
+  .tile .n.loss{color:var(--loss)} .tile .n.gain{color:var(--gain)}
+  .tile .l{font-size:11px;color:var(--slate);margin-top:6px}
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--slate);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+  td.pos{color:var(--gain);font-weight:700} td.neg{color:var(--loss);font-weight:700}
+  .note{font-size:11px;color:var(--slate);margin-top:8px}
+  .lead{font-size:13.5px;color:var(--ink)}
+  ul.tight{margin:6px 0 0;padding-left:18px;font-size:13.5px}
+  ul.tight li{margin-bottom:9px}
+  .cover{background:linear-gradient(135deg,#0b2e63,#16498c);color:#fff;justify-content:center}
+  .cover .kick{color:#d9c089}
+  .cover h1{font-size:29px;margin:8px 0 0;line-height:1.22;font-weight:800;max-width:92%}
+  .cover .sub2{font-size:14px;opacity:.85;margin-top:16px}
+  .cover .meta{position:absolute;bottom:26px;left:34px;font-size:11px;opacity:.7}
+  .banner{background:#fff4e6;border:1px solid #f0d6a8;color:#8a5a12;
+    font-size:11.5px;border-radius:8px;padding:8px 12px;max-width:1320px;margin:0 auto}
+  .gap-tag{font-size:11px;color:var(--loss);font-weight:700}
+  .miss{display:flex;gap:14px}
+  .misscard{flex:1;border:1px solid var(--line);border-radius:8px;padding:13px 15px;background:#fbfcfe}
+  .misscard h5{margin:0 0 6px;font-size:13px;color:var(--navy)}
+  .misscard p{margin:0;font-size:11.5px;color:var(--slate)}
+  .misscard .tagq{font-size:10px;color:var(--accent);font-weight:700;letter-spacing:.04em}
+  .legend{display:flex;gap:16px;font-size:11px;color:var(--slate);margin-top:4px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .conf{display:flex;flex-direction:column;gap:10px}
+  .confrow{display:flex;gap:12px;align-items:flex-start;background:#f7f9fc;border:1px solid var(--line);
+    border-radius:8px;padding:11px 13px}
+  .confrow .ck{color:var(--gain);font-weight:800;font-size:15px;line-height:1.2}
+  .confrow .t{font-size:12.5px}
+  .confrow .t b{color:var(--navy)}
+  .caveat{background:#fdf3ef;border:1px solid #eecbc0;border-left:4px solid var(--loss);
+    border-radius:6px;padding:10px 13px;font-size:12px;color:#73271a;margin-top:10px}
+</style>
+</head>
+<body>
+
+<div class="banner">⚙️ <b>WORKING MOCKUP v2</b> — storyline &amp; layout. CRV value shown at a working <b>$36 / installment</b> (placeholder pending William's NIBT). Numbers from the bulletproof results catalog. Not for external use.</div>
+
+<div class="wrap">
+  <nav class="rail">
+    <h4>Storyline</h4>
+    <div class="sub">Read the titles top-to-bottom — they tell the whole argument.</div>
+    <ol>
+      <li onclick="go(0)">Recommendation: discontinue CRV on the IM banner</li>
+      <li onclick="go(1)">Executive summary</li>
+      <li onclick="go(2)">We understand both campaigns &amp; the test is valid</li>
+      <li onclick="go(3)">Who we'd suppress: recurring installment users</li>
+      <li onclick="go(4)">The net trade: who we lose vs who we gain</li>
+      <li onclick="go(5)">Targeting &amp; robustness</li>
+      <li onclick="go(6)">Three things to close the final number</li>
+    </ol>
+    <span class="mk">7 frames · audience: senior cross-LOB (PCL + CRV)</span>
+  </nav>
+
+  <main class="deck">
+
+    <!-- 0 COVER -->
+    <section class="slide cover" id="s0">
+      <div class="kick">Cards Pod · Value Management</div>
+      <h1>Discontinue CRV on the IM online banner — the PCL we recover is worth far more than the CRV we give up</h1>
+      <div class="sub2">CRV × PCL cannibalization · bulletproof re-analysis · Oct 2024 – Apr 2026</div>
+      <div class="meta">Decision asked of this room: approve discontinue (or throttle) of CRV on the mobile banner</div>
+    </section>
+
+    <!-- 1 EXEC SUMMARY (tightened) -->
+    <section class="slide" id="s1">
+      <div class="kick">Executive summary</div>
+      <div class="atitle">Running CRV on the mobile banner suppresses a higher-value product; stopping it is <span class="emg">net positive</span></div>
+      <div class="rule"></div>
+      <div class="body">
+        <div class="col" style="flex:1.25">
+          <ul class="tight">
+            <li><b>It's real &amp; causal.</b> PCL converts <b>1.08pp lower</b> when CRV is co-present (17.2%→16.2%), significant in 17 of 20 months on a valid randomized holdout.</li>
+            <li><b>It's genuine loss, not a swap.</b> ~72% of recovered PCL is net-new demand; only ~28% would have been a CRV→PCL switch.</li>
+            <li><b>The trade favours PCL.</b> PCL recovered at <b>$675/conversion</b> dwarfs CRV forgone at <b>$36/installment</b> — even counting every installment plan we'd lose.</li>
+            <li><b>Soft landing exists.</b> Harm concentrates in high PCL-propensity clients, so a throttle captures most of the value.</li>
+          </ul>
+        </div>
+        <div class="col" style="flex:.8">
+          <div class="tiles" style="flex-direction:column">
+            <div class="tile"><div class="n loss">−1.08pp</div><div class="l">PCL conversion when CRV is co-present (z = 16.2)</div></div>
+            <div class="tile"><div class="n gain">$675 / $36</div><div class="l">PCL value recovered per conv. vs CRV value per installment</div></div>
+            <div class="tile"><div class="n gain">+$21–46M</div><div class="l">net value of discontinuing CRV (every corner positive)</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span>Source: bulletproof_analysis Q04, Q07, Q05/Q06/Q13 · PCL NIBT confirmed; CRV $36 placeholder</span><span class="pg">2 / 7</span></div>
+    </section>
+
+    <!-- 2 VALIDITY CONFIRMATIONS (Q00/Q01/Q03 compressed) -->
+    <section class="slide" id="s2">
+      <div class="kick">Foundation · why you can trust the read</div>
+      <div class="atitle">We understand how both campaigns run, and the comparison is a valid, balanced experiment</div>
+      <div class="rule"></div>
+      <div class="body">
+        <div class="col" style="flex:1.15">
+          <div class="conf">
+            <div class="confrow"><span class="ck">✓</span><div class="t"><b>Both campaigns mapped.</b> CRV is always-on (~21 waves/mo, ~92-day offers); PCL deploys ~4.4 waves/mo into the same mobile surface. <span class="gap-tag">Q00</span></div></div>
+            <div class="confrow"><span class="ck">✓</span><div class="t"><b>Arms are comparable.</b> CRV-Action and CRV-Control overlap PCL at 28% vs 27% — a real randomized holdout survives in the overlap. <span class="gap-tag">Q01</span></div></div>
+            <div class="confrow"><span class="ck">✓</span><div class="t"><b>The collision is large.</b> 67% of mobile PCL deployments run head-to-head with an active CRV offer. <span class="gap-tag">Q03</span></div></div>
+          </div>
+        </div>
+        <div class="col" style="flex:.8">
+          <div class="take"><b>One line for the room:</b> this is not an observational comparison — it's an A/C holdout, so the PCL gap we show next is <i>caused</i> by CRV, not by who the clients are. The Q00–Q03 detail lives in the appendix.</div>
+        </div>
+      </div>
+      <div class="foot"><span>Source: bulletproof_analysis Q00 / Q01 / Q03 · window Oct 2024 – Apr 2026 · channel IM (CRV) / MB (PCL)</span><span class="pg">3 / 7</span></div>
+    </section>
+
+    <!-- 3 WHO WE'D SUPPRESS (Q05 + Q13) -->
+    <section class="slide" id="s3">
+      <div class="kick">Who we'd suppress &amp; how much we'd lose</div>
+      <div class="atitle">CRV converters aren't one-and-done buyers — they're <span class="em">recurring installment users</span>, so the loss must be counted in plans, not conversions</div>
+      <div class="rule"></div>
+      <div class="body">
+        <div class="col" style="flex:1.1">
+          <div class="tiles">
+            <div class="tile"><div class="n">~6.85</div><div class="l">installment plans per converting client (20-mo window)</div></div>
+            <div class="tile"><div class="n">~$980</div><div class="l">principal per plan · ~$6.7k cumulative / client</div></div>
+            <div class="tile"><div class="n">6.6% / 6.6mo</div><div class="l">APR / term — flat across all cohorts</div></div>
+          </div>
+          <div class="caveat"><b>The unit that decides the loss:</b> valuing CRV at <b>$36/installment</b> means we must count <b>installment plans</b>, not the binary "did they convert" flag. <b>Q13</b> counts clean converting clients <i>and</i> plans; Q06's flag would undercount the loss ~7×.</div>
+          <div class="chips">
+            <span class="chip q">Q05 · installment economics (profile)</span>
+            <span class="chip q">Q13 · clean clients + plans (pending run)</span>
+          </div>
+        </div>
+        <div class="col" style="flex:.78">
+          <div class="take"><b>Why the profile matters:</b> per-unit economics are flat across Action/Control and overlap/no-overlap — so we're not suppressing a richer or riskier book, just <i>more of the same</i> recurring behavior. That removes the "you're killing your best CRV customers" objection and tells us exactly what $36 multiplies: the plan count from Q13.</div>
+        </div>
+      </div>
+      <div class="foot"><span>Source: bulletproof_analysis Q05 (n_transactions excluded — fanout); Q13 supplies the clean plan count · METRICS_DICTIONARY.md</span><span class="pg">4 / 7</span></div>
+    </section>
+
+    <!-- 4 NET ECONOMICS -->
+    <section class="slide" id="s4">
+      <div class="kick">The net trade</div>
+      <div class="atitle">Most recovered PCL is demand CRV was suppressing to zero — and at $675 vs $36 the recovered value <span class="emg">far outweighs</span> the CRV given up</div>
+      <div class="rule"></div>
+      <div class="body">
+        <div class="col" style="flex:1.05">
+          <svg viewBox="0 0 380 120" width="100%" height="120">
+            <text x="0" y="13" font-size="11" fill="#5d6a7a">Where the recovered PCL comes from</text>
+            <rect x="0" y="24" width="274" height="30" rx="3" fill="#1f7a55"/>
+            <text x="10" y="44" fill="#fff" font-size="12">Net-new — was converting nothing · 72%</text>
+            <rect x="278" y="24" width="102" height="30" rx="3" fill="#c79330"/>
+            <text x="283" y="44" fill="#fff" font-size="11">Swap · 28%</text>
+            <text x="0" y="84" font-size="11.5" fill="#1b2330">Only ~28% were already converting CRV; stop CRV and</text>
+            <text x="0" y="101" font-size="11.5" fill="#1b2330">that demand routes to PCL. The other ~72% is pure lift.</text>
+          </svg>
+          <div class="chips"><span class="chip q">Q07 · substitution test</span></div>
+        </div>
+        <div class="col" style="flex:.95">
+          <table>
+            <thead><tr><th>Side</th><th>Units × value</th><th>$</th></tr></thead>
+            <tbody>
+              <tr><td>PCL recovered</td><td>42K–70K conv × $675</td><td class="pos">+$28.6M to +$47.3M *</td></tr>
+              <tr><td>CRV forgone</td><td>29,224 conv × $36</td><td class="neg">−$1.1M</td></tr>
+              <tr><td>CRV forgone (plan-adj.)</td><td>~200K plans × $36</td><td class="neg">−$7.2M †</td></tr>
+              <tr><td><b>Net</b></td><td>—</td><td class="pos"><b>+$21M to +$46M</b></td></tr>
+            </tbody>
+          </table>
+          <div class="note">*PCL base moves with the suppression window (6- vs 12-mo). †Plan-adjusted = 29,224 × ~6.85 plans/converter — a deliberate <i>upper bound</i> on the loss until Q13 measures the exact plan count.</div>
+          <div class="take" style="margin-top:10px"><b>Even overcounting the loss, PCL wins by 4–40×:</b> the worst corner (low gain, plan-level loss) is still <b>+$21M</b>; the catalog base case is <b>+$46M</b>.</div>
+        </div>
+      </div>
+      <div class="foot"><span>Source: bulletproof_analysis Q07, Q06, Q13 · PCL $675 confirmed · CRV $36/installment working assumption</span><span class="pg">5 / 7</span></div>
+    </section>
+
+    <!-- 5 TARGETING + ROBUSTNESS -->
+    <section class="slide" id="s5">
+      <div class="kick">Targeting &amp; robustness</div>
+      <div class="atitle">Cannibalization is top-heavy in PCL-propensity, so a throttle is a credible soft landing — and the effect survives every robustness check</div>
+      <div class="rule"></div>
+      <div class="body">
+        <div class="col" style="flex:1.35">
+          <svg id="decileChart" viewBox="0 0 560 188" width="100%" height="188"></svg>
+          <div class="caveat"><b>Read with care:</b> these are <b>PCL-propensity</b> deciles — we do <b>not</b> have a CRV decile. We target the throttle by where PCL is most cannibalized (the right lever); we make <b>no</b> per-decile CRV-value claims.</div>
+        </div>
+        <div class="col" style="flex:.78">
+          <div class="take"><b>It's not a timing or duration artifact:</b><br>
+            • Gap is the same whether CRV or PCL arrives first <span class="gap-tag">Q09</span><br>
+            • Gap is flat regardless of how long the overlap lasts <span class="gap-tag">Q12</span><br>
+            • Exposed clients also convert ~2–4 days slower <span class="gap-tag">Q12</span><br>
+            → a fixed concurrent-competition penalty.</div>
+          <div class="chips"><span class="chip q">Q08 · deciles</span><span class="chip q">Q11 · throttle (running)</span></div>
+        </div>
+      </div>
+      <div class="foot"><span>Source: bulletproof_analysis Q08 (PCL new_decile); robustness Q09 / Q12; throttle scenarios Q11 pending</span><span class="pg">6 / 7</span></div>
+    </section>
+
+    <!-- 6 WHAT'S MISSING -->
+    <section class="slide" id="s6">
+      <div class="kick">To close the number</div>
+      <div class="atitle">The direction is locked; three inputs turn the net into a single defensible figure</div>
+      <div class="rule"></div>
+      <div class="body" style="flex-direction:column;gap:14px">
+        <div class="miss">
+          <div class="misscard"><div class="tagq">INPUT · external</div><h5>1 · Confirm CRV value</h5><p>Replace the $36/installment placeholder with William's actual NIBT, on a per-installment basis so it matches the Q13 plan count.</p></div>
+          <div class="misscard"><div class="tagq">Q13 · built, not run</div><h5>2 · Run the clean unit counts</h5><p>Incremental converting clients and installment plans per arm → the real CRV-loss base, valued at the confirmed $36.</p></div>
+          <div class="misscard"><div class="tagq">Decision · scope</div><h5>3 · Set the suppression window</h5><p>6- vs 12-month suppression sets the incremental PCL base (~42K vs ~70K), turning the gain from a range into a point.</p></div>
+        </div>
+        <div class="take"><b>Net message:</b> every robustness check points the same way — causal, incremental, order- and dose-independent. What's left is one value input, one query run, and one scope decision — not whether the effect is real.</div>
+      </div>
+      <div class="foot"><span>Source: open items per RESULTS_CATALOG.md · analysis_plan.md §10</span><span class="pg">7 / 7</span></div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+function go(i){document.getElementById('s'+i).scrollIntoView({behavior:'smooth',block:'start'});}
+(function(){
+  const svg=document.getElementById('decileChart'); if(!svg)return;
+  const ns="http://www.w3.org/2000/svg";
+  const gaps=[3.04,2.15,0.93,0.61,0.57,0.34,0.36,0.05,0.04,0.38];
+  const W=560,H=188,L=30,R=12,T=12,B=24, max=3.2, bw=(W-L-R)/gaps.length;
+  const title=document.createElementNS(ns,'text');title.setAttribute('x',L);title.setAttribute('y',10);
+  title.setAttribute('font-size','10.5');title.setAttribute('fill','#5d6a7a');
+  title.textContent='PCL gap (Control − Action), pp, by PCL-propensity decile (1 = most likely)';svg.appendChild(title);
+  gaps.forEach((g,i)=>{
+    const h=(H-T-B)*(g/max), x=L+i*bw+6, yv=H-B-h;
+    const r=document.createElementNS(ns,'rect');
+    r.setAttribute('x',x);r.setAttribute('y',yv);r.setAttribute('width',bw-12);r.setAttribute('height',h);
+    r.setAttribute('rx','2');r.setAttribute('fill', i<3?'#b23a23':(i<6?'#d98c6a':'#e9c9a0'));svg.appendChild(r);
+    const v=document.createElementNS(ns,'text');v.setAttribute('x',x+(bw-12)/2);v.setAttribute('y',yv-4);
+    v.setAttribute('font-size','9.5');v.setAttribute('fill','#1b2330');v.setAttribute('text-anchor','middle');
+    v.textContent='+'+g.toFixed(2);svg.appendChild(v);
+    const lab=document.createElementNS(ns,'text');lab.setAttribute('x',x+(bw-12)/2);lab.setAttribute('y',H-9);
+    lab.setAttribute('font-size','9.5');lab.setAttribute('fill','#9aa6b4');lab.setAttribute('text-anchor','middle');
+    lab.textContent='D'+(i+1);svg.appendChild(lab);
+  });
+  const bl=document.createElementNS(ns,'line');bl.setAttribute('x1',L);bl.setAttribute('x2',W-R);
+  bl.setAttribute('y1',H-B);bl.setAttribute('y2',H-B);bl.setAttribute('stroke','#cdd5de');svg.appendChild(bl);
+})();
+</script>
+</body>
+</html>

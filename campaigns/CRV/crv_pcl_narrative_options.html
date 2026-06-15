@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CRV × PCL — Narrative Options</title>
+<style>
+  body {
+    margin: 0; padding: 32px 20px 60px 20px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #d8dce0;
+  }
+
+  /* ── Page header ── */
+  .page-header {
+    width: 1280px; margin: 0 auto 24px auto;
+    font-size: 13px; font-weight: 700; color: #333;
+    letter-spacing: 0.3px; padding-bottom: 10px;
+    border-bottom: 2px solid #9ca3ae;
+  }
+
+  /* ── Option label bar ── */
+  .option-bar {
+    width: 1280px; margin: 0 auto 10px auto;
+    background: #1a4e8c; color: #fff;
+    padding: 9px 18px; box-sizing: border-box;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    display: flex; align-items: baseline; gap: 16px;
+  }
+  .option-bar-desc {
+    font-weight: 400; font-size: 11.5px; opacity: 0.85; letter-spacing: 0;
+  }
+
+  .section-spacer {
+    height: 36px;
+  }
+
+  /* ── Back-pocket label bar ── */
+  .backpocket-bar {
+    width: 1280px; margin: 0 auto 10px auto;
+    background: #4a5568; color: #fff;
+    padding: 9px 18px; box-sizing: border-box;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    display: flex; align-items: baseline; gap: 16px;
+  }
+  .backpocket-bar-desc {
+    font-weight: 400; font-size: 11.5px; opacity: 0.85; letter-spacing: 0;
+  }
+
+  /* ── Slide label (small tag above each slide) ── */
+  .slide-label {
+    width: 1280px; margin: 0 auto 6px auto;
+    font-size: 10px; font-weight: 600; color: #666;
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+
+  /* ── Slide ── */
+  .slide {
+    width: 1280px; height: 720px;
+    background: #ffffff;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+    box-sizing: border-box;
+    margin: 0 auto 28px auto;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 44px 0 44px;
+    overflow: hidden;
+  }
+
+  /* ── Kicker ── */
+  .kicker {
+    font-size: 10.5px; color: #888; letter-spacing: 0.5px;
+    text-transform: uppercase; padding-bottom: 7px;
+    border-bottom: 1px solid #dde2e8; margin-bottom: 12px;
+  }
+
+  /* ── Slide title ── */
+  .title {
+    font-size: 19px; font-weight: 700; color: #1a4e8c;
+    line-height: 1.25; margin-bottom: 14px; max-width: 1180px;
+  }
+
+  /* ── Body panels ── */
+  .body-panels {
+    display: flex; gap: 28px; flex: 1; min-height: 0;
+  }
+  .panel-left  { flex: 52; min-width: 0; display: flex; flex-direction: column; }
+  .panel-right { flex: 48; min-width: 0; display: flex; flex-direction: column; }
+  .panel-title {
+    font-size: 11px; font-weight: 700; color: #1a4e8c;
+    margin-bottom: 6px; letter-spacing: 0.1px;
+  }
+
+  /* ── Divider ── */
+  .panel-divider {
+    width: 1px; background: #dde2e8; flex-shrink: 0; margin: 0 4px;
+  }
+
+  /* ── Finance / data table ── */
+  .fin-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 10.5px; margin-bottom: 0;
+  }
+  .fin-table th {
+    background: #eef2f8; color: #1a4e8c; font-weight: 700;
+    padding: 4px 7px; border-top: 2px solid #1a4e8c;
+    border-bottom: 1px solid #b0bdd0;
+    text-align: right; font-size: 9.5px; line-height: 1.3;
+    white-space: nowrap;
+  }
+  .fin-table th.col-l { text-align: left; }
+  .fin-table td {
+    padding: 4px 7px; border-bottom: 1px solid #e4e8ed;
+    text-align: right; color: #1c1c1c; font-size: 10.5px;
+  }
+  .fin-table td.col-l { text-align: left; color: #1c1c1c; font-weight: 600; }
+  .fin-table td.neg  { color: #9c3a2e; }
+  .fin-table td.pos  { color: #1c1c1c; }
+  .fin-table tr.net-row td {
+    font-weight: 700; background: #f4f6f9;
+    border-top: 2px solid #9c9fa4; border-bottom: 2px solid #9c9fa4;
+    font-size: 11px;
+  }
+  .fin-table tr.net-row td.net-neg { color: #9c3a2e; }
+
+  /* ── Callout box ── */
+  .callout {
+    border: 1px solid #4a9f9c; border-left: 3px solid #4a9f9c;
+    padding: 7px 10px 7px 11px;
+    background: #f5fbfb;
+    font-size: 10px; color: #2a2a2a;
+    line-height: 1.5; margin-top: 10px;
+  }
+  .callout-navy {
+    border-left: 3px solid #1a4e8c;
+    padding: 7px 10px 7px 11px;
+    background: #f8f9fb;
+    font-size: 10px; color: #2a2a2a;
+    line-height: 1.5; margin-top: 9px;
+  }
+
+  /* ── Bullet list ── */
+  .bullet-list { margin: 8px 0 0 0; padding: 0; list-style: none; }
+  .bullet-list li {
+    font-size: 10.5px; color: #2a2a2a; line-height: 1.5;
+    padding: 5px 0 5px 14px; position: relative;
+    border-bottom: 1px solid #edf0f3;
+  }
+  .bullet-list li:last-child { border-bottom: none; }
+  .bullet-list li::before {
+    content: "—"; position: absolute; left: 0; color: #1a4e8c; font-weight: 700;
+  }
+
+  /* ── Experiment parameters table ── */
+  .param-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 10px; margin-top: 8px;
+  }
+  .param-table th {
+    background: #eef2f8; color: #1a4e8c; font-weight: 700;
+    padding: 4px 8px; border-top: 2px solid #1a4e8c;
+    border-bottom: 1px solid #b0bdd0;
+    text-align: left; font-size: 9.5px;
+  }
+  .param-table td {
+    padding: 4px 8px; border-bottom: 1px solid #e8ebef;
+    font-size: 10px; color: #1c1c1c; vertical-align: top;
+  }
+  .param-table td.param-label { font-weight: 600; color: #1a4e8c; white-space: nowrap; width: 38%; }
+  .param-table td.param-tbd { color: #888; font-style: italic; }
+
+  /* ── Experiment panel ── */
+  .exp-hypothesis {
+    font-size: 10px; color: #2a2a2a; line-height: 1.55;
+    background: #f8f9fb; border-left: 3px solid #1a4e8c;
+    padding: 6px 10px; margin-bottom: 7px;
+  }
+  .exp-floor {
+    font-size: 10px; color: #2a2a2a; margin-bottom: 7px; line-height: 1.5;
+  }
+  .exp-objective {
+    font-size: 10px; color: #2a2a2a; margin-bottom: 7px; line-height: 1.5;
+  }
+
+  /* ── Footnote ── */
+  .footnote {
+    position: absolute; bottom: 10px; left: 44px; right: 44px;
+    font-size: 9px; color: #999; font-style: italic;
+    border-top: 1px solid #eaecef; padding-top: 5px; line-height: 1.4;
+  }
+
+  /* SVG text utility */
+  .svt { font-family: 'Segoe UI', Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ═══ PAGE HEADER ═══════════════════════════════════════════════════ -->
+<div class="page-header">CRV × PCL — narrative options &nbsp;·&nbsp; 2026-06-09</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OPTION A — Economics first
+═══════════════════════════════════════════════════════════════════════ -->
+<div class="option-bar">
+  OPTION A — Economics first
+  <span class="option-bar-desc">The trade and its size lead; targeting evidence sets up the test.</span>
+</div>
+
+<!-- ── SLIDE A1 ── -->
+<div class="slide-label">Option A — Slide 1 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">PCL cannibalization is causal and negative-sum: ≈$30MM NIBT floor recoverable</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: LOCKED PANEL -->
+    <div class="panel-left">
+      <div class="panel-title">PCL response rate by CRV exposure status (Apr 25 – Mar 26 | MB only)</div>
+      <svg viewBox="0 0 580 340" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <!-- grid -->
+        <line x1="72" y1="30"  x2="540" y2="30"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="80"  x2="540" y2="80"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="130" x2="540" y2="130" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="180" x2="540" y2="180" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="230" x2="540" y2="230" stroke="#c0c5cc" stroke-width="1.2"/>
+        <!-- Y axis labels -->
+        <text class="svt" x="67" y="234" text-anchor="end" font-size="9" fill="#888">14%</text>
+        <text class="svt" x="67" y="184" text-anchor="end" font-size="9" fill="#888">16%</text>
+        <text class="svt" x="67" y="134" text-anchor="end" font-size="9" fill="#888">18%</text>
+        <text class="svt" x="67" y="84"  text-anchor="end" font-size="9" fill="#888">20%</text>
+        <text class="svt" x="67" y="34"  text-anchor="end" font-size="9" fill="#888">22%</text>
+        <!-- scale: 8pp range (14–22%) in 200px → 25px/pp -->
+        <!-- Not-in-CRV 21.09% → y = 230 - (21.09-14)*25 = 230-177.25 = 52.75 ≈ 53 -->
+        <!-- CRV Control 17.66% → y = 230 - (17.66-14)*25 = 230-91.5 = 138.5 ≈ 139 -->
+        <!-- CRV Action  16.56% → y = 230 - (16.56-14)*25 = 230-64 = 166 -->
+        <!-- X: Apr=80, May=128, Jun=176, Jul=224, Aug=272, Sep=320, Oct=368, Nov=416, Dec=464, Jan=512, Feb=534, Mar=540 -->
+        <!-- Flat-ish lines with slight wobble -->
+        <!-- Not-in-CRV (navy, top) -->
+        <polyline points="80,55 128,50 176,53 224,56 272,52 320,51 368,54 416,53 464,50 512,55 540,52"
+          fill="none" stroke="#1a4e8c" stroke-width="2.2"/>
+        <circle cx="80" cy="55" r="3" fill="#1a4e8c"/>
+        <circle cx="540" cy="52" r="3" fill="#1a4e8c"/>
+        <text class="svt" x="544" y="56" font-size="9.5" font-weight="700" fill="#1a4e8c">21.09% (avg)</text>
+        <!-- CRV Control (mid grey) -->
+        <polyline points="80,140 128,136 176,141 224,138 272,135 320,142 368,140 416,136 464,139 512,141 540,138"
+          fill="none" stroke="#7a97b8" stroke-width="2"/>
+        <circle cx="80" cy="140" r="3" fill="#7a97b8"/>
+        <circle cx="540" cy="138" r="3" fill="#7a97b8"/>
+        <text class="svt" x="544" y="142" font-size="9.5" font-weight="700" fill="#7a97b8">17.66% (avg)</text>
+        <!-- CRV Action (light grey) -->
+        <polyline points="80,167 128,163 176,168 224,165 272,162 320,169 368,166 416,163 464,167 512,168 540,165"
+          fill="none" stroke="#a0a8b0" stroke-width="2"/>
+        <circle cx="80" cy="167" r="3" fill="#a0a8b0"/>
+        <circle cx="540" cy="165" r="3" fill="#a0a8b0"/>
+        <text class="svt" x="544" y="169" font-size="9.5" font-weight="700" fill="#a0a8b0">16.56% (avg)</text>
+        <!-- X axis labels -->
+        <text class="svt" x="80"  y="246" text-anchor="middle" font-size="8.5" fill="#888">Apr</text>
+        <text class="svt" x="128" y="246" text-anchor="middle" font-size="8.5" fill="#888">May</text>
+        <text class="svt" x="176" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jun</text>
+        <text class="svt" x="224" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jul</text>
+        <text class="svt" x="272" y="246" text-anchor="middle" font-size="8.5" fill="#888">Aug</text>
+        <text class="svt" x="320" y="246" text-anchor="middle" font-size="8.5" fill="#888">Sep</text>
+        <text class="svt" x="368" y="246" text-anchor="middle" font-size="8.5" fill="#888">Oct</text>
+        <text class="svt" x="416" y="246" text-anchor="middle" font-size="8.5" fill="#888">Nov</text>
+        <text class="svt" x="464" y="246" text-anchor="middle" font-size="8.5" fill="#888">Dec</text>
+        <text class="svt" x="512" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jan</text>
+        <text class="svt" x="540" y="246" text-anchor="middle" font-size="8.5" fill="#888">Mar</text>
+        <!-- Legend -->
+        <line x1="72" y1="270" x2="92" y2="270" stroke="#1a4e8c" stroke-width="2.2"/>
+        <text class="svt" x="96" y="274" font-size="9" fill="#444">Not in CRV</text>
+        <line x1="185" y1="270" x2="205" y2="270" stroke="#7a97b8" stroke-width="2"/>
+        <text class="svt" x="209" y="274" font-size="9" fill="#444">CRV eligible – Control</text>
+        <line x1="355" y1="270" x2="375" y2="270" stroke="#a0a8b0" stroke-width="2"/>
+        <text class="svt" x="379" y="274" font-size="9" fill="#444">CRV exposed – Action</text>
+      </svg>
+      <!-- teal callout -->
+      <div class="callout">
+        ≈42K PCL conversions / ≈$30MM NIBT — the causal floor (randomized Control vs Action)
+      </div>
+      <ul class="bullet-list" style="margin-top:7px;">
+        <li>Gap of ~1.1pp × 3.8MM overlapped leads. Floor is causal: identical populations, randomized CRV holdout.</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Substitution table + finding -->
+    <div class="panel-right">
+      <div class="panel-title">The trade, netted — outcome distribution by CRV arm<sup style="color:#9c3a2e">†</sup></div>
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th class="col-l">Outcome</th>
+            <th>Action</th>
+            <th>Control</th>
+            <th>Gap</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-l">Took neither</td>
+            <td>82.22%</td>
+            <td>81.41%</td>
+            <td class="neg">+0.81pp</td>
+          </tr>
+          <tr>
+            <td class="col-l">Took CRV only</td>
+            <td>1.15%</td>
+            <td>0.84%</td>
+            <td class="pos">+0.31pp</td>
+          </tr>
+          <tr>
+            <td class="col-l">Took PCL only</td>
+            <td>15.79%</td>
+            <td>17.06%</td>
+            <td class="neg">(1.27pp)</td>
+          </tr>
+          <tr>
+            <td class="col-l">Took both</td>
+            <td>0.85%</td>
+            <td>0.69%</td>
+            <td class="pos">+0.16pp</td>
+          </tr>
+          <tr class="net-row">
+            <td class="col-l">Total converting to anything</td>
+            <td>17.79%</td>
+            <td>18.59%</td>
+            <td class="net-neg">(0.80pp)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout-navy" style="margin-top:10px;">
+        Running CRV on overlapped clients lowers total conversions — the interaction is negative-sum, not substitution.
+      </div>
+      <ul class="bullet-list" style="margin-top:9px;">
+        <li>Net NIBT impact: CRV +$0.2MM / PCL −$31.7MM / net ≈ ($31.5MM). Value per conversion: PCL ≈$675, CRV ≈$11.</li>
+        <li>For every incremental CRV conversion gained, ≈2.5 PCL conversions are foregone (46,967 ÷ 19,106).</li>
+      </ul>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide A1 -->
+
+
+<!-- ── SLIDE A2 ── -->
+<div class="slide-label">Option A — Slide 2 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">The effect is top-decile concentrated — a designed suppression test can confirm the floor and improve on it</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: Decile gap chart -->
+    <div class="panel-left">
+      <div class="panel-title">PCL response gap by PCL propensity decile (Action − Control, pp)<sup style="color:#9c3a2e">†</sup></div>
+      <svg viewBox="0 0 560 310" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <!-- Zero line y=155 -->
+        <line x1="100" y1="155" x2="540" y2="155" stroke="#444" stroke-width="1.3"/>
+        <!-- Grid pos/neg -->
+        <line x1="100" y1="95"  x2="540" y2="95"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="100" y1="125" x2="540" y2="125" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="100" y1="185" x2="540" y2="185" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="100" y1="215" x2="540" y2="215" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="100" y1="245" x2="540" y2="245" stroke="#e8eaed" stroke-width="0.8"/>
+        <!-- Y labels -->
+        <text class="svt" x="96" y="159" text-anchor="end" font-size="9" fill="#888">0</text>
+        <text class="svt" x="96" y="129" text-anchor="end" font-size="9" fill="#888">+1</text>
+        <text class="svt" x="96" y="99"  text-anchor="end" font-size="9" fill="#888">+2</text>
+        <text class="svt" x="96" y="189" text-anchor="end" font-size="9" fill="#888">−1</text>
+        <text class="svt" x="96" y="219" text-anchor="end" font-size="9" fill="#888">−2</text>
+        <text class="svt" x="96" y="249" text-anchor="end" font-size="9" fill="#888">−3</text>
+        <!-- scale: 1pp = 30px; zero y=155 -->
+        <!-- d1 −3.04pp → h=91, bar y=155, top=155 (down), color neg -->
+        <!-- d2 −2.15pp → h=64.5≈65 -->
+        <!-- d3 −0.93pp → h=27.9≈28 -->
+        <!-- d4 −0.61pp → h=18.3≈18 -->
+        <!-- d5 −0.57pp → h=17.1≈17 -->
+        <!-- d6 −0.34pp → h=10.2≈10 -->
+        <!-- d7 −0.36pp → h=10.8≈11 -->
+        <!-- d8 +0.01pp → h=0.3≈2 (min) pos -->
+        <!-- d9 +0.08pp → h=2.4≈3 pos -->
+        <!-- d10 −0.38pp → h=11.4≈11 neg -->
+        <!-- Bar width=34, gap=4, starting x=108 -->
+        <!-- d1 x=108 -->
+        <rect x="108" y="155" width="34" height="91" fill="#9c3a2e" opacity="0.85"/>
+        <text class="svt" x="125" y="262" text-anchor="middle" font-size="8.5" fill="#555">d1</text>
+        <text class="svt" x="125" y="252" text-anchor="middle" font-size="8" fill="#9c3a2e">(3.04)</text>
+        <!-- d2 x=146 -->
+        <rect x="146" y="155" width="34" height="65" fill="#9c3a2e" opacity="0.75"/>
+        <text class="svt" x="163" y="262" text-anchor="middle" font-size="8.5" fill="#555">d2</text>
+        <text class="svt" x="163" y="227" text-anchor="middle" font-size="8" fill="#9c3a2e">(2.15)</text>
+        <!-- d3 x=184 -->
+        <rect x="184" y="155" width="34" height="28" fill="#9c3a2e" opacity="0.6"/>
+        <text class="svt" x="201" y="262" text-anchor="middle" font-size="8.5" fill="#555">d3</text>
+        <text class="svt" x="201" y="192" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.93)</text>
+        <!-- d4 x=222 -->
+        <rect x="222" y="155" width="34" height="18" fill="#9c3a2e" opacity="0.5"/>
+        <text class="svt" x="239" y="262" text-anchor="middle" font-size="8.5" fill="#555">d4</text>
+        <text class="svt" x="239" y="180" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.61)</text>
+        <!-- d5 x=260 -->
+        <rect x="260" y="155" width="34" height="17" fill="#9c3a2e" opacity="0.5"/>
+        <text class="svt" x="277" y="262" text-anchor="middle" font-size="8.5" fill="#555">d5</text>
+        <text class="svt" x="277" y="179" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.57)</text>
+        <!-- d6 x=298 -->
+        <rect x="298" y="155" width="34" height="10" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="315" y="262" text-anchor="middle" font-size="8.5" fill="#555">d6</text>
+        <text class="svt" x="315" y="173" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.34)</text>
+        <!-- d7 x=336 -->
+        <rect x="336" y="155" width="34" height="11" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="353" y="262" text-anchor="middle" font-size="8.5" fill="#555">d7</text>
+        <text class="svt" x="353" y="174" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.36)</text>
+        <!-- d8 x=374 pos -->
+        <rect x="374" y="153" width="34" height="2" fill="#4a6fa5" opacity="0.6"/>
+        <text class="svt" x="391" y="262" text-anchor="middle" font-size="8.5" fill="#555">d8</text>
+        <text class="svt" x="391" y="148" text-anchor="middle" font-size="8" fill="#4a6fa5">+0.01</text>
+        <!-- d9 x=412 pos -->
+        <rect x="412" y="152" width="34" height="3" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="429" y="262" text-anchor="middle" font-size="8.5" fill="#555">d9</text>
+        <text class="svt" x="429" y="147" text-anchor="middle" font-size="8" fill="#4a6fa5">+0.08</text>
+        <!-- d10 x=450 neg -->
+        <rect x="450" y="155" width="34" height="11" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="467" y="262" text-anchor="middle" font-size="8.5" fill="#555">d10</text>
+        <text class="svt" x="467" y="174" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.38)</text>
+        <!-- X axis label -->
+        <text class="svt" x="295" y="280" text-anchor="middle" font-size="9" fill="#888">PCL propensity decile (d1 = highest propensity)</text>
+        <!-- Y axis title -->
+        <text class="svt" x="14" y="155" transform="rotate(-90 14 155)" text-anchor="middle" font-size="9" fill="#888">Gap (pp, Action − Control)</text>
+      </svg>
+      <ul class="bullet-list" style="margin-top:6px;">
+        <li>The gap concentrates in deciles 1–2 — the strongest PCL prospects — while CRV's own gain there is +0.85pp<sup style="color:#9c3a2e">†</sup>. Concentration defines the targeting dimension for the test.</li>
+        <li>d1 contains 1,240,216 leads (18.5% of the overlap population).</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Experiment panel -->
+    <div class="panel-right">
+      <div class="panel-title">Proposed next iteration — designed suppression test</div>
+      <div class="exp-hypothesis">
+        <strong>H1:</strong> CRV exposure during an active PCL journey reduces PCL conversion. Confirmed at floor via borrowed randomization (existing CRV control).
+      </div>
+      <div class="exp-floor">
+        <strong>The floor:</strong> ≈42K PCL conversions / ≈$30MM NIBT per 12 months, recoverable by suppressing CRV on overlapped clients.
+      </div>
+      <div class="exp-objective">
+        <strong>Test objective:</strong> confirm the floor under deliberate design, and test whether targeted suppression — by model decile, contact frequency, or journey stage — improves on it.
+      </div>
+      <table class="param-table">
+        <thead>
+          <tr><th>Parameter</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="param-label">Population</td>
+            <td>Overlapped (PCL-eligible) clients</td>
+          </tr>
+          <tr>
+            <td class="param-label">Arms</td>
+            <td class="param-tbd">[pod to define — e.g., BAU / full suppression / targeted suppression] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Split &amp; power</td>
+            <td class="param-tbd">[MDE calc to follow] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Primary metric</td>
+            <td>PCL conversion (campaign-level)</td>
+          </tr>
+          <tr>
+            <td class="param-label">Window</td>
+            <td class="param-tbd">[12 mo] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide A2 -->
+
+
+<div class="section-spacer"></div>
+<!-- ═══════════════════════════════════════════════════════════════════
+     OPTION B — Concentration first
+═══════════════════════════════════════════════════════════════════════ -->
+<div class="option-bar">
+  OPTION B — Concentration first
+  <span class="option-bar-desc">Where-it-hurts leads; economics close the case before the test.</span>
+</div>
+
+<!-- ── SLIDE B1 ── -->
+<div class="slide-label">Option B — Slide 1 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">Cannibalization is causal and concentrates on the strongest PCL prospects</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: LOCKED PANEL (identical) -->
+    <div class="panel-left">
+      <div class="panel-title">PCL response rate by CRV exposure status (Apr 25 – Mar 26 | MB only)</div>
+      <svg viewBox="0 0 580 340" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <line x1="72" y1="30"  x2="540" y2="30"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="80"  x2="540" y2="80"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="130" x2="540" y2="130" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="180" x2="540" y2="180" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="230" x2="540" y2="230" stroke="#c0c5cc" stroke-width="1.2"/>
+        <text class="svt" x="67" y="234" text-anchor="end" font-size="9" fill="#888">14%</text>
+        <text class="svt" x="67" y="184" text-anchor="end" font-size="9" fill="#888">16%</text>
+        <text class="svt" x="67" y="134" text-anchor="end" font-size="9" fill="#888">18%</text>
+        <text class="svt" x="67" y="84"  text-anchor="end" font-size="9" fill="#888">20%</text>
+        <text class="svt" x="67" y="34"  text-anchor="end" font-size="9" fill="#888">22%</text>
+        <polyline points="80,55 128,50 176,53 224,56 272,52 320,51 368,54 416,53 464,50 512,55 540,52"
+          fill="none" stroke="#1a4e8c" stroke-width="2.2"/>
+        <circle cx="80" cy="55" r="3" fill="#1a4e8c"/>
+        <circle cx="540" cy="52" r="3" fill="#1a4e8c"/>
+        <text class="svt" x="544" y="56" font-size="9.5" font-weight="700" fill="#1a4e8c">21.09% (avg)</text>
+        <polyline points="80,140 128,136 176,141 224,138 272,135 320,142 368,140 416,136 464,139 512,141 540,138"
+          fill="none" stroke="#7a97b8" stroke-width="2"/>
+        <circle cx="80" cy="140" r="3" fill="#7a97b8"/>
+        <circle cx="540" cy="138" r="3" fill="#7a97b8"/>
+        <text class="svt" x="544" y="142" font-size="9.5" font-weight="700" fill="#7a97b8">17.66% (avg)</text>
+        <polyline points="80,167 128,163 176,168 224,165 272,162 320,169 368,166 416,163 464,167 512,168 540,165"
+          fill="none" stroke="#a0a8b0" stroke-width="2"/>
+        <circle cx="80" cy="167" r="3" fill="#a0a8b0"/>
+        <circle cx="540" cy="165" r="3" fill="#a0a8b0"/>
+        <text class="svt" x="544" y="169" font-size="9.5" font-weight="700" fill="#a0a8b0">16.56% (avg)</text>
+        <text class="svt" x="80"  y="246" text-anchor="middle" font-size="8.5" fill="#888">Apr</text>
+        <text class="svt" x="128" y="246" text-anchor="middle" font-size="8.5" fill="#888">May</text>
+        <text class="svt" x="176" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jun</text>
+        <text class="svt" x="224" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jul</text>
+        <text class="svt" x="272" y="246" text-anchor="middle" font-size="8.5" fill="#888">Aug</text>
+        <text class="svt" x="320" y="246" text-anchor="middle" font-size="8.5" fill="#888">Sep</text>
+        <text class="svt" x="368" y="246" text-anchor="middle" font-size="8.5" fill="#888">Oct</text>
+        <text class="svt" x="416" y="246" text-anchor="middle" font-size="8.5" fill="#888">Nov</text>
+        <text class="svt" x="464" y="246" text-anchor="middle" font-size="8.5" fill="#888">Dec</text>
+        <text class="svt" x="512" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jan</text>
+        <text class="svt" x="540" y="246" text-anchor="middle" font-size="8.5" fill="#888">Mar</text>
+        <line x1="72" y1="270" x2="92" y2="270" stroke="#1a4e8c" stroke-width="2.2"/>
+        <text class="svt" x="96" y="274" font-size="9" fill="#444">Not in CRV</text>
+        <line x1="185" y1="270" x2="205" y2="270" stroke="#7a97b8" stroke-width="2"/>
+        <text class="svt" x="209" y="274" font-size="9" fill="#444">CRV eligible – Control</text>
+        <line x1="355" y1="270" x2="375" y2="270" stroke="#a0a8b0" stroke-width="2"/>
+        <text class="svt" x="379" y="274" font-size="9" fill="#444">CRV exposed – Action</text>
+      </svg>
+      <div class="callout">
+        ≈42K PCL conversions / ≈$30MM NIBT — the causal floor (randomized Control vs Action)
+      </div>
+      <ul class="bullet-list" style="margin-top:7px;">
+        <li>Gap of ~1.1pp × 3.8MM overlapped leads. Floor is causal: identical populations, randomized CRV holdout.</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Decile gap chart (same as A2-left, slightly larger) -->
+    <div class="panel-right">
+      <div class="panel-title">PCL response gap by PCL propensity decile (Action − Control, pp)<sup style="color:#9c3a2e">†</sup></div>
+      <svg viewBox="0 0 490 310" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <line x1="90" y1="155" x2="475" y2="155" stroke="#444" stroke-width="1.3"/>
+        <line x1="90" y1="95"  x2="475" y2="95"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="90" y1="125" x2="475" y2="125" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="90" y1="185" x2="475" y2="185" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="90" y1="215" x2="475" y2="215" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="90" y1="245" x2="475" y2="245" stroke="#e8eaed" stroke-width="0.8"/>
+        <text class="svt" x="86" y="159" text-anchor="end" font-size="9" fill="#888">0</text>
+        <text class="svt" x="86" y="129" text-anchor="end" font-size="9" fill="#888">+1</text>
+        <text class="svt" x="86" y="99"  text-anchor="end" font-size="9" fill="#888">+2</text>
+        <text class="svt" x="86" y="189" text-anchor="end" font-size="9" fill="#888">−1</text>
+        <text class="svt" x="86" y="219" text-anchor="end" font-size="9" fill="#888">−2</text>
+        <text class="svt" x="86" y="249" text-anchor="end" font-size="9" fill="#888">−3</text>
+        <!-- bars same as A2 but adjusted x -->
+        <rect x="96"  y="155" width="30" height="91" fill="#9c3a2e" opacity="0.85"/>
+        <text class="svt" x="111" y="262" text-anchor="middle" font-size="8.5" fill="#555">d1</text>
+        <text class="svt" x="111" y="252" text-anchor="middle" font-size="8" fill="#9c3a2e">(3.04)</text>
+        <rect x="130" y="155" width="30" height="65" fill="#9c3a2e" opacity="0.75"/>
+        <text class="svt" x="145" y="262" text-anchor="middle" font-size="8.5" fill="#555">d2</text>
+        <text class="svt" x="145" y="227" text-anchor="middle" font-size="8" fill="#9c3a2e">(2.15)</text>
+        <rect x="164" y="155" width="30" height="28" fill="#9c3a2e" opacity="0.6"/>
+        <text class="svt" x="179" y="262" text-anchor="middle" font-size="8.5" fill="#555">d3</text>
+        <text class="svt" x="179" y="191" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.93)</text>
+        <rect x="198" y="155" width="30" height="18" fill="#9c3a2e" opacity="0.5"/>
+        <text class="svt" x="213" y="262" text-anchor="middle" font-size="8.5" fill="#555">d4</text>
+        <text class="svt" x="213" y="180" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.61)</text>
+        <rect x="232" y="155" width="30" height="17" fill="#9c3a2e" opacity="0.5"/>
+        <text class="svt" x="247" y="262" text-anchor="middle" font-size="8.5" fill="#555">d5</text>
+        <text class="svt" x="247" y="179" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.57)</text>
+        <rect x="266" y="155" width="30" height="10" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="281" y="262" text-anchor="middle" font-size="8.5" fill="#555">d6</text>
+        <text class="svt" x="281" y="173" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.34)</text>
+        <rect x="300" y="155" width="30" height="11" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="315" y="262" text-anchor="middle" font-size="8.5" fill="#555">d7</text>
+        <text class="svt" x="315" y="174" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.36)</text>
+        <rect x="334" y="153" width="30" height="2" fill="#4a6fa5" opacity="0.6"/>
+        <text class="svt" x="349" y="262" text-anchor="middle" font-size="8.5" fill="#555">d8</text>
+        <text class="svt" x="349" y="148" text-anchor="middle" font-size="8" fill="#4a6fa5">+0.01</text>
+        <rect x="368" y="152" width="30" height="3" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="383" y="262" text-anchor="middle" font-size="8.5" fill="#555">d9</text>
+        <text class="svt" x="383" y="147" text-anchor="middle" font-size="8" fill="#4a6fa5">+0.08</text>
+        <rect x="402" y="155" width="30" height="11" fill="#9c3a2e" opacity="0.45"/>
+        <text class="svt" x="417" y="262" text-anchor="middle" font-size="8.5" fill="#555">d10</text>
+        <text class="svt" x="417" y="174" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.38)</text>
+        <text class="svt" x="280" y="280" text-anchor="middle" font-size="9" fill="#888">PCL propensity decile (d1 = highest propensity)</text>
+      </svg>
+      <ul class="bullet-list" style="margin-top:6px;">
+        <li>The gap concentrates in deciles 1–2 — the strongest PCL prospects — while CRV's own gain there is +0.85pp<sup style="color:#9c3a2e">†</sup>.</li>
+        <li>Concentration defines the targeting dimension for the test: selectively suppressing CRV on top-decile clients recovers the most PCL value at the lowest CRV cost.</li>
+      </ul>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide B1 -->
+
+
+<!-- ── SLIDE B2 ── -->
+<div class="slide-label">Option B — Slide 2 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">The trade is negative-sum at every level — the evidence supports a designed suppression test</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: Net economics mini-table -->
+    <div class="panel-left">
+      <div class="panel-title">Net economics of the interaction — campaign-level NIBT<sup style="color:#9c3a2e">†</sup></div>
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th class="col-l">Campaign</th>
+            <th>Incremental conversions</th>
+            <th>NIBT impact</th>
+            <th>Value / conversion</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-l">CRV (gain)</td>
+            <td>+19,106</td>
+            <td>+$0.2MM</td>
+            <td>≈$11</td>
+          </tr>
+          <tr>
+            <td class="col-l">PCL (loss)</td>
+            <td class="neg">(46,967)</td>
+            <td class="neg">($31.7MM)</td>
+            <td class="neg">≈$675</td>
+          </tr>
+          <tr class="net-row">
+            <td class="col-l" colspan="2">Net NIBT — overlapped population</td>
+            <td class="net-neg" colspan="2">($31.5MM)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout-navy" style="margin-top:10px;">
+        Each incremental CRV conversion carries ≈$11 of NIBT against ≈$675 foregone per displaced PCL conversion<sup style="color:#9c3a2e">†</sup>. Total conversions fall 0.8pp — negative-sum.
+      </div>
+      <ul class="bullet-list" style="margin-top:9px;">
+        <li>Running CRV on overlapped clients lowers total conversions — the interaction is negative-sum, not substitution.</li>
+        <li>The gap concentrates in the top deciles where PCL prospects are strongest: d1 −3.04pp, d2 −2.15pp.</li>
+        <li>Robustness: lift is negative across sequencing orders and in every overlap-duration bucket (31–90 days).</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Experiment panel -->
+    <div class="panel-right">
+      <div class="panel-title">Proposed next iteration — designed suppression test</div>
+      <div class="exp-hypothesis">
+        <strong>H1:</strong> CRV exposure during an active PCL journey reduces PCL conversion. Confirmed at floor via borrowed randomization (existing CRV control).
+      </div>
+      <div class="exp-floor">
+        <strong>The floor:</strong> ≈42K PCL conversions / ≈$30MM NIBT per 12 months, recoverable by suppressing CRV on overlapped clients.
+      </div>
+      <div class="exp-objective">
+        <strong>Test objective:</strong> confirm the floor under deliberate design, and test whether targeted suppression — by model decile, contact frequency, or journey stage — improves on it.
+      </div>
+      <table class="param-table">
+        <thead>
+          <tr><th>Parameter</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="param-label">Population</td>
+            <td>Overlapped (PCL-eligible) clients</td>
+          </tr>
+          <tr>
+            <td class="param-label">Arms</td>
+            <td class="param-tbd">[pod to define — e.g., BAU / full suppression / targeted suppression] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Split &amp; power</td>
+            <td class="param-tbd">[MDE calc to follow] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Primary metric</td>
+            <td>PCL conversion (campaign-level)</td>
+          </tr>
+          <tr>
+            <td class="param-label">Window</td>
+            <td class="param-tbd">[12 mo] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide B2 -->
+
+
+<div class="section-spacer"></div>
+<!-- ═══════════════════════════════════════════════════════════════════
+     OPTION C — Saturation kept
+═══════════════════════════════════════════════════════════════════════ -->
+<div class="option-bar">
+  OPTION C — Saturation kept
+  <span class="option-bar-desc">Keeps the current slide-1 right panel (saturation); slide 2 carries economics + deciles condensed + test.</span>
+</div>
+
+<!-- ── SLIDE C1 ── -->
+<div class="slide-label">Option C — Slide 1 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">MB saturation reached; PCL cannibalization confirmed — ≈$30MM NIBT floor</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: LOCKED PANEL (identical) -->
+    <div class="panel-left">
+      <div class="panel-title">PCL response rate by CRV exposure status (Apr 25 – Mar 26 | MB only)</div>
+      <svg viewBox="0 0 580 340" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <line x1="72" y1="30"  x2="540" y2="30"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="80"  x2="540" y2="80"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="130" x2="540" y2="130" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="180" x2="540" y2="180" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="72" y1="230" x2="540" y2="230" stroke="#c0c5cc" stroke-width="1.2"/>
+        <text class="svt" x="67" y="234" text-anchor="end" font-size="9" fill="#888">14%</text>
+        <text class="svt" x="67" y="184" text-anchor="end" font-size="9" fill="#888">16%</text>
+        <text class="svt" x="67" y="134" text-anchor="end" font-size="9" fill="#888">18%</text>
+        <text class="svt" x="67" y="84"  text-anchor="end" font-size="9" fill="#888">20%</text>
+        <text class="svt" x="67" y="34"  text-anchor="end" font-size="9" fill="#888">22%</text>
+        <polyline points="80,55 128,50 176,53 224,56 272,52 320,51 368,54 416,53 464,50 512,55 540,52"
+          fill="none" stroke="#1a4e8c" stroke-width="2.2"/>
+        <circle cx="80" cy="55" r="3" fill="#1a4e8c"/>
+        <circle cx="540" cy="52" r="3" fill="#1a4e8c"/>
+        <text class="svt" x="544" y="56" font-size="9.5" font-weight="700" fill="#1a4e8c">21.09% (avg)</text>
+        <polyline points="80,140 128,136 176,141 224,138 272,135 320,142 368,140 416,136 464,139 512,141 540,138"
+          fill="none" stroke="#7a97b8" stroke-width="2"/>
+        <circle cx="80" cy="140" r="3" fill="#7a97b8"/>
+        <circle cx="540" cy="138" r="3" fill="#7a97b8"/>
+        <text class="svt" x="544" y="142" font-size="9.5" font-weight="700" fill="#7a97b8">17.66% (avg)</text>
+        <polyline points="80,167 128,163 176,168 224,165 272,162 320,169 368,166 416,163 464,167 512,168 540,165"
+          fill="none" stroke="#a0a8b0" stroke-width="2"/>
+        <circle cx="80" cy="167" r="3" fill="#a0a8b0"/>
+        <circle cx="540" cy="165" r="3" fill="#a0a8b0"/>
+        <text class="svt" x="544" y="169" font-size="9.5" font-weight="700" fill="#a0a8b0">16.56% (avg)</text>
+        <text class="svt" x="80"  y="246" text-anchor="middle" font-size="8.5" fill="#888">Apr</text>
+        <text class="svt" x="128" y="246" text-anchor="middle" font-size="8.5" fill="#888">May</text>
+        <text class="svt" x="176" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jun</text>
+        <text class="svt" x="224" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jul</text>
+        <text class="svt" x="272" y="246" text-anchor="middle" font-size="8.5" fill="#888">Aug</text>
+        <text class="svt" x="320" y="246" text-anchor="middle" font-size="8.5" fill="#888">Sep</text>
+        <text class="svt" x="368" y="246" text-anchor="middle" font-size="8.5" fill="#888">Oct</text>
+        <text class="svt" x="416" y="246" text-anchor="middle" font-size="8.5" fill="#888">Nov</text>
+        <text class="svt" x="464" y="246" text-anchor="middle" font-size="8.5" fill="#888">Dec</text>
+        <text class="svt" x="512" y="246" text-anchor="middle" font-size="8.5" fill="#888">Jan</text>
+        <text class="svt" x="540" y="246" text-anchor="middle" font-size="8.5" fill="#888">Mar</text>
+        <line x1="72" y1="270" x2="92" y2="270" stroke="#1a4e8c" stroke-width="2.2"/>
+        <text class="svt" x="96" y="274" font-size="9" fill="#444">Not in CRV</text>
+        <line x1="185" y1="270" x2="205" y2="270" stroke="#7a97b8" stroke-width="2"/>
+        <text class="svt" x="209" y="274" font-size="9" fill="#444">CRV eligible – Control</text>
+        <line x1="355" y1="270" x2="375" y2="270" stroke="#a0a8b0" stroke-width="2"/>
+        <text class="svt" x="379" y="274" font-size="9" fill="#444">CRV exposed – Action</text>
+      </svg>
+      <div class="callout">
+        ≈42K PCL conversions / ≈$30MM NIBT — the causal floor (randomized Control vs Action)
+      </div>
+      <ul class="bullet-list" style="margin-top:7px;">
+        <li>Gap of ~1.1pp × 3.8MM overlapped leads. Floor is causal: identical populations, randomized CRV holdout.</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Saturation panel -->
+    <div class="panel-right">
+      <div class="panel-title">Contact frequency distribution — CRV MB deployments</div>
+      <div style="font-size:9px; color:#888; font-style:italic; margin-bottom:4px;">allocation view — descriptive</div>
+      <svg viewBox="0 0 440 270" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:2px;">
+        <!-- Bars: freq 1-7, horizontal bar chart -->
+        <!-- Response rate values: 1.47, 1.40, 1.28, 1.10, 0.92, 0.65, 0.65 (declining) -->
+        <!-- Population %: 1:5%, 2:4%, 3:5%, 4:7%, 5:13%, 6:65%, 7:1% -->
+        <!-- Y: bars at y=30,65,100,135,170,205,240. Bar height=25. X scale: 0-70% → 300px, 1%=4.28px -->
+        <!-- Gridlines -->
+        <line x1="80" y1="20"  x2="380" y2="20"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="80" y1="270" x2="380" y2="270" stroke="#c0c5cc" stroke-width="1"/>
+        <line x1="80" y1="20"  x2="80"  y2="270" stroke="#c0c5cc" stroke-width="1"/>
+        <!-- Axis labels top -->
+        <text class="svt" x="80"  y="16" text-anchor="middle" font-size="8" fill="#888">0%</text>
+        <text class="svt" x="165" y="16" text-anchor="middle" font-size="8" fill="#888">20%</text>
+        <text class="svt" x="250" y="16" text-anchor="middle" font-size="8" fill="#888">40%</text>
+        <text class="svt" x="335" y="16" text-anchor="middle" font-size="8" fill="#888">60%</text>
+        <line x1="165" y1="20" x2="165" y2="270" stroke="#e8eaed" stroke-width="0.7" stroke-dasharray="3,3"/>
+        <line x1="250" y1="20" x2="250" y2="270" stroke="#e8eaed" stroke-width="0.7" stroke-dasharray="3,3"/>
+        <line x1="335" y1="20" x2="335" y2="270" stroke="#e8eaed" stroke-width="0.7" stroke-dasharray="3,3"/>
+        <!-- Freq labels -->
+        <text class="svt" x="73" y="47"  text-anchor="end" font-size="9.5" fill="#444">Freq 1</text>
+        <text class="svt" x="73" y="82"  text-anchor="end" font-size="9.5" fill="#444">Freq 2</text>
+        <text class="svt" x="73" y="117" text-anchor="end" font-size="9.5" fill="#444">Freq 3</text>
+        <text class="svt" x="73" y="152" text-anchor="end" font-size="9.5" fill="#444">Freq 4</text>
+        <text class="svt" x="73" y="187" text-anchor="end" font-size="9.5" fill="#444">Freq 5</text>
+        <text class="svt" x="73" y="222" text-anchor="end" font-size="9.5" fill="#444">Freq 6</text>
+        <text class="svt" x="73" y="257" text-anchor="end" font-size="9.5" fill="#444">Freq 7</text>
+        <!-- Bars: 1pp = 300/70 ≈ 4.286px -->
+        <!-- Freq 1: 5% → w=21.4 -->
+        <rect x="80" y="30" width="21" height="25" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="105" y="47" font-size="9" fill="#4a6fa5">5% &nbsp; RR: 1.47%</text>
+        <!-- Freq 2: 4% → w=17 -->
+        <rect x="80" y="65" width="17" height="25" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="101" y="82" font-size="9" fill="#4a6fa5">4% &nbsp; RR: 1.40%</text>
+        <!-- Freq 3: 5% → w=21 -->
+        <rect x="80" y="100" width="21" height="25" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="105" y="117" font-size="9" fill="#4a6fa5">5% &nbsp; RR: 1.28%</text>
+        <!-- Freq 4: 7% → w=30 -->
+        <rect x="80" y="135" width="30" height="25" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="114" y="152" font-size="9" fill="#4a6fa5">7% &nbsp; RR: 1.10%</text>
+        <!-- Freq 5: 13% → w=56 -->
+        <rect x="80" y="170" width="56" height="25" fill="#4a6fa5" opacity="0.7"/>
+        <text class="svt" x="140" y="187" font-size="9" fill="#4a6fa5">13% &nbsp; RR: 0.92%</text>
+        <!-- Freq 6: 65% → w=279, navy highlighted -->
+        <rect x="80" y="205" width="279" height="25" fill="#1a4e8c"/>
+        <text class="svt" x="363" y="222" font-size="9" font-weight="700" fill="#1a4e8c">65% &nbsp; RR: 0.65%</text>
+        <!-- Freq 7: 1% → w=4 -->
+        <rect x="80" y="240" width="4" height="25" fill="#4a6fa5" opacity="0.5"/>
+        <text class="svt" x="88" y="257" font-size="9" fill="#888">1% &nbsp; RR: 0.65%</text>
+      </svg>
+      <ul class="bullet-list" style="margin-top:6px;">
+        <li>86% of contacts land at frequency 4–7 where response declines; only 5% new clients per deployment (Q2 2026).</li>
+        <li>3.5MM deployments over 3 months. The client pool is not refreshing — returns are diminishing.</li>
+      </ul>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide C1 -->
+
+
+<!-- ── SLIDE C2 ── -->
+<div class="slide-label">Option C — Slide 2 of 2</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">Negative-sum, top-decile concentrated — proposed: a designed suppression test against the ≈$30MM floor</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: stacked — net balance mini-table + 5-bar decile strip -->
+    <div class="panel-left">
+      <div class="panel-title">Net economics — overlapped clients<sup style="color:#9c3a2e">†</sup></div>
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th class="col-l">Campaign</th>
+            <th>Incremental conversions</th>
+            <th>NIBT</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-l">CRV (gain)</td>
+            <td>+19,106</td>
+            <td>+$0.2MM</td>
+          </tr>
+          <tr>
+            <td class="col-l">PCL (loss)</td>
+            <td class="neg">(46,967)</td>
+            <td class="neg">($31.7MM)</td>
+          </tr>
+          <tr class="net-row">
+            <td class="col-l" colspan="2">Net NIBT impact</td>
+            <td class="net-neg">($31.5MM)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:14px;">
+        <div class="panel-title">Gap concentrates in top deciles — PCL response gap (Action − Control, pp)<sup style="color:#9c3a2e">†</sup></div>
+        <svg viewBox="0 0 550 160" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:4px;">
+          <!-- 5-bar strip: d1, d2, d3, d5, d9 -->
+          <!-- Zero line y=80; scale 1pp=25px; bar width=60 -->
+          <line x1="40" y1="80" x2="530" y2="80" stroke="#444" stroke-width="1"/>
+          <text class="svt" x="36" y="84" text-anchor="end" font-size="9" fill="#888">0</text>
+          <text class="svt" x="36" y="59" text-anchor="end" font-size="9" fill="#888">+1</text>
+          <text class="svt" x="36" y="109" text-anchor="end" font-size="9" fill="#888">−1</text>
+          <text class="svt" x="36" y="134" text-anchor="end" font-size="9" fill="#888">−2</text>
+          <line x1="40" y1="55" x2="530" y2="55" stroke="#e8eaed" stroke-width="0.7"/>
+          <line x1="40" y1="105" x2="530" y2="105" stroke="#e8eaed" stroke-width="0.7"/>
+          <line x1="40" y1="130" x2="530" y2="130" stroke="#e8eaed" stroke-width="0.7"/>
+          <!-- d1 x=50, −3.04pp → h=76 too tall, cap at 75 -->
+          <rect x="50"  y="80" width="60" height="75" fill="#9c3a2e" opacity="0.85"/>
+          <text class="svt" x="80"  y="150" text-anchor="middle" font-size="9.5" fill="#555">d1</text>
+          <text class="svt" x="80"  y="144" text-anchor="middle" font-size="8" fill="#9c3a2e">(3.04)</text>
+          <!-- d2 x=120, −2.15pp → h=54 -->
+          <rect x="120" y="80" width="60" height="54" fill="#9c3a2e" opacity="0.75"/>
+          <text class="svt" x="150" y="150" text-anchor="middle" font-size="9.5" fill="#555">d2</text>
+          <text class="svt" x="150" y="140" text-anchor="middle" font-size="8" fill="#9c3a2e">(2.15)</text>
+          <!-- d3 x=190, −0.93pp → h=23 -->
+          <rect x="190" y="80" width="60" height="23" fill="#9c3a2e" opacity="0.6"/>
+          <text class="svt" x="220" y="150" text-anchor="middle" font-size="9.5" fill="#555">d3</text>
+          <text class="svt" x="220" y="110" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.93)</text>
+          <!-- d5 x=260, −0.57pp → h=14 -->
+          <rect x="260" y="80" width="60" height="14" fill="#9c3a2e" opacity="0.5"/>
+          <text class="svt" x="290" y="150" text-anchor="middle" font-size="9.5" fill="#555">d5</text>
+          <text class="svt" x="290" y="101" text-anchor="middle" font-size="8" fill="#9c3a2e">(0.57)</text>
+          <!-- d9 x=330, +0.08pp → h=2 pos -->
+          <rect x="330" y="78" width="60" height="2" fill="#4a6fa5" opacity="0.7"/>
+          <text class="svt" x="360" y="150" text-anchor="middle" font-size="9.5" fill="#555">d9</text>
+          <text class="svt" x="360" y="73" text-anchor="middle" font-size="8" fill="#4a6fa5">+0.08</text>
+          <text class="svt" x="290" y="158" text-anchor="middle" font-size="8.5" fill="#888">Selected deciles — full gradient in appendix</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Experiment panel -->
+    <div class="panel-right">
+      <div class="panel-title">Proposed next iteration — designed suppression test</div>
+      <div class="exp-hypothesis">
+        <strong>H1:</strong> CRV exposure during an active PCL journey reduces PCL conversion. Confirmed at floor via borrowed randomization (existing CRV control).
+      </div>
+      <div class="exp-floor">
+        <strong>The floor:</strong> ≈42K PCL conversions / ≈$30MM NIBT per 12 months, recoverable by suppressing CRV on overlapped clients.
+      </div>
+      <div class="exp-objective">
+        <strong>Test objective:</strong> confirm the floor under deliberate design, and test whether targeted suppression — by model decile, contact frequency, or journey stage — improves on it.
+      </div>
+      <table class="param-table">
+        <thead>
+          <tr><th>Parameter</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="param-label">Population</td>
+            <td>Overlapped (PCL-eligible) clients</td>
+          </tr>
+          <tr>
+            <td class="param-label">Arms</td>
+            <td class="param-tbd">[pod to define — e.g., BAU / full suppression / targeted suppression] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Split &amp; power</td>
+            <td class="param-tbd">[MDE calc to follow] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+          <tr>
+            <td class="param-label">Primary metric</td>
+            <td>PCL conversion (campaign-level)</td>
+          </tr>
+          <tr>
+            <td class="param-label">Window</td>
+            <td class="param-tbd">[12 mo] <em style="color:#888; font-size:9px;">[to be defined with pod]</em></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    † Computed on substitution-test base (4,184,004 leads); to be restated on the Apr 25 – Mar 26 aligned base. &nbsp;|&nbsp; MB channel. Parentheses denote negative values.
+  </div>
+</div><!-- /slide C2 -->
+
+
+<div class="section-spacer" style="height:48px;"></div>
+<!-- ═══════════════════════════════════════════════════════════════════
+     BACK-POCKET SLIDE
+═══════════════════════════════════════════════════════════════════════ -->
+<div class="backpocket-bar">
+  BACK-POCKET — mechanism &amp; robustness (only if challenged)
+  <span class="backpocket-bar-desc">Supporting detail for follow-up questions; not part of any option's primary narrative.</span>
+</div>
+
+<div class="slide-label">Back-pocket slide (common to all options)</div>
+<div class="slide">
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+  <div class="title">Mechanism: co-exposure splits banner attention; result robust to sequencing and overlap duration</div>
+
+  <div class="body-panels">
+
+    <!-- LEFT: Channel grouped bar chart -->
+    <div class="panel-left">
+      <div class="panel-title">Banner click rate by banner type and CRV arm (GA4, MB, ~3-month window)</div>
+      <svg viewBox="0 0 520 270" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:4px;">
+        <!-- gridlines -->
+        <line x1="65" y1="30"  x2="470" y2="30"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="68"  x2="470" y2="68"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="106" x2="470" y2="106" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="144" x2="470" y2="144" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="182" x2="470" y2="182" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="220" x2="470" y2="220" stroke="#bbbfc5" stroke-width="1.2"/>
+        <!-- Y axis labels: 0-16% in 4pp increments, 1pp=12.2px, y=220-val*12.2 -->
+        <text class="svt" x="60" y="224" text-anchor="end" font-size="9" fill="#888">0%</text>
+        <text class="svt" x="60" y="186" text-anchor="end" font-size="9" fill="#888">3%</text>
+        <text class="svt" x="60" y="148" text-anchor="end" font-size="9" fill="#888">6%</text>
+        <text class="svt" x="60" y="110" text-anchor="end" font-size="9" fill="#888">9%</text>
+        <text class="svt" x="60" y="72"  text-anchor="end" font-size="9" fill="#888">12%</text>
+        <text class="svt" x="60" y="34"  text-anchor="end" font-size="9" fill="#888">15%</text>
+        <!-- scale: 1pp = (220-30)/15 = 12.67px; zero y=220 -->
+        <!-- PCL Control 14.4% → h=14.4*12.67=182.4≈182, y=220-182=38 -->
+        <!-- PCL Action  10.5% → h=10.5*12.67=133.0≈133, y=220-133=87 -->
+        <!-- CRV Control 0.0%  → h=3 (min floor) -->
+        <!-- CRV Action  5.9%  → h=5.9*12.67=74.75≈75, y=220-75=145 -->
+        <!-- Total Control 14.4% → same as PCL Control in separate group -->
+        <!-- Total Action  12.4% → h=12.4*12.67=157.1≈157, y=220-157=63 -->
+        <!-- Group 1: PCL banner  x=90 (ctrl) 150 (action) -->
+        <rect x="90"  y="38"  width="50" height="182" fill="#1a4e8c"/>
+        <text class="svt" x="115" y="31" text-anchor="middle" font-size="10" font-weight="700" fill="#1a4e8c">14.4%</text>
+        <rect x="148" y="87"  width="50" height="133" fill="#7a97b8"/>
+        <text class="svt" x="173" y="80" text-anchor="middle" font-size="10" font-weight="700" fill="#7a97b8">10.5%</text>
+        <text class="svt" x="134" y="238" text-anchor="middle" font-size="10" font-weight="600" fill="#333">PCL banner</text>
+        <!-- Group 2: CRV banner  x=230 ctrl, 290 action -->
+        <rect x="230" y="217" width="50" height="3"   fill="#1a4e8c" opacity="0.3"/>
+        <text class="svt" x="255" y="211" text-anchor="middle" font-size="10" font-weight="700" fill="#aaa">0.0%</text>
+        <rect x="288" y="145" width="50" height="75"  fill="#7a97b8"/>
+        <text class="svt" x="313" y="138" text-anchor="middle" font-size="10" font-weight="700" fill="#7a97b8">5.9%</text>
+        <text class="svt" x="274" y="238" text-anchor="middle" font-size="10" font-weight="600" fill="#333">CRV banner</text>
+        <!-- Group 3: Total any  x=370 ctrl, 420 action -->
+        <rect x="370" y="38"  width="50" height="182" fill="#1a4e8c" opacity="0.7"/>
+        <text class="svt" x="395" y="31" text-anchor="middle" font-size="10" font-weight="700" fill="#1a4e8c">14.4%</text>
+        <rect x="424" y="63"  width="50" height="157" fill="#7a97b8" opacity="0.7"/>
+        <text class="svt" x="449" y="56" text-anchor="middle" font-size="10" font-weight="700" fill="#7a97b8">12.4%</text>
+        <text class="svt" x="412" y="238" text-anchor="middle" font-size="10" font-weight="600" fill="#333">Total any banner</text>
+        <!-- Legend -->
+        <rect x="65" y="252" width="14" height="11" fill="#1a4e8c"/>
+        <text class="svt" x="83" y="262" font-size="9.5" fill="#444">Control (no CRV shown)</text>
+        <rect x="225" y="252" width="14" height="11" fill="#7a97b8"/>
+        <text class="svt" x="243" y="262" font-size="9.5" fill="#444">Action (CRV shown alongside PCL)</text>
+      </svg>
+      <ul class="bullet-list" style="margin-top:6px;">
+        <li>Total banner engagement falls (14.4% → 12.4%) — attention is destroyed, not reallocated, mirroring the −0.8pp total-conversion result.</li>
+        <li>Among clients viewing both banners, 27.5% click PCL vs 35.7% when PCL shown alone.</li>
+      </ul>
+    </div>
+
+    <div class="panel-divider"></div>
+
+    <!-- RIGHT: Robustness list -->
+    <div class="panel-right">
+      <div class="panel-title">Robustness checks</div>
+      <ul class="bullet-list" style="margin-top:4px;">
+        <li><strong>Sequencing:</strong> gap 1.05pp (CRV arrives first) vs 0.95pp (PCL first) — arrival order is immaterial to the direction or approximate magnitude of the effect.</li>
+        <li><strong>Overlap duration:</strong> lift is negative in every duration bucket (−0.9 to −1.1pp across 31–90 days) — the effect is not driven by short or incidental co-exposure.</li>
+        <li><strong>Randomization integrity:</strong> control CRV-view contamination 6 of 55,155 (0.011%) — the control group is clean; the gap is not an artifact of spillover.</li>
+        <li><strong>Source independence:</strong> click and conversion data come from different sources and different windows (GA4 single MB placement ~3 mo vs campaign response 12 mo). Compared within metric only, never across.</li>
+        <li><strong>Floor is conservative:</strong> the ≈42K / ≈$30MM figure is computed on the randomized CRV control holdout — the cleanest possible causal estimate, no modelling assumptions.</li>
+      </ul>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote">
+    GA4 banner events, single MB placement (credit card section); Action n=1,064,491 / Control n=55,155; control CRV-view contamination 6 of 55,155 (0.011%); [PERIOD]. &nbsp;|&nbsp; Conversion data: campaign-level response, Apr 25 – Mar 26, MB channel.
+  </div>
+</div><!-- /back-pocket slide -->
+
+</body>
+</html>

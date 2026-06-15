@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRV × PCL — Story Deck v4</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #E9E9E9;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+    padding: 32px 24px 48px;
+  }
+  .page-header {
+    text-align: center;
+    font-size: 11px;
+    color: #888;
+    letter-spacing: 0.09em;
+    margin-bottom: 28px;
+    text-transform: uppercase;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+  .slide {
+    width: 1280px;
+    min-height: 720px;
+    background: #FFFFFF;
+    border: 1px solid #CFCFCF;
+    margin: 0 auto 40px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .slide-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 48px 12px;
+    border-bottom: 1px solid #D9D9D9;
+    flex-shrink: 0;
+  }
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #888;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+  .section-tag {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #888;
+    font-variant: small-caps;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+  .slide-body {
+    flex: 1;
+    padding: 22px 48px 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .slide-headline {
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+    font-size: 27px;
+    font-weight: 600;
+    color: #14365D;
+    line-height: 1.22;
+    margin-bottom: 18px;
+    max-width: 1140px;
+  }
+  .content-area {
+    display: flex;
+    flex: 1;
+    gap: 0;
+  }
+  .half {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding-right: 28px;
+  }
+  .half.right-half {
+    padding-right: 0;
+    padding-left: 28px;
+    border-left: 1px solid #D9D9D9;
+  }
+  .slide-footer {
+    padding: 8px 48px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-shrink: 0;
+    margin-top: 6px;
+  }
+  .footnote {
+    font-size: 10.5px;
+    color: #888;
+    font-style: italic;
+    line-height: 1.4;
+    max-width: 1060px;
+  }
+  .slide-num {
+    font-size: 11px;
+    color: #888;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .panel-title {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    color: #666;
+    font-weight: 600;
+    margin-bottom: 10px;
+    text-transform: none;
+  }
+  .caption {
+    font-size: 12px;
+    color: #666;
+    line-height: 1.5;
+    margin-top: 8px;
+  }
+  sup { font-size: 0.72em; vertical-align: super; }
+
+  /* Callout box */
+  .callout-box {
+    border: 1px solid #2E6E6A;
+    padding: 8px 13px;
+    margin-top: 10px;
+    display: inline-block;
+    max-width: 380px;
+  }
+  .callout-box p {
+    font-size: 12px;
+    color: #14365D;
+    line-height: 1.5;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+
+  /* Table styles */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+  .data-table th {
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    border-bottom: 1px solid #D9D9D9;
+    padding: 5px 8px;
+    text-align: left;
+    background: #F7F7F7;
+  }
+  .data-table th.num { text-align: right; }
+  .data-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #E8E8E8;
+    color: #14365D;
+  }
+  .data-table td.num { text-align: right; }
+  .data-table td.neg { color: #A23B2E; text-align: right; }
+  .data-table tr.total-row td {
+    font-weight: 700;
+    border-top: 1.5px solid #14365D;
+    border-bottom: none;
+    background: #F0F4F8;
+  }
+  .data-table td.label-col { color: #333; }
+
+  /* Params table for slide 2 */
+  .params-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+  }
+  .params-table tr { border-bottom: 1px solid #E8E8E8; }
+  .params-table td { padding: 6px 10px; vertical-align: top; }
+  .params-table td:first-child {
+    font-weight: 600;
+    color: #666;
+    font-size: 11.5px;
+    width: 130px;
+    white-space: nowrap;
+  }
+  .params-table td:last-child { color: #14365D; }
+  .params-table td.italic-grey { color: #888; font-style: italic; }
+
+  /* Bullet list */
+  .bullet-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .bullet-list li {
+    font-size: 12.5px;
+    color: #14365D;
+    line-height: 1.55;
+    padding-left: 14px;
+    position: relative;
+    margin-bottom: 5px;
+  }
+  .bullet-list li::before {
+    content: "\2022";
+    position: absolute;
+    left: 0;
+    color: #6E8CAD;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  /* Slide 5 multiples grid */
+  .multiples-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+    background: #D9D9D9;
+    border: 1px solid #D9D9D9;
+    flex: 1;
+  }
+  .multiple-cell {
+    background: #FFFFFF;
+    padding: 13px 16px 9px;
+    display: flex;
+    flex-direction: column;
+  }
+  .multiple-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 7px;
+    letter-spacing: 0.02em;
+  }
+  .multiple-caption {
+    font-size: 11px;
+    color: #666;
+    margin-top: 5px;
+  }
+  .integrity-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    flex: 1;
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .integrity-stat {
+    font-size: 13px;
+    color: #14365D;
+    line-height: 1.4;
+    padding-left: 12px;
+    border-left: 2.5px solid #14365D;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">CRV &times; PCL &nbsp;&mdash;&nbsp; story deck v4 &nbsp;&mdash;&nbsp; 2026-06-09 &nbsp;&mdash;&nbsp; mockup for PPT translation</div>
+
+<!-- ==================== SLIDE 1 ==================== -->
+<div class="slide">
+  <div class="slide-header">
+    <span class="kicker">Campaign Performance — Credit Card Installment Trigger [CRV]</span>
+    <span class="section-tag">The Story</span>
+  </div>
+  <div class="slide-body">
+    <h1 class="slide-headline">Running both banners on the same client shrinks total conversions — PCL pays for CRV's gains</h1>
+    <div class="content-area">
+
+      <!-- LEFT: line chart -->
+      <div class="half">
+        <div class="panel-title">PCL response rate by CRV exposure status (Apr 25 – Mar 26 | MB only)</div>
+        <svg width="100%" height="290" viewBox="0 0 560 290" preserveAspectRatio="xMidYMid meet">
+          <!-- Y gridlines + labels: range 15%–23%, grid at 16,18,20,22 -->
+          <!-- Scale: 15%=270, 23%=10 → 1% = (270-10)/8 = 32.5px -->
+          <!-- 23%→y=10, 22%→y=42.5, 21%→y=75, 20%→y=107.5, 19%→y=140, 18%→y=172.5, 17%→y=205, 16%→y=237.5, 15%→y=270 -->
+          <line x1="52" y1="10" x2="52" y2="270" stroke="#D9D9D9" stroke-width="1"/>
+          <!-- Horizontal gridlines at 16, 18, 20, 22 -->
+          <line x1="52" y1="237" x2="490" y2="237" stroke="#D9D9D9" stroke-width="0.8"/>
+          <line x1="52" y1="172" x2="490" y2="172" stroke="#D9D9D9" stroke-width="0.8"/>
+          <line x1="52" y1="107" x2="490" y2="107" stroke="#D9D9D9" stroke-width="0.8"/>
+          <line x1="52" y1="42"  x2="490" y2="42"  stroke="#D9D9D9" stroke-width="0.8"/>
+          <!-- Bottom axis -->
+          <line x1="52" y1="270" x2="490" y2="270" stroke="#D9D9D9" stroke-width="1"/>
+          <!-- Y labels -->
+          <text x="46" y="241" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">16%</text>
+          <text x="46" y="176" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">18%</text>
+          <text x="46" y="111" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">20%</text>
+          <text x="46" y="46"  text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">22%</text>
+          <!-- X labels: 12 months, spacing 438/11=39.8 -->
+          <text x="52"  y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Apr</text>
+          <text x="92"  y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">May</text>
+          <text x="132" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Jun</text>
+          <text x="172" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Jul</text>
+          <text x="212" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Aug</text>
+          <text x="252" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Sep</text>
+          <text x="292" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Oct</text>
+          <text x="332" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Nov</text>
+          <text x="372" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Dec</text>
+          <text x="412" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Jan</text>
+          <text x="452" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Feb</text>
+          <text x="490" y="282" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">Mar</text>
+
+          <!--
+            Not in CRV avg 21.09%: y = 270 - (21.09-15)*32.5 = 270 - 197.9 = 72.1 ≈ 72
+            Control avg 17.66%:    y = 270 - (17.66-15)*32.5 = 270 - 86.45 = 183.6 ≈ 184
+            Action avg 16.56%:     y = 270 - (16.56-15)*32.5 = 270 - 50.7 = 219.3 ≈ 219
+          -->
+
+          <!-- Line 1: Not in CRV — navy #14365D, gentle variation around 72 -->
+          <polyline points="52,70 92,66 132,74 172,68 212,73 252,69 292,67 332,74 372,70 412,75 452,71 490,72"
+            fill="none" stroke="#14365D" stroke-width="2"/>
+
+          <!-- Line 2: Control — steel blue #6E8CAD, varying around 184 -->
+          <polyline points="52,181 92,187 132,183 172,186 212,180 252,188 292,184 332,187 372,181 412,185 452,189 490,184"
+            fill="none" stroke="#6E8CAD" stroke-width="1.8"/>
+
+          <!-- Line 3: Action — light blue-grey, varying around 219 -->
+          <polyline points="52,218 92,222 132,217 172,223 212,219 252,222 292,216 332,222 372,220 412,224 452,218 490,220"
+            fill="none" stroke="#9EB5C8" stroke-width="1.8"/>
+
+          <!-- Right-edge direct labels -->
+          <text x="497" y="76"  font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#14365D" font-weight="600">Not in CRV — 21.09% avg</text>
+          <text x="497" y="188" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#6E8CAD" font-weight="600">Control — 17.66%</text>
+          <text x="497" y="224" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#9EB5C8" font-weight="600">Action — 16.56%</text>
+        </svg>
+
+        <div class="callout-box">
+          <p>&#8776;42K PCL conversions / &#8776;$30MM NIBT<br><strong>— the causal floor (randomized holdout)</strong></p>
+        </div>
+        <div class="caption">Gap ~1.1pp &times; 3.8MM overlapped leads. Causal: identical populations, randomized CRV holdout.</div>
+      </div>
+
+      <!-- RIGHT: stacked column chart -->
+      <div class="half right-half">
+        <div style="display:flex;align-items:baseline;gap:5px;margin-bottom:10px;">
+          <div class="panel-title" style="margin-bottom:0;">Converters per 1,000 overlapped clients</div>
+          <sup style="font-size:11px;color:#888;">†</sup>
+        </div>
+
+        <!--
+          Stacked columns: Control (186 total) and Action (178 total)
+          Segments: PCL-only (navy), Both (mid), CRV-only (teal)
+          Control: 171 PCL-only, 7 Both, 8 CRV-only = 186
+          Action:  158 PCL-only, 8 Both, 12 CRV-only = 178
+
+          SVG: columns side by side, centered
+          Scale: 1 unit = 1.8px.  Max=186→334.8px
+          Column width: 90px, gap between columns: 70px
+          Col1 x=70, Col2 x=220
+
+          Control:
+            CRV-only (teal) bottom: 8 units = 14.4px, y from bottom
+            Both (mid) next: 7 units = 12.6px
+            PCL-only (navy) top: 171 units = 307.8px
+            Total: 186 = 334.8px
+
+          Action:
+            CRV-only: 12 = 21.6px
+            Both: 8 = 14.4px
+            PCL-only: 158 = 284.4px
+            Total: 178 = 320.4px
+
+          Chart area bottom at y=360, top at ~y=20
+          Bottom y=360. Bars build upward.
+        -->
+        <svg width="100%" height="360" viewBox="0 0 380 360" preserveAspectRatio="xMidYMid meet">
+          <!-- Gridlines: horizontal at 50, 100, 150 units (90, 180, 270px from bottom=360) -->
+          <line x1="40" y1="360" x2="360" y2="360" stroke="#D9D9D9" stroke-width="1"/>
+          <line x1="40" y1="270" x2="360" y2="270" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="40" y1="180" x2="360" y2="180" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="40" y1="90"  x2="360" y2="90"  stroke="#D9D9D9" stroke-width="0.7"/>
+          <text x="36" y="363" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">0</text>
+          <text x="36" y="273" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">50</text>
+          <text x="36" y="183" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">100</text>
+          <text x="36" y="93"  text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">150</text>
+
+          <!-- Reference line at Control total = 186 → y = 360 - 186*1.8 = 360-334.8 = 25.2 ≈ 25 -->
+          <line x1="40" y1="25" x2="360" y2="25" stroke="#A23B2E" stroke-width="1" stroke-dasharray="4,3"/>
+
+          <!-- CONTROL COLUMN (x=70, width=90) -->
+          <!-- Bottom segment: CRV-only teal 8 units = 14.4px → y=360-14.4=345.6, h=14.4 -->
+          <rect x="70" y="346" width="90" height="14" fill="#2E6E6A"/>
+          <!-- Mid segment: Both, slate mid tone #8FA8BA, 7 units = 12.6 → y=346-12.6=333.4 -->
+          <rect x="70" y="333" width="90" height="13" fill="#8FA8BA"/>
+          <!-- Top segment: PCL-only navy 171 units = 307.8px → y=333-307.8=25.2 ≈ 25 -->
+          <rect x="70" y="25" width="90" height="308" fill="#14365D"/>
+          <!-- Total label on top -->
+          <text x="115" y="18" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="13" fill="#14365D" font-weight="700">186</text>
+          <!-- Column label bottom -->
+          <text x="115" y="378" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#666">Control</text>
+          <!-- Segment labels inside -->
+          <text x="115" y="180" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#FFFFFF">171</text>
+          <text x="115" y="341" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#FFFFFF">7</text>
+          <text x="115" y="357" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#FFFFFF">8</text>
+
+          <!-- ACTION COLUMN (x=220, width=90) -->
+          <!-- CRV-only teal 12 units = 21.6px → y=360-21.6=338.4 ≈ 338 -->
+          <rect x="220" y="338" width="90" height="22" fill="#2E6E6A"/>
+          <!-- Both 8 units = 14.4px → y=338-14.4=323.6 ≈ 324 -->
+          <rect x="220" y="324" width="90" height="14" fill="#8FA8BA"/>
+          <!-- PCL-only 158 units = 284.4px → y=324-284.4=39.6 ≈ 40 -->
+          <rect x="220" y="40" width="90" height="284" fill="#6E8CAD"/>
+          <!-- Total label on top -->
+          <text x="265" y="33" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="13" fill="#14365D" font-weight="700">178</text>
+          <!-- Column label bottom -->
+          <text x="265" y="378" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#666">Action</text>
+          <!-- Segment labels inside -->
+          <text x="265" y="190" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#FFFFFF">158</text>
+          <text x="265" y="333" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#FFFFFF">8</text>
+          <text x="265" y="354" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#FFFFFF">12</text>
+
+          <!-- Red annotation: −8 total next to reference line, over Action column -->
+          <text x="320" y="22" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#A23B2E" font-weight="700">&#8722;8 total</text>
+
+          <!-- Legend -->
+          <rect x="42" y="8" width="10" height="8" fill="#14365D"/>
+          <text x="56" y="16" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">PCL-only</text>
+          <rect x="110" y="8" width="10" height="8" fill="#8FA8BA"/>
+          <text x="124" y="16" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">Both</text>
+          <rect x="158" y="8" width="10" height="8" fill="#2E6E6A"/>
+          <text x="172" y="16" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">CRV-only</text>
+        </svg>
+
+        <ul class="bullet-list" style="margin-top:6px;">
+          <li>PCL converters fall by 12 per 1,000; CRV adds 5 — the rest convert to nothing.</li>
+          <li>Total conversion 18.59% → 17.79%<sup>†</sup> — negative-sum, not substitution.</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+  <div class="slide-footer">
+    <div class="footnote">&#8224; substitution-test base (4.18MM leads); to be restated on the Apr 25 &ndash; Mar 26 aligned base.</div>
+    <span class="slide-num">1 / 5</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 2 ==================== -->
+<div class="slide">
+  <div class="slide-header">
+    <span class="kicker">Campaign Performance — Credit Card Installment Trigger [CRV]</span>
+    <span class="section-tag">The Story</span>
+  </div>
+  <div class="slide-body">
+    <h1 class="slide-headline">Losses concentrate among the strongest PCL prospects — a designed test can confirm the ≈$30MM floor and improve on it</h1>
+    <div class="content-area">
+
+      <!-- LEFT: vertical bar chart, decile gaps -->
+      <div class="half">
+        <div class="panel-title">PCL response gap by model decile (Action − Control, pp)</div>
+        <!--
+          11 bars: d0–d10
+          Values: d0 −0.35, d1 −3.04, d2 −2.15, d3 −0.93, d4 −0.61, d5 −0.57, d6 −0.34, d7 −0.36, d8 +0.01, d9 +0.08, d10 −0.38
+          Zero axis visible; negatives extend down (red), positives up (grey)
+          Scale: 1pp = 55px. Zero at y=70.
+          Max depth: 3.04pp → 167px below zero
+          Max up: 0.08pp → 4px above zero
+          Chart area: top y=20 (axis area), zero=70, bottom ~260
+          Bar width: 35px, gap: 7px, 11 bars total = 11*35+10*7=455, start x=50
+        -->
+        <svg width="100%" height="310" viewBox="0 0 540 310" preserveAspectRatio="xMidYMid meet">
+          <!-- Y axis -->
+          <line x1="44" y1="20" x2="44" y2="270" stroke="#D9D9D9" stroke-width="1"/>
+          <!-- Zero line -->
+          <line x1="44" y1="70" x2="510" y2="70" stroke="#14365D" stroke-width="1.2"/>
+          <!-- Gridlines at −1, −2, −3 pp -->
+          <line x1="44" y1="125" x2="510" y2="125" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="44" y1="180" x2="510" y2="180" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="44" y1="237" x2="510" y2="237" stroke="#D9D9D9" stroke-width="0.7"/>
+          <!-- Y labels -->
+          <text x="40" y="73"  text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">0</text>
+          <text x="40" y="128" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">−1pp</text>
+          <text x="40" y="183" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">−2pp</text>
+          <text x="40" y="240" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">−3pp</text>
+
+          <!-- d0: −0.35pp → h=19.25, red down from y=70 -->
+          <rect x="50"  y="70"  width="35" height="19" fill="#A23B2E" opacity="0.6"/>
+          <text x="67"  y="100" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d0</text>
+
+          <!-- d1: −3.04pp → h=167.2, full red -->
+          <rect x="92"  y="70"  width="35" height="167" fill="#A23B2E"/>
+          <text x="109" y="65"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#A23B2E" font-weight="700">−3.04</text>
+          <text x="109" y="252" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d1</text>
+
+          <!-- d2: −2.15pp → h=118.25, red -->
+          <rect x="134" y="70"  width="35" height="118" fill="#A23B2E" opacity="0.8"/>
+          <text x="151" y="65"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#A23B2E" font-weight="700">−2.15</text>
+          <text x="151" y="203" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d2</text>
+
+          <!-- d3: −0.93pp → h=51.15 -->
+          <rect x="176" y="70"  width="35" height="51"  fill="#A23B2E" opacity="0.6"/>
+          <text x="193" y="135" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d3</text>
+
+          <!-- d4: −0.61pp → h=33.55 -->
+          <rect x="218" y="70"  width="35" height="34"  fill="#A23B2E" opacity="0.5"/>
+          <text x="235" y="116" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d4</text>
+
+          <!-- d5: −0.57pp → h=31.35 -->
+          <rect x="260" y="70"  width="35" height="31"  fill="#A23B2E" opacity="0.5"/>
+          <text x="277" y="113" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d5</text>
+
+          <!-- d6: −0.34pp → h=18.7 -->
+          <rect x="302" y="70"  width="35" height="19"  fill="#A23B2E" opacity="0.45"/>
+          <text x="319" y="100" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d6</text>
+
+          <!-- d7: −0.36pp → h=19.8 -->
+          <rect x="344" y="70"  width="35" height="20"  fill="#A23B2E" opacity="0.45"/>
+          <text x="361" y="101" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d7</text>
+
+          <!-- d8: +0.01pp → h≈0.55, show as 3px, grey-green up -->
+          <rect x="386" y="67"  width="35" height="3"   fill="#999" opacity="0.6"/>
+          <text x="403" y="60"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">+0.01</text>
+          <text x="403" y="82"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d8</text>
+
+          <!-- d9: +0.08pp → h=4.4, show as 5px, grey-green up -->
+          <rect x="428" y="65"  width="35" height="5"   fill="#999" opacity="0.7"/>
+          <text x="445" y="58"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#888">+0.08</text>
+          <text x="445" y="82"  text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d9</text>
+
+          <!-- d10: −0.38pp → h=20.9 -->
+          <rect x="470" y="70"  width="35" height="21"  fill="#A23B2E" opacity="0.45"/>
+          <text x="487" y="102" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#666">d10</text>
+        </svg>
+        <div class="caption">Deciles 1–2 carry most of the loss (d1 alone = 18.5% of leads); CRV's own gain in d1 is +0.85pp.<sup>†</sup></div>
+      </div>
+
+      <!-- RIGHT: parameters table + floor note -->
+      <div class="half right-half">
+        <div class="panel-title">Proposed next iteration — designed suppression test</div>
+
+        <table class="params-table" style="margin-top:10px;">
+          <tr>
+            <td>Hypothesis</td>
+            <td>CRV exposure during an active PCL journey reduces PCL conversion — confirmed at floor via the existing randomized control</td>
+          </tr>
+          <tr>
+            <td>Population</td>
+            <td>Overlapped (PCL-eligible) clients</td>
+          </tr>
+          <tr>
+            <td>Arms</td>
+            <td class="italic-grey">[pod to define — e.g. BAU / full suppression / targeted suppression by decile or frequency]</td>
+          </tr>
+          <tr>
+            <td>Split &amp; power</td>
+            <td class="italic-grey">[MDE calculation to follow]</td>
+          </tr>
+          <tr>
+            <td>Primary metric</td>
+            <td>PCL conversion (campaign-level)</td>
+          </tr>
+          <tr>
+            <td>Window</td>
+            <td>12 months</td>
+          </tr>
+        </table>
+
+        <div style="margin-top:22px;padding:13px 16px;background:#F0F4F8;border-left:3px solid #14365D;">
+          <p style="font-size:13px;color:#14365D;line-height:1.6;">The floor is already causal — &#8776;42K conversions / &#8776;$30MM per 12 months. The test confirms it under deliberate design and prices the upside of targeted suppression.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <div class="slide-footer">
+    <div class="footnote">&#8224; substitution-test base (4.18MM leads); to be restated on the Apr 25 &ndash; Mar 26 aligned base.</div>
+    <span class="slide-num">2 / 5</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 3 ==================== -->
+<div class="slide">
+  <div class="slide-header">
+    <span class="kicker">Campaign Performance — Credit Card Installment Trigger [CRV]</span>
+    <span class="section-tag">Support</span>
+  </div>
+  <div class="slide-body">
+    <h1 class="slide-headline">Each displaced PCL conversion forgoes ≈$675 of NIBT; each CRV conversion gained returns ≈$11<sup>†</sup></h1>
+    <div class="content-area">
+
+      <!-- LEFT: net balance table -->
+      <div class="half">
+        <div class="panel-title">Net balance — portfolio economics by arm<sup>†</sup></div>
+
+        <table class="data-table" style="margin-top:6px;">
+          <thead>
+            <tr>
+              <th class="label-col">Outcome</th>
+              <th class="num">With CRV (Action)</th>
+              <th class="num">Without CRV (Control)</th>
+              <th class="num">Gap</th>
+              <th class="num">NIBT<sup>†</sup></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="label-col">PCL conversion</td>
+              <td class="num">16.63%</td>
+              <td class="num">17.75%</td>
+              <td class="neg">(1.12pp)</td>
+              <td class="neg">($31.7MM)</td>
+            </tr>
+            <tr>
+              <td class="label-col">CRV conversion</td>
+              <td class="num">1.99%</td>
+              <td class="num">1.53%</td>
+              <td class="num" style="color:#2E6E6A;">+0.46pp</td>
+              <td class="num" style="color:#2E6E6A;">+$0.2MM</td>
+            </tr>
+            <tr class="total-row">
+              <td class="label-col">NET</td>
+              <td class="num">—</td>
+              <td class="num">—</td>
+              <td class="num">—</td>
+              <td class="neg">≈ ($31.5MM)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style="margin-top:16px;">
+          <p style="font-size:13px;color:#14365D;line-height:1.6;">&#8776;61:1 value asymmetry per conversion; total conversions fall 0.8pp<sup>†</sup> — the interaction is negative-sum.</p>
+        </div>
+      </div>
+
+      <!-- RIGHT: waterfall chart -->
+      <div class="half right-half">
+        <div class="panel-title">NIBT bridge — portfolio impact<sup>†</sup></div>
+
+        <!--
+          Waterfall: 3 items
+          CRV gain: +$0.2MM (navy, up bar)
+          PCL loss: −$31.7MM (red, down bar)
+          Net: ≈ −$31.5MM (navy, result bar)
+
+          SVG: zero at y=90
+          Scale: 1MM = 7px
+          +0.2MM → 1.4px → show as 10px (labeled)
+          −31.7MM → 221.9px
+          Net = −31.5MM → 220.5px
+
+          Bar width 80px, bar positions:
+          Bar1 (CRV gain): x=70, from zero=90 up to y=80 (height=10)
+          Connector from y=80 to Bar2 top
+          Bar2 (PCL loss): x=190, from y=90 down, height=222
+          Connector from y=312 to Bar3 bottom
+          Bar3 (Net): x=310, from y=90 down height=220 (drawn as filled block)
+        -->
+        <svg width="100%" height="380" viewBox="0 0 450 380" preserveAspectRatio="xMidYMid meet">
+          <!-- Y axis -->
+          <line x1="60" y1="20" x2="60" y2="345" stroke="#D9D9D9" stroke-width="1"/>
+          <!-- Zero line -->
+          <line x1="60" y1="90" x2="420" y2="90" stroke="#14365D" stroke-width="1.2"/>
+          <!-- Gridlines at −10, −20, −30MM -->
+          <line x1="60" y1="160" x2="420" y2="160" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="60" y1="230" x2="420" y2="230" stroke="#D9D9D9" stroke-width="0.7"/>
+          <line x1="60" y1="300" x2="420" y2="300" stroke="#D9D9D9" stroke-width="0.7"/>
+          <text x="56" y="93"  text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">$0</text>
+          <text x="56" y="163" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">&#8722;$10MM</text>
+          <text x="56" y="233" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">&#8722;$20MM</text>
+          <text x="56" y="303" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">&#8722;$30MM</text>
+
+          <!-- Bar 1: CRV gain +$0.2MM — navy small up bar -->
+          <!-- y from 80 to 90, height=10 -->
+          <rect x="70" y="80" width="80" height="10" fill="#14365D"/>
+          <text x="110" y="75" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#14365D" font-weight="700">+$0.2MM</text>
+          <text x="110" y="108" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">CRV gain</text>
+
+          <!-- Dashed connector: from bar1 top (y=80) to bar2 start (top-of-loss) -->
+          <line x1="150" y1="80" x2="190" y2="80" stroke="#D9D9D9" stroke-width="1" stroke-dasharray="3,2"/>
+
+          <!-- Bar 2: PCL loss −$31.7MM → 221.9px down from y=90 → rect y=90 h=222 -->
+          <rect x="190" y="90" width="80" height="222" fill="#A23B2E"/>
+          <text x="230" y="85" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#A23B2E" font-weight="700">&#8722;$31.7MM</text>
+          <text x="230" y="328" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">PCL loss</text>
+
+          <!-- Dashed connector: from bar2 bottom (y=312) to bar3 bottom -->
+          <line x1="270" y1="312" x2="310" y2="312" stroke="#D9D9D9" stroke-width="1" stroke-dasharray="3,2"/>
+
+          <!-- Bar 3: Net ≈−$31.5MM → 220px → y=90 to y=312 (height 222) but draw from y=92 h=220 for visual diff -->
+          <rect x="310" y="90" width="80" height="220" fill="#14365D"/>
+          <text x="350" y="85" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10" fill="#14365D" font-weight="700">&#8776; &#8722;$31.5MM<sup>†</sup></text>
+          <text x="350" y="328" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#666">Net</text>
+          <!-- Note inside bar -->
+          <text x="350" y="218" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#FFFFFF" opacity="0.85">(&#8776; &#8722;$30MM</text>
+          <text x="350" y="230" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#FFFFFF" opacity="0.85">aligned base)</text>
+        </svg>
+      </div>
+
+    </div>
+  </div>
+  <div class="slide-footer">
+    <div class="footnote">&#8224; substitution-test base (4.18MM leads); to be restated on the Apr 25 &ndash; Mar 26 aligned base.</div>
+    <span class="slide-num">3 / 5</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 4 ==================== -->
+<div class="slide">
+  <div class="slide-header">
+    <span class="kicker">Campaign Performance — Credit Card Installment Trigger [CRV]</span>
+    <span class="section-tag">Support</span>
+  </div>
+  <div class="slide-body">
+    <h1 class="slide-headline">Co-exposure splits banner attention: PCL clicks fall 27%, and total engagement falls with them</h1>
+
+    <!-- Full-width clustered column chart -->
+    <div class="panel-title" style="margin-bottom:8px;">Banner click rates by arm — GA4 MB (credit card section)</div>
+
+    <!--
+      Clustered columns: 3 groups × 2 series
+      Groups: PCL banner clicks | CRV banner clicks | Any banner click
+      Control (navy): 14.4%, 0.0%, 14.4%
+      Action (steel): 10.5%, 5.9%, 12.4%
+      Y axis 0–16%
+      Scale: 1% = 22px. 16%=352px above baseline.
+      Chart area: baseline y=400, top ~y=48, total height 400
+      Bar width=60, gap between pairs=14, gap between groups=40
+      Group 1 start x=80: ctrl x=80, act x=154 → group end=214
+      Group 2 start x=254: ctrl x=254, act x=328
+      Group 3 start x=408: ctrl x=408, act x=482
+    -->
+    <svg width="100%" height="430" viewBox="0 0 680 430" preserveAspectRatio="xMidYMid meet">
+      <!-- Y axis -->
+      <line x1="60" y1="30" x2="60" y2="400" stroke="#D9D9D9" stroke-width="1"/>
+      <!-- Baseline -->
+      <line x1="60" y1="400" x2="620" y2="400" stroke="#D9D9D9" stroke-width="1"/>
+      <!-- Gridlines at 4, 8, 12, 16% -->
+      <line x1="60" y1="312" x2="620" y2="312" stroke="#D9D9D9" stroke-width="0.7"/>
+      <line x1="60" y1="224" x2="620" y2="224" stroke="#D9D9D9" stroke-width="0.7"/>
+      <line x1="60" y1="136" x2="620" y2="136" stroke="#D9D9D9" stroke-width="0.7"/>
+      <line x1="60" y1="48"  x2="620" y2="48"  stroke="#D9D9D9" stroke-width="0.7"/>
+      <!-- Y labels -->
+      <text x="56" y="315" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">4%</text>
+      <text x="56" y="227" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">8%</text>
+      <text x="56" y="139" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">12%</text>
+      <text x="56" y="51"  text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="9" fill="#888">16%</text>
+
+      <!-- === GROUP 1: PCL banner clicks === -->
+      <!-- Control 14.4% → height=14.4*22=316.8, y=400-317=83 -->
+      <rect x="80" y="83" width="60" height="317" fill="#14365D"/>
+      <text x="110" y="76" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#14365D" font-weight="600">14.4%</text>
+      <!-- Action 10.5% → height=231, y=169 -->
+      <rect x="154" y="169" width="60" height="231" fill="#6E8CAD"/>
+      <text x="184" y="162" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#6E8CAD" font-weight="600">10.5%</text>
+      <!-- Group label -->
+      <text x="147" y="420" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10.5" fill="#333">PCL banner clicks</text>
+
+      <!-- === GROUP 2: CRV banner clicks === -->
+      <!-- Control 0.0% → height=0 → show as thin baseline line only -->
+      <rect x="264" y="399" width="60" height="1" fill="#14365D" opacity="0.5"/>
+      <text x="294" y="392" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#14365D" font-weight="600">0.0%</text>
+      <!-- Action 5.9% → height=129.8≈130, y=270 -->
+      <rect x="338" y="270" width="60" height="130" fill="#6E8CAD"/>
+      <text x="368" y="263" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#6E8CAD" font-weight="600">5.9%</text>
+      <!-- Group label -->
+      <text x="331" y="420" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10.5" fill="#333">CRV banner clicks</text>
+
+      <!-- === GROUP 3: Any banner click === -->
+      <!-- Control 14.4% → same as group 1 ctrl -->
+      <rect x="438" y="83" width="60" height="317" fill="#14365D"/>
+      <text x="468" y="76" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#14365D" font-weight="600">14.4%</text>
+      <!-- Action 12.4% → height=272.8≈273, y=127 -->
+      <rect x="512" y="127" width="60" height="273" fill="#6E8CAD"/>
+      <text x="542" y="120" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="11" fill="#6E8CAD" font-weight="600">12.4%</text>
+      <!-- Group label -->
+      <text x="505" y="420" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="10.5" fill="#333">Any banner click</text>
+
+      <!-- Series labels above Group 1 -->
+      <text x="110" y="64" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#14365D">Control</text>
+      <text x="184" y="150" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#6E8CAD">Action</text>
+    </svg>
+
+    <div style="margin-top:6px;">
+      <p style="font-size:13px;color:#14365D;margin-bottom:4px;line-height:1.55;">Among clients shown both banners, 27.5% click PCL — vs 35.7% when PCL is shown alone.</p>
+      <p style="font-size:13px;color:#14365D;line-height:1.55;">Engagement is destroyed, not reallocated: total clicking falls 14.4% → 12.4%, mirroring the −0.8pp<sup>†</sup> total-conversion result.</p>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <div class="footnote">GA4 is a different cut — single MB placement (credit card section), app-matched clients, ~3-month window — volumes are not comparable to campaign-base counts; only Action-vs-Control comparisons within the GA4 cut are used. Arms n=1,064,491 / 55,155. Contamination 6/55,155 (0.011%).</div>
+    <span class="slide-num">4 / 5</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 5 ==================== -->
+<div class="slide">
+  <div class="slide-header">
+    <span class="kicker">Campaign Performance — Credit Card Installment Trigger [CRV]</span>
+    <span class="section-tag">Support</span>
+  </div>
+  <div class="slide-body">
+    <h1 class="slide-headline">The gap survives every cut</h1>
+
+    <div class="multiples-grid" style="flex:1;margin-bottom:4px;">
+
+      <!-- Cell 1: By arrival order -->
+      <div class="multiple-cell">
+        <div class="multiple-title">By arrival order</div>
+        <!--
+          Two bars: CRV first −1.05pp, PCL first −0.95pp
+          Scale: 1pp=38px, zero at y=28
+        -->
+        <svg width="100%" height="120" viewBox="0 0 280 120" style="flex:1;">
+          <!-- Zero line -->
+          <line x1="30" y1="28" x2="260" y2="28" stroke="#14365D" stroke-width="0.8"/>
+          <text x="26" y="31" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#888">0</text>
+          <line x1="30" y1="66" x2="260" y2="66" stroke="#D9D9D9" stroke-width="0.6" stroke-dasharray="2,2"/>
+          <text x="26" y="69" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="8" fill="#888">−1pp</text>
+          <!-- CRV first: −1.05pp → h=39.9≈40 -->
+          <rect x="55" y="28" width="60" height="40" fill="#A23B2E" opacity="0.8"/>
+          <text x="85" y="23" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#A23B2E" font-weight="600">&#8722;1.05pp</text>
+          <text x="85" y="84" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#666">CRV first</text>
+          <!-- PCL first: −0.95pp → h=36.1≈36 -->
+          <rect x="160" y="28" width="60" height="36" fill="#A23B2E" opacity="0.65"/>
+          <text x="190" y="23" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="9.5" fill="#A23B2E" font-weight="600">&#8722;0.95pp</text>
+          <text x="190" y="84" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="8.5" fill="#666">PCL first</text>
+        </svg>
+        <div class="multiple-caption">Sequencing immaterial — both orders negative</div>
+      </div>
+
+      <!-- Cell 2: By overlap duration -->
+      <div class="multiple-cell">
+        <div class="multiple-title">By overlap duration</div>
+        <!--
+          8 buckets: 1–3d −2.6, 4–7d −1.9, 8–14d −0.3, 15–21d −0.9, 22–30d −0.9, 31–45d −1.0, 46–60d −1.1, 61–90d −0.9
+          Scale: 1pp=20px, zero at y=28. Bar width=24, gap=4
+        -->
+        <svg width="100%" height="120" viewBox="0 0 290 120" style="flex:1;">
+          <line x1="18" y1="28" x2="276" y2="28" stroke="#14365D" stroke-width="0.8"/>
+          <text x="14" y="31" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7.5" fill="#888">0</text>
+          <line x1="18" y1="48" x2="276" y2="48" stroke="#D9D9D9" stroke-width="0.5" stroke-dasharray="2,2"/>
+          <text x="14" y="51" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7.5" fill="#888">−1</text>
+          <line x1="18" y1="68" x2="276" y2="68" stroke="#D9D9D9" stroke-width="0.5" stroke-dasharray="2,2"/>
+          <text x="14" y="71" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7.5" fill="#888">−2</text>
+
+          <!-- 1-3d −2.6 → h=52 -->
+          <rect x="18"  y="28" width="24" height="52" fill="#A23B2E" opacity="0.85"/>
+          <text x="30"  y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−2.6</text>
+          <text x="30"  y="95" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">1–3d</text>
+          <!-- 4-7d −1.9 → h=38 -->
+          <rect x="46"  y="28" width="24" height="38" fill="#A23B2E" opacity="0.75"/>
+          <text x="58"  y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−1.9</text>
+          <text x="58"  y="80" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">4–7d</text>
+          <!-- 8-14d −0.3 → h=6 -->
+          <rect x="74"  y="28" width="24" height="6"  fill="#A23B2E" opacity="0.5"/>
+          <text x="86"  y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−0.3</text>
+          <text x="86"  y="48" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">8–14d</text>
+          <!-- 15-21d −0.9 → h=18 -->
+          <rect x="102" y="28" width="24" height="18" fill="#A23B2E" opacity="0.65"/>
+          <text x="114" y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−0.9</text>
+          <text x="114" y="58" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">15–21d</text>
+          <!-- 22-30d −0.9 -->
+          <rect x="130" y="28" width="24" height="18" fill="#A23B2E" opacity="0.65"/>
+          <text x="142" y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−0.9</text>
+          <text x="142" y="58" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">22–30d</text>
+          <!-- 31-45d −1.0 → h=20 -->
+          <rect x="158" y="28" width="24" height="20" fill="#A23B2E" opacity="0.70"/>
+          <text x="170" y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−1.0</text>
+          <text x="170" y="60" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">31–45d</text>
+          <!-- 46-60d −1.1 → h=22 -->
+          <rect x="186" y="28" width="24" height="22" fill="#A23B2E" opacity="0.72"/>
+          <text x="198" y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−1.1</text>
+          <text x="198" y="63" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">46–60d</text>
+          <!-- 61-90d −0.9 -->
+          <rect x="214" y="28" width="24" height="18" fill="#A23B2E" opacity="0.65"/>
+          <text x="226" y="24" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E">−0.9</text>
+          <text x="226" y="58" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#666">61–90d</text>
+        </svg>
+        <div class="multiple-caption">Negative in every duration bucket</div>
+      </div>
+
+      <!-- Cell 3: By model decile -->
+      <div class="multiple-cell">
+        <div class="multiple-title">By model decile</div>
+        <!--
+          11 bars, same data as slide 2 but scaled to fit small panel
+          Scale: 1pp=16px, zero at y=24, bar width=18, gap=2
+        -->
+        <svg width="100%" height="120" viewBox="0 0 280 120" style="flex:1;">
+          <line x1="14" y1="24" x2="266" y2="24" stroke="#14365D" stroke-width="0.8"/>
+          <text x="10" y="27" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#888">0</text>
+          <line x1="14" y1="40" x2="266" y2="40" stroke="#D9D9D9" stroke-width="0.5" stroke-dasharray="2,2"/>
+          <text x="10" y="43" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#888">−1</text>
+          <line x1="14" y1="56" x2="266" y2="56" stroke="#D9D9D9" stroke-width="0.5" stroke-dasharray="2,2"/>
+          <text x="10" y="59" text-anchor="end" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#888">−2</text>
+
+          <!-- d0: −0.35 → h=5.6≈6 -->
+          <rect x="16"  y="24" width="18" height="6"  fill="#A23B2E" opacity="0.6"/>
+          <text x="25"  y="38" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d0</text>
+          <!-- d1: −3.04 → h=48.6≈49 -->
+          <rect x="36"  y="24" width="18" height="49" fill="#A23B2E"/>
+          <text x="45"  y="20" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E" font-weight="700">−3.04</text>
+          <text x="45"  y="82" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d1</text>
+          <!-- d2: −2.15 → h=34.4≈34 -->
+          <rect x="56"  y="24" width="18" height="34" fill="#A23B2E" opacity="0.8"/>
+          <text x="65"  y="20" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="7" fill="#A23B2E" font-weight="600">−2.15</text>
+          <text x="65"  y="68" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d2</text>
+          <!-- d3: −0.93 → h=14.9≈15 -->
+          <rect x="76"  y="24" width="18" height="15" fill="#A23B2E" opacity="0.65"/>
+          <text x="85"  y="47" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d3</text>
+          <!-- d4: −0.61 → h=9.8≈10 -->
+          <rect x="96"  y="24" width="18" height="10" fill="#A23B2E" opacity="0.55"/>
+          <text x="105" y="42" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d4</text>
+          <!-- d5: −0.57 → h=9.1≈9 -->
+          <rect x="116" y="24" width="18" height="9"  fill="#A23B2E" opacity="0.5"/>
+          <text x="125" y="41" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d5</text>
+          <!-- d6: −0.34 → h=5.4≈5 -->
+          <rect x="136" y="24" width="18" height="5"  fill="#A23B2E" opacity="0.45"/>
+          <text x="145" y="37" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d6</text>
+          <!-- d7: −0.36 → h=5.8≈6 -->
+          <rect x="156" y="24" width="18" height="6"  fill="#A23B2E" opacity="0.45"/>
+          <text x="165" y="38" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d7</text>
+          <!-- d8: +0.01 → tiny up -->
+          <rect x="176" y="22" width="18" height="2"  fill="#888" opacity="0.6"/>
+          <text x="185" y="19" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#888">+0.01</text>
+          <text x="185" y="34" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d8</text>
+          <!-- d9: +0.08 → h=1.3 → show 3px up -->
+          <rect x="196" y="21" width="18" height="3"  fill="#888" opacity="0.7"/>
+          <text x="205" y="18" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6.5" fill="#888">+0.08</text>
+          <text x="205" y="34" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d9</text>
+          <!-- d10: −0.38 → h=6.1≈6 -->
+          <rect x="216" y="24" width="18" height="6"  fill="#A23B2E" opacity="0.45"/>
+          <text x="225" y="38" text-anchor="middle" font-family="Segoe UI,Calibri,sans-serif" font-size="6" fill="#666">d10</text>
+        </svg>
+        <div class="multiple-caption">Top-heavy — d8/d9 near-zero, all others negative</div>
+      </div>
+
+      <!-- Cell 4: Design integrity -->
+      <div class="multiple-cell">
+        <div class="multiple-title">Design integrity</div>
+        <div class="integrity-lines">
+          <div class="integrity-stat">
+            Control contamination: 6 of 55,155 (0.011%)
+          </div>
+          <div class="integrity-stat">
+            Total conversions fall 0.8pp<sup>†</sup> — not substitution
+          </div>
+          <div class="integrity-stat">
+            Identical populations by construction — randomized CRV holdout
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="caption" style="padding:0 0 2px;">Twenty validation queries behind this result; full catalog available.</div>
+  </div>
+  <div class="slide-footer">
+    <div class="footnote">&#8224; substitution-test base (4.18MM leads); to be restated on the Apr 25 &ndash; Mar 26 aligned base.</div>
+    <span class="slide-num">5 / 5</span>
+  </div>
+</div>
+
+</body>
+</html>
