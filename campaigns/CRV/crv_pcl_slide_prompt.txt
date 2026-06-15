@@ -1,4 +1,4 @@
-# Slide build request: discontinue CRV on mobile in-app — executive slide
+# Slide build request: discontinue CRV on the IM online banner — executive slide
 
 Build ONE PowerPoint slide for **senior business stakeholders at RBC**
 who need to approve discontinuing CRV. They will look at this slide for
@@ -21,7 +21,7 @@ recommendation supported by two simple visuals.
 
 ## Title (exact text — do not paraphrase)
 
-   "Discontinue CRV on mobile in-app — yield exhausted, ~65K PCL conversions recoverable"
+   "Discontinue CRV on the IM online banner — yield exhausted, ~65K PCL conversions recoverable"
 
 ## Plot A (left half) — Over-contacting and diminishing returns
 
@@ -76,7 +76,7 @@ of the gap. The shaded area IS the message.
 ## Single footer line (one row, bottom of slide)
 
    "Source: campaigns/CRV/crv_pcl_overlap_summary.sql, campaigns/CRV/crv_contact_frequency.sql.
-    Window: Oct 2024 – Apr 2026. Channel: IM (mobile in-app). 7.4M CRV-exposed PCL events."
+    Window: Oct 2024 – Apr 2026. Channel: IM (online banner). 7.4M CRV-exposed PCL events."
 
 ## Style
 

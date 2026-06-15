@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CRV×PCL — Slide 2 + Appendix</title>
+<style>
+  body {
+    margin: 0; padding: 40px 20px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #d8dce0;
+  }
+  .slide-label {
+    width: 1280px; margin: 0 auto 10px auto;
+    font-size: 11px; font-weight: 600; color: #555;
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .slide {
+    width: 1280px; height: 720px;
+    background: #ffffff;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+    box-sizing: border-box;
+    margin: 0 auto 52px auto;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 30px 44px 0 44px;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  .kicker {
+    font-size: 10.5px; color: #888; letter-spacing: 0.5px;
+    text-transform: uppercase; padding-bottom: 7px;
+    border-bottom: 1px solid #dde2e8; margin-bottom: 14px;
+  }
+  .title {
+    font-size: 20px; font-weight: 700; color: #1a4e8c;
+    line-height: 1.25; margin-bottom: 18px; max-width: 1180px;
+  }
+
+  /* ── Body panels ── */
+  .body-panels {
+    display: flex; gap: 28px; flex: 1; min-height: 0;
+  }
+  .panel-left  { flex: 56; min-width: 0; display: flex; flex-direction: column; }
+  .panel-right { flex: 44; min-width: 0; display: flex; flex-direction: column; }
+  .panel-title {
+    font-size: 11.5px; font-weight: 700; color: #1a4e8c;
+    margin-bottom: 6px; letter-spacing: 0.1px;
+  }
+
+  /* ── Finance table ── */
+  .fin-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 11px; margin-bottom: 0;
+  }
+  .fin-table th {
+    background: #eef2f8; color: #1a4e8c; font-weight: 700;
+    padding: 5px 7px; border-top: 2px solid #1a4e8c;
+    border-bottom: 1px solid #b0bdd0;
+    text-align: right; font-size: 10px; line-height: 1.3;
+    white-space: nowrap;
+  }
+  .fin-table th.col-outcome { text-align: left; }
+  .fin-table td {
+    padding: 5px 7px; border-bottom: 1px solid #e4e8ed;
+    text-align: right; color: #1c1c1c; font-size: 11px;
+  }
+  .fin-table td.col-outcome {
+    text-align: left; color: #1c1c1c; font-weight: 600;
+  }
+  .fin-table td.neg { color: #9c3a2e; }
+  .fin-table td.pos { color: #1c1c1c; }
+  .fin-table tr.net-row td {
+    font-weight: 700; background: #f4f6f9;
+    border-top: 2px solid #9c9fa4; border-bottom: 2px solid #9c9fa4;
+    font-size: 11.5px;
+  }
+  .fin-table tr.net-row td.net-neg { color: #9c3a2e; }
+
+  /* ── Callout bar ── */
+  .callout-bar {
+    border-left: 3px solid #1a4e8c;
+    padding: 7px 10px 7px 11px;
+    background: #f8f9fb;
+    font-size: 10.5px; color: #2a2a2a;
+    line-height: 1.5; margin-top: 11px;
+  }
+
+  /* ── SVG shared text classes ── */
+
+  /* ── Next-steps strip ── */
+  .next-strip {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 86px; background: #f0f2f5;
+    border-top: 1px solid #d0d4da;
+    display: flex; align-items: stretch;
+  }
+  .next-label {
+    width: 64px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: #1a4e8c;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    border-right: 1px solid #d0d4da; padding: 0 8px;
+    text-align: center;
+  }
+  .next-items { display: flex; flex: 1; }
+  .next-item {
+    flex: 1; padding: 10px 14px;
+    border-right: 1px solid #d0d4da;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .next-item:last-child { border-right: none; }
+  .next-item-num {
+    font-size: 9.5px; font-weight: 700; color: #1a4e8c;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px;
+  }
+  .next-item-text {
+    font-size: 11px; color: #2a2a2a; line-height: 1.4;
+  }
+  .next-item-text.placeholder { color: #888; font-style: italic; }
+
+  /* ── Footnote ── */
+  .footnote {
+    position: absolute; bottom: 94px; left: 44px; right: 44px;
+    font-size: 9.5px; color: #999; font-style: italic;
+    border-top: 1px solid #eaecef; padding-top: 5px; line-height: 1.4;
+  }
+  /* appendix slide footnote sits right above 0 (no next strip) */
+  .footnote-appendix {
+    position: absolute; bottom: 14px; left: 44px; right: 44px;
+    font-size: 9.5px; color: #999; font-style: italic;
+    border-top: 1px solid #eaecef; padding-top: 5px; line-height: 1.4;
+  }
+
+  /* ── Appendix bullets ── */
+  .formal-bullets { margin: 0; padding: 0; list-style: none; }
+  .formal-bullets li {
+    font-size: 11.5px; color: #2a2a2a; line-height: 1.55;
+    padding: 8px 0 8px 14px; position: relative;
+    border-bottom: 1px solid #eaecef;
+  }
+  .formal-bullets li:last-child { border-bottom: none; }
+  .formal-bullets li::before {
+    content: "—"; position: absolute; left: 0; color: #1a4e8c; font-weight: 700;
+  }
+
+  /* SVG text utility */
+  .svt { font-family: 'Segoe UI', Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SLIDE 2 — Net economics
+═══════════════════════════════════════════════════════════ -->
+<div class="slide-label">Slide 2 — Net economics</div>
+<div class="slide">
+
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+
+  <div class="title">
+    CRV exposure reduces PCL conversion by 1.12pp among overlapped clients — net NIBT impact −$31.5MM after CRV gains
+  </div>
+
+  <div class="body-panels">
+
+    <!-- ══ LEFT: net balance table + callout ══ -->
+    <div class="panel-left">
+      <div class="panel-title">Net balance of CRV exposure on overlapped clients</div>
+
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th class="col-outcome">Outcome</th>
+            <th>With CRV<br>(Action)</th>
+            <th>Without CRV<br>(Control)</th>
+            <th>Gap</th>
+            <th>Per 1,000<br>overlapped</th>
+            <th>Total<br>conversions</th>
+            <th>NIBT</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-outcome">PCL conversion</td>
+            <td>16.63%</td>
+            <td>17.75%</td>
+            <td class="neg">−1.12pp</td>
+            <td class="neg">−11</td>
+            <td class="neg">(46,967)</td>
+            <td class="neg">($31.7MM)</td>
+          </tr>
+          <tr>
+            <td class="col-outcome">CRV conversion</td>
+            <td>1.99%</td>
+            <td>1.53%</td>
+            <td class="pos">+0.46pp</td>
+            <td class="pos">+5</td>
+            <td class="pos">+19,106</td>
+            <td class="pos">+$0.2MM</td>
+          </tr>
+          <tr class="net-row">
+            <td class="col-outcome" colspan="6">Net NIBT impact on overlapped population</td>
+            <td class="net-neg">($31.5MM)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout-bar">
+        For every incremental CRV conversion gained, 2.5 PCL conversions are foregone
+        (46,967 ÷ 19,106 = 2.46). Implied cost per incremental CRV conversion:
+        ~$1,660 in foregone PCL NIBT ($31.7MM ÷ 19,106) against ~$11 of CRV NIBT
+        generated per conversion ($0.2MM ÷ 19,106).
+      </div>
+    </div>
+
+    <!-- ══ RIGHT: waterfall chart ══ -->
+    <div class="panel-right">
+      <div class="panel-title">Net NIBT effect of CRV on overlapped clients</div>
+
+      <!--
+        Waterfall layout (SVG viewBox 0 0 420 330)
+        Three bars with floating/dashed connectors
+
+        Scale: full height usable ≈ 220px for data range of $31.9MM
+        $1MM = 220/31.9 ≈ 6.9px/MM
+
+        Zero line at y=260 (absolute baseline)
+
+        Bar 1 "CRV NIBT gain" +$0.2MM
+          height = 0.2 * 6.9 = 1.4px → round to 2px (too thin, use minimum 6px for visibility)
+          top = 260 − 6 = 254
+          x = 60, w = 70
+
+        Bar 2 "PCL NIBT loss" −$31.7MM  (descending from zero)
+          height = 31.7 * 6.9 = 218.7 ≈ 219
+          top = 260 (starts at zero line, goes down)  → rect y=260, h=219 → bottom=479 (too tall)
+
+        Re-scale: usable height = 200px for $32MM range
+        $1MM = 200/32 = 6.25 px/MM
+
+        Zero line y = 70 (top of chart area)
+        Bottom of chart area y = 270
+
+        Bar 1 CRV gain +$0.2MM → height=max(4, 0.2*6.25)=4   y = 70-4=66 (floats above zero)
+        Bar 2 PCL loss -$31.7MM → height=31.7*6.25=198.1      y = 70, h=198 (below zero)
+        Bar 3 Net     -$31.5MM → height=31.5*6.25=196.9       y = 70, h=197 (below zero, stacked from zero)
+
+        Positions: bar width=72
+        Bar1 x=70, Bar2 x=180, Bar3 x=290
+
+        Connectors:
+        - From top of Bar1 (y=66) to top of Bar2 (y=70): dashed horizontal at y=66 from x=142 to x=180
+        - From bottom of Bar2 (y=268) to bottom of Bar3 (y=267): dashed at y=268 from x=252 to x=290
+      -->
+      <svg viewBox="0 0 420 330" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:4px;">
+
+        <!-- gridlines -->
+        <line x1="55" y1="70"  x2="385" y2="70"  stroke="#e0e3e8" stroke-width="0.8"/>
+        <line x1="55" y1="120" x2="385" y2="120" stroke="#e0e3e8" stroke-width="0.8"/>
+        <line x1="55" y1="170" x2="385" y2="170" stroke="#e0e3e8" stroke-width="0.8"/>
+        <line x1="55" y1="220" x2="385" y2="220" stroke="#e0e3e8" stroke-width="0.8"/>
+        <line x1="55" y1="270" x2="385" y2="270" stroke="#e0e3e8" stroke-width="0.8"/>
+
+        <!-- Zero axis line -->
+        <line x1="55" y1="70" x2="385" y2="70" stroke="#444" stroke-width="1.2"/>
+
+        <!-- Y axis labels -->
+        <text class="svt" x="50" y="74"  text-anchor="end" font-size="9" fill="#888">$0</text>
+        <text class="svt" x="50" y="124" text-anchor="end" font-size="9" fill="#888">−$8MM</text>
+        <text class="svt" x="50" y="174" text-anchor="end" font-size="9" fill="#888">−$16MM</text>
+        <text class="svt" x="50" y="224" text-anchor="end" font-size="9" fill="#888">−$24MM</text>
+        <text class="svt" x="50" y="274" text-anchor="end" font-size="9" fill="#888">−$32MM</text>
+
+        <!-- Bar 1: CRV NIBT gain +$0.2MM (above zero, navy muted) -->
+        <!-- Sits above zero line: y=66, h=6 -->
+        <rect x="70" y="62" width="72" height="8" fill="#4a6fa5" opacity="0.75"/>
+        <!-- value label above bar -->
+        <text class="svt" x="106" y="55" text-anchor="middle" font-size="10" font-weight="700" fill="#4a6fa5">+$0.2MM</text>
+        <!-- bar label below axis -->
+        <text class="svt" x="106" y="290" text-anchor="middle" font-size="9.5" fill="#444">CRV NIBT</text>
+        <text class="svt" x="106" y="303" text-anchor="middle" font-size="9.5" fill="#444">gain</text>
+
+        <!-- Connector: from right of Bar1 top to left of Bar2 top (dashed) -->
+        <!-- Bar1 right-top: x=142, y=62; Bar2 left-top: x=180, y=70 -->
+        <line x1="142" y1="62" x2="180" y2="62" stroke="#aaa" stroke-width="1" stroke-dasharray="4,3"/>
+        <line x1="180" y1="62" x2="180" y2="70" stroke="#aaa" stroke-width="1" stroke-dasharray="4,3"/>
+
+        <!-- Bar 2: PCL NIBT loss −$31.7MM (below zero, muted red) -->
+        <!-- y=70 (zero line), h=198 -->
+        <rect x="180" y="70" width="72" height="198" fill="#9c3a2e" opacity="0.82"/>
+        <!-- value label inside bar (near top) -->
+        <text class="svt" x="216" y="92" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">($31.7MM)</text>
+        <text class="svt" x="216" y="290" text-anchor="middle" font-size="9.5" fill="#444">PCL NIBT</text>
+        <text class="svt" x="216" y="303" text-anchor="middle" font-size="9.5" fill="#444">loss</text>
+
+        <!-- Connector: from right of Bar2 bottom to left of Bar3 bottom (dashed) -->
+        <!-- Bar2 right-bottom: x=252, y=268; Bar3 left-bottom: x=290, y=267 -->
+        <line x1="252" y1="268" x2="290" y2="268" stroke="#aaa" stroke-width="1" stroke-dasharray="4,3"/>
+
+        <!-- Bar 3: Net −$31.5MM (navy) -->
+        <!-- y=70 (zero line), h=197 -->
+        <rect x="290" y="70" width="72" height="197" fill="#1a4e8c" opacity="0.9"/>
+        <!-- value label inside bar -->
+        <text class="svt" x="326" y="92" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">($31.5MM)</text>
+        <text class="svt" x="326" y="290" text-anchor="middle" font-size="9.5" fill="#444">Net NIBT</text>
+        <text class="svt" x="326" y="303" text-anchor="middle" font-size="9.5" fill="#444">effect</text>
+
+        <!-- Chart title line -->
+        <text class="svt" x="218" y="320" text-anchor="middle" font-size="9" fill="#999" font-style="italic">[PERIOD] · Overlapped clients</text>
+
+      </svg>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <!-- footnote sits above next-strip -->
+  <div class="footnote">
+    Overlapped (PCL-eligible) clients; CRV randomized Action vs. Control arms; [PERIOD]; MB channel.
+    Conversion = campaign-level response, all channels. NIBT = net income before tax. Parentheses denote negative values.
+  </div>
+
+  <!-- Next-steps strip -->
+  <div class="next-strip">
+    <div class="next-label">Next</div>
+    <div class="next-items">
+      <div class="next-item">
+        <div class="next-item-num">1</div>
+        <div class="next-item-text">Exclude CRV exposure for clients in the PCL journey</div>
+      </div>
+      <div class="next-item">
+        <div class="next-item-num">2</div>
+        <div class="next-item-text">Apply resting rules to cap contact frequency</div>
+      </div>
+      <div class="next-item">
+        <div class="next-item-num">3</div>
+        <div class="next-item-text placeholder">[Redesigned deployment — TBD]</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /slide 2 -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     APPENDIX — Channel mechanism (backup)
+═══════════════════════════════════════════════════════════ -->
+<div class="slide-label">Appendix — Channel mechanism (backup)</div>
+<div class="slide">
+
+  <div class="kicker">Campaign Performance: Credit Card Installment Trigger [CRV]</div>
+
+  <div class="title">
+    Mechanism: CRV exposure splits banner attention; PCL banner engagement declines 14.4% → 10.5%
+  </div>
+
+  <div class="body-panels">
+
+    <!-- ══ LEFT: grouped bar chart ══ -->
+    <div class="panel-left">
+      <div class="panel-title">% of overlapped clients with ≥1 banner click — by banner type and CRV arm</div>
+
+      <!--
+        Two groups: "PCL banner" and "CRV banner"
+        Each group: Control bar (dark navy) + Action bar (medium grey-navy)
+
+        Y axis: 0% to 16% in 4pp steps
+        Chart area: x from 70 to 480, y from 30 to 250 (height=220)
+        $1pp = 220/16 = 13.75px
+
+        PCL Control = 14% → h = 14*13.75 = 192.5 → 193,  top = 250-193 = 57
+        PCL Action  = 10% → h = 10*13.75 = 137.5 → 138,  top = 250-138 = 112
+        CRV Control = 0%  → h = 0, floor bar h=3
+        CRV Action  = 5%  → h = 5*13.75 = 68.75 → 69,   top = 250-69 = 181
+
+        Group 1 (PCL) centre x=185: Control x=130 w=52, Action x=190 w=52
+        Group 2 (CRV) centre x=370: Control x=315 w=52, Action x=375 w=52
+      -->
+      <svg viewBox="0 0 530 330" xmlns="http://www.w3.org/2000/svg" width="100%" height="auto" style="margin-top:4px;">
+
+        <!-- gridlines -->
+        <line x1="65" y1="30"  x2="490" y2="30"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="85"  x2="490" y2="85"  stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="140" x2="490" y2="140" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="195" x2="490" y2="195" stroke="#e8eaed" stroke-width="0.8"/>
+        <line x1="65" y1="250" x2="490" y2="250" stroke="#bbbfc5" stroke-width="1.2"/>
+
+        <!-- Y axis labels -->
+        <text class="svt" x="60" y="254" text-anchor="end" font-size="9.5" fill="#888">0%</text>
+        <text class="svt" x="60" y="199" text-anchor="end" font-size="9.5" fill="#888">4%</text>
+        <text class="svt" x="60" y="144" text-anchor="end" font-size="9.5" fill="#888">8%</text>
+        <text class="svt" x="60" y="89"  text-anchor="end" font-size="9.5" fill="#888">12%</text>
+        <text class="svt" x="60" y="34"  text-anchor="end" font-size="9.5" fill="#888">16%</text>
+
+        <!-- Y axis title -->
+        <text class="svt" x="14" y="140" transform="rotate(-90 14 140)" text-anchor="middle" font-size="9" fill="#888">% of overlapped clients</text>
+
+        <!-- GROUP 1: PCL banner -->
+        <!-- Control bar: 14.4% → y=52, h=198 -->
+        <rect x="130" y="52"  width="52" height="198" fill="#1a4e8c"/>
+        <text class="svt" x="156" y="45" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1a4e8c">14.4%</text>
+        <!-- Action bar: 10.5% → y=106, h=144 -->
+        <rect x="190" y="106" width="52" height="144" fill="#7a97b8"/>
+        <text class="svt" x="216" y="99" text-anchor="middle" font-size="10.5" font-weight="700" fill="#7a97b8">10.5%</text>
+
+        <!-- Group 1 label -->
+        <text class="svt" x="186" y="270" text-anchor="middle" font-size="10.5" font-weight="600" fill="#333">PCL banner</text>
+
+        <!-- GROUP 2: CRV banner -->
+        <!-- Control bar: 0.0% → floor bar y=247, h=3 -->
+        <rect x="315" y="247" width="52" height="3" fill="#1a4e8c" opacity="0.3"/>
+        <text class="svt" x="341" y="241" text-anchor="middle" font-size="10.5" font-weight="700" fill="#aaa">0.0%</text>
+        <!-- Action bar: 5.9% → y=169, h=81 -->
+        <rect x="375" y="169" width="52" height="81" fill="#7a97b8"/>
+        <text class="svt" x="401" y="162" text-anchor="middle" font-size="10.5" font-weight="700" fill="#7a97b8">5.9%</text>
+
+        <!-- Group 2 label -->
+        <text class="svt" x="371" y="270" text-anchor="middle" font-size="10.5" font-weight="600" fill="#333">CRV banner</text>
+
+        <!-- Legend -->
+        <rect x="68" y="290" width="13" height="11" fill="#1a4e8c"/>
+        <text class="svt" x="85" y="301" font-size="10" fill="#444">Control (no CRV shown)</text>
+        <rect x="230" y="290" width="13" height="11" fill="#7a97b8"/>
+        <text class="svt" x="247" y="301" font-size="10" fill="#444">Action (CRV shown alongside PCL)</text>
+
+        <!-- Footnote row -->
+        <text class="svt" x="278" y="320" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">[PERIOD] · MB channel · % of overlapped clients within CRV arm</text>
+
+      </svg>
+    </div>
+
+    <!-- ══ RIGHT: formal bullets ══ -->
+    <div class="panel-right" style="padding-top:2px;">
+      <div class="panel-title" style="margin-bottom:12px;">Interpretation</div>
+
+      <ul class="formal-bullets">
+        <li>
+          <strong>Attention is split, not lost:</strong> among clients viewing both banners,
+          27.5% click PCL vs. 35.7% when PCL is shown alone. The CRV banner competes for
+          the same MB impression window.
+        </li>
+        <li>
+          <strong>CRV rarely substitutes outright:</strong> 1.8% of overlapped clients click
+          CRV exclusively; 11.9% of both-viewers click both banners. CRV is not simply
+          displacing PCL engagement on a 1-for-1 basis.
+        </li>
+        <li>
+          <strong>Banner clicks are an engagement diagnostic, not a conversion funnel.</strong>
+          PCL conversion occurs across all channels and is not conditional on banner click —
+          click rates (GA4, MB channel) and conversion rates are not a stacked funnel.
+          The click decline is a mechanism signal; the NIBT impact is measured
+          independently via Action vs. Control conversion rates.
+        </li>
+      </ul>
+    </div>
+
+  </div><!-- /body-panels -->
+
+  <div class="footnote-appendix">
+    GA4 banner events, single MB placement (credit card section); % of overlapped clients within CRV arm (Action n=1,064,491; Control n=55,155); ~19% of each arm had no app activity in window; control CRV-view contamination 6 of 55,155 (0.011%); [PERIOD].
+  </div>
+
+</div><!-- /appendix slide -->
+
+</body>
+</html>
