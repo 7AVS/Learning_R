@@ -121,8 +121,8 @@ SELECT
     SUM(any_pcl_view)         AS clients_any_pcl_view,
     SUM(pcl_view_days)        AS total_pcl_view_days
 FROM client_roll
-GROUP BY overlap_status, pcl_touch_bucket
-ORDER BY overlap_status, pcl_touch_bucket;
+GROUP BY 1, 2
+ORDER BY 1, 2;
 
 
 -- Statement 2: channel saturation histogram (arm x view-day bucket)
@@ -247,5 +247,5 @@ SELECT
     COUNT(DISTINCT clnt_no) AS n_clients,
     SUM(responded)          AS converters
 FROM client_roll
-GROUP BY overlap_status, view_day_bucket, sort_key
-ORDER BY overlap_status, sort_key;
+GROUP BY 1, 2, 3
+ORDER BY 1, 3;
