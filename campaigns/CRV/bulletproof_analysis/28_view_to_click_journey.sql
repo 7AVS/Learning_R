@@ -48,9 +48,11 @@ pcl_flagged AS (
       ON oc.acct_no = p.acct_no AND oc.treatmt_strt_dt = p.treatmt_strt_dt AND oc.treatmt_end_dt = p.treatmt_end_dt
 ),
 ga4_events AS (
+    -- mobile-only split: IOS/ANDROID; platform propagates downstream for OS-level grouping
     SELECT
         TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
         event_date,
+        platform,
         CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
               AND event_name = 'view_promotion'   THEN 1 ELSE 0 END AS crv_view_e,
         CASE WHEN it_item_id IN ('i_87340','i_87342','i_87343','i_87344')
@@ -67,12 +69,14 @@ ga4_events AS (
       AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344',
                          'i_156764','i_156788','i_162326','i_167715','i_167716','i_167717',
                          'i_289661','i_289662','i_289664','i_289665','i_289666','i_289698')
+      AND platform IN ('IOS','ANDROID')
 ),
 -- engagement scored per deployment window first (anchors to real windows, no calendar box)
 dep_eng AS (
     SELECT
         f.clnt_no, f.action_flag, f.control_flag,
         f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
+        g.platform,
         COALESCE(MAX(g.crv_view_e),  0) AS crv_view,
         COALESCE(MAX(g.crv_click_e), 0) AS crv_click,
         COALESCE(MAX(g.pcl_view_e),  0) AS pcl_view,
@@ -82,12 +86,14 @@ dep_eng AS (
       ON g.clnt_no    = f.clnt_no
      AND g.event_date BETWEEN f.treatmt_strt_dt AND f.treatmt_end_dt
     GROUP BY f.clnt_no, f.action_flag, f.control_flag,
-             f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt
+             f.acct_no, f.treatmt_strt_dt, f.treatmt_end_dt,
+             g.platform
 ),
--- roll deployments up to one row per client (action > control > no_overlap precedence)
+-- roll deployments up to one row per (client, platform) (action > control > no_overlap precedence)
 client_roll AS (
     SELECT
         clnt_no,
+        platform,
         CASE WHEN MAX(action_flag)  = 1 THEN 'overlap_action'
              WHEN MAX(control_flag) = 1 THEN 'overlap_control'
              ELSE                            'no_overlap' END AS overlap_status,
@@ -96,7 +102,7 @@ client_roll AS (
         MAX(pcl_view)  AS pcl_view,
         MAX(pcl_click) AS pcl_click
     FROM dep_eng
-    GROUP BY clnt_no
+    GROUP BY clnt_no, platform
 )
 SELECT
     overlap_status,
@@ -104,12 +110,13 @@ SELECT
          WHEN crv_view = 1 AND pcl_view = 0 THEN 'CRV only'
          WHEN crv_view = 0 AND pcl_view = 1 THEN 'PCL only'
          ELSE                                     'Neither' END AS view_category,
+    platform,
     COUNT(*)                                                                          AS clients,
     SUM(CASE WHEN crv_click = 1 AND pcl_click = 1 THEN 1 ELSE 0 END)                AS click_both,
     SUM(CASE WHEN crv_click = 1 AND pcl_click = 0 THEN 1 ELSE 0 END)                AS click_crv_only,
     SUM(CASE WHEN crv_click = 0 AND pcl_click = 1 THEN 1 ELSE 0 END)                AS click_pcl_only,
     SUM(CASE WHEN crv_click = 0 AND pcl_click = 0 THEN 1 ELSE 0 END)                AS click_neither
 FROM client_roll
-GROUP BY 1, 2
-ORDER BY 1, 2
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3
 ;
