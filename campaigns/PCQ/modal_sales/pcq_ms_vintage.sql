@@ -58,7 +58,7 @@ daily AS (                             -- new converters per cell per event-day,
         ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
         test_group_latest, offer_prod_latest_name,
         first_approved_day AS vintage_day,
-        COUNT(*) AS n_approved, 0 AS n_completed
+        CAST(COUNT(*) AS BIGINT) AS n_approved, CAST(0 AS BIGINT) AS n_completed
     FROM client
     WHERE first_approved_day BETWEEN 0 AND 90
     GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
@@ -69,7 +69,7 @@ daily AS (                             -- new converters per cell per event-day,
     SELECT
         ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
         test_group_latest, offer_prod_latest_name,
-        first_completed_day, 0, COUNT(*)
+        first_completed_day, CAST(0 AS BIGINT), CAST(COUNT(*) AS BIGINT)
     FROM client
     WHERE first_completed_day BETWEEN 0 AND 90
     GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
