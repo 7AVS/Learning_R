@@ -60,8 +60,7 @@ SELECT
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
-WHERE r.mnemonic        = 'PCQ'
-  AND r.decsn_year      = 2026
+WHERE r.decsn_year      = 2026
   AND r.tpa_ita         = 'TPA'
   AND r.treatmt_start_dt >= DATE '2026-06-01'
 ORDER BY ms_targeted DESC, r.tactic_id, r.clnt_no;
@@ -88,8 +87,7 @@ SELECT
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
-WHERE r.mnemonic        = 'PCQ'
-  AND r.decsn_year      = 2026
+WHERE r.decsn_year      = 2026
   AND r.tpa_ita         = 'TPA'
   AND r.treatmt_start_dt >= DATE '2026-06-01'
 GROUP BY

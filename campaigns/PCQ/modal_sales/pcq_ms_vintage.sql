@@ -33,8 +33,7 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
         LEFT JOIN ms_clients m
                ON m.CLNT_NO = r.clnt_no
               AND m.TACTIC_ID = TRIM(r.tactic_id)
-        WHERE r.mnemonic         = 'PCQ'
-          AND r.decsn_year       = 2026
+        WHERE r.decsn_year       = 2026
           AND r.tpa_ita          = 'TPA'
           AND r.treatmt_start_dt >= DATE '2026-06-01'
         GROUP BY 
@@ -69,11 +68,11 @@ CREATE VOLATILE TABLE vt_pcq_days_spine AS (
         FROM (
             SELECT MAX(CASE WHEN app_approved = 1 THEN days_to_respond END) AS vintage_day 
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
-            WHERE mnemonic = 'PCQ' AND decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
+            WHERE decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
             UNION ALL
             SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END) 
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
-            WHERE mnemonic = 'PCQ' AND decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
+            WHERE decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
         ) t
     )
     SELECT (calendar_date - DATE '1900-01-01') AS vintage_day
@@ -112,8 +111,7 @@ client_conversions AS (
     LEFT JOIN ms_clients m
            ON m.CLNT_NO = r.clnt_no
           AND m.TACTIC_ID = TRIM(r.tactic_id)
-    WHERE r.mnemonic         = 'PCQ'
-      AND r.decsn_year       = 2026
+    WHERE r.decsn_year       = 2026
       AND r.tpa_ita          = 'TPA'
       AND r.treatmt_start_dt >= DATE '2026-06-01'
     GROUP BY 

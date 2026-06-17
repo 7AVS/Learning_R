@@ -20,8 +20,7 @@ SELECT
     COUNT(*)                  AS rows_acct_grain,
     COUNT(DISTINCT clnt_no)   AS clients
 FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
-WHERE mnemonic         = 'PCQ'
-  AND decsn_year       = 2026
+WHERE decsn_year       = 2026
   AND tpa_ita          = 'TPA'
   AND treatmt_start_dt >= DATE '2026-06-01'
   AND test_group_latest LIKE 'NG3%'
@@ -57,8 +56,7 @@ ORDER BY clients DESC;
 WITH ms_conv AS (
     SELECT DISTINCT r.clnt_no
     FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
-    WHERE r.mnemonic         = 'PCQ'
-      AND r.decsn_year       = 2026
+    WHERE r.decsn_year       = 2026
       AND r.tpa_ita          = 'TPA'
       AND r.treatmt_start_dt >= DATE '2026-06-01'
       AND r.app_approved     = 1
