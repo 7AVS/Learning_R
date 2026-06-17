@@ -12,8 +12,7 @@
 
 
 -- ============================================================================
--- QUERY 1: banner discovery — what banners with 'pcq' or 'iav' in the name exist?
---   Broad OR so we don't miss it on token order; eyeball which it_item_name has BOTH.
+-- QUERY 1: banner discovery — banners with BOTH 'pcq' AND 'iav' in the name (token order-agnostic).
 -- ============================================================================
 SELECT
     it_item_name,
@@ -25,8 +24,8 @@ FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026'
   AND month IN ('06', '07')
   AND lower(event_name) IN ('view_promotion', 'select_promotion')
-  AND ( lower(it_item_name) LIKE '%pcq%'
-     OR lower(it_item_name) LIKE '%iav%' )
+  AND lower(it_item_name) LIKE '%pcq%'
+  AND lower(it_item_name) LIKE '%iav%'
 GROUP BY it_item_name, it_item_id, lower(event_name)
 ORDER BY clients DESC;
 
