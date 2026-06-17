@@ -1,5 +1,5 @@
 -- pcq_ms_summary.sql
--- PCQ Modal Sales (MS) — summary totals (no vintage_day breakdown). Engine: Starburst / Trino.
+-- PCQ Modal Sales (MS) — summary totals (no vintage_day breakdown). Engine: Teradata-direct (no EDL/GA4 source — runs Teradata-direct; do NOT add a catalog prefix or it fails).
 -- One row per (tactic_id, ms_targeted, slicer_dim, slicer_value). Counts only, no rates.
 -- ms_targeted REPLACES action/control here — PCQ has no control arm for MS.
 -- Hop 1 (ms_clients) and curated column names copied verbatim from pcq_ms_vs_benchmark.sql.
@@ -8,9 +8,9 @@ WITH
 ms_clients AS (
     SELECT DISTINCT CLNT_NO
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE SUBSTRING(TACTIC_ID, 8, 3) = 'PCQ'
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
       AND TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND SUBSTRING(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 ),
 
 base AS (
@@ -25,7 +25,7 @@ base AS (
         r.offer_prod_latest_name,
         r.app_completed,
         r.app_approved
-    FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     LEFT JOIN ms_clients m
            ON m.CLNT_NO = r.clnt_no
     WHERE r.mnemonic         = 'PCQ'
