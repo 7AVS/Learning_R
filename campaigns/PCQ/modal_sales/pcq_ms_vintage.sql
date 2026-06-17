@@ -1,5 +1,5 @@
 -- pcq_ms_vintage.sql
--- PCQ Modal Sales (MS) — cumulative converter curve by days since treatment start. Engine: Starburst / Trino.
+-- PCQ Modal Sales (MS) — cumulative converter curve by days since treatment start. Engine: Teradata-direct (no EDL/GA4 source — runs Teradata-direct; do NOT add a catalog prefix or it fails).
 -- One row per (tactic_id, ms_targeted, slicer_dim, slicer_value, metric, vintage_day). 0..90 day spine.
 -- vintage_day = curated days_to_respond, clamped 0..90. ms_targeted REPLACES action/control.
 -- Hop 1 (ms_clients) and curated column names copied verbatim from pcq_ms_vs_benchmark.sql.
@@ -8,9 +8,9 @@ WITH
 ms_clients AS (
     SELECT DISTINCT CLNT_NO
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE SUBSTRING(TACTIC_ID, 8, 3) = 'PCQ'
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
       AND TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND SUBSTRING(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 ),
 
 base AS (
@@ -26,7 +26,7 @@ base AS (
         r.app_completed,
         r.app_approved,
         r.days_to_respond
-    FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
     LEFT JOIN ms_clients m
            ON m.CLNT_NO = r.clnt_no
     WHERE r.mnemonic         = 'PCQ'
@@ -77,10 +77,11 @@ base_stacked AS (
     FROM base
 ),
 
--- metric_universe: hardcoded list of both metrics — ensures zero-event combos still appear
-metric_universe AS (
-    SELECT 'approved'  AS metric UNION ALL
-    SELECT 'completed'
+-- vintage_days: 0..90 day spine from the system calendar (Teradata has no SEQUENCE/UNNEST)
+vintage_days AS (
+    SELECT (calendar_date - DATE '2020-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE calendar_date BETWEEN DATE '2020-01-01' AND (DATE '2020-01-01' + 90)
 ),
 
 -- slicer_universe: every (tactic, ms_targeted, slicer) cell that exists in base_stacked
@@ -91,16 +92,15 @@ slicer_universe AS (
 
 -- scaffold: full day spine 0..90 for every (tactic x ms_targeted x slicer x metric) cell
 scaffold AS (
-    SELECT
-        s.tactic_id,
-        s.ms_targeted,
-        s.slicer_dim,
-        s.slicer_value,
-        m.metric,
-        d.vintage_day
+    SELECT s.tactic_id, s.ms_targeted, s.slicer_dim, s.slicer_value,
+           CAST('approved' AS VARCHAR(50)) AS metric, d.vintage_day
     FROM slicer_universe s
-    CROSS JOIN metric_universe m
-    CROSS JOIN UNNEST(SEQUENCE(0, 90)) AS d(vintage_day)
+    CROSS JOIN vintage_days d
+    UNION ALL
+    SELECT s.tactic_id, s.ms_targeted, s.slicer_dim, s.slicer_value,
+           CAST('completed' AS VARCHAR(50)) AS metric, d.vintage_day
+    FROM slicer_universe s
+    CROSS JOIN vintage_days d
 ),
 
 -- client_first: per client per cell, the FIRST day they converted (min days_to_respond),

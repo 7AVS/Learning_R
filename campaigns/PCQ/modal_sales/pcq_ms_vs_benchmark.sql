@@ -1,10 +1,10 @@
 -- PCQ Modal Sales (MS) vs benchmark — descriptive comparison, deployments from Jun 1 2026
--- Engine: Starburst / Trino (both EDW tables reachable from one query)
+-- Engine: Teradata-direct (no EDL/GA4 source — runs Teradata-direct; do NOT add a catalog prefix or it fails)
 -- Descriptive / directional only — no control group.
 --
 -- Architecture:
 --   Hop 1  DG6V01.TACTIC_EVNT_IP_AR_HIST  -> LIST of MS clients (MS lives ONLY here)
---   Hop 2  dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp = the master:
+--   Hop 2  DL_MR_PROD.cards_tpa_pcq_decision_resp = the master:
 --          ALL PCQ deployments after Jun 2026, every category/field, MS clients FLAGGED.
 --          Everyone else in that window = the benchmark.
 --
@@ -28,9 +28,9 @@
 WITH ms_clients AS (
     SELECT DISTINCT CLNT_NO
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE SUBSTRING(TACTIC_ID, 8, 3) = 'PCQ'
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
       AND TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND SUBSTRING(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 )
 SELECT
     CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END   AS ms_targeted,
@@ -57,7 +57,7 @@ SELECT
     -- email funnel
     r.tactic_email,
     r.email_disposition
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
 WHERE r.mnemonic        = 'PCQ'
@@ -72,9 +72,9 @@ ORDER BY ms_targeted DESC, r.tactic_id, r.clnt_no;
 WITH ms_clients AS (
     SELECT DISTINCT CLNT_NO
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE SUBSTRING(TACTIC_ID, 8, 3) = 'PCQ'
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
       AND TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND SUBSTRING(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 )
 SELECT
     CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END   AS ms_targeted,
@@ -84,7 +84,7 @@ SELECT
     COUNT(DISTINCT r.clnt_no)                           AS clients,
     SUM(COALESCE(r.app_completed, 0))                   AS completed,
     SUM(COALESCE(r.app_approved, 0))                    AS approved
-FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
+FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
 WHERE r.mnemonic        = 'PCQ'
