@@ -83,8 +83,8 @@ SELECT
     r.test_group_latest,
     COUNT(*)                                            AS rows_acct_grain,
     COUNT(DISTINCT r.clnt_no)                           AS clients,
-    SUM(COALESCE(r.app_completed, 0))                   AS completed,
-    SUM(COALESCE(r.app_approved, 0))                    AS approved
+    SUM(CAST(COALESCE(r.app_completed, 0) AS BIGINT))   AS completed,
+    SUM(CAST(COALESCE(r.app_approved, 0) AS BIGINT))    AS approved
 FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
 LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
