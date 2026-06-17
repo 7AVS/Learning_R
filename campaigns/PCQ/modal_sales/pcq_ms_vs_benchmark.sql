@@ -62,6 +62,7 @@ LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
 WHERE r.mnemonic        = 'PCQ'
   AND r.decsn_year      = 2026
+  AND r.tpa_ita         = 'TPA'
   AND r.treatmt_start_dt >= DATE '2026-06-01'
 ORDER BY ms_targeted DESC, r.tactic_id, r.clnt_no;
 
@@ -89,6 +90,7 @@ LEFT JOIN ms_clients m
        ON m.CLNT_NO = r.clnt_no
 WHERE r.mnemonic        = 'PCQ'
   AND r.decsn_year      = 2026
+  AND r.tpa_ita         = 'TPA'
   AND r.treatmt_start_dt >= DATE '2026-06-01'
 GROUP BY
     CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END,
