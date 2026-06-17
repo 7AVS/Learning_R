@@ -1,7 +1,9 @@
 -- pcq_ms_vintage.sql
--- PCQ Modal Sales (MS) — cumulative converter curve by days since treatment start. Engine: Teradata-direct (no EDL/GA4 source — runs Teradata-direct; do NOT add a catalog prefix or it fails).
--- One row per (tactic_id, ms_targeted, slicer_dim, slicer_value, metric, vintage_day). 0..90 day spine.
--- vintage_day = curated days_to_respond, clamped 0..90. ms_targeted REPLACES action/control.
+-- PCQ Modal Sales (MS) — cumulative converter curve by days since treatment start. Engine: Teradata-direct (no EDL/GA4 source — do NOT add a catalog prefix or it fails).
+-- One row per (tactic_id, ms_targeted, slicer_dim, slicer_value, metric, vintage_day) — but ONLY days
+--   that have a new conversion (no dense 0..90 spine, to avoid a TDWM unconstrained-product-join block).
+--   The curve is flat between rows, so forward-fill (fill-down) cum_responders in Excel for a dense chart.
+-- vintage_day = curated days_to_respond (clamped 0..90). ms_targeted REPLACES action/control.
 -- Hop 1 (ms_clients) and curated column names copied verbatim from pcq_ms_vs_benchmark.sql.
 
 WITH
@@ -34,7 +36,7 @@ base AS (
       AND r.treatmt_start_dt >= DATE '2026-06-01'
 ),
 
--- base_stacked: fan out to 6 rotating slicer blocks; tactic_id/ms_targeted carried as permanent columns
+-- base_stacked: fan out to 6 slicer blocks; tactic_id/ms_targeted carried as permanent columns
 base_stacked AS (
     SELECT clnt_no, tactic_id, ms_targeted, app_approved, app_completed, days_to_respond,
            CAST('OVERALL' AS VARCHAR(50)) AS slicer_dim,
@@ -77,32 +79,6 @@ base_stacked AS (
     FROM base
 ),
 
--- vintage_days: 0..90 day spine from the system calendar (Teradata has no SEQUENCE/UNNEST)
-vintage_days AS (
-    SELECT (calendar_date - DATE '2020-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE calendar_date BETWEEN DATE '2020-01-01' AND (DATE '2020-01-01' + 90)
-),
-
--- slicer_universe: every (tactic, ms_targeted, slicer) cell that exists in base_stacked
-slicer_universe AS (
-    SELECT DISTINCT tactic_id, ms_targeted, slicer_dim, slicer_value
-    FROM base_stacked
-),
-
--- scaffold: full day spine 0..90 for every (tactic x ms_targeted x slicer x metric) cell
-scaffold AS (
-    SELECT s.tactic_id, s.ms_targeted, s.slicer_dim, s.slicer_value,
-           CAST('approved' AS VARCHAR(50)) AS metric, d.vintage_day
-    FROM slicer_universe s
-    CROSS JOIN vintage_days d
-    UNION ALL
-    SELECT s.tactic_id, s.ms_targeted, s.slicer_dim, s.slicer_value,
-           CAST('completed' AS VARCHAR(50)) AS metric, d.vintage_day
-    FROM slicer_universe s
-    CROSS JOIN vintage_days d
-),
-
 -- client_first: per client per cell, the FIRST day they converted (min days_to_respond),
 -- separately for approved and completed. Anchoring on first event prevents a multi-application
 -- client from being counted on more than one vintage_day (which would inflate the cumulative curve).
@@ -115,7 +91,7 @@ client_first AS (
     GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, clnt_no
 ),
 
--- daily_counts: distinct converters booked on their FIRST conversion day, per metric
+-- daily_counts: distinct converters booked on their FIRST conversion day, per metric (event days only)
 daily_counts AS (
     SELECT
         tactic_id, ms_targeted, slicer_dim, slicer_value,
@@ -147,28 +123,21 @@ denominators AS (
     GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value
 ),
 
--- cumulative: join daily counts onto scaffold, zero-fill, window cumulative sum
+-- cumulative: running total over event days only (window function — NO product join)
 cumulative AS (
     SELECT
-        s.tactic_id,
-        s.ms_targeted,
-        s.slicer_dim,
-        s.slicer_value,
-        s.metric,
-        s.vintage_day,
-        SUM(COALESCE(dc.n_responders, 0)) OVER (
-            PARTITION BY s.tactic_id, s.ms_targeted, s.slicer_dim, s.slicer_value, s.metric
-            ORDER BY s.vintage_day
+        tactic_id,
+        ms_targeted,
+        slicer_dim,
+        slicer_value,
+        metric,
+        vintage_day,
+        SUM(n_responders) OVER (
+            PARTITION BY tactic_id, ms_targeted, slicer_dim, slicer_value, metric
+            ORDER BY vintage_day
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS cum_responders
-    FROM scaffold s
-    LEFT JOIN daily_counts dc
-        ON  dc.tactic_id    = s.tactic_id
-        AND dc.ms_targeted  = s.ms_targeted
-        AND dc.slicer_dim   = s.slicer_dim
-        AND dc.slicer_value = s.slicer_value
-        AND dc.metric       = s.metric
-        AND dc.vintage_day  = s.vintage_day
+    FROM daily_counts
 )
 
 -- final output
