@@ -34,6 +34,7 @@ base AS (
            ON m.CLNT_NO = r.clnt_no
     WHERE r.mnemonic         = 'PCQ'
       AND r.decsn_year       = 2026
+      AND r.tpa_ita          = 'TPA'
       AND r.treatmt_start_dt >= DATE '2026-06-01'
 )
 SELECT
@@ -76,6 +77,7 @@ base AS (
            ON m.CLNT_NO = r.clnt_no
     WHERE r.mnemonic         = 'PCQ'
       AND r.decsn_year       = 2026
+      AND r.tpa_ita          = 'TPA'
       AND r.treatmt_start_dt >= DATE '2026-06-01'
 )
 SELECT
