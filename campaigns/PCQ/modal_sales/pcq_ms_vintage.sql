@@ -46,7 +46,7 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
             COALESCE(r.offer_prod_latest_name, '(null)')
     ),
     stacked AS (
-        SELECT clnt_no, tactic_id, ms_targeted, 'overall' AS slicer_dim, 'ALL' AS slicer_value FROM client_base
+        SELECT clnt_no, tactic_id, ms_targeted, CAST('overall' AS VARCHAR(50)) AS slicer_dim, CAST('ALL' AS VARCHAR(100)) AS slicer_value FROM client_base
         UNION ALL
         SELECT clnt_no, tactic_id, ms_targeted, 'model_score_decile', model_score_decile FROM client_base
         UNION ALL
@@ -67,11 +67,11 @@ CREATE VOLATILE TABLE vt_pcq_days_spine AS (
     WITH max_day AS (
         SELECT COALESCE(MAX(vintage_day), 14) AS max_vintage_day
         FROM (
-            SELECT MIN(CASE WHEN app_approved = 1 THEN days_to_respond END) AS vintage_day 
+            SELECT MAX(CASE WHEN app_approved = 1 THEN days_to_respond END) AS vintage_day 
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
             WHERE mnemonic = 'PCQ' AND decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
             UNION ALL
-            SELECT MIN(CASE WHEN app_completed = 1 THEN days_to_respond END) 
+            SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END) 
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
             WHERE mnemonic = 'PCQ' AND decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
         ) t
