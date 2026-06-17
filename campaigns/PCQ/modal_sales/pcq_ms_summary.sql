@@ -1,9 +1,19 @@
 -- pcq_ms_summary.sql
--- PCQ Modal Sales (MS) — summary totals (no vintage_day breakdown). Engine: Teradata-direct (no EDL/GA4 source — runs Teradata-direct; do NOT add a catalog prefix or it fails).
--- One row per (tactic_id, ms_targeted, slicer_dim, slicer_value). Counts only, no rates.
--- ms_targeted REPLACES action/control here — PCQ has no control arm for MS.
+-- PCQ Modal Sales (MS) — summary. Engine: Teradata-direct (no EDL/GA4 source — do NOT add a catalog prefix or it fails).
+-- ms_targeted (1/0) REPLACES action/control — PCQ has no control arm for MS. Counts only, no rates.
 -- Hop 1 (ms_clients) and curated column names copied verbatim from pcq_ms_vs_benchmark.sql.
+--
+-- Two views (no slicer long-format — categories are kept as their own columns so you can cross-check):
+--   QUERY 1  roll-up: MS vs benchmark totals per deployment + overall.
+--   QUERY 2  wide category cube: every category as a column -> pivot/cross-tab any combination in Excel.
+-- NOTE on QUERY 2: clients/approved/completed use COUNT(DISTINCT clnt_no). If a client spans
+--   >1 value of a category (e.g. two offered products / response channels), summing those columns
+--   across categories in a pivot can overcount that client. For TRUE distinct totals use QUERY 1.
 
+
+-- ============================================================================
+-- QUERY 1: roll-up — MS vs benchmark, per deployment and overall (GROUPING SETS).
+-- ============================================================================
 WITH
 ms_clients AS (
     SELECT DISTINCT CLNT_NO
@@ -12,7 +22,43 @@ ms_clients AS (
       AND TREATMT_STRT_DT >= DATE '2026-06-01'
       AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 ),
+base AS (
+    SELECT
+        r.clnt_no,
+        r.tactic_id,
+        CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS ms_targeted,
+        r.app_completed,
+        r.app_approved
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
+    LEFT JOIN ms_clients m
+           ON m.CLNT_NO = r.clnt_no
+    WHERE r.mnemonic         = 'PCQ'
+      AND r.decsn_year       = 2026
+      AND r.treatmt_start_dt >= DATE '2026-06-01'
+)
+SELECT
+    ms_targeted,
+    COALESCE(tactic_id, 'ALL DEPLOYMENTS')                         AS tactic_id,
+    COUNT(DISTINCT clnt_no)                                        AS clients,
+    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)   AS approved,
+    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)   AS completed
+FROM base
+GROUP BY GROUPING SETS ((ms_targeted, tactic_id), (ms_targeted))
+ORDER BY ms_targeted DESC, tactic_id;
 
+
+-- ============================================================================
+-- QUERY 2: wide category cube — one row per (ms_targeted x deployment x all categories).
+--   Categories are columns, so pivot/cross-check any pair (e.g. decile x channel) in Excel.
+-- ============================================================================
+WITH
+ms_clients AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
+      AND TREATMT_STRT_DT >= DATE '2026-06-01'
+      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+),
 base AS (
     SELECT
         r.clnt_no,
@@ -32,87 +78,25 @@ base AS (
       AND r.decsn_year       = 2026
       AND r.treatmt_start_dt >= DATE '2026-06-01'
 )
-
--- OVERALL
 SELECT
-    tactic_id,
     ms_targeted,
-    CAST('OVERALL' AS VARCHAR(50)) AS slicer_dim,
-    CAST('ALL'     AS VARCHAR(50)) AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
-FROM base
-GROUP BY tactic_id, ms_targeted
-
-UNION ALL
-
--- decile
-SELECT
     tactic_id,
-    ms_targeted,
-    CAST('decile' AS VARCHAR(50))                       AS slicer_dim,
-    COALESCE(CAST(model_score_decile AS VARCHAR(50)), '(null)') AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
+    model_score_decile,
+    strtgy_seg_typ,
+    test_group_latest,
+    response_channel_grp,
+    offer_prod_latest_name,
+    COUNT(*)                                                       AS rows_acct_grain,
+    COUNT(DISTINCT clnt_no)                                        AS clients,
+    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)   AS approved,
+    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)   AS completed
 FROM base
-GROUP BY tactic_id, ms_targeted, model_score_decile
-
-UNION ALL
-
--- strategy_seg
-SELECT
+GROUP BY
+    ms_targeted,
     tactic_id,
-    ms_targeted,
-    CAST('strategy_seg' AS VARCHAR(50))         AS slicer_dim,
-    COALESCE(strtgy_seg_typ, '(null)')          AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
-FROM base
-GROUP BY tactic_id, ms_targeted, strtgy_seg_typ
-
-UNION ALL
-
--- test_group_latest
-SELECT
-    tactic_id,
-    ms_targeted,
-    CAST('test_group_latest' AS VARCHAR(50))    AS slicer_dim,
-    COALESCE(test_group_latest, '(null)')       AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
-FROM base
-GROUP BY tactic_id, ms_targeted, test_group_latest
-
-UNION ALL
-
--- response_channel
-SELECT
-    tactic_id,
-    ms_targeted,
-    CAST('response_channel' AS VARCHAR(50))     AS slicer_dim,
-    COALESCE(response_channel_grp, '(null)')    AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
-FROM base
-GROUP BY tactic_id, ms_targeted, response_channel_grp
-
-UNION ALL
-
--- offered_product
-SELECT
-    tactic_id,
-    ms_targeted,
-    CAST('offered_product' AS VARCHAR(50))      AS slicer_dim,
-    COALESCE(offer_prod_latest_name, '(null)')  AS slicer_value,
-    COUNT(DISTINCT clnt_no)                                          AS total_population,
-    COUNT(DISTINCT CASE WHEN app_approved  = 1 THEN clnt_no END)     AS responders,
-    COUNT(DISTINCT CASE WHEN app_completed = 1 THEN clnt_no END)     AS responders_completed
-FROM base
-GROUP BY tactic_id, ms_targeted, offer_prod_latest_name
-
-ORDER BY 1, 2, 3, 4;
+    model_score_decile,
+    strtgy_seg_typ,
+    test_group_latest,
+    response_channel_grp,
+    offer_prod_latest_name
+ORDER BY ms_targeted DESC, tactic_id, model_score_decile, strtgy_seg_typ;
