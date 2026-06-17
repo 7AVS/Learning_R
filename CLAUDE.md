@@ -30,9 +30,10 @@ Measurement and analytics infrastructure for the Cards pod (NBA). Contains schem
 - **Segment:** DG6V01.CLNT_DERIV_DTA_HIST
 
 ## SQL Conventions
+- **CANON: `references/query_engine_guidelines.md`** — the three environments (Starburst/Trino, Teradata-direct, YARN Spark), per-engine syntax rules, federation pushdown rules, partition pruning. Check every new query against it before shipping.
 - GA4 tables are in Trino (catalog: edl0_im). Use Trino SQL syntax.
-- Campaign tables are in Teradata. Use Teradata SQL syntax (TOP instead of LIMIT, QUALIFY for window filters, etc.).
-- GA4 partitioned by year/month/day (varchar). Always filter these to avoid full scans.
+- Campaign/EDW tables (Teradata schemas) are normally queried THROUGH Starburst federation → **write Trino syntax** (no QUALIFY, no TOP, no NULLIFZERO, strict typing). Teradata-native syntax only when running Teradata-direct (volatile tables / spool control).
+- GA4 partitioned by year/month/day (varchar). Always filter year AND month (event_date alone does not prune).
 - TACTIC_ID structure: positions 8-10 = MNE (campaign mnemonic, e.g. AUH, PCL, PCQ, IRI/IPC for IMT).
 
 ## Artifacts Per Campaign
@@ -133,3 +134,8 @@ This workbench follows a strict build-and-verify methodology:
    - Daily cumulative window curves vs. rolled-up cohort summaries (these must match)
    - Known baseline numbers or prior deployment results
 7. **Sanity checks are mandatory**, not optional. If a number looks surprising, investigate before reporting.
+
+## Teradata Quirks & Hard Rules (Learned from Experience)
+1. **TDWM `sys_calendar` Blocker:** Unconstrained product joins (CROSS JOIN) against `sys_calendar.calendar` will block in TDWM ("F-uncnstrm PJ … rowest"). **Solution**: The day-spine and the joining cells must be placed in `VOLATILE TABLE`s with `COLLECT STATISTICS` before the cross join.
+2. **Volatile Table Session Persistence:** `VOLATILE TABLE`s persist in the session. When creating scripts, do not use volatile tables for everything or it will cause "table already exists" errors when users rerun failed scripts. Use CTEs (`WITH`) for all data prep, and ONLY use volatile tables where strictly required by TDWM (e.g., the spine and cells).
+3. **UNION ALL Implicit Truncation:** In Teradata, the character length of a column built via `UNION ALL` is strictly defined by the length of the string in the *first* `SELECT` statement. If the first block is `'overall'` (7 chars), all subsequent strings (like `'model_score_decile'`) will be truncated. **Solution**: Always explicitly cast strings in the first `SELECT` of a `UNION ALL` (e.g., `CAST('overall' AS VARCHAR(50))`).
