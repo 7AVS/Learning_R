@@ -2,11 +2,9 @@
 -- PCQ Modal Sales (MS) — cumulative converter curve, vintage_day = days since treatment start.
 -- Engine: Teradata-direct (no EDL/GA4 source — no catalog prefix). Descriptive only, no control group.
 --
--- REWRITTEN TO FIX CHANGING COHORT SIZES & TDWM PRODUCT JOIN BLOCKER:
--- 1. Uses Volatile Tables with COLLECT STATISTICS for the Day Spine and Cells to give the TDWM optimizer
---    accurate row estimates and allow the CROSS JOIN without throwing "F-uncnstrm PJ … rowest" errors.
--- 2. Uses a dense grid to ensure cohort_size denominators are stable across all vintage days when aggregating.
--- 3. tactic_id joined with TRIM to avoid byte-for-byte mismatch silently dropping MS targeted clients.
+-- REWRITTEN: 
+-- 1. Uses the Long-Format Slicer Pattern (from PCD) to avoid cartesian explosions.
+-- 2. Dynamically calculates the max vintage day based on the latest conversion, truncating the spine.
 
 CREATE VOLATILE TABLE vt_pcq_ms_clients AS (
     SELECT DISTINCT CLNT_NO, TRIM(TACTIC_ID) AS TACTIC_ID
@@ -23,7 +21,7 @@ CREATE VOLATILE TABLE vt_pcq_ms_base AS (
         r.clnt_no,
         TRIM(r.tactic_id) AS tactic_id,
         CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END             AS ms_targeted,
-        COALESCE(r.model_score_decile, -1)                            AS model_score_decile,
+        COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)') AS model_score_decile,
         COALESCE(r.strtgy_seg_typ, '(null)')                          AS strtgy_seg_typ,
         COALESCE(r.test_group_latest, '(null)')                       AS test_group_latest,
         COALESCE(r.offer_prod_latest_name, '(null)')                  AS offer_prod_latest_name,
@@ -40,109 +38,112 @@ CREATE VOLATILE TABLE vt_pcq_ms_base AS (
     GROUP BY 
         r.clnt_no, TRIM(r.tactic_id),
         CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END,
-        COALESCE(r.model_score_decile, -1),
+        COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)'),
         COALESCE(r.strtgy_seg_typ, '(null)'),
         COALESCE(r.test_group_latest, '(null)'),
         COALESCE(r.offer_prod_latest_name, '(null)')
 ) WITH DATA PRIMARY INDEX (clnt_no, tactic_id) ON COMMIT PRESERVE ROWS;
 
-CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
-    SELECT
-        ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-        test_group_latest, offer_prod_latest_name,
-        COUNT(*) AS cohort_size
+-- Stacked Slicer Pattern (Fanned out to avoid wide-grain explosion)
+CREATE VOLATILE TABLE vt_pcq_ms_stacked AS (
+    SELECT clnt_no, tactic_id, ms_targeted, first_approved_day, first_completed_day,
+           'overall' AS slicer_dim, 'ALL' AS slicer_value
     FROM vt_pcq_ms_base
-    GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-             test_group_latest, offer_prod_latest_name
-) WITH DATA PRIMARY INDEX (ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ, test_group_latest, offer_prod_latest_name) ON COMMIT PRESERVE ROWS;
+    UNION ALL
+    SELECT clnt_no, tactic_id, ms_targeted, first_approved_day, first_completed_day,
+           'model_score_decile' AS slicer_dim, model_score_decile AS slicer_value
+    FROM vt_pcq_ms_base
+    UNION ALL
+    SELECT clnt_no, tactic_id, ms_targeted, first_approved_day, first_completed_day,
+           'strtgy_seg_typ' AS slicer_dim, strtgy_seg_typ AS slicer_value
+    FROM vt_pcq_ms_base
+    UNION ALL
+    SELECT clnt_no, tactic_id, ms_targeted, first_approved_day, first_completed_day,
+           'test_group_latest' AS slicer_dim, test_group_latest AS slicer_value
+    FROM vt_pcq_ms_base
+    UNION ALL
+    SELECT clnt_no, tactic_id, ms_targeted, first_approved_day, first_completed_day,
+           'offer_prod_latest_name' AS slicer_dim, offer_prod_latest_name AS slicer_value
+    FROM vt_pcq_ms_base
+) WITH DATA PRIMARY INDEX (clnt_no, tactic_id, slicer_dim, slicer_value) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_pcq_ms_cells COLUMN (ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ, test_group_latest, offer_prod_latest_name);
+CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
+    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, COUNT(DISTINCT clnt_no) AS cohort_size
+    FROM vt_pcq_ms_stacked
+    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value
+) WITH DATA PRIMARY INDEX (tactic_id, ms_targeted, slicer_dim, slicer_value) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_pcq_ms_cells COLUMN (tactic_id, ms_targeted, slicer_dim, slicer_value);
+
+-- Dynamic Max Day (Truncates the spine)
+CREATE VOLATILE TABLE vt_pcq_max_day AS (
+    SELECT COALESCE(MAX(vintage_day), 14) AS max_vintage_day
+    FROM (
+        SELECT first_approved_day AS vintage_day FROM vt_pcq_ms_base
+        UNION ALL
+        SELECT first_completed_day FROM vt_pcq_ms_base
+    ) t
+) WITH DATA ON COMMIT PRESERVE ROWS;
 
 CREATE VOLATILE TABLE vt_pcq_days_spine AS (
     SELECT (calendar_date - DATE '1900-01-01') AS vintage_day
     FROM sys_calendar.calendar
-    WHERE vintage_day BETWEEN 0 AND 90
+    CROSS JOIN vt_pcq_max_day m
+    WHERE (calendar_date - DATE '1900-01-01') BETWEEN 0 AND m.max_vintage_day
 ) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
-
 COLLECT STATISTICS ON vt_pcq_days_spine COLUMN (vintage_day);
 
 CREATE VOLATILE TABLE vt_pcq_ms_dense_grid AS (
-    SELECT 
-        c.ms_targeted, c.tactic_id, c.model_score_decile, c.strtgy_seg_typ,
-        c.test_group_latest, c.offer_prod_latest_name, c.cohort_size,
-        d.vintage_day
+    SELECT c.tactic_id, c.ms_targeted, c.slicer_dim, c.slicer_value, c.cohort_size, d.vintage_day
     FROM vt_pcq_ms_cells c
     CROSS JOIN vt_pcq_days_spine d
-) WITH DATA PRIMARY INDEX (ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ, test_group_latest, offer_prod_latest_name, vintage_day) ON COMMIT PRESERVE ROWS;
+) WITH DATA PRIMARY INDEX (tactic_id, ms_targeted, slicer_dim, slicer_value, vintage_day) ON COMMIT PRESERVE ROWS;
 
-WITH
-daily_conversions AS (
-    SELECT
-        ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-        test_group_latest, offer_prod_latest_name,
-        first_approved_day AS vintage_day,
-        CAST(COUNT(*) AS BIGINT) AS n_approved, CAST(0 AS BIGINT) AS n_completed
-    FROM vt_pcq_ms_base
-    WHERE first_approved_day BETWEEN 0 AND 90
-    GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-             test_group_latest, offer_prod_latest_name, first_approved_day
+WITH daily_conversions AS (
+    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, first_approved_day AS vintage_day,
+           CAST(COUNT(*) AS BIGINT) AS n_approved, CAST(0 AS BIGINT) AS n_completed
+    FROM vt_pcq_ms_stacked
+    WHERE first_approved_day IS NOT NULL
+    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, first_approved_day
 
     UNION ALL
 
-    SELECT
-        ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-        test_group_latest, offer_prod_latest_name,
-        first_completed_day AS vintage_day,
-        CAST(0 AS BIGINT) AS n_approved, CAST(COUNT(*) AS BIGINT) AS n_completed
-    FROM vt_pcq_ms_base
-    WHERE first_completed_day BETWEEN 0 AND 90
-    GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-             test_group_latest, offer_prod_latest_name, first_completed_day
+    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, first_completed_day AS vintage_day,
+           CAST(0 AS BIGINT) AS n_approved, CAST(COUNT(*) AS BIGINT) AS n_completed
+    FROM vt_pcq_ms_stacked
+    WHERE first_completed_day IS NOT NULL
+    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, first_completed_day
 ),
 daily_rollup AS (
-    SELECT
-        ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-        test_group_latest, offer_prod_latest_name, vintage_day,
-        SUM(n_approved)  AS n_approved,
-        SUM(n_completed) AS n_completed
+    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, vintage_day,
+           SUM(n_approved) AS n_approved, SUM(n_completed) AS n_completed
     FROM daily_conversions
-    GROUP BY ms_targeted, tactic_id, model_score_decile, strtgy_seg_typ,
-             test_group_latest, offer_prod_latest_name, vintage_day
+    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, vintage_day
 )
 SELECT
-    g.ms_targeted,
-    g.tactic_id,
-    g.model_score_decile,
-    g.strtgy_seg_typ,
-    g.test_group_latest,
-    g.offer_prod_latest_name,
-    g.vintage_day,
-    COALESCE(r.n_approved, 0)  AS n_approved,
-    COALESCE(r.n_completed, 0) AS n_completed,
+    g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value, g.vintage_day,
+    COALESCE(r.n_approved, 0)  AS n_approved, COALESCE(r.n_completed, 0) AS n_completed,
     SUM(COALESCE(r.n_approved, 0)) OVER (
-        PARTITION BY g.ms_targeted, g.tactic_id, g.model_score_decile,
-                     g.strtgy_seg_typ, g.test_group_latest, g.offer_prod_latest_name
+        PARTITION BY g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value
         ORDER BY g.vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS cum_approved,
     SUM(COALESCE(r.n_completed, 0)) OVER (
-        PARTITION BY g.ms_targeted, g.tactic_id, g.model_score_decile,
-                     g.strtgy_seg_typ, g.test_group_latest, g.offer_prod_latest_name
+        PARTITION BY g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value
         ORDER BY g.vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS cum_completed,
     g.cohort_size
 FROM vt_pcq_ms_dense_grid g
 LEFT JOIN daily_rollup r
-       ON g.ms_targeted            = r.ms_targeted
-      AND g.tactic_id              = r.tactic_id
-      AND g.model_score_decile     = r.model_score_decile
-      AND g.strtgy_seg_typ         = r.strtgy_seg_typ
-      AND g.test_group_latest      = r.test_group_latest
-      AND g.offer_prod_latest_name = r.offer_prod_latest_name
-      AND g.vintage_day            = r.vintage_day
-ORDER BY 1, 2, 3, 4, 5, 6, 7;
+       ON g.tactic_id    = r.tactic_id
+      AND g.ms_targeted  = r.ms_targeted
+      AND g.slicer_dim   = r.slicer_dim
+      AND g.slicer_value = r.slicer_value
+      AND g.vintage_day  = r.vintage_day
+ORDER BY 1, 2, 3, 4, 5;
 
 DROP TABLE vt_pcq_ms_clients;
 DROP TABLE vt_pcq_ms_base;
+DROP TABLE vt_pcq_ms_stacked;
 DROP TABLE vt_pcq_ms_cells;
+DROP TABLE vt_pcq_max_day;
 DROP TABLE vt_pcq_days_spine;
 DROP TABLE vt_pcq_ms_dense_grid;
