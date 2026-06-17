@@ -12,6 +12,24 @@
 
 
 -- ============================================================================
+-- QUERY 0: confirm exact test_group_latest codes for the sales-model arms.
+--   Andre: sales model = NG3_CHLG (challenger) + NG3_CHLN. Verify spelling before trusting the IN-list.
+-- ============================================================================
+SELECT
+    test_group_latest,
+    COUNT(*)                  AS rows_acct_grain,
+    COUNT(DISTINCT clnt_no)   AS clients
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+WHERE mnemonic         = 'PCQ'
+  AND decsn_year       = 2026
+  AND tpa_ita          = 'TPA'
+  AND treatmt_start_dt >= DATE '2026-06-01'
+  AND test_group_latest LIKE 'NG3%'
+GROUP BY test_group_latest
+ORDER BY clients DESC;
+
+
+-- ============================================================================
 -- QUERY 1: banner discovery — banners with BOTH 'pcq' AND 'iav' in the name (token order-agnostic).
 -- ============================================================================
 SELECT
@@ -31,23 +49,20 @@ ORDER BY clients DESC;
 
 
 -- ============================================================================
--- QUERY 2: anchor on MS converters — which banners do they actually engage with?
---   MS converters = approved PCQ clients (post-Jun) who are in the tactic-event MS list.
+-- QUERY 2: anchor on sales-model converters — which banners do they actually engage with?
+--   Sales-model converters = approved PCQ clients (post-Jun) in test_group_latest NG3_CHLG/NG3_CHLN.
+--   No tactic-event scan needed — the test group lives in curated. Confirm codes with QUERY 0 first.
 --   Returns rows => join key works. Top it_item_name reveals the real MS banner name.
 -- ============================================================================
 WITH ms_conv AS (
     SELECT DISTINCT r.clnt_no
     FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp r
-    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-      ON t.CLNT_NO = r.clnt_no
     WHERE r.mnemonic         = 'PCQ'
       AND r.decsn_year       = 2026
       AND r.tpa_ita          = 'TPA'
       AND r.treatmt_start_dt >= DATE '2026-06-01'
       AND r.app_approved     = 1
-      AND substr(t.TACTIC_ID, 8, 3) = 'PCQ'
-      AND t.TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND substr(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
+      AND r.test_group_latest IN ('NG3_CHLG', 'NG3_CHLN')
 ),
 ga4 AS (
     SELECT
