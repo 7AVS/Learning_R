@@ -125,7 +125,7 @@ client_conversions AS (
         COALESCE(r.offer_prod_latest_name, '(null)')
 ),
 stacked_conversions AS (
-    SELECT tactic_id, ms_targeted, 'overall' AS slicer_dim, 'ALL' AS slicer_value, first_approved_day, first_completed_day FROM client_conversions
+    SELECT tactic_id, ms_targeted, CAST('overall' AS VARCHAR(50)) AS slicer_dim, CAST('ALL' AS VARCHAR(100)) AS slicer_value, first_approved_day, first_completed_day FROM client_conversions
     UNION ALL
     SELECT tactic_id, ms_targeted, 'model_score_decile', model_score_decile, first_approved_day, first_completed_day FROM client_conversions
     UNION ALL
