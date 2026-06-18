@@ -54,6 +54,10 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
         SELECT clnt_no, tactic_id, ms_targeted, 'test_group_latest', test_group_latest FROM client_base
         UNION ALL
         SELECT clnt_no, tactic_id, ms_targeted, 'offer_prod_latest_name', offer_prod_latest_name FROM client_base
+        UNION ALL
+        -- curated slice: test_group within top-5 deciles only (champ vs 2 challengers)
+        SELECT clnt_no, tactic_id, ms_targeted, 'test_group_top5dec', test_group_latest FROM client_base
+        WHERE model_score_decile IN ('1','2','3','4','5')
     )
     SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, COUNT(DISTINCT clnt_no) AS cohort_size
     FROM stacked
@@ -132,6 +136,10 @@ stacked_conversions AS (
     SELECT tactic_id, ms_targeted, 'test_group_latest', test_group_latest, first_approved_day, first_completed_day FROM client_conversions
     UNION ALL
     SELECT tactic_id, ms_targeted, 'offer_prod_latest_name', offer_prod_latest_name, first_approved_day, first_completed_day FROM client_conversions
+    UNION ALL
+    -- curated slice: test_group within top-5 deciles only (champ vs 2 challengers)
+    SELECT tactic_id, ms_targeted, 'test_group_top5dec', test_group_latest, first_approved_day, first_completed_day FROM client_conversions
+    WHERE model_score_decile IN ('1','2','3','4','5')
 ),
 daily_conversions AS (
     SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, first_approved_day AS vintage_day,
