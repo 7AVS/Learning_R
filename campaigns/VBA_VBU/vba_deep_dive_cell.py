@@ -190,7 +190,7 @@ print(f"Q2 master:           {len(vba_master):,} rows × {len(vba_master.columns
 #   5. Inner-join on (CLNT_NO, MONTH_END_DATE).
 #   6. Save thin slice to /user/427966379/ for download to local data/.
 #
-# Curated 91-field list per campaigns/VBA_VBU/schemas/ucp_business_curated_fields.md
+# Curated 91-field list per schemas/ucp_business_curated_fields.md
 
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col, trim
