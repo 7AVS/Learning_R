@@ -1,82 +1,128 @@
 -- pcq_ms_vintage.sql
--- PCQ Modal Sales (MS) — cumulative converter curve, vintage_day = days since treatment start.
--- Engine: Teradata-direct (no EDL/GA4 source — no catalog prefix). Descriptive only, no control group.
+-- PCQ Modal Sales (MS) — cumulative converter curve, long-format output.
+-- Engine: Teradata-direct (DL_MR_PROD.*, no catalog prefix, Teradata SQL syntax).
+-- Descriptive only. Counts only — no rate columns.
 --
--- REWRITTEN: 
--- 1. Uses the Long-Format Slicer Pattern (from PCD) to avoid cartesian explosions.
--- 2. Dynamically calculates the max vintage day based on the latest conversion, truncating the spine.
--- 3. MINIMAL VOLATILE TABLES: Only cells and days_spine are materialized to bypass the TDWM 
---    unconstrained product join error. All other logic uses CTEs to prevent "table already exists" session errors.
+-- OUTPUT GRAIN: one row per (wave_dt, arm, metric, decile_scope, vintage_day)
+-- with cohort_size (fixed for that cell) and cum_events (cumulative first-event count).
+--
+-- NOTE: If a previous failed run left volatile tables in session, drop them first:
+--   DROP TABLE vt_pcq_ms_cells;
+--   DROP TABLE vt_pcq_days_spine;
 
--- NOTE: If you get "table already exists" from a previous failed run in your session, run these drops first:
--- DROP TABLE vt_pcq_ms_cells;
--- DROP TABLE vt_pcq_days_spine;
+/* ===== CONFIRM TEST GROUPS (Andre to lock the 2 challenger codes from deployment config) =====
+   champion   : NG3_CHMP
+   challenger : NG3_CHLN, NG3_CHLD   <-- candidates; replace with the exact 2 codes
+   Only these 3 exact codes pass the population filter below.
+   ============================================================================================= */
 
+/* ===== CONFIRM PRODUCT FILTER (Andre to lock the target product before running) =====
+   The curated table covers all PCQ products (see offer_prod_latest_name in pcq_ms_vs_benchmark.sql).
+   If this vintage should be scoped to a single product, uncomment and set the value below in Step 1
+   and in the client_base CTE in Step 3:
+       AND r.offer_prod_latest_name = '<PRODUCT NAME HERE>'
+   If multi-product is intentional, leave the filter commented out.
+   ===================================================================================== */
+
+/* ===== DECILE ORIENTATION =====
+   Decile 1 is assumed = TOP of model (highest propensity).
+   Confirm this against the model documentation before acting on top5 slice results.
+   ================================ */
+
+-- ============================================================================
+-- STEP 1: cells — cohort_size per (wave_dt, arm, decile_scope)
+-- Materialized as volatile table because it cross-joins with days_spine below.
+-- wave_dt = treatmt_start_dt (the deployment wave). Each distinct value is one deployment.
+-- tactic_id holds multiple deployments if a finer split is later needed — not used here.
+-- A sentinel wave_dt of DATE '2026-06-01' is added per cell to represent the pooled-wave row;
+-- it is distinguishable from real wave dates because it equals the filter lower bound.
+-- ============================================================================
 CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
-    WITH ms_clients AS (
-        SELECT DISTINCT CLNT_NO, TRIM(TACTIC_ID) AS TACTIC_ID
-        FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-        WHERE TREATMT_STRT_DT >= DATE '2026-06-01'
-          AND SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
-          AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
-    ),
-    client_base AS (
+    WITH client_base AS (
         SELECT
-            r.clnt_no,
-            TRIM(r.tactic_id) AS tactic_id,
-            CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END             AS ms_targeted,
-            COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)') AS model_score_decile,
-            COALESCE(r.strtgy_seg_typ, '(null)')                          AS strtgy_seg_typ,
-            COALESCE(r.test_group_latest, '(null)')                       AS test_group_latest,
-            COALESCE(r.offer_prod_latest_name, '(null)')                  AS offer_prod_latest_name
-        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-        LEFT JOIN ms_clients m
-               ON m.CLNT_NO = r.clnt_no
-              AND m.TACTIC_ID = TRIM(r.tactic_id)
-        WHERE r.decsn_year       = 2026
-          AND r.tpa_ita          = 'TPA'
-          AND r.treatmt_start_dt >= DATE '2026-06-01'
-        GROUP BY 
-            r.clnt_no, TRIM(r.tactic_id),
-            CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END,
-            COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)'),
-            COALESCE(r.strtgy_seg_typ, '(null)'),
-            COALESCE(r.test_group_latest, '(null)'),
-            COALESCE(r.offer_prod_latest_name, '(null)')
+            clnt_no,
+            treatmt_start_dt   AS wave_dt,
+            CASE
+                WHEN TRIM(test_group_latest) = 'NG3_CHMP'
+                    THEN 'champion'
+                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD')
+                    THEN 'challenger'
+            END                AS arm,
+            CAST(model_score_decile AS VARCHAR(10)) AS model_score_decile
+        FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+        WHERE decsn_year        = 2026
+          AND tpa_ita           = 'TPA'
+          AND treatmt_start_dt  >= DATE '2026-06-01'
+          AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+          -- PRODUCT FILTER (uncomment if scoping to one product — see header block above):
+          -- AND offer_prod_latest_name = '<PRODUCT NAME HERE>'
+        GROUP BY
+            clnt_no, treatmt_start_dt,
+            CASE
+                WHEN TRIM(test_group_latest) = 'NG3_CHMP'  THEN 'champion'
+                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD') THEN 'challenger'
+            END,
+            CAST(model_score_decile AS VARCHAR(10))
     ),
-    stacked AS (
-        SELECT clnt_no, tactic_id, ms_targeted, CAST('overall' AS VARCHAR(50)) AS slicer_dim, CAST('ALL' AS VARCHAR(100)) AS slicer_value FROM client_base
+    -- Long-format by decile_scope: overall (all deciles) and top5
+    scoped AS (
+        -- overall: all deciles
+        SELECT clnt_no, wave_dt, arm, CAST('overall' AS VARCHAR(10)) AS decile_scope
+        FROM client_base
         UNION ALL
-        SELECT clnt_no, tactic_id, ms_targeted, 'model_score_decile', model_score_decile FROM client_base
-        UNION ALL
-        SELECT clnt_no, tactic_id, ms_targeted, 'strtgy_seg_typ', strtgy_seg_typ FROM client_base
-        UNION ALL
-        SELECT clnt_no, tactic_id, ms_targeted, 'test_group_latest', test_group_latest FROM client_base
-        UNION ALL
-        SELECT clnt_no, tactic_id, ms_targeted, 'offer_prod_latest_name', offer_prod_latest_name FROM client_base
-        UNION ALL
-        -- curated slice: test_group within top-5 deciles only (champ vs 2 challengers)
-        SELECT clnt_no, tactic_id, ms_targeted, 'test_group_top5dec', test_group_latest FROM client_base
+        -- top5: deciles 1-5 only (decile 1 assumed = top of model)
+        SELECT clnt_no, wave_dt, arm, 'top5'
+        FROM client_base
         WHERE model_score_decile IN ('1','2','3','4','5')
+    ),
+    -- Add a pooled-wave row (sentinel wave_dt) alongside per-wave rows
+    with_pooled AS (
+        -- Per-wave rows (actual wave date)
+        SELECT CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD') AS wave_dt,
+               CAST(arm AS VARCHAR(20))                  AS arm,
+               decile_scope,
+               clnt_no
+        FROM scoped
+        UNION ALL
+        -- Pooled row: sentinel DATE '2026-06-01' collapses all waves into one curve
+        SELECT CAST(DATE '2026-06-01' AS DATE FORMAT 'YYYY-MM-DD'),
+               CAST(arm AS VARCHAR(20)),
+               decile_scope,
+               clnt_no
+        FROM scoped
     )
-    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, COUNT(DISTINCT clnt_no) AS cohort_size
-    FROM stacked
-    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value
-) WITH DATA PRIMARY INDEX (tactic_id, ms_targeted, slicer_dim, slicer_value) ON COMMIT PRESERVE ROWS;
+    SELECT
+        wave_dt,
+        arm,
+        decile_scope,
+        COUNT(DISTINCT clnt_no) AS cohort_size
+    FROM with_pooled
+    GROUP BY wave_dt, arm, decile_scope
+) WITH DATA PRIMARY INDEX (wave_dt, arm, decile_scope) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_pcq_ms_cells COLUMN (tactic_id, ms_targeted, slicer_dim, slicer_value);
+COLLECT STATISTICS ON vt_pcq_ms_cells COLUMN (wave_dt, arm, decile_scope);
 
+-- ============================================================================
+-- STEP 2: days_spine — 0..max_vintage_day
+-- Materialized as volatile table for TDWM cross-join clearance.
+-- ============================================================================
 CREATE VOLATILE TABLE vt_pcq_days_spine AS (
     WITH max_day AS (
-        SELECT COALESCE(MAX(vintage_day), 14) AS max_vintage_day
+        SELECT COALESCE(MAX(vd), 14) AS max_vintage_day
         FROM (
-            SELECT MAX(CASE WHEN app_approved = 1 THEN days_to_respond END) AS vintage_day 
-            FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
-            WHERE decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
+            SELECT MAX(CASE WHEN app_approved  = 1 THEN days_to_respond END) AS vd
+            FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+            WHERE decsn_year = 2026
+              AND tpa_ita    = 'TPA'
+              AND treatmt_start_dt >= DATE '2026-06-01'
+              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
             UNION ALL
-            SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END) 
-            FROM DL_MR_PROD.cards_tpa_pcq_decision_resp 
-            WHERE decsn_year = 2026 AND treatmt_start_dt >= DATE '2026-06-01'
+            SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END)
+            FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+            WHERE decsn_year = 2026
+              AND tpa_ita    = 'TPA'
+              AND treatmt_start_dt >= DATE '2026-06-01'
+              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
         ) t
     )
     SELECT (calendar_date - DATE '1900-01-01') AS vintage_day
@@ -87,100 +133,113 @@ CREATE VOLATILE TABLE vt_pcq_days_spine AS (
 
 COLLECT STATISTICS ON vt_pcq_days_spine COLUMN (vintage_day);
 
-WITH 
-dense_grid AS (
-    SELECT c.tactic_id, c.ms_targeted, c.slicer_dim, c.slicer_value, c.cohort_size, d.vintage_day
-    FROM vt_pcq_ms_cells c
-    CROSS JOIN vt_pcq_days_spine d
-),
-ms_clients AS (
-    SELECT DISTINCT CLNT_NO, TRIM(TACTIC_ID) AS TACTIC_ID
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE TREATMT_STRT_DT >= DATE '2026-06-01'
-      AND SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
-      AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
-),
-client_conversions AS (
+-- ============================================================================
+-- STEP 3: final long-format curve
+-- metric = 'approved' | 'completed' — each anchored on the client's FIRST such event.
+-- ============================================================================
+WITH
+client_base AS (
     SELECT
-        r.clnt_no,
-        TRIM(r.tactic_id) AS tactic_id,
-        CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END             AS ms_targeted,
-        COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)') AS model_score_decile,
-        COALESCE(r.strtgy_seg_typ, '(null)')                          AS strtgy_seg_typ,
-        COALESCE(r.test_group_latest, '(null)')                       AS test_group_latest,
-        COALESCE(r.offer_prod_latest_name, '(null)')                  AS offer_prod_latest_name,
-        MIN(CASE WHEN r.app_approved  = 1 THEN r.days_to_respond END) AS first_approved_day,
-        MIN(CASE WHEN r.app_completed = 1 THEN r.days_to_respond END) AS first_completed_day
-    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-    LEFT JOIN ms_clients m
-           ON m.CLNT_NO = r.clnt_no
-          AND m.TACTIC_ID = TRIM(r.tactic_id)
-    WHERE r.decsn_year       = 2026
-      AND r.tpa_ita          = 'TPA'
-      AND r.treatmt_start_dt >= DATE '2026-06-01'
-    GROUP BY 
-        r.clnt_no, TRIM(r.tactic_id),
-        CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END,
-        COALESCE(CAST(r.model_score_decile AS VARCHAR(10)), '(null)'),
-        COALESCE(r.strtgy_seg_typ, '(null)'),
-        COALESCE(r.test_group_latest, '(null)'),
-        COALESCE(r.offer_prod_latest_name, '(null)')
+        clnt_no,
+        treatmt_start_dt   AS wave_dt,
+        CASE
+            WHEN TRIM(test_group_latest) = 'NG3_CHMP'                     THEN 'champion'
+            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD')      THEN 'challenger'
+        END                                                                AS arm,
+        CAST(model_score_decile AS VARCHAR(10))                            AS model_score_decile,
+        -- first-event per metric uses its OWN first-event date (per vintage convention)
+        MIN(CASE WHEN app_approved  = 1 THEN days_to_respond END)         AS first_approved_day,
+        MIN(CASE WHEN app_completed = 1 THEN days_to_respond END)         AS first_completed_day
+    FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+    WHERE decsn_year        = 2026
+      AND tpa_ita           = 'TPA'
+      AND treatmt_start_dt  >= DATE '2026-06-01'
+      AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+      -- PRODUCT FILTER (uncomment if scoping to one product — see header block above):
+      -- AND offer_prod_latest_name = '<PRODUCT NAME HERE>'
+    GROUP BY
+        clnt_no, treatmt_start_dt,
+        CASE
+            WHEN TRIM(test_group_latest) = 'NG3_CHMP'                THEN 'champion'
+            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD') THEN 'challenger'
+        END,
+        CAST(model_score_decile AS VARCHAR(10))
 ),
-stacked_conversions AS (
-    SELECT tactic_id, ms_targeted, CAST('overall' AS VARCHAR(50)) AS slicer_dim, CAST('ALL' AS VARCHAR(100)) AS slicer_value, first_approved_day, first_completed_day FROM client_conversions
+-- Expand by decile_scope: overall and top5
+scoped AS (
+    SELECT clnt_no, wave_dt, arm, CAST('overall' AS VARCHAR(10)) AS decile_scope,
+           first_approved_day, first_completed_day
+    FROM client_base
     UNION ALL
-    SELECT tactic_id, ms_targeted, 'model_score_decile', model_score_decile, first_approved_day, first_completed_day FROM client_conversions
-    UNION ALL
-    SELECT tactic_id, ms_targeted, 'strtgy_seg_typ', strtgy_seg_typ, first_approved_day, first_completed_day FROM client_conversions
-    UNION ALL
-    SELECT tactic_id, ms_targeted, 'test_group_latest', test_group_latest, first_approved_day, first_completed_day FROM client_conversions
-    UNION ALL
-    SELECT tactic_id, ms_targeted, 'offer_prod_latest_name', offer_prod_latest_name, first_approved_day, first_completed_day FROM client_conversions
-    UNION ALL
-    -- curated slice: test_group within top-5 deciles only (champ vs 2 challengers)
-    SELECT tactic_id, ms_targeted, 'test_group_top5dec', test_group_latest, first_approved_day, first_completed_day FROM client_conversions
+    SELECT clnt_no, wave_dt, arm, 'top5',
+           first_approved_day, first_completed_day
+    FROM client_base
     WHERE model_score_decile IN ('1','2','3','4','5')
 ),
-daily_conversions AS (
-    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, first_approved_day AS vintage_day,
-           CAST(COUNT(*) AS BIGINT) AS n_approved, CAST(0 AS BIGINT) AS n_completed
-    FROM stacked_conversions
-    WHERE first_approved_day IS NOT NULL
-    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, first_approved_day
-
+-- Add pooled-wave sentinel rows alongside per-wave rows
+with_pooled AS (
+    SELECT CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD')        AS wave_dt,
+           CAST(arm AS VARCHAR(20))                         AS arm,
+           decile_scope, first_approved_day, first_completed_day
+    FROM scoped
     UNION ALL
-
-    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, first_completed_day AS vintage_day,
-           CAST(0 AS BIGINT) AS n_approved, CAST(COUNT(*) AS BIGINT) AS n_completed
-    FROM stacked_conversions
-    WHERE first_completed_day IS NOT NULL
-    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, first_completed_day
+    -- Pooled sentinel: all waves combined into one curve
+    SELECT CAST(DATE '2026-06-01' AS DATE FORMAT 'YYYY-MM-DD'),
+           CAST(arm AS VARCHAR(20)),
+           decile_scope, first_approved_day, first_completed_day
+    FROM scoped
 ),
-daily_rollup AS (
-    SELECT tactic_id, ms_targeted, slicer_dim, slicer_value, vintage_day,
-           SUM(n_approved) AS n_approved, SUM(n_completed) AS n_completed
-    FROM daily_conversions
-    GROUP BY tactic_id, ms_targeted, slicer_dim, slicer_value, vintage_day
+-- Pivot to long format: one row per metric per client per cell
+metric_long AS (
+    SELECT wave_dt, arm, decile_scope,
+           CAST('approved'  AS VARCHAR(20)) AS metric,
+           first_approved_day               AS event_day
+    FROM with_pooled
+    WHERE first_approved_day IS NOT NULL
+    UNION ALL
+    SELECT wave_dt, arm, decile_scope,
+           CAST('completed' AS VARCHAR(20)) AS metric,
+           first_completed_day              AS event_day
+    FROM with_pooled
+    WHERE first_completed_day IS NOT NULL
+),
+-- Daily event counts per cell per metric
+daily_counts AS (
+    SELECT wave_dt, arm, decile_scope, metric, event_day AS vintage_day,
+           CAST(COUNT(*) AS BIGINT) AS n_events
+    FROM metric_long
+    GROUP BY wave_dt, arm, decile_scope, metric, event_day
+),
+-- Dense grid: cells × spine × metrics
+dense_grid AS (
+    SELECT c.wave_dt, c.arm, c.decile_scope, c.cohort_size,
+           m.metric, d.vintage_day
+    FROM vt_pcq_ms_cells c
+    CROSS JOIN vt_pcq_days_spine d
+    CROSS JOIN (
+        SELECT CAST('approved'  AS VARCHAR(20)) AS metric
+        UNION ALL
+        SELECT CAST('completed' AS VARCHAR(20))
+    ) m
 )
 SELECT
-    g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value, g.vintage_day,
-    COALESCE(r.n_approved, 0)  AS n_approved, COALESCE(r.n_completed, 0) AS n_completed,
-    SUM(COALESCE(r.n_approved, 0)) OVER (
-        PARTITION BY g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value
+    g.wave_dt,
+    g.arm,
+    g.metric,
+    g.decile_scope,
+    g.vintage_day,
+    g.cohort_size,
+    SUM(COALESCE(dc.n_events, 0)) OVER (
+        PARTITION BY g.wave_dt, g.arm, g.metric, g.decile_scope
         ORDER BY g.vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS cum_approved,
-    SUM(COALESCE(r.n_completed, 0)) OVER (
-        PARTITION BY g.tactic_id, g.ms_targeted, g.slicer_dim, g.slicer_value
-        ORDER BY g.vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS cum_completed,
-    g.cohort_size
+    ) AS cum_events
 FROM dense_grid g
-LEFT JOIN daily_rollup r
-       ON g.tactic_id    = r.tactic_id
-      AND g.ms_targeted  = r.ms_targeted
-      AND g.slicer_dim   = r.slicer_dim
-      AND g.slicer_value = r.slicer_value
-      AND g.vintage_day  = r.vintage_day
+LEFT JOIN daily_counts dc
+       ON g.wave_dt      = dc.wave_dt
+      AND g.arm          = dc.arm
+      AND g.metric       = dc.metric
+      AND g.decile_scope = dc.decile_scope
+      AND g.vintage_day  = dc.vintage_day
 ORDER BY 1, 2, 3, 4, 5;
 
 DROP TABLE vt_pcq_ms_cells;
