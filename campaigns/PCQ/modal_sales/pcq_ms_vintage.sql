@@ -110,14 +110,14 @@ CREATE VOLATILE TABLE vt_pcq_days_spine AS (
     WITH max_day AS (
         SELECT COALESCE(MAX(vd), 14) AS max_vintage_day
         FROM (
-            SELECT MAX(CASE WHEN app_approved  = 1 THEN days_to_respond END) AS vd
+            SELECT MAX(CASE WHEN app_approved  = 1 AND TRIM(asc_on_app_source) = 'Period-ASC' THEN days_to_respond END) AS vd
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
             WHERE decsn_year = 2026
               AND tpa_ita    = 'TPA'
               AND treatmt_start_dt >= DATE '2026-06-01'
               AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
             UNION ALL
-            SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END)
+            SELECT MAX(CASE WHEN app_completed = 1 AND TRIM(asc_on_app_source) = 'Period-ASC' THEN days_to_respond END)
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
             WHERE decsn_year = 2026
               AND tpa_ita    = 'TPA'
@@ -148,8 +148,10 @@ client_base AS (
         END                                                                AS arm,
         CAST(model_score_decile AS VARCHAR(10))                            AS model_score_decile,
         -- first-event per metric uses its OWN first-event date (per vintage convention)
-        MIN(CASE WHEN app_approved  = 1 THEN days_to_respond END)         AS first_approved_day,
-        MIN(CASE WHEN app_completed = 1 THEN days_to_respond END)         AS first_completed_day
+        -- SUCCESS = Period-ASC attributed only (campaign-window applications). This gates the
+        -- NUMERATOR only; cohort_size (denominator) stays all targeted clients in the arm.
+        MIN(CASE WHEN app_approved  = 1 AND TRIM(asc_on_app_source) = 'Period-ASC' THEN days_to_respond END) AS first_approved_day,
+        MIN(CASE WHEN app_completed = 1 AND TRIM(asc_on_app_source) = 'Period-ASC' THEN days_to_respond END) AS first_completed_day
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
     WHERE decsn_year        = 2026
       AND tpa_ita           = 'TPA'
