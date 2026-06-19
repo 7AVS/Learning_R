@@ -10,9 +10,9 @@
 --   DROP TABLE vt_pcq_ms_cells;
 --   DROP TABLE vt_pcq_days_spine;
 
-/* ===== CONFIRM TEST GROUPS (Andre to lock the 2 challenger codes from deployment config) =====
-   champion   : NG3_CHMP
-   challenger : NG3_CHLN, NG3_CHLD   <-- candidates; replace with the exact 2 codes
+/* ===== TEST GROUPS (confirmed from tactic table DG6V01.TACTIC_EVNT_IP_AR_HIST, 2026-06-19) =====
+   champion   : NG3_CHMP            (is_MS = 0 — no Modal Sales)
+   challenger : NG3_CHLN, NG3_CHLG  (is_MS = 1 — Modal Sales; NG3_CHLG is small, ~2-4k/wave)
    Only these 3 exact codes pass the population filter below.
    ============================================================================================= */
 
@@ -34,8 +34,8 @@
 -- Materialized as volatile table because it cross-joins with days_spine below.
 -- wave_dt = treatmt_start_dt (the deployment wave). Each distinct value is one deployment.
 -- tactic_id holds multiple deployments if a finer split is later needed — not used here.
--- A sentinel wave_dt of DATE '2026-06-01' is added per cell to represent the pooled-wave row;
--- it is distinguishable from real wave dates because it equals the filter lower bound.
+-- A 'pooled' wave_dt text label is added per cell for the all-waves-combined row
+-- (a literal label, so it cannot collide with the real 2026-06-01 wave date).
 -- ============================================================================
 CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
     WITH client_base AS (
@@ -45,7 +45,7 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
             CASE
                 WHEN TRIM(test_group_latest) = 'NG3_CHMP'
                     THEN 'champion'
-                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD')
+                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG')
                     THEN 'challenger'
             END                AS arm,
             CAST(model_score_decile AS VARCHAR(10)) AS model_score_decile
@@ -53,14 +53,14 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
         WHERE decsn_year        = 2026
           AND tpa_ita           = 'TPA'
           AND treatmt_start_dt  >= DATE '2026-06-01'
-          AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+          AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
           -- PRODUCT FILTER (uncomment if scoping to one product — see header block above):
           -- AND offer_prod_latest_name = '<PRODUCT NAME HERE>'
         GROUP BY
             clnt_no, treatmt_start_dt,
             CASE
                 WHEN TRIM(test_group_latest) = 'NG3_CHMP'  THEN 'champion'
-                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD') THEN 'challenger'
+                WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN 'challenger'
             END,
             CAST(model_score_decile AS VARCHAR(10))
     ),
@@ -77,15 +77,15 @@ CREATE VOLATILE TABLE vt_pcq_ms_cells AS (
     ),
     -- Add a pooled-wave row (sentinel wave_dt) alongside per-wave rows
     with_pooled AS (
-        -- Per-wave rows (actual wave date)
-        SELECT CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD') AS wave_dt,
+        -- Per-wave rows (actual wave date as text 'YYYY-MM-DD')
+        SELECT CAST(CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD') AS VARCHAR(20)) AS wave_dt,
                CAST(arm AS VARCHAR(20))                  AS arm,
                decile_scope,
                clnt_no
         FROM scoped
         UNION ALL
-        -- Pooled row: sentinel DATE '2026-06-01' collapses all waves into one curve
-        SELECT CAST(DATE '2026-06-01' AS DATE FORMAT 'YYYY-MM-DD'),
+        -- Pooled row: literal 'pooled' label collapses all waves (no date collision)
+        SELECT CAST('pooled' AS VARCHAR(20)),
                CAST(arm AS VARCHAR(20)),
                decile_scope,
                clnt_no
@@ -115,14 +115,14 @@ CREATE VOLATILE TABLE vt_pcq_days_spine AS (
             WHERE decsn_year = 2026
               AND tpa_ita    = 'TPA'
               AND treatmt_start_dt >= DATE '2026-06-01'
-              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
             UNION ALL
             SELECT MAX(CASE WHEN app_completed = 1 THEN days_to_respond END)
             FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
             WHERE decsn_year = 2026
               AND tpa_ita    = 'TPA'
               AND treatmt_start_dt >= DATE '2026-06-01'
-              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+              AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
         ) t
     )
     SELECT (calendar_date - DATE '1900-01-01') AS vintage_day
@@ -144,7 +144,7 @@ client_base AS (
         treatmt_start_dt   AS wave_dt,
         CASE
             WHEN TRIM(test_group_latest) = 'NG3_CHMP'                     THEN 'champion'
-            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD')      THEN 'challenger'
+            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG')      THEN 'challenger'
         END                                                                AS arm,
         CAST(model_score_decile AS VARCHAR(10))                            AS model_score_decile,
         -- first-event per metric uses its OWN first-event date (per vintage convention)
@@ -154,14 +154,14 @@ client_base AS (
     WHERE decsn_year        = 2026
       AND tpa_ita           = 'TPA'
       AND treatmt_start_dt  >= DATE '2026-06-01'
-      AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLD')
+      AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
       -- PRODUCT FILTER (uncomment if scoping to one product — see header block above):
       -- AND offer_prod_latest_name = '<PRODUCT NAME HERE>'
     GROUP BY
         clnt_no, treatmt_start_dt,
         CASE
             WHEN TRIM(test_group_latest) = 'NG3_CHMP'                THEN 'champion'
-            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLD') THEN 'challenger'
+            WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN 'challenger'
         END,
         CAST(model_score_decile AS VARCHAR(10))
 ),
@@ -178,13 +178,13 @@ scoped AS (
 ),
 -- Add pooled-wave sentinel rows alongside per-wave rows
 with_pooled AS (
-    SELECT CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD')        AS wave_dt,
+    SELECT CAST(CAST(wave_dt AS DATE FORMAT 'YYYY-MM-DD') AS VARCHAR(20)) AS wave_dt,
            CAST(arm AS VARCHAR(20))                         AS arm,
            decile_scope, first_approved_day, first_completed_day
     FROM scoped
     UNION ALL
-    -- Pooled sentinel: all waves combined into one curve
-    SELECT CAST(DATE '2026-06-01' AS DATE FORMAT 'YYYY-MM-DD'),
+    -- Pooled row: literal 'pooled' label, all waves combined (no date collision)
+    SELECT CAST('pooled' AS VARCHAR(20)),
            CAST(arm AS VARCHAR(20)),
            decile_scope, first_approved_day, first_completed_day
     FROM scoped
