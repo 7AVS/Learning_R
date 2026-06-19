@@ -217,9 +217,11 @@ dense_grid AS (
     FROM vt_pcq_ms_cells c
     CROSS JOIN vt_pcq_days_spine d
     CROSS JOIN (
-        SELECT CAST('approved'  AS VARCHAR(20)) AS metric
+        -- Teradata: each SELECT in a UNION must reference a table (error 3888).
+        -- Anchor to the spine at vintage_day = 0 (exactly one row) to emit one row per metric.
+        SELECT CAST('approved'  AS VARCHAR(20)) AS metric FROM vt_pcq_days_spine WHERE vintage_day = 0
         UNION ALL
-        SELECT CAST('completed' AS VARCHAR(20))
+        SELECT CAST('completed' AS VARCHAR(20))           FROM vt_pcq_days_spine WHERE vintage_day = 0
     ) m
 )
 SELECT
