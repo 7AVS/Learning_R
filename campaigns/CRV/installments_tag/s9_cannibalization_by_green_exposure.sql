@@ -67,16 +67,20 @@ flagged AS (
     FROM pcl_universe p
 ),
 agg AS (
-    SELECT CAST(SUM(a_flag) AS DOUBLE)                                            AS n_action,
-           CAST(SUM(CASE WHEN a_flag = 1 THEN responder_cli ELSE 0 END) AS DOUBLE) AS resp_action,
-           CAST(SUM(c_flag) AS DOUBLE)                                            AS n_control,
-           CAST(SUM(CASE WHEN c_flag = 1 THEN responder_cli ELSE 0 END) AS DOUBLE) AS resp_control
+    -- keep SUMs as exact numerics (NOT DOUBLE): STMT 2 is single-source (all Teradata),
+    -- so Starburst pushes the whole statement down to Teradata. Teradata ROUND/arithmetic
+    -- rejects FLOAT (=Trino DOUBLE) with error 9881 — use DECIMAL division instead.
+    SELECT SUM(a_flag)                                            AS n_action,
+           SUM(CASE WHEN a_flag = 1 THEN responder_cli ELSE 0 END) AS resp_action,
+           SUM(c_flag)                                            AS n_control,
+           SUM(CASE WHEN c_flag = 1 THEN responder_cli ELSE 0 END) AS resp_control
     FROM flagged
 )
 SELECT 'overall_2024-10+' AS slice, n_action, resp_action, n_control, resp_control,
-       resp_action / NULLIF(n_action,0)                                          AS p_action,
-       resp_control / NULLIF(n_control,0)                                        AS p_control,
-       resp_control / NULLIF(n_control,0) - resp_action / NULLIF(n_action,0)     AS gap
+       CAST(resp_action  AS DECIMAL(18,6)) / NULLIF(n_action,0)                  AS p_action,
+       CAST(resp_control AS DECIMAL(18,6)) / NULLIF(n_control,0)                 AS p_control,
+       CAST(resp_control AS DECIMAL(18,6)) / NULLIF(n_control,0)
+     - CAST(resp_action  AS DECIMAL(18,6)) / NULLIF(n_action,0)                  AS gap
 FROM agg
 ;
 
