@@ -42,17 +42,17 @@ WHERE year = '2026' AND month = '06'
 -- STMT 2 — REPRODUCTION GATE: published 1.08pp gap (curated only, no green). Must match before STMT 3.
 -- ============================================================
 WITH pcl_universe AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, treatmt_strt_dt, treatmt_end_dt, responder_cli
     FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2024-10-01' AND channel LIKE '%MB%'
 ),
 crv_action AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, offer_start_date, offer_end_date
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, offer_start_date, offer_end_date
     FROM dw00_im.dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
 ),
 crv_control AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, offer_start_date, offer_end_date
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, offer_start_date, offer_end_date
     FROM dw00_im.dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
 ),
@@ -88,30 +88,30 @@ FROM agg
 -- STMT 3 — DELIVERABLE: the gap split by entry segment (green / M1 banner). 2025-02+ (GA4-observable).
 -- ============================================================
 WITH green_clients AS (
-    SELECT DISTINCT CAST(up_srf_id2_value AS BIGINT) AS clnt
+    SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
     WHERE year IN ('2025','2026') AND event_name = 'view'
       AND LOWER(ep_details) = 'view - credit card installments - eligible transaction'
 ),
 m1_clients AS (
-    SELECT DISTINCT CAST(up_srf_id2_value AS BIGINT) AS clnt
+    SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE year IN ('2025','2026') AND event_name = 'view_promotion'
       AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
 ),
 pcl_universe AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, CAST(clnt_no AS BIGINT) AS clnt_no,
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, CAST(clnt_no AS DECIMAL(38,0)) AS clnt_no,
            treatmt_strt_dt, treatmt_end_dt, responder_cli
     FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
 ),
 crv_action AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, offer_start_date, offer_end_date
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, offer_start_date, offer_end_date
     FROM dw00_im.dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND channels_deployed LIKE '%IM%' AND action_control = 'Action'
 ),
 crv_control AS (
-    SELECT CAST(acct_no AS BIGINT) AS acct_no, offer_start_date, offer_end_date
+    SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, offer_start_date, offer_end_date
     FROM dw00_im.dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01' AND action_control = 'Control'
 ),
