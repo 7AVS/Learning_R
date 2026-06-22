@@ -162,7 +162,10 @@ ORDER BY segment
 ;
 
 -- ============================================================
--- STMT 4 — profile cpc_dni (learn what it is — values + volume). NOT used as a definition yet.
+-- STMT 4 — profile cpc_dni values + volume.
+-- KNOWN (Andre, 2026-06-22): 3-way categorical = 'Not CPC/DNI' | 'CPC' | 'DNI' (mutually exclusive).
+--   CPC = Customer Preference Contact = OPTED OUT of marketing contact (repo: cpc_*_eligible).
+--   DNI = reportedly "Do Not Increase" (unconfirmed / doesn't cohere as a contact sibling) — we don't use it.
 -- ============================================================
 SELECT cpc_dni,
        COUNT(*)                         AS n_leads,
@@ -171,4 +174,52 @@ FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
 WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
 GROUP BY cpc_dni
 ORDER BY n_leads DESC
+;
+
+-- ============================================================
+-- STMT 5 — Is green-banner exposure present specifically where CPC (contact opt-out) is flagged?
+--   LOGIC: CPC opt-out => M1 installments banner is SUPPRESSED (it's a marketing contact).
+--   The green per-transaction tag is NOT CPC-capped, so it still shows. Expectation among
+--   CPC-flagged leads: n_m1_exposed ~ 0 (suppressed) while n_green_exposed > 0 — i.e. green is
+--   the independent channel that survives the opt-out. This is the curated identification of the
+--   "M1-suppressed" population (cleaner than the by-exclusion green_only of STMT 3).
+--   Grain = PCL-MB lead, Dec'25–Feb'26. COUNTS ONLY. Mixed-source (GA4+EDW) → runs in Trino.
+--   NOTE: column is `cpc_dni` (the STMT 4 column). If your env names it differently, swap it.
+-- ============================================================
+WITH green_clients AS (
+    SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
+    WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
+      AND event_name = 'view'
+      AND LOWER(ep_details) = 'view - credit card installments - eligible transaction'
+),
+m1_clients AS (
+    SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+    WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
+      AND event_name = 'view_promotion'
+      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
+),
+pcl_universe AS (
+    SELECT CAST(clnt_no AS DECIMAL(38,0)) AS clnt_no,
+           CASE WHEN cpc_dni = 'CPC' THEN 'CPC_optout' ELSE 'not_CPC' END AS cpc_flag
+    FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2025-12-01' AND treatmt_strt_dt < DATE '2026-03-01' AND channel LIKE '%MB%'
+),
+flagged AS (
+    SELECT p.cpc_flag,
+        CASE WHEN p.clnt_no IN (SELECT clnt FROM green_clients) THEN 1 ELSE 0 END AS green_flag,
+        CASE WHEN p.clnt_no IN (SELECT clnt FROM m1_clients)    THEN 1 ELSE 0 END AS m1_flag
+    FROM pcl_universe p
+)
+SELECT cpc_flag,
+       COUNT(*)                                                        AS n_leads,
+       SUM(green_flag)                                                 AS n_green_exposed,
+       SUM(m1_flag)                                                    AS n_m1_exposed,
+       SUM(CASE WHEN green_flag = 1 AND m1_flag = 0 THEN 1 ELSE 0 END) AS n_green_only,
+       SUM(CASE WHEN green_flag = 1 AND m1_flag = 1 THEN 1 ELSE 0 END) AS n_both,
+       SUM(CASE WHEN green_flag = 0 AND m1_flag = 0 THEN 1 ELSE 0 END) AS n_neither
+FROM flagged
+GROUP BY cpc_flag
+ORDER BY cpc_flag
 ;
