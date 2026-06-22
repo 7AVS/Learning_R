@@ -35,7 +35,7 @@ SELECT 'm1_banner_Jun2026' AS flag,
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026' AND month = '06'
   AND event_name = 'view_promotion'
-  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
+  AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344')  -- CRV 4-code allowlist (s2/q28 contract; only 87342 live in Dec'25-Feb'26; it_item_id format-stable, no Android '.0')
 ;
 
 -- ============================================================
@@ -99,7 +99,7 @@ m1_clients AS (
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
       AND event_name = 'view_promotion'
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
+      AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344')  -- CRV 4-code allowlist (s2/q28 contract; only 87342 live in Dec'25-Feb'26; it_item_id format-stable, no Android '.0')
 ),
 pcl_universe AS (
     SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, CAST(clnt_no AS DECIMAL(38,0)) AS clnt_no,
@@ -198,7 +198,7 @@ m1_clients AS (
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
     WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
       AND event_name = 'view_promotion'
-      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
+      AND it_item_id IN ('i_87340','i_87342','i_87343','i_87344')  -- CRV 4-code allowlist (s2/q28 contract; only 87342 live in Dec'25-Feb'26; it_item_id format-stable, no Android '.0')
 ),
 pcl_universe AS (
     SELECT CAST(clnt_no AS DECIMAL(38,0)) AS clnt_no,
