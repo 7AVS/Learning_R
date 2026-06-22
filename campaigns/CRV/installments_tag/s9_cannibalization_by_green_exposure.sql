@@ -90,20 +90,22 @@ FROM agg
 WITH green_clients AS (
     SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
-    WHERE year IN ('2025','2026') AND event_name = 'view'
+    WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
+      AND event_name = 'view'
       AND LOWER(ep_details) = 'view - credit card installments - eligible transaction'
 ),
 m1_clients AS (
     SELECT DISTINCT CAST(up_srf_id2_value AS DECIMAL(38,0)) AS clnt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-    WHERE year IN ('2025','2026') AND event_name = 'view_promotion'
+    WHERE ( (year = '2025' AND month = '12') OR (year = '2026' AND month IN ('01','02')) )  -- Dec'25–Feb'26
+      AND event_name = 'view_promotion'
       AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
 ),
 pcl_universe AS (
     SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, CAST(clnt_no AS DECIMAL(38,0)) AS clnt_no,
            treatmt_strt_dt, treatmt_end_dt, responder_cli
     FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2025-02-01' AND channel LIKE '%MB%'
+    WHERE treatmt_strt_dt >= DATE '2025-12-01' AND treatmt_strt_dt < DATE '2026-03-01' AND channel LIKE '%MB%'
 ),
 crv_action AS (
     SELECT CAST(acct_no AS DECIMAL(38,0)) AS acct_no, offer_start_date, offer_end_date
