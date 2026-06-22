@@ -1,0 +1,72 @@
+-- s2_installments_tag_narrow_discovery.sql
+-- ENGINE: Starburst/Trino
+-- TABLE:  edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
+--
+-- PURPOSE: Find the inline "pay in installments" tag when it fires OUTSIDE the GA4
+--   promotion framework. s1 scanned the ecommerce table (view_promotion / item ids);
+--   if the tag is a custom event with null item/promotion payload it is INVISIBLE there.
+--   The narrow table carries the event-parameter (key/value) grain — a custom event like
+--   "tap_installments" and its screen params live here, not in the ecommerce item fields.
+--
+-- WHY SHOW COLUMNS FIRST: we have never profiled this table's schema. The narrow table is
+--   a different shape from ecommerce (long key/value, not wide it_* columns). Do NOT assume
+--   it_location_id / it_item_id / up_srf_id2_value exist here. STMT 1 reveals the real
+--   column names; STMTs 2-3 get re-pointed at those once we read STMT 1's output together.
+--
+-- WORKFLOW: run STMT 1 -> screenshot -> we pick the real event/param/screen/client columns
+--   -> fill the <PLACEHOLDER> names in STMTs 2-3. Nothing below STMT 1 should run until then.
+
+-- ============================================================
+-- STMT 1 — Schema discovery (run this ALONE first)
+-- ============================================================
+SHOW COLUMNS FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow;
+
+
+-- ============================================================
+-- STMT 2 — Event-name census (re-point column names after STMT 1)
+-- ============================================================
+-- Goal: list every event_name in the data so we can spot a custom installments event
+--   (e.g. tap_installments / view_installment_offer / select_item) that the promotion
+--   framework — and therefore s1 — never sees.
+-- EDIT after STMT 1: confirm the event-name column (likely `event_name`) and the partition
+--   columns (likely `year`,`month`); replace if STMT 1 shows otherwise.
+--
+-- SELECT
+--     year,
+--     month,
+--     event_name,
+--     COUNT(*) AS n_events
+-- FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
+-- WHERE year IN ('2025','2026')
+-- GROUP BY 1, 2, 3
+-- ORDER BY n_events DESC
+-- LIMIT 500;
+
+
+-- ============================================================
+-- STMT 3 — Installments keyword sweep across event params (re-point after STMT 1)
+-- ============================================================
+-- Goal: catch the tag wherever its label sits in the narrow key/value pairs. The narrow
+--   table typically stores params as (param_key, param_string_value / param_int_value).
+--   Sweep for install/bnpl strings in BOTH the event name and the param value/key columns.
+-- EDIT after STMT 1: replace <PARAM_KEY_COL>, <PARAM_VAL_COL>, and the screen-param key
+--   with the real names from STMT 1 output. Do not run until those are confirmed.
+--
+-- SELECT
+--     year,
+--     month,
+--     event_name,
+--     <PARAM_KEY_COL>,
+--     <PARAM_VAL_COL>,
+--     COUNT(*) AS n_events
+-- FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
+-- WHERE year IN ('2025','2026')
+--   AND (
+--         LOWER(event_name)        LIKE '%install%'
+--      OR LOWER(<PARAM_VAL_COL>)   LIKE '%install%'
+--      OR LOWER(<PARAM_VAL_COL>)   LIKE '%bnpl%'
+--      OR LOWER(<PARAM_KEY_COL>)   LIKE '%install%'
+--   )
+-- GROUP BY 1, 2, 3, 4, 5
+-- ORDER BY n_events DESC
+-- LIMIT 300;
