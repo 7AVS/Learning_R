@@ -35,7 +35,7 @@ SELECT 'm1_banner_Jun2026' AS flag,
 FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
 WHERE year = '2026' AND month = '06'
   AND event_name = 'view_promotion'
-  AND it_promotion_id = '87342'
+  AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
 ;
 
 -- ============================================================
@@ -96,7 +96,8 @@ WITH green_clients AS (
 m1_clients AS (
     SELECT DISTINCT CAST(up_srf_id2_value AS BIGINT) AS clnt
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-    WHERE year IN ('2025','2026') AND event_name = 'view_promotion' AND it_promotion_id = '87342'
+    WHERE year IN ('2025','2026') AND event_name = 'view_promotion'
+      AND TRY_CAST(TRY_CAST(it_promotion_id AS DOUBLE) AS BIGINT) = 87342  -- iOS '87342' + Android '87342.0'
 ),
 pcl_universe AS (
     SELECT CAST(acct_no AS BIGINT) AS acct_no, CAST(clnt_no AS BIGINT) AS clnt_no,
