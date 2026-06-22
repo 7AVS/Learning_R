@@ -67,20 +67,20 @@ flagged AS (
     FROM pcl_universe p
 ),
 agg AS (
-    -- keep SUMs as exact numerics (NOT DOUBLE): STMT 2 is single-source (all Teradata),
-    -- so Starburst pushes the whole statement down to Teradata. Teradata ROUND/arithmetic
-    -- rejects FLOAT (=Trino DOUBLE) with error 9881 — use DECIMAL division instead.
     SELECT SUM(a_flag)                                            AS n_action,
            SUM(CASE WHEN a_flag = 1 THEN responder_cli ELSE 0 END) AS resp_action,
            SUM(c_flag)                                            AS n_control,
            SUM(CASE WHEN c_flag = 1 THEN responder_cli ELSE 0 END) AS resp_control
     FROM flagged
 )
-SELECT 'overall_2024-10+' AS slice, n_action, resp_action, n_control, resp_control,
-       CAST(resp_action  AS DECIMAL(18,6)) / NULLIF(n_action,0)                  AS p_action,
-       CAST(resp_control AS DECIMAL(18,6)) / NULLIF(n_control,0)                 AS p_control,
-       CAST(resp_control AS DECIMAL(18,6)) / NULLIF(n_control,0)
-     - CAST(resp_action  AS DECIMAL(18,6)) / NULLIF(n_action,0)                  AS gap
+-- COUNTS ONLY — do NOT divide here. STMT 2 is single-source (all Teradata), so Starburst pushes
+-- the whole statement down to Teradata. The connector wraps ANY pushed-down rate division in a
+-- ROUND() (to preserve Trino result-type semantics), and Teradata rejects that with error 9881 —
+-- DOUBLE and DECIMAL both fail. SUM pushes down fine. Compute the gate by hand from the 4 counts:
+--   p_action  = resp_action  / n_action
+--   p_control = resp_control / n_control
+--   gap = p_control - p_action   -- EXPECT ~ +0.0108 (1.08pp). If so, STMT 3 is good to run.
+SELECT 'overall_2024-10+' AS slice, n_action, resp_action, n_control, resp_control
 FROM agg
 ;
 
