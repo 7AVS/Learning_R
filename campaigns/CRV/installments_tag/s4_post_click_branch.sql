@@ -5,9 +5,8 @@
 --   s3 proved the installments offer IS the CRV M1 banner (id 87342, VSA_OFFER_SF) with
 --   view_promotion + select_promotion. Open question: after a client CLICKS that banner,
 --   where do they go? And do the other 3 CRV creatives carry different offers?
---   The actual installment-plan CONVERSION is NOT in GA4 — it lives in the CRV curated
---   install table (Teradata). This file closes only the GA4 half; STMT 3 below is a stub
---   for the EDW join once the curated table name/fields are confirmed.
+--   Two GA4 questions only: where do banner-clickers go next, and what offers are the
+--   other 3 creatives. (Conversion is not in GA4 and is out of scope here.)
 --
 -- Trino rules: no QUALIFY/NULLIFZERO; LOWER() match; filter year AND month.
 -- Identity: filter the installments banner by it_item_name LIKE '%instalment%' (proven),
@@ -65,17 +64,3 @@ GROUP BY 1, 2, 3, 4
 ORDER BY n_clients DESC
 LIMIT 30
 ;
-
--- ============================================================
--- STMT 3 — EDW conversion join (STUB — needs CRV curated install table name/fields)
--- ============================================================
--- The actual installment-plan creation + economics is in the CRV curated install table
--- (Teradata; see reference: CRV install columns, install_details economics). Once the exact
--- table + plan-flag + date fields are confirmed, join GA4 banner clickers to plan creators
--- on clnt_no (= up_srf_id2_value) to complete the funnel: viewed -> clicked -> plan created.
--- Left as a stub on purpose — do NOT guess the table/columns.
---
--- SELECT <plan_count>, <plan_amount> ...
--- FROM <crv_curated_install_table>
--- WHERE <decision/plan date in window>
---   AND clnt_no IN (SELECT clnt_no FROM clicks);   -- clickers from STMT 1
