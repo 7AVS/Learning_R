@@ -25,13 +25,7 @@ cohort AS (
             WHEN TRIM(test_groups_period) LIKE '%T' THEN 'TEST'
             WHEN TRIM(test_groups_period) LIKE '%C' THEN 'CONTROL'
         END                                             AS arm,
-        CAST(
-            CAST(YEAR(response_start) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(response_start) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                                               AS cohort_month
+        (response_start - (EXTRACT(DAY FROM response_start) - 1)) AS cohort_month
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent = '2026111PCD'
       AND response_start   >= DATE '2026-01-01'

@@ -24,13 +24,7 @@ CREATE VOLATILE TABLE vt_pcq_monthly_cells AS (
     WITH client_base AS (
         SELECT
             clnt_no,
-            CAST(
-                CAST(YEAR(treatmt_start_dt) AS CHAR(4))
-                || '-'
-                || TRIM(CAST(MONTH(treatmt_start_dt) AS CHAR(2)) (FORMAT 'Z9'))
-                || '-01'
-                AS DATE FORMAT 'YYYY-MM-DD'
-            )                                              AS cohort_month,
+            (treatmt_start_dt - (EXTRACT(DAY FROM treatmt_start_dt) - 1)) AS cohort_month,
             CASE
                 WHEN TRIM(test_group_latest) = 'NG3_CHMP'
                     THEN 'champion'
@@ -43,13 +37,7 @@ CREATE VOLATILE TABLE vt_pcq_monthly_cells AS (
           AND treatmt_start_dt >= DATE '2026-01-01'
           AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
         GROUP BY clnt_no,
-                 CAST(
-                     CAST(YEAR(treatmt_start_dt) AS CHAR(4))
-                     || '-'
-                     || TRIM(CAST(MONTH(treatmt_start_dt) AS CHAR(2)) (FORMAT 'Z9'))
-                     || '-01'
-                     AS DATE FORMAT 'YYYY-MM-DD'
-                 ),
+                 (treatmt_start_dt - (EXTRACT(DAY FROM treatmt_start_dt) - 1)),
                  CASE
                      WHEN TRIM(test_group_latest) = 'NG3_CHMP'  THEN 'champion'
                      WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN 'challenger'
@@ -85,13 +73,7 @@ WITH
 client_base AS (
     SELECT
         clnt_no,
-        CAST(
-            CAST(YEAR(treatmt_start_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_start_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                                              AS cohort_month,
+        (treatmt_start_dt - (EXTRACT(DAY FROM treatmt_start_dt) - 1)) AS cohort_month,
         CASE
             WHEN TRIM(test_group_latest) = 'NG3_CHMP'
                 THEN 'champion'
@@ -113,13 +95,7 @@ client_base AS (
       AND TRIM(test_group_latest) IN ('NG3_CHMP', 'NG3_CHLN', 'NG3_CHLG')
     GROUP BY
         clnt_no,
-        CAST(
-            CAST(YEAR(treatmt_start_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_start_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        ),
+        (treatmt_start_dt - (EXTRACT(DAY FROM treatmt_start_dt) - 1)),
         CASE
             WHEN TRIM(test_group_latest) = 'NG3_CHMP'                     THEN 'champion'
             WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG')      THEN 'challenger'
