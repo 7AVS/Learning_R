@@ -22,26 +22,14 @@ CREATE VOLATILE TABLE vt_crv_monthly_cells AS (
     WITH client_base AS (
         SELECT
             acct_no,
-            CAST(
-                CAST(YEAR(offer_start_date) AS CHAR(4))
-                || '-'
-                || TRIM(CAST(MONTH(offer_start_date) AS CHAR(2)) (FORMAT 'Z9'))
-                || '-01'
-                AS DATE FORMAT 'YYYY-MM-DD'
-            )                              AS cohort_month,
+            (offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)) AS cohort_month,
             TRIM(action_control)           AS arm
         FROM DL_MR_PROD.cards_crv_install_decis_resp
         WHERE offer_start_date >= DATE '2026-01-01'
           AND TRIM(action_control) IN ('Action', 'Control')
         GROUP BY
             acct_no,
-            CAST(
-                CAST(YEAR(offer_start_date) AS CHAR(4))
-                || '-'
-                || TRIM(CAST(MONTH(offer_start_date) AS CHAR(2)) (FORMAT 'Z9'))
-                || '-01'
-                AS DATE FORMAT 'YYYY-MM-DD'
-            ),
+            (offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)),
             TRIM(action_control)
     )
     SELECT
@@ -76,13 +64,7 @@ WITH
 client_base AS (
     SELECT
         acct_no,
-        CAST(
-            CAST(YEAR(offer_start_date) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(offer_start_date) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                              AS cohort_month,
+        (offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)) AS cohort_month,
         CAST(TRIM(action_control) AS VARCHAR(10)) AS arm,
         -- earliest converting wave for this account in this cohort_month × arm cell
         MIN(
@@ -95,13 +77,7 @@ client_base AS (
       AND TRIM(action_control) IN ('Action', 'Control')
     GROUP BY
         acct_no,
-        CAST(
-            CAST(YEAR(offer_start_date) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(offer_start_date) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        ),
+        (offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)),
         CAST(TRIM(action_control) AS VARCHAR(10))
 ),
 
