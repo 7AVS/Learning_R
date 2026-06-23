@@ -24,25 +24,13 @@ CREATE VOLATILE TABLE vt_pcl_monthly_cells AS (
     WITH client_base AS (
         SELECT
             acct_no,
-            CAST(
-                CAST(YEAR(treatmt_end_dt) AS CHAR(4))
-                || '-'
-                || TRIM(CAST(MONTH(treatmt_end_dt) AS CHAR(2)) (FORMAT 'Z9'))
-                || '-01'
-                AS DATE FORMAT 'YYYY-MM-DD'
-            )                              AS cohort_month,
+            (treatmt_end_dt - (EXTRACT(DAY FROM treatmt_end_dt) - 1)) AS cohort_month,
             TRIM(tst_grp_cd)              AS arm
         FROM DL_MR_PROD.cards_pli_decision_resp
         WHERE treatmt_end_dt >= DATE '2026-01-01'
         GROUP BY
             acct_no,
-            CAST(
-                CAST(YEAR(treatmt_end_dt) AS CHAR(4))
-                || '-'
-                || TRIM(CAST(MONTH(treatmt_end_dt) AS CHAR(2)) (FORMAT 'Z9'))
-                || '-01'
-                AS DATE FORMAT 'YYYY-MM-DD'
-            ),
+            (treatmt_end_dt - (EXTRACT(DAY FROM treatmt_end_dt) - 1)),
             TRIM(tst_grp_cd)
     )
     SELECT
@@ -77,13 +65,7 @@ WITH
 client_base AS (
     SELECT
         acct_no,
-        CAST(
-            CAST(YEAR(treatmt_end_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_end_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                              AS cohort_month,
+        (treatmt_end_dt - (EXTRACT(DAY FROM treatmt_end_dt) - 1)) AS cohort_month,
         CAST(TRIM(tst_grp_cd) AS VARCHAR(20)) AS arm,
         -- responder_cli = 1 when CLI accepted; event date is dt_cl_change
         CASE WHEN responder_cli = 1
@@ -95,13 +77,7 @@ client_base AS (
       AND TRIM(tst_grp_cd) <> ''
     GROUP BY
         acct_no,
-        CAST(
-            CAST(YEAR(treatmt_end_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_end_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        ),
+        (treatmt_end_dt - (EXTRACT(DAY FROM treatmt_end_dt) - 1)),
         CAST(TRIM(tst_grp_cd) AS VARCHAR(20)),
         CASE WHEN responder_cli = 1
              THEN CAST(dt_cl_change - treatmt_end_dt AS INTEGER)

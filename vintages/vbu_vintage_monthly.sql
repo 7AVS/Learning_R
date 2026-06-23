@@ -31,13 +31,7 @@ pop AS (
         treatmt_end_dt,
         addnl_data_dt,
         tst_grp_cd,
-        CAST(
-            CAST(YEAR(treatmt_strt_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_strt_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                                               AS cohort_month,
+        (treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)) AS cohort_month,
         SUBSTR(tst_grp_cd, 6, 3)                        AS from_product_code
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE SUBSTR(CAST(tactic_id AS VARCHAR(50)), 8, 3) = 'VBU'

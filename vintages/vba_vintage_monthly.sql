@@ -23,13 +23,7 @@ pop AS (
         treatmt_strt_dt,
         treatmt_end_dt,
         tst_grp_cd                             AS arm,
-        CAST(
-            CAST(YEAR(treatmt_strt_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_strt_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                                      AS cohort_month
+        (treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)) AS cohort_month
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE treatmt_strt_dt >= DATE '2026-01-01'
       AND SUBSTR(tactic_id, 8, 3) = 'VBA'

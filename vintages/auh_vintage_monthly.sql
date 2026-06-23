@@ -36,13 +36,7 @@ cohort AS (
             WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN 'Control'
             ELSE 'Test'
         END                                                     AS arm,
-        CAST(
-            CAST(YEAR(treatmt_strt_dt) AS CHAR(4))
-            || '-'
-            || TRIM(CAST(MONTH(treatmt_strt_dt) AS CHAR(2)) (FORMAT 'Z9'))
-            || '-01'
-            AS DATE FORMAT 'YYYY-MM-DD'
-        )                                                       AS cohort_month
+        (treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)) AS cohort_month
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
       AND treatmt_strt_dt >= DATE '2026-01-01'
