@@ -1,124 +1,13 @@
-WITH
-vintage_days AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM sys_calendar.calendar
-    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-01-01' + 30
-),
-cohort AS (
-    SELECT
-        clnt_no,
-        CAST(TACTIC_EVNT_ID AS BIGINT) AS acct_no,
-        tactic_id,
-        treatmt_strt_dt, treatmt_end_dt, tst_grp_cd,
-        CASE WHEN RIGHT(trim(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS test_group,
-        treatmt_strt_dt AS wave_dt,
-        CASE
-          WHEN tactic_id='2026042AUH' THEN
-               CASE WHEN trim(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C') THEN 'NonReward'
-                    ELSE 'Unknown' END
-          WHEN tactic_id='2026119AUH' THEN
-               CASE WHEN SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') THEN 'NonReward'
-                    WHEN SUBSTR(tst_grp_cd,1,3) IN ('RNR','RNM','RNW') THEN 'Rewards_No_Offer'
-                    WHEN SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') THEN 'Rewards_Offer'
-                    ELSE 'Unknown' END
-          ELSE 'Unknown'
-        END AS strategy_arm,
-        CASE
-          WHEN tactic_id='2026042AUH' THEN
-               CASE WHEN trim(tst_grp_cd) IN ('NRGA','NRGA_C') THEN 'Web'
-                    WHEN trim(tst_grp_cd) IN ('NRR','NRR_C')   THEN 'Random'
-                    WHEN trim(tst_grp_cd) IN ('NRS','NRS_C')   THEN 'Model'
-                    ELSE 'Unknown' END
-          WHEN tactic_id='2026119AUH' THEN
-               CASE WHEN SUBSTR(tst_grp_cd,3,1)='R' THEN 'Random'
-                    WHEN SUBSTR(tst_grp_cd,3,1)='M' THEN 'Model'
-                    WHEN SUBSTR(tst_grp_cd,3,1)='W' THEN 'Web'
-                    ELSE 'Unknown' END
-          ELSE 'Unknown'
-        END AS model_arm,
-        substr(tactic_decisn_vrb_info,21,3) AS prod_cd   -- offered product, for the target match
-    FROM DG6V01.tactic_evnt_ip_ar_hist
-    WHERE tactic_id IN ('2026042AUH','2026119AUH')
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY tactic_id, CAST(TACTIC_EVNT_ID AS BIGINT)
-                               ORDER BY treatmt_strt_dt) = 1   -- one row per account per wave
-),
-au_event AS (
-    SELECT a.acct_no, c.visa_prod_cd AS prod_cd, a.evnt_dt
-    FROM D3CV12A.CR_CRD_ACCT_EVNT_DLY a
-    INNER JOIN D3CV12A.DLY_FULL_PORTFOLIO c
-        ON a.clnt_no = c.clnt_no AND a.evnt_dt = c.DT_RECORD_EXT AND a.acct_no = c.acct_no
-    WHERE a.dtl_evnt_typ_cd = 191 AND a.ADD_RELTN_CD = 3 AND a.evnt_dt >= DATE '2026-01-01'
-),
-new_owner AS (
-    SELECT acct_no, prod_cd, MIN(evnt_dt) AS first_owned_dt
-    FROM au_event GROUP BY acct_no, prod_cd
-),
-success_events AS (
-    SELECT c.wave_dt,c.strategy_arm,c.model_arm,c.test_group,c.acct_no,c.treatmt_strt_dt,
-        MIN(n.first_owned_dt) AS first_app_dt,
-        MIN(CASE WHEN trim(c.prod_cd)=trim(n.prod_cd) THEN n.first_owned_dt END) AS first_app_dt_target
-    FROM cohort c
-    INNER JOIN new_owner n
-        ON n.acct_no=c.acct_no AND n.first_owned_dt BETWEEN c.treatmt_strt_dt AND c.treatmt_end_dt
-    GROUP BY 1,2,3,4,5,6
-),
-pop_sm AS (
-    SELECT wave_dt,strategy_arm,model_arm,test_group,COUNT(DISTINCT acct_no) AS total_population
-    FROM cohort GROUP BY 1,2,3,4
-),
-resp_d_sm AS (
-    SELECT wave_dt,strategy_arm,model_arm,test_group,(first_app_dt-treatmt_strt_dt) AS vintage_day,
-           COUNT(DISTINCT acct_no) AS responders
-    FROM success_events WHERE (first_app_dt-treatmt_strt_dt) BETWEEN 0 AND 30
-    GROUP BY 1,2,3,4,5
-),
-resp_t_sm AS (
-    SELECT wave_dt,strategy_arm,model_arm,test_group,(first_app_dt_target-treatmt_strt_dt) AS vintage_day,
-           COUNT(DISTINCT acct_no) AS responders_target
-    FROM success_events
-    WHERE first_app_dt_target IS NOT NULL AND (first_app_dt_target-treatmt_strt_dt) BETWEEN 0 AND 30
-    GROUP BY 1,2,3,4,5
-),
-/* finest grain: real strategy x real model */
-detail AS (
-    SELECT p.wave_dt,p.strategy_arm,p.model_arm,p.test_group,v.vintage_day,p.total_population,
-        COALESCE(r1.responders,0) AS responders,
-        COALESCE(r2.responders_target,0) AS responders_target
-    FROM pop_sm p CROSS JOIN vintage_days v
-    LEFT JOIN resp_d_sm r1 ON r1.wave_dt=p.wave_dt AND r1.strategy_arm=p.strategy_arm
-        AND r1.model_arm=p.model_arm AND r1.test_group=p.test_group AND r1.vintage_day=v.vintage_day
-    LEFT JOIN resp_t_sm r2 ON r2.wave_dt=p.wave_dt AND r2.strategy_arm=p.strategy_arm
-        AND r2.model_arm=p.model_arm AND r2.test_group=p.test_group AND r2.vintage_day=v.vintage_day
-),
-/* strategy total: real strategy, models combined */
-overall_model AS (
-    SELECT wave_dt, strategy_arm, CAST('Overall' AS VARCHAR(50)) AS model_arm, test_group, vintage_day,
-        SUM(total_population) AS total_population,
-        SUM(responders) AS responders,
-        SUM(responders_target) AS responders_target
-    FROM detail
-    GROUP BY wave_dt, strategy_arm, test_group, vintage_day
-),
-/* grand total per wave: everything combined */
-overall_all AS (
-    SELECT wave_dt, CAST('Overall' AS VARCHAR(50)) AS strategy_arm,
-           CAST('Overall' AS VARCHAR(50)) AS model_arm, test_group, vintage_day,
-        SUM(total_population) AS total_population,
-        SUM(responders) AS responders,
-        SUM(responders_target) AS responders_target
-    FROM detail
-    GROUP BY wave_dt, test_group, vintage_day
-),
-final_grain AS (
-    SELECT * FROM detail
-    UNION ALL SELECT * FROM overall_model
-    UNION ALL SELECT * FROM overall_all
-)
-SELECT wave_dt, strategy_arm, model_arm, test_group, vintage_day,
-    total_population, responders, responders_target,
-    SUM(responders) OVER (PARTITION BY wave_dt,strategy_arm,model_arm,test_group
-        ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_cum,
-    SUM(responders_target) OVER (PARTITION BY wave_dt,strategy_arm,model_arm,test_group
-        ORDER BY vintage_day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS responders_target_cum
-FROM final_grain
-ORDER BY wave_dt, strategy_arm, model_arm, test_group, vintage_day;
+You're right. Here it is tightened to what survives a tired reader skimming:
+O2P
+Waves 1–2 (Apr–May) show how widely the async banner was adopted, not proven value — there was no clean comparison group. Adoption hit 20% (~$1.7MM annualized), end-to-end 16.5% (~$1.4MM). Treat as directional.
+Wave 3 (June) is our first proper test: clients split into randomized Champion vs. Challenger groups. Early read — Champion 0.36% vs. Challenger 0.20%. Promising, still maturing.
+Value: no final number yet, but async beat non-async across waves, and if Wave 3 matures like the earlier ones, the early gap points to a meaningful incremental gain. Preliminary estimate, not final.
+Next wave: add a business-as-usual control across all non-async OLB channels for a clean read.
+
+O2P
+Waves 1 and 2 (April–May) captured the rollout of the async banner. These early waves didn't include a proper comparison group, so the results show how widely the banner was adopted rather than a clean measure of added value. Adoption reached 20% of eligible clients (~$1.7MM annualized), with end-to-end adoption at 16.5% (~$1.4MM annualized). A small holdout group was kept aside, but for this product it isn't a reliable comparison, so we're treating these numbers as directional, not as proven lift.
+Wave 3 (June) is the first deployment built to measure value properly. It splits clients into two randomized groups — a Champion and a Challenger — so we can compare like-for-like. At this early stage, the Champion is converting at 0.36% versus 0.20% for the Challenger. That's an encouraging early gap, though the wave is still young and the numbers will settle as more responses come in.
+What this means for value: we can't yet give a final incremental figure, but we can frame it two ways. Looking across waves, async consistently outperformed non-async, and Wave 1 outperformed Wave 2 — so the direction of value is clear. And if Wave 3 matures along the same path the earlier waves followed, the early Champion-vs-Challenger gap points to a meaningful incremental gain at maturity. We're presenting this as a preliminary, best-estimate range, not a finalized result.
+Next wave plan: add a rigorous business-as-usual comparison group spanning all non-async OLB channels, so the following read isolates the true value of async cleanly.
+Two notes for you, not for the box: I dropped the old "both waves reached statistical significance" line, since without a real comparison group it's the exact claim business will challenge. And once you give me the Champion/Challenger split inside the 271K, I'll fill the "meaningful incremental gain" line with an actual dollar range so it's not left vague. Want me to put this back into slide form?
