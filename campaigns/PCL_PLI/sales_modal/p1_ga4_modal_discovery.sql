@@ -14,7 +14,7 @@ WITH pop AS (
     strategy_id,
     responder_cli
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
-  WHERE report_groups_period LIKE '%R___WMS%'        -- challenger = with modal
+  WHERE report_groups_period LIKE '%R____WMS%'        -- challenger = with modal
     AND strategy_id IN ('LZJ4PENS','M8RHS9OI')         -- BAU / NTC
     AND treatmt_strt_dt >= DATE '2026-05-01'
     AND treatmt_strt_dt <  DATE '2026-06-01'
@@ -56,10 +56,10 @@ ORDER BY clients DESC;
 WITH pop AS (
   SELECT
     CAST(clnt_no AS BIGINT) AS clnt_no,
-    CASE WHEN report_groups_period LIKE '%R___WMS%' THEN 'WMS'
-         WHEN report_groups_period LIKE '%R___NMS%' THEN 'NMS' END AS arm
+    CASE WHEN report_groups_period LIKE '%R____WMS%' THEN 'WMS'
+         WHEN report_groups_period LIKE '%R____NMS%' THEN 'NMS' END AS arm
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
-  WHERE (report_groups_period LIKE '%R___WMS%' OR report_groups_period LIKE '%R___NMS%')
+  WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
     AND strategy_id IN ('LZJ4PENS','M8RHS9OI')
     AND treatmt_strt_dt >= DATE '2026-05-01'
     AND treatmt_strt_dt <  DATE '2026-06-01'
