@@ -61,6 +61,7 @@ WITH pop_raw AS (
     CAST(clnt_no AS BIGINT) AS clnt_no,
     CASE WHEN report_groups_period LIKE '%R____WMS%' THEN 'challenger'
          WHEN report_groups_period LIKE '%R____NMS%' THEN 'champion' END AS arm,
+    treatmt_strt_dt,
     ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY treatmt_strt_dt) AS rn
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
   WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
@@ -68,7 +69,7 @@ WITH pop_raw AS (
     AND treatmt_strt_dt >= DATE '2026-05-01'
     AND treatmt_strt_dt <  DATE '2026-07-01'
 ),
-pop AS ( SELECT clnt_no, arm FROM pop_raw WHERE rn = 1 ),
+pop AS ( SELECT clnt_no, arm, date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month FROM pop_raw WHERE rn = 1 ),
 modal AS (
   SELECT DISTINCT
     TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
@@ -80,9 +81,10 @@ modal AS (
 )
 SELECT
   m.it_item_id,
+  p.cohort_month,
   p.arm,
   COUNT(DISTINCT m.clnt_no) AS exposed_clients
 FROM pop p
 JOIN modal m ON m.clnt_no = p.clnt_no
-GROUP BY m.it_item_id, p.arm
-ORDER BY m.it_item_id, p.arm;
+GROUP BY m.it_item_id, p.cohort_month, p.arm
+ORDER BY m.it_item_id, p.cohort_month, p.arm;
