@@ -4,9 +4,10 @@
 -- Scope: WMS (with-modal) PLI population, May deployments, PLI sales-modal events only.
 
 -- ============================================================
--- Q-A — per CLIENT, all counting units side by side.
--- LEFT JOIN keeps WMS clients with ZERO modal views (assigned but app-inactive).
--- Heaviest viewers float to the top.
+-- Q-A — OPTIONAL sanity peek only (NOT a deliverable). Top 50 heaviest viewers,
+-- all counting units side by side, to confirm big counts are real users not a
+-- join bug. The full per-client version is the spine we build P3 on, not for reading.
+-- For the actual answer run Q-B (pooled) and Q-C (by arm x decile).
 -- ============================================================
 WITH pop AS (
   SELECT
@@ -45,7 +46,8 @@ SELECT
 FROM pop p
 LEFT JOIN modal m ON m.clnt_no = p.clnt_no
 GROUP BY p.clnt_no, p.strategy_id, p.decile
-ORDER BY raw_view_rows DESC;
+ORDER BY raw_view_rows DESC
+LIMIT 50;
 
 
 -- ============================================================
