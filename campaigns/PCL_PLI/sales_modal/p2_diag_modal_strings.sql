@@ -12,7 +12,7 @@ WITH pop AS (
   WHERE report_groups_period LIKE '%R____WMS%'              -- challenger (known modal-served)
     AND strategy_id IN ('LZJ4PENS','M8RHS9OI')
     AND treatmt_strt_dt >= DATE '2026-05-01'
-    AND treatmt_strt_dt <  DATE '2026-06-01'
+    AND treatmt_strt_dt <  DATE '2026-07-01'         -- May + June deployments
 ),
 ga AS (
   SELECT
@@ -21,7 +21,7 @@ ga AS (
     it_promotion_name,
     it_item_id
   FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
-  WHERE year = '2026' AND month IN ('05','06')
+  WHERE year = '2026' AND month IN ('05','06','07')        -- exposure May-July (60d windows run into July)
     AND event_name = 'view_promotion'
     AND ( LOWER(it_location_id)  LIKE '%modal%'             -- any "...modal..." surface (no '_' trap)
        OR LOWER(it_promotion_name) LIKE '%modal%'
