@@ -29,6 +29,7 @@ WITH pop_raw AS (
     CASE strategy_id WHEN 'LZJ4PENS' THEN 'BAU' WHEN 'M8RHS9OI' THEN 'NTC' ELSE strategy_id END AS strategy,
     decile,
     responder_cli,
+    treatmt_strt_dt,
     ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY treatmt_strt_dt) AS rn   -- first deployment per client
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
   WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
@@ -37,7 +38,8 @@ WITH pop_raw AS (
     AND treatmt_strt_dt <  DATE '2026-07-01'
 ),
 pop AS (
-  SELECT clnt_no, arm, strategy, decile, responder_cli
+  SELECT clnt_no, arm, strategy, decile, responder_cli,
+         date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month   -- first-deployment month (May vs June)
   FROM pop_raw
   WHERE rn = 1
 ),
@@ -53,7 +55,7 @@ modal AS (
 ),
 per_client AS (
   SELECT
-    p.clnt_no, p.arm, p.strategy, p.decile, p.responder_cli,
+    p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli,
     COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,
     MAX(CASE WHEN m.event_name = 'select_promotion'
               AND ( LOWER(m.it_creative_name) LIKE '%close%'
@@ -62,10 +64,11 @@ per_client AS (
              THEN 1 ELSE 0 END) AS dismissed
   FROM pop p
   LEFT JOIN modal m ON m.clnt_no = p.clnt_no
-  GROUP BY p.clnt_no, p.arm, p.strategy, p.decile, p.responder_cli
+  GROUP BY p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli
 )
 SELECT
   strategy,
+  cohort_month,
   arm,
   decile,
   CASE WHEN exposures >= 20 THEN 20 ELSE exposures END  AS exposure_bin,   -- 0..19, 20 = 20+
@@ -73,5 +76,5 @@ SELECT
   SUM(dismissed)                                        AS dismissed_clients,
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)    AS converted_clients
 FROM per_client
-GROUP BY strategy, arm, decile, CASE WHEN exposures >= 20 THEN 20 ELSE exposures END
-ORDER BY strategy, arm, decile, exposure_bin;
+GROUP BY strategy, cohort_month, arm, decile, CASE WHEN exposures >= 20 THEN 20 ELSE exposures END
+ORDER BY strategy, cohort_month, arm, decile, exposure_bin;
