@@ -12,6 +12,7 @@ WITH pop AS (
   SELECT
     CAST(clnt_no AS BIGINT) AS clnt_no,
     strategy_id,
+    decile,
     responder_cli
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
   WHERE report_groups_period LIKE '%R____WMS%'
@@ -35,6 +36,7 @@ modal AS (                                  -- PLI sales-modal events only
 SELECT
   p.clnt_no,
   p.strategy_id,
+  p.decile,
   COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END)                                            AS raw_view_rows,        -- every fire (double-counted)
   COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess || '|' || CAST(m.event_sec AS VARCHAR) END) AS view_occasions,  -- deduped (session+second)
   COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END)                              AS sessions,             -- distinct sessions with a view
@@ -42,7 +44,7 @@ SELECT
   COUNT(CASE WHEN m.event_name = 'select_promotion' THEN 1 END)                                          AS click_rows            -- raw clicks (creative split comes later)
 FROM pop p
 LEFT JOIN modal m ON m.clnt_no = p.clnt_no
-GROUP BY p.clnt_no, p.strategy_id
+GROUP BY p.clnt_no, p.strategy_id, p.decile
 ORDER BY raw_view_rows DESC;
 
 
@@ -103,3 +105,55 @@ UNION ALL
 SELECT NULL, NULL, 'days', ROUND(AVG(days),1),
     approx_percentile(days,0.5), approx_percentile(days,0.9),
     approx_percentile(days,0.99), MAX(days) FROM per_client;
+
+
+-- ============================================================
+-- Q-C — exposure distribution by the dimensions we report on: ARM x DECILE.
+-- Uses sessions as the candidate unit (swap to days if Q-B says raw balloons).
+-- Shows whether exposure load differs across BAU/NTC and deciles.
+-- ============================================================
+WITH pop AS (
+  SELECT
+    CAST(clnt_no AS BIGINT) AS clnt_no,
+    strategy_id,
+    decile
+  FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+  WHERE report_groups_period LIKE '%R____WMS%'
+    AND strategy_id IN ('LZJ4PENS','M8RHS9OI')
+    AND treatmt_strt_dt >= DATE '2026-05-01'
+    AND treatmt_strt_dt <  DATE '2026-06-01'
+),
+modal AS (
+  SELECT
+    TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+    CAST(ep_ga_session_id AS VARCHAR) AS sess,
+    event_name,
+    event_date
+  FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
+  WHERE year = '2026'
+    AND month IN ('05','06')
+    AND it_location_id LIKE '%Sales_Modal%'
+    AND (it_promotion_name LIKE '%PLI%' OR it_promotion_name LIKE '%PCL%')
+),
+per_client AS (
+  SELECT
+    p.clnt_no,
+    p.strategy_id,
+    p.decile,
+    COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS sessions
+  FROM pop p
+  LEFT JOIN modal m ON m.clnt_no = p.clnt_no
+  GROUP BY p.clnt_no, p.strategy_id, p.decile
+)
+SELECT
+  CASE strategy_id WHEN 'LZJ4PENS' THEN 'BAU' WHEN 'M8RHS9OI' THEN 'NTC' ELSE strategy_id END AS arm,
+  decile,
+  COUNT(*)                                       AS wms_clients,
+  COUNT(CASE WHEN sessions > 0 THEN 1 END)       AS clients_served,
+  approx_percentile(sessions, 0.5)               AS sess_p50,
+  approx_percentile(sessions, 0.9)               AS sess_p90,
+  approx_percentile(sessions, 0.99)              AS sess_p99,
+  MAX(sessions)                                  AS sess_max
+FROM per_client
+GROUP BY 1, 2
+ORDER BY arm, decile;
