@@ -66,7 +66,8 @@ SELECT
   arm,
   decile,
   CASE WHEN exposures >= 20 THEN 20 ELSE exposures END  AS exposure_bin,   -- 0..19, 20 = 20+
-  COUNT(*)                                              AS clients,
+  COUNT(*)                                              AS clients,              -- total population in cell (sums to whole population)
+  SUM(CASE WHEN raw_views > 0 THEN 1 ELSE 0 END)        AS exposed_clients,      -- unique clients with >=1 view (viewers)
   SUM(raw_views)                                        AS total_views,          -- raw view fires (validation lens; ~2x occasions)
   SUM(dismissed)                                        AS dismissed_clients,
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)    AS converted_clients
