@@ -49,6 +49,7 @@ modal AS (
 per_client AS (
   SELECT
     p.clnt_no, p.arm, p.strategy, p.cohort_month, p.decile, p.responder_cli,
+    COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,           -- every fire (carries the ~2x double-fire)
     COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,
     MAX(CASE WHEN m.event_name = 'select_promotion'
               AND ( LOWER(m.it_creative_name) LIKE '%close%'
@@ -66,6 +67,7 @@ SELECT
   decile,
   CASE WHEN exposures >= 20 THEN 20 ELSE exposures END  AS exposure_bin,   -- 0..19, 20 = 20+
   COUNT(*)                                              AS clients,
+  SUM(raw_views)                                        AS total_views,          -- raw view fires (validation lens; ~2x occasions)
   SUM(dismissed)                                        AS dismissed_clients,
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)    AS converted_clients
 FROM per_client
