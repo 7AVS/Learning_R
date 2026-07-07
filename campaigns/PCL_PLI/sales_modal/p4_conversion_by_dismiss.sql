@@ -87,5 +87,5 @@ SELECT
   SUM(raw_views)                                      AS total_views,       -- raw fires (validation lens vs distinct sessions)
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)  AS converted_clients  -- numerator; rate = converted/clients (client-side)
 FROM segmented
-GROUP BY strategy, cohort_month, arm, decile, engagement, CASE WHEN exposures >= 5 THEN 5 ELSE exposures END
+GROUP BY strategy, cohort_month, arm, decile, engagement, exposure_bin
 ORDER BY strategy, cohort_month, arm, decile, engagement, exposure_bin;
