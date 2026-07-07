@@ -56,7 +56,8 @@ modal AS (
 per_client AS (
   SELECT
     p.clnt_no, p.arm, p.strategy, p.cohort_month, p.decile, p.responder_cli,
-    COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,
+    COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,                    -- every fire (~2x double-fire)
+    COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,      -- distinct sessions = times seen
     MAX(CASE WHEN m.event_name = 'select_promotion'
               AND ( LOWER(m.it_creative_name) LIKE '%close%'
                  OR LOWER(m.it_creative_name) LIKE '%not now%'
@@ -68,10 +69,11 @@ per_client AS (
 ),
 segmented AS (
   SELECT
-    strategy, cohort_month, arm, decile, responder_cli, raw_views, dismissed,
+    strategy, cohort_month, arm, decile, responder_cli, raw_views, exposures, dismissed,
     CASE WHEN dismissed = 1  THEN 'dismissed'
          WHEN raw_views > 0  THEN 'exposed_not_dismissed'
-         ELSE 'not_exposed' END AS engagement
+         ELSE 'not_exposed' END AS engagement,
+    CASE WHEN exposures >= 5 THEN 5 ELSE exposures END AS exposure_bin   -- 0..4, 5 = 5+ (distinct sessions)
   FROM per_client
 )
 SELECT
@@ -80,9 +82,10 @@ SELECT
   arm,
   decile,
   engagement,
-  COUNT(*)                                            AS clients,           -- denominator for conversion rate within segment
-  SUM(CASE WHEN raw_views > 0 THEN 1 ELSE 0 END)      AS exposed_clients,   -- check: 'dismissed' should be ~fully exposed
+  exposure_bin,                                                          -- 0 within 'dismissed' = select w/o logged view (data check)
+  COUNT(*)                                            AS clients,           -- denominator for conversion rate within cell
+  SUM(raw_views)                                      AS total_views,       -- raw fires (validation lens vs distinct sessions)
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)  AS converted_clients  -- numerator; rate = converted/clients (client-side)
 FROM segmented
-GROUP BY strategy, cohort_month, arm, decile, engagement
-ORDER BY strategy, cohort_month, arm, decile, engagement;
+GROUP BY strategy, cohort_month, arm, decile, engagement, CASE WHEN exposures >= 5 THEN 5 ELSE exposures END
+ORDER BY strategy, cohort_month, arm, decile, engagement, exposure_bin;
