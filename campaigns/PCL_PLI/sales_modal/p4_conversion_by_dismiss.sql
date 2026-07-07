@@ -73,7 +73,7 @@ segmented AS (
     CASE WHEN dismissed = 1  THEN 'dismissed'
          WHEN raw_views > 0  THEN 'exposed_not_dismissed'
          ELSE 'not_exposed' END AS engagement,
-    CASE WHEN exposures >= 5 THEN 5 ELSE exposures END AS exposure_bin   -- 0..4, 5 = 5+ (distinct sessions)
+    CASE WHEN exposures >= 5 THEN '5+' ELSE CAST(exposures AS VARCHAR) END AS exposure_bin   -- '0'..'4', '5+' (distinct sessions)
   FROM per_client
 )
 SELECT
