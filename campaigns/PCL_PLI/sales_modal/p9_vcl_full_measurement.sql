@@ -3,8 +3,9 @@
 -- challenger-only, ~76% reach of the ~232K targeted. The PLI-NAMED i_333067/i_333070 are
 -- contaminated (836 champion vs 1,564 challenger) and low-volume -> NOT the modal. So the real
 -- PLI modal is registered under the VCL-labeled id; we track by BEHAVIOR, not label.
--- Population: challenger (WMS) + champion (NMS) ONLY. No strategy filter (drops 'Other' and the
---   BAU/NTC/udobank other report groups). Full dims: decile x engagement x exposure_bin. Conversion curated.
+-- Population: challenger (WMS) + champion (NMS) ONLY. No strategy FILTER (all strategies kept),
+--   but strategy is a COLUMN (BAU/NTC/raw) so you can pivot BAU/NTC; 'overall' = don't filter.
+-- Full dims: strategy x decile x engagement x exposure_bin. Conversion from curated.
 -- Engine: Starburst/Trino (GA4 + curated). Counts only. 9881-safe: GA4 side cast only, clnt_no raw.
 -- WATCH: creative_name was '(not set)' on the view rows, so the 'dismissed' bucket may be empty;
 --   dismiss is read off select_promotion rows here - verify it populates before trusting it.
@@ -14,6 +15,7 @@ WITH pop AS (
     clnt_no,                                    -- raw, uncast (no Teradata ROUND pushdown)
     CASE WHEN report_groups_period LIKE '%R____WMS%' THEN 'challenger'
          WHEN report_groups_period LIKE '%R____NMS%' THEN 'champion' END AS arm,
+    CASE strategy_id WHEN 'LZJ4PENS' THEN 'BAU' WHEN 'M8RHS9OI' THEN 'NTC' ELSE strategy_id END AS strategy,
     decile,
     responder_cli,
     treatmt_strt_dt,
@@ -23,7 +25,7 @@ WITH pop AS (
     AND treatmt_strt_dt >= DATE '2026-05-01' AND treatmt_strt_dt < DATE '2026-07-01'
 ),
 pop1 AS (
-  SELECT clnt_no, arm, decile, responder_cli,
+  SELECT clnt_no, arm, strategy, decile, responder_cli,
          date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month
   FROM pop WHERE rn = 1
 ),
@@ -39,7 +41,7 @@ modal AS (
 ),
 per_client AS (
   SELECT
-    p.clnt_no, p.arm, p.decile, p.cohort_month, p.responder_cli,
+    p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli,
     COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,
     COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,
     MAX(CASE WHEN m.event_name = 'select_promotion'
@@ -49,11 +51,11 @@ per_client AS (
              THEN 1 ELSE 0 END) AS dismissed
   FROM pop1 p
   LEFT JOIN modal m ON m.clnt_no = p.clnt_no
-  GROUP BY p.clnt_no, p.arm, p.decile, p.cohort_month, p.responder_cli
+  GROUP BY p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli
 ),
 segmented AS (
   SELECT
-    arm, decile, cohort_month, responder_cli, raw_views,
+    arm, strategy, decile, cohort_month, responder_cli, raw_views,
     CASE WHEN dismissed = 1  THEN 'dismissed'
          WHEN raw_views > 0  THEN 'exposed_not_dismissed'
          ELSE 'not_exposed' END AS engagement,
@@ -63,6 +65,7 @@ segmented AS (
 SELECT
   cohort_month,
   arm,
+  strategy,
   decile,
   engagement,
   exposure_bin,
@@ -70,5 +73,5 @@ SELECT
   SUM(raw_views)                                      AS total_views,       -- raw view fires
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)  AS converted_clients  -- rate = conv/clients (client-side)
 FROM segmented
-GROUP BY cohort_month, arm, decile, engagement, exposure_bin
-ORDER BY cohort_month, arm, decile, engagement, exposure_bin;
+GROUP BY cohort_month, arm, strategy, decile, engagement, exposure_bin
+ORDER BY cohort_month, arm, strategy, decile, engagement, exposure_bin;
