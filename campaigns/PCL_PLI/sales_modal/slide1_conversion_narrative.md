@@ -72,11 +72,13 @@ saw the modal), bucketed by number of views.
 control arm, which does not appear here. The left plot's own legend already says "Total" / "NTC".
 
 ## Title (replaces the "PCL New titles" placeholder)
-PCL Sales Modal — engagement: reach, dismissal, and conversion by number of views
+Both dismissal and conversion peak at the first view
 
 ## Subtitle (replace the duplicated slide-1 conversion text — it is wrong on this slide)
-How clients interacted with the modal — how many saw it, how many closed it, and how many responded —
-broken down by the number of times they saw it.
+The modal reaches ~76% of targeted clients within days of launch. From there it is a first-view story:
+among clients who saw it just once, both the share who dismiss and the share who convert are at their
+highest — and each additional view shows a lower rate of both, for the broad book and the
+New-to-Campaign group alike.
 
 ## Left plot — reach
 Title: Reach — share of targeted clients who viewed the modal, over time
