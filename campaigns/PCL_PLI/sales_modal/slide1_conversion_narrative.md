@@ -100,9 +100,18 @@ offer (any channel). First view: 16% (All) / 51% (NTC). 5+ views: 8% (All) / 24%
 For both segments, dismiss rate and conversion rate are each highest at the first view and decline as
 the number of views increases.
 
-## Footnotes
-Challenger-only (the modal group); the control arm is not shown. Denominators are viewers, by
-number-of-views bucket. Conversion = PLI response, any channel. Figures interim (campaign in-flight).
+## Callout box (the bridge — put on slide)
+Reach ~76% — clients are seeing the modal. What happens next is the story: 76% of first-time viewers
+dismiss it (44% for New-to-Campaign).
+
+## Footnotes (put on slide)
+- Challenger-only (the modal group); the control arm is not shown. Figures interim (campaign in-flight).
+- Rates are viewer-based. Each "views" bucket = clients who viewed the modal *exactly* that many times
+  (5+ grouped) — a different, smaller group per bucket, NOT a running funnel. Show the client N per bucket.
+- Dismiss rate and conversion rate are separate measures on the same viewers: a client can dismiss AND
+  convert, or do neither — they do NOT sum to 100%.
+- Conversion = responded to the PLI offer through ANY channel; no clean modal-attributed conversion
+  signal exists yet.
 
 ## Fixes to make on the slide itself
 - Title is a placeholder ("PCL New titles") and the subtitle repeats slide-1 conversion text twice —
@@ -110,6 +119,25 @@ number-of-views bucket. Conversion = PLI response, any channel. Figures interim 
 - The three plots have no titles — add the three above.
 - The two right-side charts have no legend — add one, and keep colours consistent: NTC is teal in both
   (good); "All clients" is navy in the bar chart but black in the line chart — pick one colour for it.
+- Add the client-N under each "views" bar/point so the shrinking, per-bucket denominator is visible.
+
+## Back-pocket Q&A (NOT on slide — for live questions)
+- **"So the non-dismissers are the converters?"** No. Dismiss and convert are measured on the same
+  viewers, but a client can do both (dismiss the modal, then respond by email) or neither. You cannot
+  subtract one from the other. Direct consequence of conversion being any-channel.
+- **"Is this conversion coming from the modal?"** Not necessarily — conversion = PLI response on ANY
+  channel. No clean modal-attributed signal yet; building that is the next measurement step.
+- **"Why does the dismiss rate fall at higher view counts?"** Each bar is a different group (clients
+  who viewed that many times). Dismissers exit at view 1, so higher-view buckets are, by construction,
+  the people who did not dismiss early — not "repeat views reduce dismissal."
+
+## TLDR — 30-second exec summary
+We tested a mobile Sales Modal offering pre-approved credit-limit increases against a hold-out not shown
+it. The modal group converted 3–7 points higher — statistically significant, ~9,350 incremental
+responses, ~$4.4M in 5-year NIBT, strongest for new-to-campaign clients. Still in-flight, trending up.
+Nearly everyone sees it (~76%), but most dismiss on the first view — the first impression is where it
+lands. One caveat: conversion is measured across all channels, not modal-only, until we build a clean
+modal signal.
 
 ---
 ---
