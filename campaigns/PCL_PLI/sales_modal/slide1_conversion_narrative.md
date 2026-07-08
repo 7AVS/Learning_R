@@ -67,18 +67,19 @@ marketing framing. Challenger-only (the control arm is not served the modal, so 
 slide). Figures interim (campaign in-flight). All rates are viewer-based (denominator = clients who
 saw the modal), bucketed by number of views.
 
-**Labels (locked):** the two series are **All clients** (the full Sales-Modal group) and
-**New-to-Campaign (NTC)** (a subset of All). Do NOT label either "BAU" — on slide 1 "BAU" = the
-control arm, which does not appear here. The left plot's own legend already says "Total" / "NTC".
+**Labels (locked):** right-side plots use **Non-NTC** (the broad book) vs **New-to-Campaign (NTC)** —
+mutually exclusive segments. Do NOT label either "BAU" (on slide 1 "BAU" = the control arm, not shown
+here). CONSISTENCY FIX: the left reach plot still labels its series "Total" (all, incl. NTC) — align it
+to Non-NTC/NTC, otherwise the same broad group reads as "Total" on the left and "Non-NTC" on the right.
 
 ## Title (replaces the "PCL New titles" placeholder)
 Both dismissal and conversion peak at the first view
 
 ## Subtitle (replace the duplicated slide-1 conversion text — it is wrong on this slide)
-The modal reaches ~76% of targeted clients within days of launch. From there it is a first-view story:
-among clients who saw it just once, both the share who dismiss and the share who convert are at their
-highest — and each additional view shows a lower rate of both, for the broad book and the
-New-to-Campaign group alike.
+The modal reaches ~76% of targeted clients within ~9 days of launch. From there it is a first-view
+story: for both segments, the share who dismiss and the share who convert are highest among clients who
+saw it once, and lower among those who saw it more often. (Conversion declines steadily with views;
+dismissal declines clearly for the Non-NTC book and is noisier for the smaller New-to-Campaign group.)
 
 ## Left plot — reach
 Title: Reach — share of targeted clients who viewed the modal, over time
@@ -89,20 +90,20 @@ consistent with the curve endpoint.)
 ## Top-right plot — dismiss rate by number of views
 Title: Dismiss rate by number of views
 Caption: Of the clients who viewed the modal a given number of times, the share who dismissed it.
-First view: 76% (All) / 44% (NTC). 5+ views: 38% (All) / 35% (NTC).
+First view: 76% (Non-NTC) / 44% (NTC). 5+ views: 38% (Non-NTC) / 35% (NTC).
 
 ## Bottom-right plot — conversion rate by number of views
 Title: Conversion rate by number of views
 Caption: Of the clients who viewed the modal a given number of times, the share who responded to the
-offer (any channel). First view: 16% (All) / 51% (NTC). 5+ views: 8% (All) / 24% (NTC).
+offer (any channel). First view: 16% (Non-NTC) / 51% (NTC). 5+ views: 8% (Non-NTC) / 24% (NTC).
 
 ## Neutral observation (describe only)
 For both segments, dismiss rate and conversion rate are each highest at the first view and decline as
 the number of views increases.
 
 ## Callout box (the bridge — put on slide)
-Reach ~76% — clients are seeing the modal. What happens next is the story: 76% of first-time viewers
-dismiss it (44% for New-to-Campaign).
+Reach ~76% — clients are seeing the modal. What happens next: of clients who saw it once, 76% of the
+broad (Non-NTC) book and 44% of New-to-Campaign dismissed it on that first view.
 
 ## Footnotes (put on slide)
 - Challenger-only (the modal group); the control arm is not shown. Figures interim (campaign in-flight).
@@ -112,6 +113,9 @@ dismiss it (44% for New-to-Campaign).
   convert, or do neither — they do NOT sum to 100%.
 - Conversion = responded to the PLI offer through ANY channel; no clean modal-attributed conversion
   signal exists yet.
+- Trend: conversion declines monotonically with views for both segments; dismissal declines for Non-NTC
+  but is NOT strictly monotonic for NTC (44/50/46/48/35 — smaller sample). Do not claim a clean NTC
+  dismissal decline.
 
 ## Fixes to make on the slide itself
 - Title is a placeholder ("PCL New titles") and the subtitle repeats slide-1 conversion text twice —
@@ -181,7 +185,7 @@ lift offsets smaller sample.
 | Jun NTC | 667 | [493, 840] |
 | **Total** | **~9,353** | **[8,185, 10,520]** |
 
-5-yr NIBT = incremental x $475/response -> ~$4.44M (All), of which NTC ~1,443 / ~$0.69M.
+5-yr NIBT = incremental x $475/response -> ~$4.44M (Non-NTC), of which NTC ~1,443 / ~$0.69M.
 
 ## D. Caveats on the calculations
 - **June is right-censored** (campaign in-flight): June point estimates are an interim floor and expected
