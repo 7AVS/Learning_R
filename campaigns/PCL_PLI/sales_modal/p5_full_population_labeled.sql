@@ -39,6 +39,7 @@ pop AS (
 modal AS (
   SELECT
     TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+    CAST(ep_ga_session_id AS VARCHAR) AS sess,
     event_name,
     it_creative_name
   FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
@@ -49,6 +50,7 @@ per_client AS (
   SELECT
     p.clnt_no, p.arm, p.strategy, p.cohort_month, p.responder_cli,
     COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,
+    COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,   -- distinct sessions = times seen
     MAX(CASE WHEN m.event_name = 'select_promotion'
               AND ( LOWER(m.it_creative_name) LIKE '%close%'
                  OR LOWER(m.it_creative_name) LIKE '%not now%'
@@ -63,7 +65,8 @@ segmented AS (
     strategy, cohort_month, arm, responder_cli, raw_views,
     CASE WHEN dismissed = 1  THEN 'dismissed'
          WHEN raw_views > 0  THEN 'exposed_not_dismissed'
-         ELSE 'not_exposed' END AS engagement
+         ELSE 'not_exposed' END AS engagement,
+    CASE WHEN exposures >= 5 THEN '5+' ELSE CAST(exposures AS VARCHAR) END AS exposure_bin  -- '0'..'4','5+' distinct sessions
   FROM per_client
 )
 SELECT
@@ -71,9 +74,10 @@ SELECT
   cohort_month,
   arm,
   engagement,
+  exposure_bin,
   COUNT(*)                                            AS clients,           -- population in cell
   SUM(raw_views)                                      AS total_views,       -- raw view fires
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)  AS converted_clients  -- rate = converted/clients (client-side)
 FROM segmented
-GROUP BY strategy, cohort_month, arm, engagement
-ORDER BY strategy, cohort_month, arm, engagement;
+GROUP BY strategy, cohort_month, arm, engagement, exposure_bin
+ORDER BY strategy, cohort_month, arm, engagement, exposure_bin;
