@@ -35,7 +35,9 @@ SELECT
   COUNT(DISTINCT CASE WHEN a.arm = 'challenger' THEN a.clnt_no END) AS challenger_viewers,
   COUNT(DISTINCT CASE WHEN a.arm = 'champion'   THEN a.clnt_no END) AS champion_viewers
 FROM surface s
-JOIN arm a ON CAST(a.clnt_no AS BIGINT) = TRY_CAST(s.up_srf_id2_value AS BIGINT)   -- casts stay in Trino
+-- 9881 fix: NEVER cast the Teradata column (Starburst renders decimal->int as ROUND, Teradata
+-- rejects it). Leave clnt_no raw; cast ONLY the GA4 side to clnt_no's type (decimal(14,0)).
+JOIN arm a ON a.clnt_no = TRY_CAST(s.up_srf_id2_value AS DECIMAL(14,0))
 GROUP BY s.it_item_id
 ORDER BY challenger_viewers DESC;
 
