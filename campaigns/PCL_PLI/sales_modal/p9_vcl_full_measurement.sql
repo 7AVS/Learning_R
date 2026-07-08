@@ -16,6 +16,8 @@ WITH pop AS (
     CASE WHEN report_groups_period LIKE '%R____WMS%' THEN 'challenger'
          WHEN report_groups_period LIKE '%R____NMS%' THEN 'champion' END AS arm,
     CASE strategy_id WHEN 'LZJ4PENS' THEN 'BAU' WHEN 'M8RHS9OI' THEN 'NTC' ELSE strategy_id END AS strategy,
+    product_current,               -- offered product proxy: card held = card getting the PLI (not post-treatment)
+    product_grouping_current,      -- readable product grouping to slice on
     decile,
     responder_cli,
     treatmt_strt_dt,
@@ -25,7 +27,7 @@ WITH pop AS (
     AND treatmt_strt_dt >= DATE '2026-05-01' AND treatmt_strt_dt < DATE '2026-07-01'
 ),
 pop1 AS (
-  SELECT clnt_no, arm, strategy, decile, responder_cli,
+  SELECT clnt_no, arm, strategy, product_current, product_grouping_current, decile, responder_cli,
          date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month
   FROM pop WHERE rn = 1
 ),
@@ -41,7 +43,8 @@ modal AS (
 ),
 per_client AS (
   SELECT
-    p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli,
+    p.clnt_no, p.arm, p.strategy, p.product_current, p.product_grouping_current,
+    p.decile, p.cohort_month, p.responder_cli,
     COUNT(CASE WHEN m.event_name = 'view_promotion' THEN 1 END) AS raw_views,
     COUNT(DISTINCT CASE WHEN m.event_name = 'view_promotion' THEN m.sess END) AS exposures,
     MAX(CASE WHEN m.event_name = 'select_promotion'
@@ -51,11 +54,12 @@ per_client AS (
              THEN 1 ELSE 0 END) AS dismissed
   FROM pop1 p
   LEFT JOIN modal m ON m.clnt_no = p.clnt_no
-  GROUP BY p.clnt_no, p.arm, p.strategy, p.decile, p.cohort_month, p.responder_cli
+  GROUP BY p.clnt_no, p.arm, p.strategy, p.product_current, p.product_grouping_current,
+           p.decile, p.cohort_month, p.responder_cli
 ),
 segmented AS (
   SELECT
-    arm, strategy, decile, cohort_month, responder_cli, raw_views,
+    arm, strategy, product_current, product_grouping_current, decile, cohort_month, responder_cli, raw_views,
     CASE WHEN dismissed = 1  THEN 'dismissed'
          WHEN raw_views > 0  THEN 'exposed_not_dismissed'
          ELSE 'not_exposed' END AS engagement,
@@ -66,6 +70,8 @@ SELECT
   cohort_month,
   arm,
   strategy,
+  product_current,
+  product_grouping_current,
   decile,
   engagement,
   exposure_bin,
@@ -73,5 +79,5 @@ SELECT
   SUM(raw_views)                                      AS total_views,       -- raw view fires
   SUM(CASE WHEN responder_cli = 1 THEN 1 ELSE 0 END)  AS converted_clients  -- rate = conv/clients (client-side)
 FROM segmented
-GROUP BY cohort_month, arm, strategy, decile, engagement, exposure_bin
-ORDER BY cohort_month, arm, strategy, decile, engagement, exposure_bin;
+GROUP BY cohort_month, arm, strategy, product_current, product_grouping_current, decile, engagement, exposure_bin
+ORDER BY cohort_month, arm, strategy, product_current, product_grouping_current, decile, engagement, exposure_bin;
