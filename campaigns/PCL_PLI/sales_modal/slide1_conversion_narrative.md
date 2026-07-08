@@ -81,9 +81,8 @@ broken down by the number of times they saw it.
 ## Left plot — reach
 Title: Reach — share of targeted clients who viewed the modal, over time
 Caption: Of all clients targeted, the share who had seen the modal at least once. Reaches ~74–78% by
-cohort (May, June), with New-to-Campaign shown separately.
-[FLAG: legend "Viewers" (May-Total 130K of 138K ≈ 94%) contradicts the curve's ~78% endpoint — one is
-wrong; reconcile before use.]
+cohort (May, June), with New-to-Campaign shown separately. (May-Total: 103K viewers of 138K ≈ 75%,
+consistent with the curve endpoint.)
 
 ## Top-right plot — dismiss rate by number of views
 Title: Dismiss rate by number of views
