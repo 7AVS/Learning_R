@@ -7,9 +7,12 @@
 -- Engine: Starburst/Trino (GA4 + curated). Counts only. Arm from curated report_groups_period
 -- (now corroborated by the tactic RPT_GRP_CD result). Window: May-July exposure, May-June deploy.
 
+-- NOTE (error 9881 fix): keep the Teradata-side CTE a plain projection with NO numeric CAST.
+-- Starburst was pushing CAST(clnt_no AS BIGINT) into Teradata as a ROUND -> 9881. The join-key
+-- casts live in the cross-catalog JOIN predicate instead, so Trino evaluates them, not Teradata.
 WITH arm AS (                                   -- experiment arms only (challenger vs champion)
   SELECT
-    CAST(clnt_no AS BIGINT) AS clnt_no,
+    clnt_no,                                    -- raw, uncast (no pushdown to wrap)
     CASE WHEN report_groups_period LIKE '%R____WMS%' THEN 'challenger'
          WHEN report_groups_period LIKE '%R____NMS%' THEN 'champion' END AS arm
   FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
@@ -18,7 +21,7 @@ WITH arm AS (                                   -- experiment arms only (challen
 ),
 surface AS (                                    -- everything shown on the Sales_Modal surface
   SELECT
-    TRY_CAST(up_srf_id2_value AS BIGINT) AS clnt_no,
+    up_srf_id2_value,                           -- raw, uncast
     it_item_id
   FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce_reduced
   WHERE year = '2026' AND month IN ('05','06','07')
@@ -32,7 +35,7 @@ SELECT
   COUNT(DISTINCT CASE WHEN a.arm = 'challenger' THEN a.clnt_no END) AS challenger_viewers,
   COUNT(DISTINCT CASE WHEN a.arm = 'champion'   THEN a.clnt_no END) AS champion_viewers
 FROM surface s
-JOIN arm a ON a.clnt_no = s.clnt_no
+JOIN arm a ON CAST(a.clnt_no AS BIGINT) = TRY_CAST(s.up_srf_id2_value AS BIGINT)   -- casts stay in Trino
 GROUP BY s.it_item_id
 ORDER BY challenger_viewers DESC;
 
