@@ -9,7 +9,10 @@
 -- here is "any event inside the window", with no artificial day cap re-applied.
 -- Engine: Starburst/Trino, cross-catalog federated join (dg6v01 <-> edl0_im).
 -- Trino syntax only: no QUALIFY, no TOP, no NULLIFZERO.
--- Counts only — no rate/percentage/ratio columns.
+-- Output: raw whole-number counts (cohort_size, responders) plus thousands-
+-- separated display twins (cohort_size_fmt, responders_fmt) and a 2-decimal
+-- response_rate_pct (divide-by-zero guarded via NULLIF). No population/success
+-- logic changed — formatting/rate are computed off the same raw counts.
 
 WITH
 tactic_cohort AS (
@@ -67,16 +70,29 @@ responder_cells AS (
         COUNT(DISTINCT clnt_no) AS responders
     FROM client_success
     GROUP BY cohort_month, arm
+),
+
+final_counts AS (
+    SELECT
+        CAST('CRV' AS VARCHAR(10))       AS campaign,
+        c.cohort_month,
+        c.arm,
+        c.cohort_size,
+        COALESCE(r.responders, 0)        AS responders
+    FROM cohort_cells c
+    LEFT JOIN responder_cells r
+        ON  r.cohort_month = c.cohort_month
+        AND r.arm           = c.arm
 )
 
 SELECT
-    CAST('CRV' AS VARCHAR(10))       AS campaign,
-    c.cohort_month,
-    c.arm,
-    c.cohort_size,
-    COALESCE(r.responders, 0)        AS responders
-FROM cohort_cells c
-LEFT JOIN responder_cells r
-    ON  r.cohort_month = c.cohort_month
-    AND r.arm           = c.arm
-ORDER BY c.cohort_month, c.arm;
+    campaign,
+    cohort_month,
+    arm,
+    cohort_size,
+    responders,
+    format('%,d', cohort_size)                                     AS cohort_size_fmt,
+    format('%,d', responders)                                      AS responders_fmt,
+    round(100.0 * responders / NULLIF(cohort_size, 0), 2)          AS response_rate_pct
+FROM final_counts
+ORDER BY cohort_month, arm;
