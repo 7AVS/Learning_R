@@ -1,34 +1,47 @@
 -- crv_cohort_summary_v2_production.sql
 -- Per-cohort FULL-WINDOW summary version of crv_vintage_v2_production.sql.
--- Same population, cohort anchor, arm derivation and success logic as the vintage
--- file; the vintage_day spine and cumulative curve are dropped in favor of one row
--- per (cohort_month, arm) covering the entire [treatmt_strt_dt, treatmt_end_dt]
--- window. Built for source reconciliation (dashboard vs Data Lab vs Production)
--- with the time axis removed so population/anchor/success differences are
--- isolated. The vintage file's 0-90 day cap only bounded the daily curve — success
--- here is "any event inside the window", with no artificial day cap re-applied.
+-- Grain: ACCOUNT (acct_no) -- tactic history joined to measurement_events_v2
+-- directly on acct_no, no clnt_no bridge (acct_no is the identifier on BOTH
+-- tables). Same population, cohort anchor, arm derivation and success logic
+-- as the vintage file; the vintage_day spine and cumulative curve are dropped
+-- in favor of one row per (cohort_month, arm) covering the entire
+-- [treatmt_strt_dt, treatmt_end_dt] window. Responder is DERIVED (>=1
+-- in-window p_card_installmt_purch event), not a precomputed flag. The
+-- vintage file's 0-90 day cap only bounded the daily curve -- success here is
+-- "any event inside the window", with no artificial day cap re-applied.
+-- Inclusion window: treatmt_end_dt in [2026-05-01, 2026-07-31] (deployments
+-- ENDING in this window). cohort_month is still keyed on treatmt_strt_dt (the
+-- wave's start month) -- a deployment can start earlier (e.g. Feb) and end
+-- inside the window (e.g. May) and is included under its START-month cohort.
+-- This is the validation gate (denominator + conversions) that must pass
+-- before trusting the vintage.
+-- Grain caveat: CRV randomization is per-wave, not sticky. Collapsing to
+-- (acct_no, cohort_month, arm) can put the same account in both arms across
+-- different waves. Multiple waves landing in the same cell are collapsed
+-- using MIN(treatmt_strt_dt) / MAX(treatmt_end_dt) as the cell's anchor/
+-- window bound -- a simplification, not a wave-level solve.
 -- Engine: Starburst/Trino, cross-catalog federated join (dg6v01 <-> edl0_im).
 -- Trino syntax only: no QUALIFY, no TOP, no NULLIFZERO.
 -- Output: campaign, cohort_month, arm, cohort_size (formatted), responders
 -- (formatted), response_rate (percentage with % sign). cohort_size and
 -- responders are thousands-separated whole numbers; response_rate is a
 -- 2-decimal percentage string (divide-by-zero guarded via NULLIF). No
--- population/success logic changed — formatting/rate are computed off the
+-- population/success logic changed -- formatting/rate are computed off the
 -- same raw counts.
 
 WITH
 tactic_cohort AS (
     SELECT
-        clnt_no,
+        acct_no,
         date_trunc('month', treatmt_strt_dt)                            AS cohort_month,
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END    AS arm,
         MIN(treatmt_strt_dt)                                            AS treatmt_strt_dt,
         MAX(treatmt_end_dt)                                             AS treatmt_end_dt
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
-      AND treatmt_strt_dt >= DATE '2026-01-01'
+      AND treatmt_end_dt BETWEEN DATE '2026-05-01' AND DATE '2026-07-31'
     GROUP BY
-        clnt_no,
+        acct_no,
         date_trunc('month', treatmt_strt_dt),
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END
 ),
@@ -37,7 +50,7 @@ cohort_cells AS (
     SELECT
         cohort_month,
         arm,
-        COUNT(DISTINCT clnt_no) AS cohort_size
+        COUNT(DISTINCT acct_no) AS cohort_size
     FROM tactic_cohort
     GROUP BY cohort_month, arm
 ),
@@ -45,21 +58,21 @@ cohort_cells AS (
 -- success events anywhere in-window (no vintage_day, no day binning)
 success_events AS (
     SELECT
-        t.clnt_no,
+        t.acct_no,
         t.cohort_month,
         t.arm
     FROM tactic_cohort t
     JOIN edl0_im.prod_zp10_prod_staging.measurement_events_v2 m
-        ON m.clnt_no = t.clnt_no
+        ON m.acct_no = t.acct_no
     WHERE m.event_cd = 'p_card_installmt_purch'
       AND m.event_date >= DATE '2026-01-01'
       AND m.event_date BETWEEN t.treatmt_strt_dt AND t.treatmt_end_dt
 ),
 
--- one row per client per cell that had at least one in-window success
-client_success AS (
+-- one row per account per cell that had at least one in-window success
+acct_success AS (
     SELECT DISTINCT
-        clnt_no,
+        acct_no,
         cohort_month,
         arm
     FROM success_events
@@ -69,8 +82,8 @@ responder_cells AS (
     SELECT
         cohort_month,
         arm,
-        COUNT(DISTINCT clnt_no) AS responders
-    FROM client_success
+        COUNT(DISTINCT acct_no) AS responders
+    FROM acct_success
     GROUP BY cohort_month, arm
 ),
 
