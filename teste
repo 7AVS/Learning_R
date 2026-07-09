@@ -1,13 +1,13 @@
-You're right. Here it is tightened to what survives a tired reader skimming:
-O2P
-Waves 1–2 (Apr–May) show how widely the async banner was adopted, not proven value — there was no clean comparison group. Adoption hit 20% (~$1.7MM annualized), end-to-end 16.5% (~$1.4MM). Treat as directional.
-Wave 3 (June) is our first proper test: clients split into randomized Champion vs. Challenger groups. Early read — Champion 0.36% vs. Challenger 0.20%. Promising, still maturing.
-Value: no final number yet, but async beat non-async across waves, and if Wave 3 matures like the earlier ones, the early gap points to a meaningful incremental gain. Preliminary estimate, not final.
-Next wave: add a business-as-usual control across all non-async OLB channels for a clean read.
+Rick,
 
-O2P
-Waves 1 and 2 (April–May) captured the rollout of the async banner. These early waves didn't include a proper comparison group, so the results show how widely the banner was adopted rather than a clean measure of added value. Adoption reached 20% of eligible clients (~$1.7MM annualized), with end-to-end adoption at 16.5% (~$1.4MM annualized). A small holdout group was kept aside, but for this product it isn't a reliable comparison, so we're treating these numbers as directional, not as proven lift.
-Wave 3 (June) is the first deployment built to measure value properly. It splits clients into two randomized groups — a Champion and a Challenger — so we can compare like-for-like. At this early stage, the Champion is converting at 0.36% versus 0.20% for the Challenger. That's an encouraging early gap, though the wave is still young and the numbers will settle as more responses come in.
-What this means for value: we can't yet give a final incremental figure, but we can frame it two ways. Looking across waves, async consistently outperformed non-async, and Wave 1 outperformed Wave 2 — so the direction of value is clear. And if Wave 3 matures along the same path the earlier waves followed, the early Champion-vs-Challenger gap points to a meaningful incremental gain at maturity. We're presenting this as a preliminary, best-estimate range, not a finalized result.
-Next wave plan: add a rigorous business-as-usual comparison group spanning all non-async OLB channels, so the following read isolates the true value of async cleanly.
-Two notes for you, not for the box: I dropped the old "both waves reached statistical significance" line, since without a real comparison group it's the exact claim business will challenge. And once you give me the Champion/Challenger split inside the 271K, I'll fill the "meaningful incremental gain" line with an actual dollar range so it's not left vague. Want me to put this back into slide form?
+Following up on our earlier conversation about getting our agents querying campaign data directly.
+
+The goal is an aggregated dataset — our success library combined with the experiment data — that the agents can query, instead of writing one-off queries per experiment. As I see it, there are two existing paths, and I'd value your take on which makes more sense:
+
+1. The Trino MCP server that already exists — which, as you mentioned, would mean being part of Insiders Pro.
+2. The Snowflake data lake connector already available in the Assist Pro version I have.
+
+I'm not tied to either — I just want to build it the right way. Could we grab 15 minutes to talk it through, or if someone else is better placed to advise, point me their way? And if Insiders Pro is the route, happy to start that process.
+
+Thanks,
+[Your name]
