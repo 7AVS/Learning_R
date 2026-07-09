@@ -9,10 +9,12 @@
 -- here is "any event inside the window", with no artificial day cap re-applied.
 -- Engine: Starburst/Trino, cross-catalog federated join (dg6v01 <-> edl0_im).
 -- Trino syntax only: no QUALIFY, no TOP, no NULLIFZERO.
--- Output: raw whole-number counts (cohort_size, responders) plus thousands-
--- separated display twins (cohort_size_fmt, responders_fmt) and a 2-decimal
--- response_rate_pct (divide-by-zero guarded via NULLIF). No population/success
--- logic changed — formatting/rate are computed off the same raw counts.
+-- Output: campaign, cohort_month, arm, cohort_size (formatted), responders
+-- (formatted), response_rate (percentage with % sign). cohort_size and
+-- responders are thousands-separated whole numbers; response_rate is a
+-- 2-decimal percentage string (divide-by-zero guarded via NULLIF). No
+-- population/success logic changed — formatting/rate are computed off the
+-- same raw counts.
 
 WITH
 tactic_cohort AS (
@@ -89,10 +91,8 @@ SELECT
     campaign,
     cohort_month,
     arm,
-    cohort_size,
-    responders,
-    format('%,d', cohort_size)                                     AS cohort_size_fmt,
-    format('%,d', responders)                                      AS responders_fmt,
-    round(100.0 * responders / NULLIF(cohort_size, 0), 2)          AS response_rate_pct
+    format('%,d', cohort_size)                                             AS cohort_size,
+    format('%,d', responders)                                              AS responders,
+    format('%.2f', 100.0 * responders / NULLIF(cohort_size, 0)) || '%'     AS response_rate
 FROM final_counts
 ORDER BY cohort_month, arm;

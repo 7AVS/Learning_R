@@ -8,10 +8,12 @@
 -- Engine: Teradata-direct. No volatile tables needed here — the only reason the
 -- vintage file used them was TDWM clearance for the SYS_CALENDAR cross join, and
 -- that spine/cross join doesn't exist in this summary.
--- Output: raw whole-number counts (cohort_size, responders) plus thousands-
--- separated display twins (cohort_size_fmt, responders_fmt) and a 2-decimal
--- response_rate_pct (divide-by-zero guarded via NULLIF). No population/success
--- logic changed — formatting/rate are computed off the same raw counts.
+-- Output: campaign, cohort_month, arm, cohort_size (formatted), responders
+-- (formatted), response_rate (percentage with % sign). cohort_size and
+-- responders are thousands-separated whole numbers; response_rate is a
+-- 2-decimal percentage string (divide-by-zero guarded via NULLIF). No
+-- population/success logic changed — formatting/rate are computed off the
+-- same raw counts.
 
 WITH
 bridge AS (
@@ -58,10 +60,8 @@ SELECT
     campaign,
     cohort_month,
     arm,
-    cohort_size,
-    responders,
-    TRIM(CAST(CAST(cohort_size AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))  AS cohort_size_fmt,
-    TRIM(CAST(CAST(responders AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))   AS responders_fmt,
-    CAST(100.0 * responders / NULLIF(cohort_size, 0) AS DECIMAL(6,2))    AS response_rate_pct
+    TRIM(CAST(CAST(cohort_size AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))  AS cohort_size,
+    TRIM(CAST(CAST(responders AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))   AS responders,
+    TRIM(CAST(CAST(100.0 * responders / NULLIF(cohort_size,0) AS DECIMAL(6,2)) AS VARCHAR(10))) || '%'  AS response_rate
 FROM final_counts
 ORDER BY cohort_month, arm;
