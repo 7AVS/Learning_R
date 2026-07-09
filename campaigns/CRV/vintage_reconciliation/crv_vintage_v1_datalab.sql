@@ -16,16 +16,26 @@
 --       window end (its cohort_max_day); there is no flat tail past the campaign.
 --
 -- Grain    : account (acct_no) — matches the summary, no bridge.
--- Success  : responder = 1 (first installment activation); vintage_day = first_response_days
+-- Success  : responder = 1 (first installment activation);
+--            vintage_day = GREATEST(first_response_date - offer_start_date, 0), computed
+--            from the raw DATE columns (NOT the precomputed first_response_days column).
+--            Pre-offer responses (first_response_date < offer_start_date, i.e. a negative
+--            raw day) are clamped to day 0 instead of being dropped. This is pre-treatment
+--            activity being credited by the responder flag — a known dashboard-side
+--            attribution quirk, not a real post-offer response — but it is pinned to day 0
+--            here so the curve's terminal cum_responders reconciles to the validated summary.
 -- Arm      : action_control — 'Action' / 'Control'
 --
 -- RECONCILIATION NOTE: at the max vintage_day (= that cell's cohort_max_day, i.e. its
--- offer window end) per (cohort_month, arm), cum_responders should equal the summary's
--- responders EXCEPT for responder=1 accounts whose first_response_days is NULL. Those
--- accounts count toward the summary's responder=1 total but have no day to land on in
--- this day-axis, so they are NOT in cum_responders here. If terminal cum_responders <
--- summary responders, that gap = responder=1 accounts with NULL first_response_days --
--- do not assume it away, use the reconciliation check query below to quantify it.
+-- offer window end) per (cohort_month, arm), cum_responders should now equal the summary's
+-- responders. The prior version of this file used the precomputed first_response_days
+-- column and a dense grid starting at day 0, which silently dropped any responder whose
+-- day was negative (their n_events never joined to a dense_grid row, since the spine only
+-- covers 0..cohort_max_day) -- that negative bucket is exactly the gap that used to show up
+-- as "missing" responders relative to the summary. Clamping to 0 via GREATEST fixes this.
+-- responder=1 accounts with a NULL first_response_date (if any) are still excluded from the
+-- day axis (no day to land on) -- use the reconciliation check query below to confirm there
+-- is no such residual gap.
 --
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_crv_v1_cells;
@@ -73,10 +83,14 @@ COLLECT STATISTICS ON vt_crv_v1_spine COLUMN (vintage_day);
 
 -- ============================================================================
 -- STEP 3: final curve — account grain throughout, no bridge
--- vintage_day = first_response_days directly off the curated table (no MIN/collapse
+-- vintage_day = GREATEST(first_response_date - offer_start_date, 0), computed directly
+-- from the raw DATE columns (NOT the precomputed first_response_days column). Both dates
+-- are DATE typed, so the subtraction returns an integer day count. GREATEST clamps any
+-- pre-offer response (negative raw day) to day 0 instead of dropping it (no MIN/collapse
 -- across accounts needed — one row per acct_no, no client-level fan-out from a bridge).
--- Dense grid is capped per-cell at that cell's own cohort_max_day (WHERE clause below),
--- so each cohort's curve ends exactly at its own offer_end -- no tail past the campaign.
+-- Dense grid is still capped per-cell at that cell's own cohort_max_day (WHERE clause
+-- below) on the high end -- responses never land after the offer window (verified:
+-- resp_after_window = 0), so that cap is unchanged. Only the low end is clamped to 0.
 -- ============================================================================
 WITH
 acct_base AS (
@@ -85,23 +99,24 @@ acct_base AS (
         (offer_start_date - (EXTRACT(DAY FROM offer_start_date) - 1)) AS cohort_month,
         CAST(TRIM(action_control) AS VARCHAR(10))                     AS arm,
         responder,
-        first_response_days
+        offer_start_date,
+        first_response_date
     FROM DL_MR_PROD.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2026-01-01'
       AND TRIM(action_control) IN ('Action', 'Control')
 ),
 
--- accounts whose first response lands on this vintage_day
+-- accounts whose first response lands on this vintage_day (pre-offer responses clamped to 0)
 daily_counts AS (
     SELECT
         cohort_month,
         arm,
-        first_response_days              AS vintage_day,
-        COUNT(DISTINCT acct_no)          AS n_events
+        GREATEST((first_response_date - offer_start_date), 0) AS vintage_day,
+        COUNT(DISTINCT acct_no)                               AS n_events
     FROM acct_base
     WHERE responder = 1
-      AND first_response_days IS NOT NULL
-    GROUP BY cohort_month, arm, first_response_days
+      AND first_response_date IS NOT NULL
+    GROUP BY cohort_month, arm, vintage_day
 ),
 
 -- dense grid: cohort_month x arm x vintage_day, capped at each cell's own campaign window
