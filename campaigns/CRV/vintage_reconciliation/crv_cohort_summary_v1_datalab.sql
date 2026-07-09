@@ -42,6 +42,6 @@ SELECT
     arm,
     TRIM(CAST(CAST(cohort_size AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))  AS cohort_size,
     TRIM(CAST(CAST(responders AS FORMAT 'zzz,zzz,zz9') AS VARCHAR(15)))   AS responders,
-    TRIM(CAST(CAST(100.0 * responders / NULLIF(cohort_size,0) AS DECIMAL(6,2)) AS VARCHAR(10))) || '%'  AS response_rate
+    TRIM(CAST(CAST(100.0 * responders / NULLIF(cohort_size,0) AS DECIMAL(6,2)) (FORMAT 'zz9.99') AS VARCHAR(10))) || '%'  AS response_rate
 FROM final_counts
 ORDER BY cohort_month, arm;
