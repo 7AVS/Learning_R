@@ -1,5 +1,11 @@
 -- crv_cohort_summary_v2_production.sql
 -- Per-cohort FULL-WINDOW summary version of crv_vintage_v2_production.sql.
+-- COHORT ANCHOR = treatmt_eff_dt (treatment EFFECTIVE date), NOT treatmt_strt_dt.
+-- FINDING (2026-07-09): the tactic table has two dates; treatmt_strt_dt runs a few
+-- days LATER than the curated offer_start_date and pushes ~30,429 accounts (~1.7%)
+-- into the next month, breaking cohort-size reconciliation. treatmt_eff_dt matches
+-- the curated offer_start_date. Anchoring cohort/window on treatmt_eff_dt closes the
+-- gap. See RECONCILIATION_FINDINGS.md.
 -- Grain: ACCOUNT (visa_acct_no) for the population/denominator. dg6v01.tactic_evnt_ip_ar_hist
 -- (the tactic/decisioning population source) carries the account number under the
 -- column name visa_acct_no -- it does NOT have a column literally named acct_no.
@@ -13,11 +19,11 @@
 -- events-side acct_no is used only to find matching events, never counted separately.
 -- Same population, cohort anchor, and arm derivation as the vintage file; the
 -- vintage_day spine and cumulative curve are dropped in favor of one row per
--- (cohort_month, arm) covering the entire [treatmt_strt_dt, treatmt_end_dt] window.
+-- (cohort_month, arm) covering the entire [treatmt_eff_dt, treatmt_end_dt] window.
 -- Success is DERIVED (>=1 in-window p_card_installmt_purch event), not a precomputed
 -- flag.
 -- Inclusion window: treatmt_end_dt in [2026-05-01, 2026-07-31] (deployments
--- ENDING in this window). cohort_month is still keyed on treatmt_strt_dt (the
+-- ENDING in this window). cohort_month is still keyed on treatmt_eff_dt (the
 -- wave's start month) -- a deployment can start earlier (e.g. Feb) and end
 -- inside the window (e.g. May) and is included under its START-month cohort.
 -- This is the validation gate (denominator + conversions) that must pass
@@ -25,7 +31,7 @@
 -- Grain caveat: CRV randomization is per-wave, not sticky. Collapsing to
 -- (visa_acct_no, cohort_month, arm) can put the same account in both arms across
 -- different waves. Multiple waves landing in the same cell are collapsed
--- using MIN(treatmt_strt_dt) / MAX(treatmt_end_dt) as the cell's anchor/
+-- using MIN(treatmt_eff_dt) / MAX(treatmt_end_dt) as the cell's anchor/
 -- window bound -- a simplification, not a wave-level solve.
 -- Engine: Starburst/Trino, cross-catalog federated join (dg6v01 <-> edl0_im).
 -- Trino syntax only: no QUALIFY, no TOP, no NULLIFZERO.
@@ -47,16 +53,17 @@ WITH
 tactic_cohort AS (
     SELECT
         visa_acct_no,
-        date_trunc('month', treatmt_strt_dt)                            AS cohort_month,
+        date_trunc('month', treatmt_eff_dt)                            AS cohort_month,
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END    AS arm,
-        MIN(treatmt_strt_dt)                                            AS treatmt_strt_dt,
+        MIN(treatmt_eff_dt)                                            AS treatmt_eff_dt,
         MAX(treatmt_end_dt)                                             AS treatmt_end_dt
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
       AND treatmt_end_dt BETWEEN DATE '2026-05-01' AND DATE '2026-07-31'
+      AND treatmt_eff_dt IS NOT NULL
     GROUP BY
         visa_acct_no,
-        date_trunc('month', treatmt_strt_dt),
+        date_trunc('month', treatmt_eff_dt),
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END
 ),
 
@@ -82,7 +89,7 @@ success_events AS (
         ON CAST(t.visa_acct_no AS DECIMAL(38,0)) = CAST(m.acct_no AS DECIMAL(38,0))
     WHERE m.event_cd = 'p_card_installmt_purch'
       AND m.event_date >= DATE '2026-01-01'
-      AND m.event_date BETWEEN t.treatmt_strt_dt AND t.treatmt_end_dt
+      AND m.event_date BETWEEN t.treatmt_eff_dt AND t.treatmt_end_dt
 ),
 
 -- per-cell responders: accounts (visa_acct_no) with >=1 matching in-window event

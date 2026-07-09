@@ -1,5 +1,9 @@
 -- crv_vintage_v2_production.sql
 -- Campaign : CRV (Credit Card Installment Plan) — SOURCE RECONCILIATION, PRODUCTION SIDE
+-- COHORT/DAY-0 ANCHOR = treatmt_eff_dt (EFFECTIVE date), NOT treatmt_strt_dt. Finding
+-- 2026-07-09: treatmt_strt_dt runs a few days later than curated offer_start_date,
+-- pushing ~30,429 accts (~1.7%) into the next month and breaking reconciliation;
+-- treatmt_eff_dt matches offer_start_date. See RECONCILIATION_FINDINGS.md.
 -- Source   : DG6V01.TACTIC_EVNT_IP_AR_HIST (decisioning) + EDL0_IM measurement_events_v2
 --            (success events). This file is fully self-contained: only these two tables,
 --            no shared tables with crv_vintage_v1_datalab.sql, and NEVER filtered by the
@@ -27,17 +31,17 @@
 --            numerics) takes priority over pushdown efficiency; flag for follow-up if
 --            this proves slow at full volume.
 -- Inclusion window : deployments whose treatmt_end_dt falls in [2026-05-01, 2026-07-31].
---            cohort_month is still keyed on treatmt_strt_dt (the wave's start month) — a
+--            cohort_month is still keyed on treatmt_eff_dt (the wave's start month) — a
 --            deployment can start earlier (e.g. Feb) and end inside the window (e.g. May)
 --            and is included under its START-month cohort.
 -- Day axis : no hardcoded 0..90. Each cohort's curve is bounded by its own deployment
---            window length (treatmt_end_dt - treatmt_strt_dt), mirroring the datalab file.
+--            window length (treatmt_end_dt - treatmt_eff_dt), mirroring the datalab file.
 --            The spine runs 0 .. MAX(cohort_max_day) across all cohorts; dense_grid caps
 --            each cohort at its own cohort_max_day.
--- Success  : event_cd = 'p_card_installmt_purch' inside the [treatmt_strt_dt, treatmt_end_dt]
+-- Success  : event_cd = 'p_card_installmt_purch' inside the [treatmt_eff_dt, treatmt_end_dt]
 --            window — matches the datalab's in-window definition. vintage_day =
---            date_diff('day', treatmt_strt_dt, event_date), naturally >= 0 by construction
---            (events are restricted to on/after treatmt_strt_dt). ONE cumulative curve is
+--            date_diff('day', treatmt_eff_dt, event_date), naturally >= 0 by construction
+--            (events are restricted to on/after treatmt_eff_dt). ONE cumulative curve is
 --            tracked -- cum_responders -- built from the first in-window success day per
 --            visa_acct_no. Each cohort's terminal (max vintage_day) value should tie back
 --            to the summary file's (crv_cohort_summary_v2_production.sql) responders count.
@@ -47,23 +51,24 @@
 -- (visa_acct_no, cohort_month, arm) can put the same account in both arms across different
 -- waves. Flagged for a downstream multi-arm prevalence check, not solved here.
 -- Multiple waves landing in the same (visa_acct_no, cohort_month, arm) cell are collapsed
--- using MIN(treatmt_strt_dt) / MAX(treatmt_end_dt) as the cell's anchor/window bound —
+-- using MIN(treatmt_eff_dt) / MAX(treatmt_end_dt) as the cell's anchor/window bound —
 -- a simplification, not a wave-level solve.
 
 WITH
 tactic_cohort AS (
     SELECT
         visa_acct_no,
-        date_trunc('month', treatmt_strt_dt)                            AS cohort_month,
+        date_trunc('month', treatmt_eff_dt)                            AS cohort_month,
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END    AS arm,
-        MIN(treatmt_strt_dt)                                            AS treatmt_strt_dt,
+        MIN(treatmt_eff_dt)                                            AS treatmt_eff_dt,
         MAX(treatmt_end_dt)                                             AS treatmt_end_dt
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
       AND treatmt_end_dt BETWEEN DATE '2026-05-01' AND DATE '2026-07-31'
+      AND treatmt_eff_dt IS NOT NULL
     GROUP BY
         visa_acct_no,
-        date_trunc('month', treatmt_strt_dt),
+        date_trunc('month', treatmt_eff_dt),
         CASE WHEN tst_grp_cd = 'TG8' THEN 'Control' ELSE 'Action' END
 ),
 
@@ -73,7 +78,7 @@ cohort_cells AS (
         cohort_month,
         arm,
         COUNT(DISTINCT visa_acct_no)                            AS cohort_size,
-        MAX(date_diff('day', treatmt_strt_dt, treatmt_end_dt))  AS cohort_max_day
+        MAX(date_diff('day', treatmt_eff_dt, treatmt_end_dt))  AS cohort_max_day
     FROM tactic_cohort
     GROUP BY cohort_month, arm
 ),
@@ -86,17 +91,17 @@ success_events AS (
         t.visa_acct_no,
         t.cohort_month,
         t.arm,
-        date_diff('day', t.treatmt_strt_dt, m.event_date) AS vintage_day
+        date_diff('day', t.treatmt_eff_dt, m.event_date) AS vintage_day
     FROM tactic_cohort t
     JOIN edl0_im.prod_zp10_prod_staging.measurement_events_v2 m
         ON CAST(t.visa_acct_no AS DECIMAL(38,0)) = CAST(m.acct_no AS DECIMAL(38,0))
     WHERE m.event_cd = 'p_card_installmt_purch'
       AND m.event_date >= DATE '2026-01-01'
-      AND m.event_date BETWEEN t.treatmt_strt_dt AND t.treatmt_end_dt
+      AND m.event_date BETWEEN t.treatmt_eff_dt AND t.treatmt_end_dt
 ),
 
 -- first in-window success per ACCOUNT per cell (vintage_day is naturally >= 0 since
--- events are restricted to on/after treatmt_strt_dt above; no clamp needed)
+-- events are restricted to on/after treatmt_eff_dt above; no clamp needed)
 acct_success AS (
     SELECT
         visa_acct_no,
