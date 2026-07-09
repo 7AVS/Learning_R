@@ -87,6 +87,21 @@ Caption: Of all clients targeted, the share who had seen the modal at least once
 cohort (May, June), with New-to-Campaign shown separately. (May-Total: 103K viewers of 138K ≈ 75%,
 consistent with the curve endpoint.)
 
+## Distribution plot — how many times each client viewed the modal (put BEFORE the rate charts)
+The rate-by-view charts only mean something alongside the volumes. Among VIEWERS (pooled May+June):
+| views | Non-NTC (clients / share) | NTC (clients / share) |
+|---|---|---|
+| 1 | 78,346 / 49% | 9,679 / 55% |
+| 2 | 24,276 / 15% | 2,789 / 16% |
+| 3 | 12,693 / 8% | 1,305 / 7% |
+| 4 | 8,073 / 5% | 780 / 4% |
+| 5+ | 35,498 / 22% | 2,953 / 17% |
+| Total viewers | 158,886 | 17,506 |
+Reading: ~half of viewers see the modal exactly ONCE (49% Non-NTC, 55% NTC); ~1 in 5 see it 5+; the
+middle is thin — same shape in both segments. This is the backbone of the slide: for ~half the audience
+the first view is the only view, which is why first-view behaviour governs the story. (Bins sum to May
+viewers = 103,700 ≈ 103K and total challenger viewers = 176,392 — independently confirms 103K, not 130K.)
+
 ## Top-right plot — dismiss rate by number of views
 Title: Dismiss rate by number of views
 Caption: Of the clients who viewed the modal a given number of times, the share who dismissed it.
@@ -102,8 +117,9 @@ For both segments, dismiss rate and conversion rate are each highest at the firs
 the number of views increases.
 
 ## Callout box (the bridge — put on slide)
-Reach ~76% — clients are seeing the modal. What happens next: of clients who saw it once, 76% of the
-broad (Non-NTC) book and 44% of New-to-Campaign dismissed it on that first view.
+Reach ~76%, and ~half of all viewers see the modal only once — so for most clients the first view is
+the whole interaction. On that first view, 76% of the broad (Non-NTC) book and 44% of New-to-Campaign
+dismissed it.
 
 ## Footnotes (put on slide)
 - Challenger-only (the modal group); the control arm is not shown. Figures interim (campaign in-flight).
