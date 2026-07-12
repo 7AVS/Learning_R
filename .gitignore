@@ -4,3 +4,10 @@
 # Allow project instructions
 !CLAUDE.md
 !WORKSTREAMS.md
+
+# Allow CRV bulletproof analysis docs (catalog + metrics dictionary)
+!campaigns/CRV/bulletproof_analysis/METRICS_DICTIONARY.md
+!campaigns/CRV/bulletproof_analysis/RESULTS_CATALOG.md
+!campaigns/CRV/bulletproof_analysis/analysis_plan.md
+!campaigns/CRV/bulletproof_analysis/findings.md
+.aider*

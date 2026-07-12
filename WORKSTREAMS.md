@@ -1,6 +1,6 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-04-01
+Last updated: 2026-05-29
 
 ## Priority Stack
 
@@ -8,11 +8,13 @@ Last updated: 2026-04-01
 - **Ask:** Daily stats for LOB — available leads, banner views, clicks, CTR
 - **Jira:** NBA-12268
 - **Requestor:** Daniel Chin
-- **Status:** WAITING FOR LAUNCH. All 4 queries built and ready (`campaigns/PCD/pcd_async_banner_explore.sql`). Promo names confirmed by Rajani Singineedi (2026-03-18). Email documentation complete (`campaigns/PCD/pcd_promo_names_email.md`). Launch postponed from ~Mar 25 to ~Apr 20.
-- **Tables:** ga4_ecommerce (banner events), cards_pcd_ongoing_decis_resp (population)
-- **Launch:** ~2026-04-20 (postponed from ~2026-03-25)
-- **Next:** Run Query 1 post-launch to validate which GA4 field promo names land in.
-- **Blocked on:** Launch date (~Apr 20)
+- **Tactic ID:** `2026111PCD`
+- **Status:** LIVE (~5 weeks post-launch). Schema catalogued (`schemas/pcd_curated_schemas.md`, local). EDA built (`campaigns/PCD/pcd_2026111_curated_eda.sql`, 35 self-contained queries A–I). Vintage curves SQL built (`campaigns/PCD/pcd_2026111_vintage.sql`, long-format slicer pattern, single Starburst query). Full session context in `campaigns/PCD/PCD_2026111_README.md`.
+- **Tables:** `DL_MR_PROD.cards_pcd_ongoing_decis_resp` (curated), `DG6V01.TACTIC_EVNT_IP_AR_HIST` (for tst_grp_cd), `edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce` (GA4)
+- **Launch:** ~2026-04-20 (confirmed live)
+- **Next:** (a) recover `tst_grp_cd → action_control` mapping for non-T/C codes; (b) capture schema columns past `clicked_mb`; (c) run diagnostics + vintage in work env, validate curve shapes
+- **Blocked on:** None active. Mapping list pending from Andre's external doc.
+- **2026-05-29:** Async banner interim deck reframed conservative — all 3 campaign slides (PCD/O2P/CTU) + slide-2 setup table + OBF caveat finalized in `campaigns/PCD/async_banner_slides_mockup.html` (v2). Stance: interim = directional only under O'Brien–Fleming; no "channel works" claims. O2P = context only (control not a valid benchmark, compass argument kept off-slide). CTU observational; randomised A/C DoE launches 9 Jun. Incremental reported per campaign (~60 PCD, ~1,850 O2P vs non-async, ~64 CTU), never pooled. NEXT: replace placeholder numbers with real query output; fold into PPT.
 
 ### 2. AUH Experiment Design / Control Split (HIGH)
 - **Ask:** Prepare for tomorrow's experiment design discussion
@@ -50,7 +52,7 @@ Last updated: 2026-04-01
 ## Blocked Items
 | Item | Blocked on | Owner | Since |
 |------|-----------|-------|-------|
-| PCD banner tracking | Launch date (~Apr 20) | — | 2026-03-18 |
+| PCD action_control mapping | Mapping list (Andre's external doc) | Andre | 2026-05-26 |
 | AUH Phase 2 execution | Execution person unassigned | Tracy/pod | 2026-03-16 |
 
 ## Key Dates
@@ -67,6 +69,6 @@ Last updated: 2026-04-01
 |------|-----|----------------|-------|
 | CLI | (TBD) | (TBD) | (TBD — not catalogued) |
 | AUH | AUH | 2026042AUH | DG6V01.TACTIC_EVNT_IP_AR_HIST + D3CV12A.ACCT_CRD_OWN_DLY_DELTA |
-| PCD | (TBD) | (TBD) | cards_pcd_ongoing_decis_resp + ga4_ecommerce |
+| PCD | PCD | 2026111PCD | cards_pcd_ongoing_decis_resp + TACTIC_EVNT_IP_AR_HIST + ga4_ecommerce |
 | PLI | PCL | (TBD) | cards_pli_decision_resp |
 | TPA | PCQ | (TBD) | cards_tpa_pcq_decision_resp |
