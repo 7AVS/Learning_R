@@ -16,8 +16,8 @@
 --   tag    = green view 'eligible transaction' + entry taps 'view rbc installment plans' / 'transaction details - learn more'
 --
 -- PARAMS to edit: wave window (offer_start_date), GA4 partitions (year/month), data cutoff 2026-06-30.
--- Fallbacks: CRV catalog dw00_im -> dw00_jm if it errors (s9 note). Bridge assumed at p3c.d3cv12a
--- (Starburst catalog for D3CV12A). If ga4_narrow lacks Mar'26+ history, swap to ..._narrow_reduced.
+-- Fallbacks: CRV catalog dw00_im -> dw00_jm if it errors (s9 note). Bridge = d3cv12a.cr_crd_rpts_acct
+-- (prefix with your session catalog if needed). If ga4_narrow lacks Mar'26+ history, swap to ..._narrow_reduced.
 
 WITH crv AS (
     SELECT
@@ -42,7 +42,7 @@ bridge AS (
     FROM (
         SELECT r.acct_no, r.clnt_no,
                ROW_NUMBER() OVER (PARTITION BY r.acct_no ORDER BY r.me_dt DESC) AS rn
-        FROM p3c.d3cv12a.cr_crd_rpts_acct r
+        FROM d3cv12a.cr_crd_rpts_acct r
         WHERE r.me_dt >= DATE '2026-01-31'
           AND r.acct_no IN (SELECT CAST(acct_no AS DECIMAL(38,0)) FROM crv)
     )
@@ -126,6 +126,7 @@ leads AS (
     SELECT
         p.acct_no,
         p.clnt_no,
+        p.offer_start_date,
         p.action_control,
         p.channels_deployed,
         CASE
@@ -150,6 +151,7 @@ leads AS (
 )
 
 SELECT
+    offer_start_date,
     cohort,
     action_control,
     channels_deployed,
@@ -158,6 +160,6 @@ SELECT
     COUNT(DISTINCT acct_no)  AS accts,
     COUNT(DISTINCT clnt_no)  AS clients
 FROM leads
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 3, 4
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 1, 2, 3, 4, 5
 ;
