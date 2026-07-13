@@ -55,7 +55,9 @@ elig_txn AS (
       ON k.txn_cd = t.txn_cd
     WHERE t.DR_TXN_AMT >= 250
       AND t.txn_catg_cd <> 5001            /* 5001 = quasi-cash */
-      AND t.txn_dt = t.proc_dt             /* posted date = statement cycle date, per spec */
+      /* NOTE: spec's txn_dt = TRIAD_INSTL_PLN_OFFR_REC.proc_dt is CIDM's TRIGGER anchor
+         (cycle-date evaluation), not part of txn eligibility — deliberately omitted here;
+         we count eligible-txn VOLUME over the 30d pre-wave window instead. */
       AND k.TXN_CATG_LVL_ID = 2
       AND k.catg_lvl_desc IN ('CAPR_OCRG_DB','PRCH_TRF_DB')
       AND t.txn_dt >= DATE '2025-08-01'    /* global prune: min(offer_start)-30 */
