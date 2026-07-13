@@ -1,95 +1,140 @@
--- c1: CRV suppression policy — coverage-curve CELL TABLE (retrospective, borrowed randomization)
--- Per policy-matrix cell x action_control: leads + converters. The coverage curve (cut X% of
--- surface -> keep Y% of converters, ranked by lift) is computed FROM this table downstream.
--- ENGINE: Teradata-direct (all sources Teradata). CTEs only — rerunnable, no volatile tables.
--- Dimensions use CIDM's OWN definitions from the tech spec (campaigns/CRV/crv_tech_spec_notes.md):
---   eligible txns  = VISA_TXN_DLY DR_TXN_AMT>=250, txn_catg_cd<>5001, txn_dt=proc_dt,
---                    purchases via lkup_txn_cd_catg (LVL_ID=2, CAPR_OCRG_DB/PRCH_TRF_DB)
---   mobile logins  = EXT_CDP_CHNL_EVNT mobile-app client authentications (spec Path B; see mob CTE)
---   prior contacts = prior CRV waves per acct (curated table history)
--- DEVIATION from CIDM (deliberate): counting windows are the 30 DAYS BEFORE offer_start_date
--- (pre-treatment), not CIDM's in-decision-month view — required so dimensions are pre-treatment.
+-- c1 v2: CRV suppression policy — coverage-curve CELL TABLE (retrospective, borrowed randomization)
+-- Per policy-matrix cell x action_control: leads + converters. Coverage curve computed downstream.
+-- ENGINE: Teradata-direct. CTEs only — rerunnable. If spool still blows, convert lead_keys to a
+-- VOLATILE TABLE + COLLECT STATISTICS and rerun from STMT 1 (session-persistence caveat applies).
 --
--- !! UNVERIFIED FIELD NAME (spec doesn't show the key column — check before first run):
---   VISA_TXN_DLY account key assumed `acct_no`.
---   (EXT_CDP_CHNL_EVNT.CLNT_NO is confirmed — used by the IMT pipeline. EVNT_DT per spec;
---    if it errors, the catalogued date field is CAPTR_DT.)
+-- Dimension FILTERS are CIDM's own (tech spec, campaigns/CRV/crv_tech_spec_notes.md); the
+-- WINDOWS ARE NOT CIDM'S — deliberately 30d pre offer_start_date (pre-treatment), and CIDM's
+-- trigger anchors (txn_dt = TRIAD proc_dt, me_dt decision-month) are deliberately excluded:
+--   eligible txns  = VISA_TXN_DLY >=250, non-quasi-cash, purchase catgs via lkup_txn_cd_catg
+--   mobile logins  = EXT_CDP_CHNL_EVNT mobile-app client authentications (spec Path B;
+--                    connection_log_all Path A skipped — no clnt_no on it)
+--   prior contacts = DISTINCT prior wave dates per acct (curated table history)
 --
--- PARAMS to edit: wave window (matured waves), 30-day lookbacks, bin edges (marked EDITABLE).
--- If spool blows on VISA_TXN_DLY, run month-of-waves at a time and stack.
+-- v2 fixes (Andre's critiques 2026-07-13):
+--   * dimensions join a DISTINCT key spine (immune to duplicate lead rows)
+--   * bridge is AS-OF wave date (latest ME_DT <= offer_start; fallback first post-wave month-end)
+--   * prior contacts via DENSE_RANK (distinct wave dates, not row counts — tie/dup safe)
+--   * big tables pre-filtered into pools before any join (spool)
+--
+-- !! UNVERIFIED FIELD NAME: VISA_TXN_DLY account key assumed `acct_no`.
+--    (EXT_CDP_CHNL_EVNT.CLNT_NO confirmed; EVNT_DT per spec, fallback CAPTR_DT.)
+-- PARAMS: wave window, 30d lookbacks, bin edges (EDITABLE).
 
+-- ============================================================================
+-- STMT 0 — dup guard: rows vs distinct accts per wave. rows = accts on every
+-- wave => acct x wave grain is clean and STMT 1 counts are safe. If rows > accts
+-- on any wave, STOP and inspect before trusting STMT 1.
+-- ============================================================================
+SELECT
+    offer_start_date,
+    COUNT(*)                AS lead_rows,
+    COUNT(DISTINCT acct_no) AS distinct_accts
+FROM DL_MR_PROD.cards_crv_install_decis_resp
+WHERE offer_start_date >= DATE '2025-09-01'
+  AND offer_start_date <  DATE '2026-04-01'
+GROUP BY 1
+ORDER BY 1
+;
+
+-- ============================================================================
+-- STMT 1 — the cell table
+-- ============================================================================
 WITH crv_hist AS (
     SELECT
         acct_no,
         offer_start_date,
         action_control,
         responder,
-        COUNT(*) OVER (PARTITION BY acct_no ORDER BY offer_start_date
-                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prior_crv_contacts
+        DENSE_RANK() OVER (PARTITION BY acct_no ORDER BY offer_start_date) - 1 AS prior_crv_waves
     FROM DL_MR_PROD.cards_crv_install_decis_resp
 ),
 
 leads AS (
     SELECT *
     FROM crv_hist
-    WHERE offer_start_date >= DATE '2025-09-01'   -- matured waves only (full response window)
+    WHERE offer_start_date >= DATE '2025-09-01'   -- matured waves only
       AND offer_start_date <  DATE '2026-04-01'
 ),
 
-bridge AS (
-    SELECT acct_no, clnt_no
-    FROM D3CV12A.CR_CRD_RPTS_ACCT
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY ME_DT DESC) = 1
+-- distinct key spine: all dimension joins hang off this, so duplicate lead rows
+-- (if any exist) cannot inflate dimension counts
+lead_keys AS (
+    SELECT DISTINCT acct_no, offer_start_date
+    FROM leads
 ),
 
--- CIDM eligible-transaction recipe, 30d pre wave
-elig_txn AS (
-    SELECT
-        l.acct_no,
-        l.offer_start_date,
-        COUNT(*) AS elig_txn_cnt
-    FROM leads l
-    JOIN D3CV12A.VISA_TXN_DLY t
-      ON t.acct_no = l.acct_no
-     AND t.txn_dt >= l.offer_start_date - 30
-     AND t.txn_dt <  l.offer_start_date
+-- acct -> clnt AS-OF the wave: latest month-end at or before offer_start;
+-- accounts too new for a pre-wave row fall back to their first post-wave month-end
+-- (mapping only — no behavioral leakage). Restricted to lead accts BEFORE ranking (spool).
+bridge AS (
+    SELECT acct_no, offer_start_date, clnt_no
+    FROM (
+        SELECT
+            k.acct_no,
+            k.offer_start_date,
+            r.clnt_no,
+            ROW_NUMBER() OVER (
+                PARTITION BY k.acct_no, k.offer_start_date
+                ORDER BY CASE WHEN r.ME_DT <= k.offer_start_date THEN 0 ELSE 1 END,
+                         CASE WHEN r.ME_DT <= k.offer_start_date THEN r.ME_DT END DESC,
+                         r.ME_DT ASC
+            ) AS rn
+        FROM lead_keys k
+        JOIN D3CV12A.CR_CRD_RPTS_ACCT r
+          ON r.acct_no = k.acct_no
+    ) x
+    WHERE rn = 1
+),
+
+-- eligible-txn pool: CIDM txn filters applied BEFORE joining leads (spool)
+txn_pool AS (
+    SELECT t.acct_no, t.txn_dt
+    FROM D3CV12A.VISA_TXN_DLY t
     JOIN D3CV12A.lkup_txn_cd_catg k
       ON k.txn_cd = t.txn_cd
     WHERE t.DR_TXN_AMT >= 250
-      AND t.txn_catg_cd <> 5001            /* 5001 = quasi-cash */
-      /* NOTE: spec's txn_dt = TRIAD_INSTL_PLN_OFFR_REC.proc_dt is CIDM's TRIGGER anchor
-         (cycle-date evaluation), not part of txn eligibility — deliberately omitted here;
-         we count eligible-txn VOLUME over the 30d pre-wave window instead. */
+      AND t.txn_catg_cd <> 5001                       /* quasi-cash */
       AND k.TXN_CATG_LVL_ID = 2
       AND k.catg_lvl_desc IN ('CAPR_OCRG_DB','PRCH_TRF_DB')
-      AND t.txn_dt >= DATE '2025-08-01'    /* global prune: min(offer_start)-30 */
+      AND t.txn_dt >= DATE '2025-08-01'               /* min(offer_start)-30 */
       AND t.txn_dt <  DATE '2026-04-01'
+),
+
+elig_txn AS (
+    SELECT
+        k.acct_no,
+        k.offer_start_date,
+        COUNT(*) AS elig_txn_cnt
+    FROM lead_keys k
+    JOIN txn_pool t
+      ON t.acct_no = k.acct_no
+     AND t.txn_dt >= k.offer_start_date - 30
+     AND t.txn_dt <  k.offer_start_date
     GROUP BY 1, 2
 ),
 
--- CIDM mobile-active definition, counted as frequency, 30d pre wave.
--- Spec defines Mobile Active as a UNION of connection_log_all (Path A) and EXT_CDP_CHNL_EVNT
--- (Path B). connection_log_all has NO clnt_no (Andre-confirmed) and its key is unknown, so we
--- use Path B only: EXT_CDP_CHNL_EVNT is client-grain with confirmed CLNT_NO (IMT pipeline).
--- Path B = mobile-app client authentications; slight undercount vs the spec's union — acceptable
--- for a binning dimension.
+-- mobile-auth pool: spec Path B filters applied BEFORE joining (spool)
+mob_pool AS (
+    SELECT c.CLNT_NO, c.EVNT_DT
+    FROM DDWV01.EXT_CDP_CHNL_EVNT c
+    WHERE c.SRC_DTA_STORE_CD = '140'                  /* Mobile */
+      AND c.chnl_typ_cd = '021'                       /* Mobile Apps */
+      AND c.actvy_typ_cd = '065'                      /* Client Authentication */
+      AND c.EVNT_DT >= DATE '2025-08-01'
+      AND c.EVNT_DT <  DATE '2026-04-01'
+),
+
 mob AS (
     SELECT
-        l.acct_no,
-        l.offer_start_date,
+        b.acct_no,
+        b.offer_start_date,
         COUNT(*) AS mobile_login_cnt
-    FROM leads l
-    JOIN bridge b
-      ON b.acct_no = l.acct_no
-    JOIN DDWV01.EXT_CDP_CHNL_EVNT c
+    FROM bridge b
+    JOIN mob_pool c
       ON c.CLNT_NO = b.clnt_no
-     AND c.EVNT_DT >= l.offer_start_date - 30
-     AND c.EVNT_DT <  l.offer_start_date
-    WHERE c.SRC_DTA_STORE_CD = '140'       /* Mobile */
-      AND c.chnl_typ_cd = '021'            /* Mobile Apps */
-      AND c.actvy_typ_cd = '065'           /* Client Authentication */
-      AND c.EVNT_DT >= DATE '2025-08-01'   /* global prune */
-      AND c.EVNT_DT <  DATE '2026-04-01'
+     AND c.EVNT_DT >= b.offer_start_date - 30
+     AND c.EVNT_DT <  b.offer_start_date
     GROUP BY 1, 2
 )
 
@@ -106,9 +151,9 @@ SELECT
         ELSE                                          'c. 10+'
     END AS mobile_login_bin,
     CASE                                                   /* EDITABLE bins */
-        WHEN l.prior_crv_contacts = 0  THEN 'a. 0'
-        WHEN l.prior_crv_contacts <= 2 THEN 'b. 1-2'
-        ELSE                                'c. 3+'
+        WHEN l.prior_crv_waves = 0  THEN 'a. 0'
+        WHEN l.prior_crv_waves <= 2 THEN 'b. 1-2'
+        ELSE                             'c. 3+'
     END AS prior_contact_bin,
     l.action_control,
     COUNT(*)         AS leads,
