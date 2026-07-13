@@ -221,3 +221,162 @@ WHERE rn_any = 1
 GROUP BY decile
 ORDER BY decile
 ;
+
+-- =============================================================================
+-- Q17b -- cohort-month timeline + EVENT-DATE LOCK (added 2026-07-13)
+-- Two scrutiny fixes over Q17:
+--   1. Converter = prior lead with responder_cli=1 AND dt_cl_change < offer_start
+--      (the actual limit-change EVENT, not just the lead window). Offers whose only
+--      responder leads fail/can't prove the event lock go to 'prior_pli_conv_unproven'
+--      so the leakage is COUNTED, not assumed away.
+--   2. One row per CRV cohort month x status (Q17 pooled 19 months into one number).
+-- RUN 2026-07-13 (pics PXL_20260713_2215*): conv_unproven = ZERO rows -> Q17's lock
+--   was already airtight (dt_cl_change always populated + pre-offer). Taker/decliner
+--   ratio stable ~3.5-4x in ALL 19 cohorts, both arms; all rates decline over time
+--   (taker 4.3%->2.7%) -- partly converter-pool AGING -> motivates Q17e recency.
+-- =============================================================================
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, year_mth_offer_start, action_control,
+           responder AS crv_resp
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+),
+pli_leads AS (
+    SELECT acct_no, treatmt_end_dt, responder_cli, dt_cl_change
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+),
+crv_prior_pli AS (
+    SELECT c.acct_no, c.offer_start_date, c.year_mth_offer_start,
+           c.action_control, c.crv_resp,
+           COUNT(p.acct_no) AS n_prior_pli,
+           MAX(CASE WHEN p.responder_cli = 1
+                     AND p.dt_cl_change IS NOT NULL
+                     AND p.dt_cl_change < c.offer_start_date
+                    THEN 1 ELSE 0 END) AS conv_locked,
+           MAX(CASE WHEN p.responder_cli = 1
+                     AND (p.dt_cl_change IS NULL
+                          OR p.dt_cl_change >= c.offer_start_date)
+                    THEN 1 ELSE 0 END) AS conv_unproven
+    FROM crv_offers c
+    LEFT JOIN pli_leads p
+      ON p.acct_no = c.acct_no
+     AND p.treatmt_end_dt < c.offer_start_date
+    GROUP BY c.acct_no, c.offer_start_date, c.year_mth_offer_start,
+             c.action_control, c.crv_resp
+),
+classified AS (
+    SELECT year_mth_offer_start, action_control, crv_resp,
+           CASE WHEN n_prior_pli = 0     THEN 'no_prior_pli'
+                WHEN conv_locked = 1     THEN 'prior_pli_converter'
+                WHEN conv_unproven = 1   THEN 'prior_pli_conv_unproven'
+                ELSE 'prior_pli_nonconverter' END AS pli_status
+    FROM crv_prior_pli
+)
+SELECT
+    year_mth_offer_start AS cohort_month,
+    pli_status,
+    SUM(CASE WHEN action_control = 'Action'  THEN 1 ELSE 0 END)        AS offers_action,
+    SUM(CASE WHEN action_control = 'Action'  THEN crv_resp ELSE 0 END) AS responders_action,
+    SUM(CASE WHEN action_control = 'Control' THEN 1 ELSE 0 END)        AS offers_control,
+    SUM(CASE WHEN action_control = 'Control' THEN crv_resp ELSE 0 END) AS responders_control
+FROM classified
+GROUP BY 1, 2
+ORDER BY 1, 2
+;
+
+-- =============================================================================
+-- Q17e -- HOW FAR APART? PLI take -> CRV, anchored on dt_cl_change (added 2026-07-13)
+-- STMT A (TARGETING view): CRV offers to prior takers, bucketed by days-since-take
+--   AT OFFER START (known at decision time -> implementable as a CIDM rule).
+--   Recency is pre-treatment -> within-bucket A/C lift is causal. Where lift decays
+--   to the decliner baseline (~+0.2pp) is N for "sequence CRV within N days of PLI".
+-- STMT B (RHYTHM view): among CRV converters, days from PLI take (dt_cl_change) to
+--   CRV conversion (first_response_date). DESCRIPTIVE; long-gap tail is censored
+--   for recent takers (recent takes can't show 365+ gaps yet) -- STMT A sets the rule.
+-- Anchor = LATEST prior take. One row per CRV offer (rank in CTE, rn=1).
+-- =============================================================================
+
+-- Q17e STMT A -- conversion by days-since-PLI-take at offer start, x arm
+WITH crv_offers AS (
+    SELECT acct_no, offer_start_date, action_control, responder AS crv_resp
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+),
+pli_takes AS (
+    SELECT acct_no, dt_cl_change
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+      AND responder_cli = 1
+      AND dt_cl_change IS NOT NULL
+),
+ranked AS (
+    SELECT c.action_control, c.crv_resp,
+           (c.offer_start_date - p.dt_cl_change) AS days_since_take,
+           ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date
+                              ORDER BY p.dt_cl_change DESC) AS rn
+    FROM crv_offers c
+    JOIN pli_takes p
+      ON p.acct_no = c.acct_no
+     AND p.dt_cl_change < c.offer_start_date
+)
+SELECT
+    CASE WHEN days_since_take <= 30  THEN 'a. 000-030'
+         WHEN days_since_take <= 60  THEN 'b. 031-060'
+         WHEN days_since_take <= 90  THEN 'c. 061-090'
+         WHEN days_since_take <= 120 THEN 'd. 091-120'
+         WHEN days_since_take <= 180 THEN 'e. 121-180'
+         WHEN days_since_take <= 270 THEN 'f. 181-270'
+         WHEN days_since_take <= 365 THEN 'g. 271-365'
+         ELSE                             'h. 365+' END AS recency_bucket,
+    SUM(CASE WHEN action_control = 'Action'  THEN 1 ELSE 0 END)        AS offers_action,
+    SUM(CASE WHEN action_control = 'Action'  THEN crv_resp ELSE 0 END) AS responders_action,
+    SUM(CASE WHEN action_control = 'Control' THEN 1 ELSE 0 END)        AS offers_control,
+    SUM(CASE WHEN action_control = 'Control' THEN crv_resp ELSE 0 END) AS responders_control
+FROM ranked
+WHERE rn = 1
+GROUP BY 1
+ORDER BY 1
+;
+
+-- Q17e STMT B -- event-to-event gap: PLI take -> CRV conversion, converters only
+WITH crv_conv AS (
+    SELECT acct_no, offer_start_date, first_response_date, action_control
+    FROM dl_mr_prod.cards_crv_install_decis_resp
+    WHERE offer_start_date >= DATE '2024-10-01'
+      AND responder = 1
+      AND first_response_date IS NOT NULL
+),
+pli_takes AS (
+    SELECT acct_no, dt_cl_change
+    FROM dl_mr_prod.cards_pli_decision_resp
+    WHERE treatmt_strt_dt >= DATE '2024-01-01'
+      AND responder_cli = 1
+      AND dt_cl_change IS NOT NULL
+),
+ranked AS (
+    SELECT c.action_control,
+           (c.first_response_date - p.dt_cl_change) AS take_to_conv_days,
+           ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date
+                              ORDER BY p.dt_cl_change DESC) AS rn
+    FROM crv_conv c
+    JOIN pli_takes p
+      ON p.acct_no = c.acct_no
+     AND p.dt_cl_change < c.offer_start_date
+)
+SELECT
+    CASE WHEN take_to_conv_days <= 30  THEN 'a. 000-030'
+         WHEN take_to_conv_days <= 60  THEN 'b. 031-060'
+         WHEN take_to_conv_days <= 90  THEN 'c. 061-090'
+         WHEN take_to_conv_days <= 120 THEN 'd. 091-120'
+         WHEN take_to_conv_days <= 180 THEN 'e. 121-180'
+         WHEN take_to_conv_days <= 270 THEN 'f. 181-270'
+         WHEN take_to_conv_days <= 365 THEN 'g. 271-365'
+         ELSE                               'h. 365+' END AS take_to_conv_bucket,
+    action_control,
+    COUNT(*) AS crv_converters
+FROM ranked
+WHERE rn = 1
+GROUP BY 1, 2
+ORDER BY 1, 2
+;
