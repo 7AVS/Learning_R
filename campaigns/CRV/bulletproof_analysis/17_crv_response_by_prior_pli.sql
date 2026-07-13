@@ -297,9 +297,9 @@ ORDER BY 1, 2
 -- Anchor = LATEST prior take. One row per CRV offer (rank in CTE, rn=1).
 -- =============================================================================
 
--- Q17e STMT A -- conversion by days-since-PLI-take at offer start, x arm
+-- Q17e STMT A -- conversion by days-since-PLI-take at offer start, x arm, BY COHORT MONTH
 WITH crv_offers AS (
-    SELECT acct_no, offer_start_date, action_control, responder AS crv_resp
+    SELECT acct_no, offer_start_date, year_mth_offer_start, action_control, responder AS crv_resp
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
 ),
@@ -311,7 +311,7 @@ pli_takes AS (
       AND dt_cl_change IS NOT NULL
 ),
 ranked AS (
-    SELECT c.action_control, c.crv_resp,
+    SELECT c.year_mth_offer_start, c.action_control, c.crv_resp,
            (c.offer_start_date - p.dt_cl_change) AS days_since_take,
            ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date
                               ORDER BY p.dt_cl_change DESC) AS rn
@@ -321,6 +321,7 @@ ranked AS (
      AND p.dt_cl_change < c.offer_start_date
 )
 SELECT
+    year_mth_offer_start AS cohort_month,
     CASE WHEN days_since_take <= 30  THEN 'a. 000-030'
          WHEN days_since_take <= 60  THEN 'b. 031-060'
          WHEN days_since_take <= 90  THEN 'c. 061-090'
@@ -335,13 +336,13 @@ SELECT
     SUM(CASE WHEN action_control = 'Control' THEN crv_resp ELSE 0 END) AS responders_control
 FROM ranked
 WHERE rn = 1
-GROUP BY 1
-ORDER BY 1
+GROUP BY 1, 2
+ORDER BY 1, 2
 ;
 
--- Q17e STMT B -- event-to-event gap: PLI take -> CRV conversion, converters only
+-- Q17e STMT B -- event-to-event gap: PLI take -> CRV conversion, converters only, BY COHORT MONTH
 WITH crv_conv AS (
-    SELECT acct_no, offer_start_date, first_response_date, action_control
+    SELECT acct_no, offer_start_date, year_mth_offer_start, first_response_date, action_control
     FROM dl_mr_prod.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2024-10-01'
       AND responder = 1
@@ -355,7 +356,7 @@ pli_takes AS (
       AND dt_cl_change IS NOT NULL
 ),
 ranked AS (
-    SELECT c.action_control,
+    SELECT c.year_mth_offer_start, c.action_control,
            (c.first_response_date - p.dt_cl_change) AS take_to_conv_days,
            ROW_NUMBER() OVER (PARTITION BY c.acct_no, c.offer_start_date
                               ORDER BY p.dt_cl_change DESC) AS rn
@@ -365,6 +366,7 @@ ranked AS (
      AND p.dt_cl_change < c.offer_start_date
 )
 SELECT
+    year_mth_offer_start AS cohort_month,
     CASE WHEN take_to_conv_days <= 30  THEN 'a. 000-030'
          WHEN take_to_conv_days <= 60  THEN 'b. 031-060'
          WHEN take_to_conv_days <= 90  THEN 'c. 061-090'
@@ -377,6 +379,6 @@ SELECT
     COUNT(*) AS crv_converters
 FROM ranked
 WHERE rn = 1
-GROUP BY 1, 2
-ORDER BY 1, 2
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3
 ;
