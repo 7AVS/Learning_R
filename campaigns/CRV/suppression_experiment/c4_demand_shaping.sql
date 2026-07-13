@@ -26,23 +26,29 @@ lead_keys AS (
     SELECT DISTINCT acct_no, offer_start_date FROM crv
 ),
 
--- eligible-txn pool (single-source subquery -> filters push down to Teradata)
+-- v3 (2026-07-13): NO amount filter — ALL purchase transactions, any size (Andre: pre/post
+-- purchase behavior was asked unfiltered; the >=250 floor was an unrequested carry-over from
+-- the eligibility recipe and made avg-per-txn read ~$800-870 by construction).
+-- Kept: purchases-only (lkup lvl-2 purchase catgs) + quasi-cash exclusion, so payments/cash
+-- advances/fees don't pollute "purchase behavior". Drop those two lines too if you want raw.
+-- Pre-aggregated to acct x day before the lead join (runtime control).
 txn_pool AS (
-    SELECT CAST(t.acct_no AS DECIMAL(38,0)) AS acct_no, t.txn_dt, t.DR_TXN_AMT
+    SELECT CAST(t.acct_no AS DECIMAL(38,0)) AS acct_no, t.txn_dt,
+           COUNT(*) AS n_txn, SUM(t.DR_TXN_AMT) AS amt
     FROM d3cv12a.visa_txn_dly t
     JOIN d3cv12a.lkup_txn_cd_catg k
       ON k.txn_cd = t.txn_cd
-    WHERE t.DR_TXN_AMT >= 250
-      AND t.txn_catg_cd <> 5001
+    WHERE t.txn_catg_cd <> 5001
       AND k.TXN_CATG_LVL_ID = 2
       AND k.catg_lvl_desc IN ('CAPR_OCRG_DB','PRCH_TRF_DB')
       AND t.txn_dt >= DATE '2025-08-01'
       AND t.txn_dt <  DATE '2026-07-01'
+    GROUP BY 1, 2
 ),
 
 pre_beh AS (
     SELECT k.acct_no, k.offer_start_date,
-           COUNT(*) AS pre_cnt, SUM(t.DR_TXN_AMT) AS pre_amt
+           SUM(t.n_txn) AS pre_cnt, SUM(t.amt) AS pre_amt
     FROM lead_keys k
     JOIN txn_pool t
       ON t.acct_no = CAST(k.acct_no AS DECIMAL(38,0))
@@ -53,7 +59,7 @@ pre_beh AS (
 
 post_beh AS (
     SELECT k.acct_no, k.offer_start_date,
-           COUNT(*) AS post_cnt, SUM(t.DR_TXN_AMT) AS post_amt
+           SUM(t.n_txn) AS post_cnt, SUM(t.amt) AS post_amt
     FROM lead_keys k
     JOIN txn_pool t
       ON t.acct_no = CAST(k.acct_no AS DECIMAL(38,0))
@@ -129,15 +135,15 @@ SELECT
     SUM(CASE WHEN l.action_control = 'Action'  THEN 1 ELSE 0 END) AS leads_action,
     SUM(CASE WHEN l.action_control = 'Control' THEN 1 ELSE 0 END) AS leads_control,
     /* PRE (30d before deployment) */
-    SUM(CASE WHEN l.action_control = 'Action'  AND p.pre_cnt >= 1 THEN 1 ELSE 0 END) AS pre_elig_leads_action,
-    SUM(CASE WHEN l.action_control = 'Control' AND p.pre_cnt >= 1 THEN 1 ELSE 0 END) AS pre_elig_leads_control,
+    SUM(CASE WHEN l.action_control = 'Action'  AND p.pre_cnt >= 1 THEN 1 ELSE 0 END) AS pre_active_leads_action,
+    SUM(CASE WHEN l.action_control = 'Control' AND p.pre_cnt >= 1 THEN 1 ELSE 0 END) AS pre_active_leads_control,
     SUM(CASE WHEN l.action_control = 'Action'  THEN COALESCE(p.pre_cnt, 0) ELSE 0 END) AS pre_txns_action,
     SUM(CASE WHEN l.action_control = 'Control' THEN COALESCE(p.pre_cnt, 0) ELSE 0 END) AS pre_txns_control,
     SUM(CASE WHEN l.action_control = 'Action'  THEN COALESCE(p.pre_amt, 0) ELSE 0 END) AS pre_amt_action,
     SUM(CASE WHEN l.action_control = 'Control' THEN COALESCE(p.pre_amt, 0) ELSE 0 END) AS pre_amt_control,
     /* POST (90d after deployment) */
-    SUM(CASE WHEN l.action_control = 'Action'  AND q.post_cnt >= 1 THEN 1 ELSE 0 END) AS post_elig_leads_action,
-    SUM(CASE WHEN l.action_control = 'Control' AND q.post_cnt >= 1 THEN 1 ELSE 0 END) AS post_elig_leads_control,
+    SUM(CASE WHEN l.action_control = 'Action'  AND q.post_cnt >= 1 THEN 1 ELSE 0 END) AS post_active_leads_action,
+    SUM(CASE WHEN l.action_control = 'Control' AND q.post_cnt >= 1 THEN 1 ELSE 0 END) AS post_active_leads_control,
     SUM(CASE WHEN l.action_control = 'Action'  THEN COALESCE(q.post_cnt, 0) ELSE 0 END) AS post_txns_action,
     SUM(CASE WHEN l.action_control = 'Control' THEN COALESCE(q.post_cnt, 0) ELSE 0 END) AS post_txns_control,
     SUM(CASE WHEN l.action_control = 'Action'  THEN COALESCE(q.post_amt, 0) ELSE 0 END) AS post_amt_action,
