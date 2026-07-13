@@ -3,13 +3,20 @@
 -- ENGINE: Teradata-direct. CTEs only — rerunnable. If spool still blows, convert lead_keys to a
 -- VOLATILE TABLE + COLLECT STATISTICS and rerun from STMT 1 (session-persistence caveat applies).
 --
--- Dimension FILTERS are CIDM's own (tech spec, campaigns/CRV/crv_tech_spec_notes.md); the
--- WINDOWS ARE NOT CIDM'S — deliberately 30d pre offer_start_date (pre-treatment), and CIDM's
--- trigger anchors (txn_dt = TRIAD proc_dt, me_dt decision-month) are deliberately excluded:
---   eligible txns  = VISA_TXN_DLY >=250, non-quasi-cash, purchase catgs via lkup_txn_cd_catg
---   mobile logins  = EXT_CDP_CHNL_EVNT mobile-app client authentications (spec Path B;
---                    connection_log_all Path A skipped — no clnt_no on it)
---   prior contacts = DISTINCT prior wave dates per acct (curated table history)
+-- DIMENSION WINDOW LOGIC — all three are DECISION-TIME information (computable by CIDM at the
+-- moment of decisioning, BEFORE any deployment is assigned to the client). This is the exact
+-- logic the CIDM implementation ask must replicate:
+--   eligible txns  = COUNT of qualifying purchases in the 30 DAYS BEFORE this lead's own
+--                    offer_start_date. Filters are CIDM's own: VISA_TXN_DLY >=250,
+--                    non-quasi-cash, purchase catgs via lkup_txn_cd_catg.
+--   mobile logins  = COUNT of mobile-app client authentications in the SAME 30 days before
+--                    this lead's offer_start_date (EXT_CDP_CHNL_EVNT, spec Path B;
+--                    connection_log_all Path A skipped — no clnt_no on it).
+--   prior contacts = COUNT of DISTINCT prior offer dates for this acct over the FULL campaign
+--                    history (Oct-2024+). NOT a rolling window: '10+' means the acct was
+--                    decisioned into CRV on 10+ earlier occasions before this deployment.
+-- CIDM's trigger anchors (txn_dt = TRIAD proc_dt, me_dt decision-month) deliberately excluded —
+-- they define when CIDM evaluates, not what the client is.
 --
 -- v2 fixes (Andre's critiques 2026-07-13):
 --   * dimensions join a DISTINCT key spine (immune to duplicate lead rows)
@@ -161,14 +168,17 @@ SELECT
         WHEN l.prior_crv_waves <= 9 THEN 'd. 5-9'
         ELSE                             'e. 10+'
     END AS prior_contact_bin,
-    l.action_control,
-    COUNT(*)         AS leads,
-    SUM(l.responder) AS converters
+    /* WIDE output (v4): one row per cohort x cell, arms as columns — lift is a plain
+       row formula downstream, no pivot calculated fields needed */
+    SUM(CASE WHEN l.action_control = 'Action'  THEN 1 ELSE 0 END)           AS leads_action,
+    SUM(CASE WHEN l.action_control = 'Control' THEN 1 ELSE 0 END)           AS leads_control,
+    SUM(CASE WHEN l.action_control = 'Action'  THEN l.responder ELSE 0 END) AS conv_action,
+    SUM(CASE WHEN l.action_control = 'Control' THEN l.responder ELSE 0 END) AS conv_control
 FROM leads l
 LEFT JOIN elig_txn e
        ON e.acct_no = l.acct_no AND e.offer_start_date = l.offer_start_date
 LEFT JOIN mob m
        ON m.acct_no = l.acct_no AND m.offer_start_date = l.offer_start_date
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 4, 5
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4
 ;
