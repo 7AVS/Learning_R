@@ -74,6 +74,27 @@ bridge AS (
     WHERE rn = 1
 ),
 
+-- revolver/transactor behavior segment, taken at the last month-end BEFORE deployment
+-- (pre-wave, Q26 precedent — segment measured during/after the offer would be post-treatment).
+-- Grain caveat from Q26: >1 row per acct x ME_DT unverified -> rank dedup handles it.
+behavior AS (
+    SELECT acct_no, offer_start_date, usg_bhvr_seg
+    FROM (
+        SELECT
+            k.acct_no,
+            k.offer_start_date,
+            r.usg_bhvr_seg_at_cyc_cd AS usg_bhvr_seg,
+            ROW_NUMBER() OVER (PARTITION BY k.acct_no, k.offer_start_date
+                               ORDER BY r.me_dt DESC) AS rn
+        FROM lead_keys k
+        JOIN d3cv12a.cr_crd_rpts_acct r
+          ON r.acct_no = CAST(k.acct_no AS DECIMAL(38,0))
+         AND r.me_dt <  k.offer_start_date
+         AND r.me_dt >= k.offer_start_date - INTERVAL '70' DAY   /* bound the rank set */
+    )
+    WHERE rn = 1
+),
+
 -- banner views per client-day (GA4, canon 8-id allowlist)
 view_days AS (
     SELECT
@@ -103,6 +124,7 @@ SELECT
     l.year_mth_offer_start AS cohort_month,
     CASE WHEN l.responder = 1 THEN 'converter' ELSE 'non_converter' END AS converter_seg,
     CASE WHEN e.acct_no IS NOT NULL THEN 'exposed' ELSE 'not_exposed' END AS exposure_seg,
+    COALESCE(bh.usg_bhvr_seg, 'unknown') AS behavior_seg,   /* Dormant/Transactor/Revolver, pre-wave */
     /* wide: arms as columns */
     SUM(CASE WHEN l.action_control = 'Action'  THEN 1 ELSE 0 END) AS leads_action,
     SUM(CASE WHEN l.action_control = 'Control' THEN 1 ELSE 0 END) AS leads_control,
@@ -124,6 +146,7 @@ FROM crv l
 LEFT JOIN pre_beh  p ON p.acct_no = l.acct_no AND p.offer_start_date = l.offer_start_date
 LEFT JOIN post_beh q ON q.acct_no = l.acct_no AND q.offer_start_date = l.offer_start_date
 LEFT JOIN exposed  e ON e.acct_no = l.acct_no AND e.offer_start_date = l.offer_start_date
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3
+LEFT JOIN behavior bh ON bh.acct_no = l.acct_no AND bh.offer_start_date = l.offer_start_date
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4
 ;
