@@ -44,6 +44,7 @@ WITH crv_hist AS (
     SELECT
         acct_no,
         offer_start_date,
+        year_mth_offer_start,
         action_control,
         responder,
         DENSE_RANK() OVER (PARTITION BY acct_no ORDER BY offer_start_date) - 1 AS prior_crv_waves
@@ -139,21 +140,26 @@ mob AS (
 )
 
 SELECT
+    l.year_mth_offer_start AS cohort_month,                /* monthly cohort (daily decisioning) */
     CASE                                                   /* EDITABLE bins */
         WHEN COALESCE(e.elig_txn_cnt, 0) = 0 THEN 'a. 0'
         WHEN e.elig_txn_cnt = 1              THEN 'b. 1'
         WHEN e.elig_txn_cnt <= 3             THEN 'c. 2-3'
-        ELSE                                      'd. 4+'
+        WHEN e.elig_txn_cnt <= 6             THEN 'd. 4-6'
+        ELSE                                      'e. 7+'
     END AS elig_txn_bin,
     CASE                                                   /* EDITABLE bins */
         WHEN COALESCE(m.mobile_login_cnt, 0) = 0 THEN 'a. 0'
         WHEN m.mobile_login_cnt <= 9             THEN 'b. 1-9'
-        ELSE                                          'c. 10+'
+        WHEN m.mobile_login_cnt <= 29            THEN 'c. 10-29'
+        ELSE                                          'd. 30+'
     END AS mobile_login_bin,
     CASE                                                   /* EDITABLE bins */
         WHEN l.prior_crv_waves = 0  THEN 'a. 0'
         WHEN l.prior_crv_waves <= 2 THEN 'b. 1-2'
-        ELSE                             'c. 3+'
+        WHEN l.prior_crv_waves <= 4 THEN 'c. 3-4'
+        WHEN l.prior_crv_waves <= 9 THEN 'd. 5-9'
+        ELSE                             'e. 10+'
     END AS prior_contact_bin,
     l.action_control,
     COUNT(*)         AS leads,
@@ -163,6 +169,6 @@ LEFT JOIN elig_txn e
        ON e.acct_no = l.acct_no AND e.offer_start_date = l.offer_start_date
 LEFT JOIN mob m
        ON m.acct_no = l.acct_no AND m.offer_start_date = l.offer_start_date
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 3, 4
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 1, 2, 3, 4, 5
 ;
