@@ -5,13 +5,15 @@
 -- Dimensions use CIDM's OWN definitions from the tech spec (campaigns/CRV/crv_tech_spec_notes.md):
 --   eligible txns  = VISA_TXN_DLY DR_TXN_AMT>=250, txn_catg_cd<>5001, txn_dt=proc_dt,
 --                    purchases via lkup_txn_cd_catg (LVL_ID=2, CAPR_OCRG_DB/PRCH_TRF_DB)
---   mobile logins  = connection_log_all chnl_cd MB/TI, connectn_cd 00/14/15/18/70/80/8F
+--   mobile logins  = EXT_CDP_CHNL_EVNT mobile-app client authentications (spec Path B; see mob CTE)
 --   prior contacts = prior CRV waves per acct (curated table history)
 -- DEVIATION from CIDM (deliberate): counting windows are the 30 DAYS BEFORE offer_start_date
 -- (pre-treatment), not CIDM's in-decision-month view — required so dimensions are pre-treatment.
 --
--- !! UNVERIFIED FIELD NAMES (spec doesn't show the key columns — check before first run):
---   VISA_TXN_DLY account key assumed `acct_no`; connection_log_all client key assumed `clnt_no`.
+-- !! UNVERIFIED FIELD NAME (spec doesn't show the key column — check before first run):
+--   VISA_TXN_DLY account key assumed `acct_no`.
+--   (EXT_CDP_CHNL_EVNT.CLNT_NO is confirmed — used by the IMT pipeline. EVNT_DT per spec;
+--    if it errors, the catalogued date field is CAPTR_DT.)
 --
 -- PARAMS to edit: wave window (matured waves), 30-day lookbacks, bin edges (marked EDITABLE).
 -- If spool blows on VISA_TXN_DLY, run month-of-waves at a time and stack.
@@ -65,7 +67,12 @@ elig_txn AS (
     GROUP BY 1, 2
 ),
 
--- CIDM mobile-active definition, counted as frequency, 30d pre wave
+-- CIDM mobile-active definition, counted as frequency, 30d pre wave.
+-- Spec defines Mobile Active as a UNION of connection_log_all (Path A) and EXT_CDP_CHNL_EVNT
+-- (Path B). connection_log_all has NO clnt_no (Andre-confirmed) and its key is unknown, so we
+-- use Path B only: EXT_CDP_CHNL_EVNT is client-grain with confirmed CLNT_NO (IMT pipeline).
+-- Path B = mobile-app client authentications; slight undercount vs the spec's union — acceptable
+-- for a binning dimension.
 mob AS (
     SELECT
         l.acct_no,
@@ -74,14 +81,15 @@ mob AS (
     FROM leads l
     JOIN bridge b
       ON b.acct_no = l.acct_no
-    JOIN DDWV01.connection_log_all c
-      ON c.clnt_no = b.clnt_no
-     AND c.src_dt >= l.offer_start_date - 30
-     AND c.src_dt <  l.offer_start_date
-    WHERE c.chnl_cd IN ('MB','TI')
-      AND c.connectn_cd IN ('00','14','15','18','70','80','8F')
-      AND c.src_dt >= DATE '2025-08-01'    /* global prune */
-      AND c.src_dt <  DATE '2026-04-01'
+    JOIN DDWV01.EXT_CDP_CHNL_EVNT c
+      ON c.CLNT_NO = b.clnt_no
+     AND c.EVNT_DT >= l.offer_start_date - 30
+     AND c.EVNT_DT <  l.offer_start_date
+    WHERE c.SRC_DTA_STORE_CD = '140'       /* Mobile */
+      AND c.chnl_typ_cd = '021'            /* Mobile Apps */
+      AND c.actvy_typ_cd = '065'           /* Client Authentication */
+      AND c.EVNT_DT >= DATE '2025-08-01'   /* global prune */
+      AND c.EVNT_DT <  DATE '2026-04-01'
     GROUP BY 1, 2
 )
 
