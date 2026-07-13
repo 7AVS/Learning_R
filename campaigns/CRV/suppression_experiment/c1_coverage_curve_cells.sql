@@ -161,12 +161,20 @@ SELECT
         WHEN m.mobile_login_cnt <= 29            THEN 'c. 10-29'
         ELSE                                          'd. 30+'
     END AS mobile_login_bin,
-    CASE                                                   /* EDITABLE bins */
-        WHEN l.prior_crv_waves = 0  THEN 'a. 0'
-        WHEN l.prior_crv_waves <= 2 THEN 'b. 1-2'
-        WHEN l.prior_crv_waves <= 4 THEN 'c. 3-4'
-        WHEN l.prior_crv_waves <= 9 THEN 'd. 5-9'
-        ELSE                             'e. 10+'
+    CASE                                                   /* EDITABLE bins — v5: singles, the
+                                                              5-9 bucket held 46% of leads (Andre) */
+        WHEN l.prior_crv_waves = 0   THEN 'a. 0'
+        WHEN l.prior_crv_waves = 1   THEN 'b. 1'
+        WHEN l.prior_crv_waves = 2   THEN 'c. 2'
+        WHEN l.prior_crv_waves = 3   THEN 'd. 3'
+        WHEN l.prior_crv_waves = 4   THEN 'e. 4'
+        WHEN l.prior_crv_waves = 5   THEN 'f. 5'
+        WHEN l.prior_crv_waves = 6   THEN 'g. 6'
+        WHEN l.prior_crv_waves = 7   THEN 'h. 7'
+        WHEN l.prior_crv_waves = 8   THEN 'i. 8'
+        WHEN l.prior_crv_waves = 9   THEN 'j. 9'
+        WHEN l.prior_crv_waves <= 12 THEN 'k. 10-12'
+        ELSE                              'l. 13+'
     END AS prior_contact_bin,
     /* WIDE output (v4): one row per cohort x cell, arms as columns — lift is a plain
        row formula downstream, no pivot calculated fields needed */
