@@ -4,7 +4,7 @@
 -- ENGINE: Teradata-direct (all sources Teradata). CTEs only — rerunnable, no volatile tables.
 -- Dimensions use CIDM's OWN definitions from the tech spec (campaigns/CRV/crv_tech_spec_notes.md):
 --   eligible txns  = VISA_TXN_DLY DR_TXN_AMT>=250, txn_catg_cd<>5001, txn_dt=proc_dt,
---                    purchases via ikup_txn_cd_catg (LVL_ID=2, CAPR_OCRG_DB/PRCH_TRF_DB)
+--                    purchases via lkup_txn_cd_catg (LVL_ID=2, CAPR_OCRG_DB/PRCH_TRF_DB)
 --   mobile logins  = connection_log_all chnl_cd MB/TI, connectn_cd 00/14/15/18/70/80/8F
 --   prior contacts = prior CRV waves per acct (curated table history)
 -- DEVIATION from CIDM (deliberate): counting windows are the 30 DAYS BEFORE offer_start_date
@@ -51,7 +51,7 @@ elig_txn AS (
       ON t.acct_no = l.acct_no
      AND t.txn_dt >= l.offer_start_date - 30
      AND t.txn_dt <  l.offer_start_date
-    JOIN D3CV12A.ikup_txn_cd_catg k
+    JOIN D3CV12A.lkup_txn_cd_catg k
       ON k.txn_cd = t.txn_cd
     WHERE t.DR_TXN_AMT >= 250
       AND t.txn_catg_cd <> 5001            /* 5001 = quasi-cash */
