@@ -122,6 +122,7 @@ WITH leads AS (
     FROM DL_MR_PROD.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2026-01-01'
       AND offer_start_date <  DATE '2026-02-01'
+      AND acct_no MOD 97 = 0        /* ~1% deterministic sample — spool control; shares unbiased */
 ),
 per_lead AS (
     SELECT
@@ -194,6 +195,7 @@ WITH leads AS (
     FROM DL_MR_PROD.cards_crv_install_decis_resp
     WHERE offer_start_date >= DATE '2026-01-01'
       AND offer_start_date <  DATE '2026-02-01'
+      AND acct_no MOD 97 = 0        /* ~1% deterministic sample — spool control; averages unbiased */
 ),
 txn_beh AS (
     SELECT
