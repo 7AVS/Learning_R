@@ -80,18 +80,19 @@ Extraction stays ALL-MNE (the MNE falls out of `SUBSTR(treatment_id,8,3)` — no
 | Cards | AUH | Authorized User | confirmed |
 | Cards | CLI | Card Limit Increase Nurture | confirmed |
 | Cards | MVP | Card Acquisition Nurture | confirmed |
-| Cards | CRV | (Cards pod campaign, runs today) | ⚠ NOT in env list — confirm code present in data |
+| Cards | CRV | (Cards pod campaign, runs today) | KEEP (Andre 2026-07-14); not in env email list — verify presence in data |
 | PBA | CTU | Chequing Account Right Fit | confirmed |
 | Personal Lending | O2P | Pre-approved Overdraft Opportunity | confirmed |
 | Payments | VDT | Activation Trigger | confirmed |
 | Payments | VUI | Usage Trigger | confirmed |
 | Payments | VUT | Wallet Provisioning | confirmed |
 | Payments | VDA | BFCM Acquisition | confirmed (in env list) |
-| Payments | VVD | — | ⚠ named by Andre, NOT in env list — possible typo for VDA? CONFIRM |
 | Payments | VAW | (debit campaign, known from dashboard_sas work) | ⚠ not in env list — confirm |
 | Payments | VCN | (debit campaign, known from dashboard_sas work) | ⚠ not in env list — confirm |
-| Personal Loans | RCU | — | ⚠ named by Andre, code unconfirmed in tactic data |
-| Personal Loans | RCL | — | ⚠ named by Andre; RCL appears as a product in NBR's description, not confirmed as an MNE |
+| Personal Loans | RCU | — | KEEP (Andre 2026-07-14); verify presence in data |
+| Personal Loans | RCL | — | KEEP (Andre 2026-07-14); verify presence in data |
+
+VVD is NOT an MNE (Andre 2026-07-14) — do not track.
 
 Draft IN-list (fix the ⚠ entries before production use):
 `('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P','VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')`
@@ -156,6 +157,6 @@ Python note: `.py` versions discontinued at Andre's request (2026-07-14); SQL is
 2. MASTER grain unverified (one row per client × send?).
 3. Semantics of disposition 4: one-click unsub vs preference-center vs list-level — determines whether an unsub kills all email or one program. Also whether repeated unsubs per client appear.
 4. MASTER col #17: `app_` vs `opp_product_typ_code`.
-5. ⚠ MNE codes to confirm: VVD (vs VDA), VAW, VCN, RCU, RCL, CRV presence in email universe; PFS vs CHQ duplicate description.
+5. ⚠ MNE codes to confirm in data: VAW, VCN; presence of CRV/RCU/RCL in the email universe (scope-confirmed by Andre, keep regardless); PFS vs CHQ duplicate description. VVD is NOT an MNE — resolved.
 6. Wedge decision (saturation evidence vs campaign league table vs standing monitor) — base layer built to serve all three.
 7. Retention window of vendor feedback tables (Q1c/Q2b outputs will show).
