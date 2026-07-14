@@ -10,16 +10,15 @@
 -- gets: column catalog, retention window, disposition distribution, MASTER/EVENT
 -- join-key reconciliation, and unsubscribe (disposition_cd=4) attribution coverage.
 --
--- ENGINE: Starburst/Trino
---   Every confirmed use of these two tables in this repo runs through Trino:
---     - campaigns/AUH/auh_explore.sql Query 4 header: "(Teradata via Trino — email
---       master)" / "(Teradata via Trino — email events)", queries say "Run this in Trino."
---     - campaigns/AUH/auh_tracking.sql Query 5 uses the same two-part DTZV01.* addressing,
---       no catalog prefix, joined into a Trino-syntax CTE.
---     - schemas/imt_pipeline_edw.py: EMAIL_MASTER/EMAIL_EVENT comment "Teradata via Trino".
---   So this pack is Trino syntax throughout: no QUALIFY, no TOP, no NULLIFZERO, explicit
---   casts only where needed. Addressing matches existing files exactly: DTZV01.<table>,
---   no dw00_im/catalog prefix (per query_engine_guidelines.md, DTZV01.* is used directly).
+-- ENGINE: Teradata-direct
+--   Two-part addressing DTZV01.<table>, no catalog prefix. Simple aggregates only —
+--   no volatile tables needed (no TDWM product-join hazard here).
+--   Whole-table COUNT(*) is CAST to BIGINT: EVENT may exceed 2.1B rows and plain
+--   COUNT overflows (error 2616) on Teradata.
+--   Month buckets use EXTRACT(YEAR)*100 + EXTRACT(MONTH) (yyyymm) — works whether
+--   the date columns turn out DATE or TIMESTAMP (types unconfirmed until Q0).
+--   (Prior revision of this file was Trino syntax for Starburst federation — if this
+--   ever runs through Starburst instead, swap TOP->LIMIT and yyyymm->date_trunc.)
 --
 -- Confirmed columns (from repo usage, do NOT invent others):
 --   MASTER: TREATMENT_ID (= TACTIC_ID), CLNT_NO, consumer_id_hashed, FEEDBACK_ID, SEND_DT
@@ -39,12 +38,10 @@
 -- output is reviewed; column names/types may need adjustment afterward.
 --
 -- Counts only, no rates computed in SQL (numerators/denominators as separate columns,
--- divide client-side) -- avoids the Teradata pushdown ROUND-9881 hazard on a fully
--- pushed-down single-source (all-Teradata) Trino statement.
+-- divide client-side).
 --
 -- ---------------------------------------------------------------------------
--- EDIT WINDOW BOUNDARIES HERE (repeated as literals below, same convention as
--- auh_explore.sql / auh_tracking.sql -- Trino has no session variables here):
+-- EDIT WINDOW BOUNDARIES HERE (repeated as literals in each query below):
 --   Q1b monthly trend, ~24 months : SEND_DT           >= DATE '2024-07-01'
 --   Q3/Q4 recent window, last 3 full months (run 2026-07-13): disposition_dt_tm
 --                                  >= DATE '2026-04-01' AND < DATE '2026-07-01'
@@ -55,23 +52,28 @@
 -- ---------------------------------------------------------------------------
 -- Q0a: Full column catalog — MASTER
 -- ---------------------------------------------------------------------------
--- Proves: complete column list/types for VENDOR_FEEDBACK_MASTER as seen through
--- Trino. Expect to see TREATMENT_ID, CLNT_NO, consumer_id_hashed, FEEDBACK_ID,
--- SEND_DT plus whatever else the table carries that we've never catalogued.
+-- Proves: complete column list for VENDOR_FEEDBACK_MASTER, with sample values
+-- (TOP 5 works on views where HELP TABLE may not — DTZV01 is a view layer).
+-- Expect TREATMENT_ID, CLNT_NO, consumer_id_hashed, FEEDBACK_ID, SEND_DT plus
+-- whatever else the table carries that we've never catalogued.
 -- ---------------------------------------------------------------------------
 
-SHOW COLUMNS FROM DTZV01.VENDOR_FEEDBACK_MASTER;
+SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_MASTER;
+
+-- alternative if you want declared types: HELP VIEW DTZV01.VENDOR_FEEDBACK_MASTER;
 
 
 -- ---------------------------------------------------------------------------
 -- Q0b: Full column catalog — EVENT
 -- ---------------------------------------------------------------------------
--- Proves: complete column list/types for VENDOR_FEEDBACK_EVENT as seen through
--- Trino. Expect EVENT_TYPE, disposition_cd, disposition_dt_tm, FEEDBACK_ID,
+-- Proves: complete column list for VENDOR_FEEDBACK_EVENT, with sample values.
+-- Expect EVENT_TYPE, disposition_cd, disposition_dt_tm, FEEDBACK_ID,
 -- consumer_id_hashed, TREATMENT_ID plus anything uncatalogued.
 -- ---------------------------------------------------------------------------
 
-SHOW COLUMNS FROM DTZV01.VENDOR_FEEDBACK_EVENT;
+SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_EVENT;
+
+-- alternative if you want declared types: HELP VIEW DTZV01.VENDOR_FEEDBACK_EVENT;
 
 
 -- ---------------------------------------------------------------------------
@@ -82,7 +84,7 @@ SHOW COLUMNS FROM DTZV01.VENDOR_FEEDBACK_EVENT;
 -- ---------------------------------------------------------------------------
 
 SELECT
-    COUNT(*)                        AS master_rows,
+    CAST(COUNT(*) AS BIGINT)        AS master_rows,
     COUNT(DISTINCT CLNT_NO)         AS distinct_clients,
     COUNT(DISTINCT TREATMENT_ID)    AS distinct_treatments,
     MIN(SEND_DT)                    AS min_send_dt,
@@ -98,13 +100,14 @@ FROM DTZV01.VENDOR_FEEDBACK_MASTER;
 -- ---------------------------------------------------------------------------
 
 SELECT
-    date_trunc('month', SEND_DT)    AS send_month,
-    COUNT(*)                        AS master_rows,
+    EXTRACT(YEAR FROM SEND_DT) * 100
+      + EXTRACT(MONTH FROM SEND_DT) AS send_month_yyyymm,
+    CAST(COUNT(*) AS BIGINT)        AS master_rows,
     COUNT(DISTINCT CLNT_NO)         AS distinct_clients
 FROM DTZV01.VENDOR_FEEDBACK_MASTER
 WHERE SEND_DT >= DATE '2024-07-01'
-GROUP BY date_trunc('month', SEND_DT)
-ORDER BY send_month;
+GROUP BY 1
+ORDER BY 1;
 
 
 -- ---------------------------------------------------------------------------
@@ -117,7 +120,7 @@ ORDER BY send_month;
 
 SELECT
     disposition_cd,
-    COUNT(*)                        AS event_rows
+    CAST(COUNT(*) AS BIGINT)        AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
 GROUP BY disposition_cd
 ORDER BY event_rows DESC;
@@ -133,10 +136,10 @@ ORDER BY event_rows DESC;
 SELECT
     EXTRACT(YEAR FROM disposition_dt_tm)   AS disposition_year,
     disposition_cd,
-    COUNT(*)                               AS event_rows
+    CAST(COUNT(*) AS BIGINT)               AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
-GROUP BY EXTRACT(YEAR FROM disposition_dt_tm), disposition_cd
-ORDER BY disposition_year, disposition_cd;
+GROUP BY 1, 2
+ORDER BY 1, 2;
 
 
 -- ---------------------------------------------------------------------------
@@ -228,7 +231,8 @@ WHERE e.disposition_cd = 4
 -- ---------------------------------------------------------------------------
 
 SELECT
-    date_trunc('month', e.disposition_dt_tm) AS unsub_month,
+    EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
+      + EXTRACT(MONTH FROM e.disposition_dt_tm) AS unsub_month_yyyymm,
     SUBSTR(m.TREATMENT_ID, 8, 3)    AS mne,
     COUNT(*)                        AS unsub_rows,
     COUNT(DISTINCT m.CLNT_NO)       AS distinct_clients
@@ -239,5 +243,5 @@ INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
 WHERE e.disposition_cd = 4
   AND e.disposition_dt_tm >= DATE '2025-07-01'
   AND e.disposition_dt_tm <  DATE '2026-07-01'
-GROUP BY date_trunc('month', e.disposition_dt_tm), SUBSTR(m.TREATMENT_ID, 8, 3)
-ORDER BY unsub_month, unsub_rows DESC;
+GROUP BY 1, 2
+ORDER BY 1, unsub_rows DESC;
