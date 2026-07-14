@@ -25,7 +25,9 @@
 --           SEND_DT does NOT exist (first-run error) -- send timing lives on the
 --           decisioning table (TACTIC_EVNT_IP_AR) via m.TREATMENT_ID = t.TACTIC_ID
 --           + m.CLNT_NO = t.CLNT_NO.
---   EVENT:  EVENT_TYPE, disposition_cd, disposition_dt_tm, consumer_id_hashed, TREATMENT_ID.
+--   EVENT (9 cols, full catalog in schemas/vendor_feedback_tables_schema.md):
+--           disposition_cd (smallint), disposition_dt_tm, consumer_id_hashed, TREATMENT_ID.
+--           EVENT_TYPE does NOT exist; EVENT has no CLNT_NO (resolve client via MASTER).
 --   FEEDBACK_ID does NOT exist (first-run error) -- auh_explore.sql's FEEDBACK_ID join
 --   was never valid here. The ONLY MASTER<->EVENT join path is
 --   consumer_id_hashed + TREATMENT_ID (auh_tracking.sql Q5 / imt_pipeline.py Cell 4b).
@@ -41,7 +43,8 @@
 --
 -- ---------------------------------------------------------------------------
 -- EDIT WINDOW BOUNDARIES HERE (repeated as literals in each query below):
---   Q1c monthly trend, ~24 months : TREATMT_STRT_DT   >= DATE '2024-07-01'
+--   History floor (all scans)      : >= DATE '2024-01-01' (data reaches ~2018; pre-2024 excluded)
+--   Q1c monthly trend              : TREATMT_STRT_DT   >= DATE '2024-01-01'
 --   Q3/Q4 recent window, last 3 full months (run 2026-07-13): disposition_dt_tm
 --                                  >= DATE '2026-04-01' AND < DATE '2026-07-01'
 --   Q5 trailing 12 months          : disposition_dt_tm >= DATE '2025-07-01' AND < DATE '2026-07-01'
@@ -127,32 +130,32 @@ FROM DTZV01.VENDOR_FEEDBACK_MASTER m
 INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
     ON  t.TACTIC_ID = m.TREATMENT_ID
     AND t.CLNT_NO   = m.CLNT_NO
-WHERE t.TREATMT_STRT_DT >= DATE '2024-07-01'
+WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
 GROUP BY 1
 ORDER BY 1;
 
 
 -- ---------------------------------------------------------------------------
--- Q2a: EVENT — disposition_cd distribution, whole table
+-- Q2a: EVENT — disposition_cd distribution, 2024+
 -- ---------------------------------------------------------------------------
--- Proves: how many rows fall into each disposition_cd across all history.
--- Expect codes 1/2/3/4/5/6 (sent/opened/clicked/unsub/hardbounce/complaint);
--- flag anything outside that set as an unknown code to chase down.
+-- Proves: how many rows fall into each disposition_cd since 2024 (pre-2024
+-- excluded by convention). Expect codes 1/2/3/4/5/6; flag anything outside
+-- that set as an unknown code to chase down.
 -- ---------------------------------------------------------------------------
 
 SELECT
     disposition_cd,
     CAST(COUNT(*) AS BIGINT)        AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_dt_tm >= DATE '2024-01-01'
 GROUP BY disposition_cd
 ORDER BY event_rows DESC;
 
 
 -- ---------------------------------------------------------------------------
--- Q2b: EVENT — disposition_cd by year of disposition_dt_tm
+-- Q2b: EVENT — disposition_cd by year, 2024+
 -- ---------------------------------------------------------------------------
--- Proves: whether disposition mix is stable year over year, and confirms the
--- EVENT table's own retention window (earliest/latest years present per code).
+-- Proves: whether disposition mix is stable year over year since 2024.
 -- ---------------------------------------------------------------------------
 
 SELECT
@@ -160,6 +163,7 @@ SELECT
     disposition_cd,
     CAST(COUNT(*) AS BIGINT)               AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_dt_tm >= DATE '2024-01-01'
 GROUP BY 1, 2
 ORDER BY 1, 2;
 

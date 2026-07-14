@@ -19,7 +19,8 @@ pd.set_option('display.max_colwidth', 100)
 # ── Editable window boundaries (edit here only — f-strung into queries below) ──
 WIN_START = '2026-04-01'        # Q3/Q4 recent window start
 WIN_END = '2026-07-01'          # Q3/Q4 recent window end (exclusive)
-TREND_START = '2024-07-01'      # Q1c monthly trend (TREATMT_STRT_DT), ~24 months
+TREND_START = '2024-01-01'      # Q1c monthly trend (TREATMT_STRT_DT)
+HIST_START = '2024-01-01'       # history floor for EVENT scans (data reaches ~2018; pre-2024 excluded)
 TRAILING_START = '2025-07-01'   # Q5 trailing 12 months start
 TRAILING_END = '2026-07-01'     # Q5 trailing 12 months end (exclusive)
 
@@ -72,7 +73,7 @@ print(df_q0b.to_string(index=False))
 
 cols_event = df_q0b.columns.tolist()
 cols_event_upper = [c.upper() for c in cols_event]
-expected_event = ['EVENT_TYPE', 'DISPOSITION_CD', 'DISPOSITION_DT_TM', 'CONSUMER_ID_HASHED', 'TREATMENT_ID']
+expected_event = ['DISPOSITION_CD', 'DISPOSITION_DT_TM', 'CONSUMER_ID_HASHED', 'TREATMENT_ID']  # EVENT_TYPE does not exist; 9-col catalog in schemas/vendor_feedback_tables_schema.md
 missing_event = [c for c in expected_event if c not in cols_event_upper]
 print(f"\nQ0b proves: full column list for VENDOR_FEEDBACK_EVENT ({len(cols_event)} columns): {cols_event}")
 if missing_event:
@@ -154,13 +155,14 @@ if len(df_q1c) > 0:
     print(f"  Row range across months: {lo:,} to {hi:,} — a sharp drop mid-window flags a retention cutoff, not a real volume dip.")
 
 
-# %% [5] Q2a — EVENT disposition_cd distribution, whole table
+# %% [5] Q2a — EVENT disposition_cd distribution, 2024+
 
-sql = """
+sql = f"""
 SELECT
     disposition_cd,
     CAST(COUNT(*) AS BIGINT)        AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_dt_tm >= DATE '{HIST_START}'
 GROUP BY disposition_cd
 ORDER BY event_rows DESC
 """
@@ -174,28 +176,29 @@ if codes_numeric.isna().any():
 seen_codes = set(codes_numeric.dropna().astype(int).tolist())
 unknown_codes = seen_codes - known_codes
 total_events = df_q2a['event_rows'].sum()
-print(f"\nQ2a proves: disposition_cd distribution across all EVENT history ({total_events:,} total rows).")
+print(f"\nQ2a proves: disposition_cd distribution since {HIST_START} ({total_events:,} total rows).")
 if unknown_codes:
     print(f"  WARNING: unrecognized disposition_cd values present: {unknown_codes} — not in confirmed set {known_codes}, chase down.")
 else:
     print(f"  All disposition_cd values fall within confirmed set {known_codes} (1=sent 2=opened 3=clicked 4=unsub 5=hardbounce 6=complaint).")
 
 
-# %% [6] Q2b — EVENT disposition_cd by year of disposition_dt_tm
+# %% [6] Q2b — EVENT disposition_cd by year, 2024+
 
-sql = """
+sql = f"""
 SELECT
     EXTRACT(YEAR FROM disposition_dt_tm)   AS disposition_year,
     disposition_cd,
     CAST(COUNT(*) AS BIGINT)               AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_dt_tm >= DATE '{HIST_START}'
 GROUP BY 1, 2
 ORDER BY 1, 2
 """
 df_q2b = edw_query(sql, "Q2b")
 print(df_q2b.to_string(index=False))
 
-print(f"\nQ2b proves: disposition_cd mix by year — EVENT table's own retention window "
+print(f"\nQ2b proves: disposition_cd mix by year since {HIST_START} "
       f"({df_q2b['disposition_year'].min()} to {df_q2b['disposition_year'].max()}).")
 
 
