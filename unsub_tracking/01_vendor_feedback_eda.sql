@@ -20,18 +20,17 @@
 --   (Prior revision of this file was Trino syntax for Starburst federation — if this
 --   ever runs through Starburst instead, swap TOP->LIMIT and yyyymm->date_trunc.)
 --
--- Confirmed columns (from repo usage, do NOT invent others):
---   MASTER: TREATMENT_ID (= TACTIC_ID), CLNT_NO, consumer_id_hashed, FEEDBACK_ID, SEND_DT
---   EVENT:  EVENT_TYPE, disposition_cd, disposition_dt_tm, FEEDBACK_ID,
---           consumer_id_hashed, TREATMENT_ID
+-- Confirmed columns (corrected after first run, 2026-07-14):
+--   MASTER: TREATMENT_ID (= TACTIC_ID), CLNT_NO, consumer_id_hashed.
+--           SEND_DT does NOT exist (first-run error) -- send timing lives on the
+--           decisioning table (TACTIC_EVNT_IP_AR) via m.TREATMENT_ID = t.TACTIC_ID
+--           + m.CLNT_NO = t.CLNT_NO.
+--   EVENT:  EVENT_TYPE, disposition_cd, disposition_dt_tm, consumer_id_hashed, TREATMENT_ID.
+--   FEEDBACK_ID does NOT exist (first-run error) -- auh_explore.sql's FEEDBACK_ID join
+--   was never valid here. The ONLY MASTER<->EVENT join path is
+--   consumer_id_hashed + TREATMENT_ID (auh_tracking.sql Q5 / imt_pipeline.py Cell 4b).
 --   disposition_cd (confirmed AUH Phase 1): 1=sent, 2=opened, 3=clicked, 4=unsubscribed,
 --                                            5=hardbounce, 6=complaint
---
--- Two confirmed join paths (both must appear here, per the two source files):
---   (a) FEEDBACK_ID            -- auh_explore.sql Query 4: m.FEEDBACK_ID = e.FEEDBACK_ID
---   (b) consumer_id_hashed + TREATMENT_ID -- auh_tracking.sql Query 5 and
---       schemas/imt_pipeline.py Cell 4b: e.consumer_id_hashed = m.consumer_id_hashed
---       AND e.TREATMENT_ID = m.TREATMENT_ID
 --
 -- Q0 exists to discover the FULL column list on both tables. Everything from Q1 on
 -- uses only the repo-confirmed columns above — treat those as provisional until Q0
@@ -42,7 +41,7 @@
 --
 -- ---------------------------------------------------------------------------
 -- EDIT WINDOW BOUNDARIES HERE (repeated as literals in each query below):
---   Q1b monthly trend, ~24 months : SEND_DT           >= DATE '2024-07-01'
+--   Q1c monthly trend, ~24 months : TREATMT_STRT_DT   >= DATE '2024-07-01'
 --   Q3/Q4 recent window, last 3 full months (run 2026-07-13): disposition_dt_tm
 --                                  >= DATE '2026-04-01' AND < DATE '2026-07-01'
 --   Q5 trailing 12 months          : disposition_dt_tm >= DATE '2025-07-01' AND < DATE '2026-07-01'
@@ -54,8 +53,8 @@
 -- ---------------------------------------------------------------------------
 -- Proves: complete column list for VENDOR_FEEDBACK_MASTER, with sample values
 -- (TOP 5 works on views where HELP TABLE may not — DTZV01 is a view layer).
--- Expect TREATMENT_ID, CLNT_NO, consumer_id_hashed, FEEDBACK_ID, SEND_DT plus
--- whatever else the table carries that we've never catalogued.
+-- Expect TREATMENT_ID, CLNT_NO, consumer_id_hashed plus uncatalogued extras.
+-- Confirmed absent: SEND_DT, FEEDBACK_ID (first-run errors, 2026-07-14).
 -- ---------------------------------------------------------------------------
 
 SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_MASTER;
@@ -67,8 +66,8 @@ SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_MASTER;
 -- Q0b: Full column catalog — EVENT
 -- ---------------------------------------------------------------------------
 -- Proves: complete column list for VENDOR_FEEDBACK_EVENT, with sample values.
--- Expect EVENT_TYPE, disposition_cd, disposition_dt_tm, FEEDBACK_ID,
--- consumer_id_hashed, TREATMENT_ID plus anything uncatalogued.
+-- Expect EVENT_TYPE, disposition_cd, disposition_dt_tm, consumer_id_hashed,
+-- TREATMENT_ID plus anything uncatalogued.
 -- ---------------------------------------------------------------------------
 
 SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_EVENT;
@@ -77,35 +76,58 @@ SELECT TOP 5 * FROM DTZV01.VENDOR_FEEDBACK_EVENT;
 
 
 -- ---------------------------------------------------------------------------
--- Q1a: MASTER — volume, cardinality, date range
+-- Q1a: MASTER — volume, cardinality
 -- ---------------------------------------------------------------------------
--- Proves: overall MASTER row count, distinct clients/treatments, and the
--- SEND_DT min/max (retention window — how far back this table actually goes).
+-- Proves: overall MASTER row count, distinct clients/treatments. No date range
+-- here — MASTER has no send-date column; timing comes via Q1b/Q1c.
 -- ---------------------------------------------------------------------------
 
 SELECT
     CAST(COUNT(*) AS BIGINT)        AS master_rows,
     COUNT(DISTINCT CLNT_NO)         AS distinct_clients,
-    COUNT(DISTINCT TREATMENT_ID)    AS distinct_treatments,
-    MIN(SEND_DT)                    AS min_send_dt,
-    MAX(SEND_DT)                    AS max_send_dt
+    COUNT(DISTINCT TREATMENT_ID)    AS distinct_treatments
 FROM DTZV01.VENDOR_FEEDBACK_MASTER;
 
 
 -- ---------------------------------------------------------------------------
--- Q1b: MASTER — monthly send volume, last ~24 months
+-- Q1b: MASTER -> decisioning join coverage (TREATMENT_ID = TACTIC_ID + CLNT_NO)
 -- ---------------------------------------------------------------------------
--- Proves: volume trend by month of SEND_DT -- confirms retention isn't a hard
--- cutoff mid-window and shows any send-volume anomalies month to month.
+-- Proves: how many MASTER rows resolve to a decisioning record — the only route
+-- to send timing. EXISTS avoids fan-out from multi-wave (CLNT_NO, TACTIC_ID)
+-- duplicates. Compare against Q1a master_rows for coverage.
+-- NOTE: using DG6V01.TACTIC_EVNT_IP_AR_HIST (latest working usage in repo);
+-- alternative: DTZV01.TACTIC_EVNT_IP_AR_H60M.
 -- ---------------------------------------------------------------------------
 
 SELECT
-    EXTRACT(YEAR FROM SEND_DT) * 100
-      + EXTRACT(MONTH FROM SEND_DT) AS send_month_yyyymm,
-    CAST(COUNT(*) AS BIGINT)        AS master_rows,
-    COUNT(DISTINCT CLNT_NO)         AS distinct_clients
-FROM DTZV01.VENDOR_FEEDBACK_MASTER
-WHERE SEND_DT >= DATE '2024-07-01'
+    CAST(COUNT(*) AS BIGINT)        AS master_rows_with_decis_match
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+WHERE EXISTS (
+    SELECT 1
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    WHERE t.TACTIC_ID = m.TREATMENT_ID
+      AND t.CLNT_NO   = m.CLNT_NO
+);
+
+
+-- ---------------------------------------------------------------------------
+-- Q1c: send volume by month of TREATMT_STRT_DT, last ~24 months (via decisioning)
+-- ---------------------------------------------------------------------------
+-- Proves: send-volume trend using the decisioning wave date as the send axis.
+-- Joined-row counts can inherit multi-wave duplicates on (CLNT_NO, TACTIC_ID);
+-- distinct_clients is the fan-out-safe figure.
+-- ---------------------------------------------------------------------------
+
+SELECT
+    EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+      + EXTRACT(MONTH FROM t.TREATMT_STRT_DT) AS send_month_yyyymm,
+    CAST(COUNT(*) AS BIGINT)        AS joined_rows,
+    COUNT(DISTINCT m.CLNT_NO)       AS distinct_clients
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    ON  t.TACTIC_ID = m.TREATMENT_ID
+    AND t.CLNT_NO   = m.CLNT_NO
+WHERE t.TREATMT_STRT_DT >= DATE '2024-07-01'
 GROUP BY 1
 ORDER BY 1;
 
@@ -143,12 +165,11 @@ ORDER BY 1, 2;
 
 
 -- ---------------------------------------------------------------------------
--- Q3: MASTER <-> EVENT join-key reconciliation (same window, both join paths)
+-- Q3: MASTER <-> EVENT join coverage (consumer_id_hashed + TREATMENT_ID)
 -- ---------------------------------------------------------------------------
 -- Proves: of all EVENT rows in a fixed recent window, how many resolve back to
--- MASTER via (a) FEEDBACK_ID [auh_explore.sql pattern] vs (b) consumer_id_hashed
--- + TREATMENT_ID [auh_tracking.sql / imt_pipeline.py pattern]. Same window for
--- all three counts so (b) and (c) are directly comparable against (a)'s denominator.
+-- MASTER via consumer_id_hashed + TREATMENT_ID — the only valid join path
+-- (FEEDBACK_ID does not exist; the former Q3b was removed after the first run).
 -- NOTE: a matched count ABOVE Q3a's denominator = join fan-out (duplicate keys
 -- on the MASTER side) — that's a grain finding, record it, don't dismiss it.
 -- ---------------------------------------------------------------------------
@@ -159,15 +180,6 @@ SELECT
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
 WHERE disposition_dt_tm >= DATE '2026-04-01'
   AND disposition_dt_tm <  DATE '2026-07-01';
-
--- Q3b: EVENT rows matching MASTER via FEEDBACK_ID
-SELECT
-    COUNT(*)                        AS event_rows_matched_feedback_id
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-    ON e.FEEDBACK_ID = m.FEEDBACK_ID
-WHERE e.disposition_dt_tm >= DATE '2026-04-01'
-  AND e.disposition_dt_tm <  DATE '2026-07-01';
 
 -- Q3c: EVENT rows matching MASTER via consumer_id_hashed + TREATMENT_ID
 SELECT
@@ -203,8 +215,6 @@ WHERE disposition_cd = 4
 -- Proves: how many unsub events resolve to a MASTER send record and a CLNT_NO.
 -- Compare unsub_rows_joined against Q4a's unsub_rows_total: a higher number
 -- here = MASTER-side fan-out (duplicate consumer_id_hashed+TREATMENT_ID keys).
--- Uses the consumer_id_hashed+TREATMENT_ID path (Q3c); re-run via FEEDBACK_ID
--- if Q3 shows that path has better coverage.
 -- ---------------------------------------------------------------------------
 
 SELECT

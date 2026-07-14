@@ -3,10 +3,11 @@
 # Tables: DTZV01.VENDOR_FEEDBACK_MASTER (email send master) + DTZV01.VENDOR_FEEDBACK_EVENT (disposition events).
 # Engine: Teradata-direct via pre-initialized EDW connector — no login/connection code here.
 # disposition_cd (confirmed AUH Phase 1): 1=sent 2=opened 3=clicked 4=unsubscribed 5=hardbounce 6=complaint.
-# Two confirmed join paths: (a) FEEDBACK_ID [auh_explore.sql Q4]  (b) consumer_id_hashed+TREATMENT_ID
-#   [auh_tracking.sql Q5 / imt_pipeline.py Cell 4b]. Fan-out caveat: a joined count ABOVE the no-join
-#   denominator means duplicate keys on the MASTER side — that's a grain finding, not noise.
-# Column names below are provisional (repo-confirmed usage) until Q0 output is reviewed.
+# Corrected after first run (2026-07-14): MASTER has NO SEND_DT — send timing comes from the decisioning
+#   table (TACTIC_EVNT_IP_AR) via m.TREATMENT_ID = t.TACTIC_ID + m.CLNT_NO = t.CLNT_NO.
+#   FEEDBACK_ID does NOT exist — only MASTER<->EVENT join path is consumer_id_hashed + TREATMENT_ID.
+# Fan-out caveat: a joined count ABOVE the no-join denominator means duplicate keys on the
+#   MASTER side — that's a grain finding, not noise.
 
 import pandas as pd
 import time
@@ -18,7 +19,7 @@ pd.set_option('display.max_colwidth', 100)
 # ── Editable window boundaries (edit here only — f-strung into queries below) ──
 WIN_START = '2026-04-01'        # Q3/Q4 recent window start
 WIN_END = '2026-07-01'          # Q3/Q4 recent window end (exclusive)
-TREND_START = '2024-07-01'      # Q1b monthly trend, ~24 months
+TREND_START = '2024-07-01'      # Q1c monthly trend (TREATMT_STRT_DT), ~24 months
 TRAILING_START = '2025-07-01'   # Q5 trailing 12 months start
 TRAILING_END = '2026-07-01'     # Q5 trailing 12 months end (exclusive)
 
@@ -52,7 +53,7 @@ print(df_q0a.to_string(index=False))
 
 cols_master = df_q0a.columns.tolist()
 cols_master_upper = [c.upper() for c in cols_master]
-expected_master = ['TREATMENT_ID', 'CLNT_NO', 'CONSUMER_ID_HASHED', 'FEEDBACK_ID', 'SEND_DT']
+expected_master = ['TREATMENT_ID', 'CLNT_NO', 'CONSUMER_ID_HASHED']  # SEND_DT/FEEDBACK_ID confirmed absent 2026-07-14
 missing_master = [c for c in expected_master if c not in cols_master_upper]
 print(f"\nQ0a proves: full column list for VENDOR_FEEDBACK_MASTER ({len(cols_master)} columns): {cols_master}")
 if missing_master:
@@ -71,7 +72,7 @@ print(df_q0b.to_string(index=False))
 
 cols_event = df_q0b.columns.tolist()
 cols_event_upper = [c.upper() for c in cols_event]
-expected_event = ['EVENT_TYPE', 'DISPOSITION_CD', 'DISPOSITION_DT_TM', 'FEEDBACK_ID', 'CONSUMER_ID_HASHED', 'TREATMENT_ID']
+expected_event = ['EVENT_TYPE', 'DISPOSITION_CD', 'DISPOSITION_DT_TM', 'CONSUMER_ID_HASHED', 'TREATMENT_ID']
 missing_event = [c for c in expected_event if c not in cols_event_upper]
 print(f"\nQ0b proves: full column list for VENDOR_FEEDBACK_EVENT ({len(cols_event)} columns): {cols_event}")
 if missing_event:
@@ -80,45 +81,76 @@ else:
     print(f"  Repo-confirmed columns present: {expected_event}")
 
 
-# %% [3] Q1a — MASTER volume, cardinality, date range
+# %% [3] Q1a — MASTER volume, cardinality (no date range — MASTER has no send-date column)
 
 sql = """
 SELECT
     CAST(COUNT(*) AS BIGINT)        AS master_rows,
     COUNT(DISTINCT CLNT_NO)         AS distinct_clients,
-    COUNT(DISTINCT TREATMENT_ID)    AS distinct_treatments,
-    MIN(SEND_DT)                    AS min_send_dt,
-    MAX(SEND_DT)                    AS max_send_dt
+    COUNT(DISTINCT TREATMENT_ID)    AS distinct_treatments
 FROM DTZV01.VENDOR_FEEDBACK_MASTER
 """
 df_q1a = edw_query(sql, "Q1a")
 print(df_q1a.to_string(index=False))
 
 r = df_q1a.iloc[0]
-print(f"\nQ1a proves: MASTER has {r['master_rows']:,} rows, {r['distinct_clients']:,} distinct clients, "
-      f"{r['distinct_treatments']:,} distinct treatments.")
-print(f"  Retention window: {r['min_send_dt']} to {r['max_send_dt']} — confirms how far back MASTER actually goes.")
+q1a_master_rows = int(r['master_rows'])
+print(f"\nQ1a proves: MASTER has {q1a_master_rows:,} rows, {r['distinct_clients']:,} distinct clients, "
+      f"{r['distinct_treatments']:,} distinct treatments. Send timing comes via the decisioning join (Q1b/Q1c).")
 
 
-# %% [4] Q1b — MASTER monthly send volume, last ~24 months
+# %% [4] Q1b — MASTER -> decisioning join coverage (TREATMENT_ID = TACTIC_ID + CLNT_NO)
+# EXISTS avoids fan-out from multi-wave (CLNT_NO, TACTIC_ID) duplicates.
+# Using DG6V01.TACTIC_EVNT_IP_AR_HIST; alternative: DTZV01.TACTIC_EVNT_IP_AR_H60M.
 
-sql = f"""
+sql = """
 SELECT
-    EXTRACT(YEAR FROM SEND_DT) * 100
-      + EXTRACT(MONTH FROM SEND_DT) AS send_month_yyyymm,
-    CAST(COUNT(*) AS BIGINT)        AS master_rows,
-    COUNT(DISTINCT CLNT_NO)         AS distinct_clients
-FROM DTZV01.VENDOR_FEEDBACK_MASTER
-WHERE SEND_DT >= DATE '{TREND_START}'
-GROUP BY 1
-ORDER BY 1
+    CAST(COUNT(*) AS BIGINT)        AS master_rows_with_decis_match
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+WHERE EXISTS (
+    SELECT 1
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    WHERE t.TACTIC_ID = m.TREATMENT_ID
+      AND t.CLNT_NO   = m.CLNT_NO
+)
 """
 df_q1b = edw_query(sql, "Q1b")
 print(df_q1b.to_string(index=False))
 
-print(f"\nQ1b proves: monthly MASTER send volume since {TREND_START} ({len(df_q1b)} months returned).")
-if len(df_q1b) > 0:
-    lo, hi = df_q1b['master_rows'].min(), df_q1b['master_rows'].max()
+q1b_matched = int(df_q1b.iloc[0]['master_rows_with_decis_match'])
+if 'q1a_master_rows' in globals():
+    pct = (q1b_matched / q1a_master_rows * 100) if q1a_master_rows else 0
+    print(f"\nQ1b proves: {q1b_matched:,} of {q1a_master_rows:,} MASTER rows ({pct:.1f}%) resolve to a decisioning "
+          f"record — this is the send-timing coverage ceiling for the whole build.")
+    if pct < 95:
+        print(f"  WARNING: coverage below 95% — investigate which treatments/periods fail to match before designing on top.")
+else:
+    print(f"\nQ1b: {q1b_matched:,} MASTER rows resolve to a decisioning record. (Run Q1a cell for the coverage %.)")
+
+
+# %% [5] Q1c — send volume by month of TREATMT_STRT_DT, last ~24 months (via decisioning)
+# Joined-row counts can inherit multi-wave duplicates; distinct_clients is fan-out-safe.
+
+sql = f"""
+SELECT
+    EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+      + EXTRACT(MONTH FROM t.TREATMT_STRT_DT) AS send_month_yyyymm,
+    CAST(COUNT(*) AS BIGINT)        AS joined_rows,
+    COUNT(DISTINCT m.CLNT_NO)       AS distinct_clients
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    ON  t.TACTIC_ID = m.TREATMENT_ID
+    AND t.CLNT_NO   = m.CLNT_NO
+WHERE t.TREATMT_STRT_DT >= DATE '{TREND_START}'
+GROUP BY 1
+ORDER BY 1
+"""
+df_q1c = edw_query(sql, "Q1c")
+print(df_q1c.to_string(index=False))
+
+print(f"\nQ1c proves: monthly send volume (decisioning wave date) since {TREND_START} ({len(df_q1c)} months returned).")
+if len(df_q1c) > 0:
+    lo, hi = df_q1c['joined_rows'].min(), df_q1c['joined_rows'].max()
     print(f"  Row range across months: {lo:,} to {hi:,} — a sharp drop mid-window flags a retention cutoff, not a real volume dip.")
 
 
@@ -183,32 +215,8 @@ q3a_rows = int(df_q3a.iloc[0]['event_rows_window'])
 print(f"\nQ3a proves: {q3a_rows:,} EVENT rows in window [{WIN_START}, {WIN_END}) — denominator for Q3b/Q3c match rates.")
 
 
-# %% [8] Q3b — EVENT rows matched to MASTER via FEEDBACK_ID
-
-sql = f"""
-SELECT
-    COUNT(*)                        AS event_rows_matched_feedback_id
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-    ON e.FEEDBACK_ID = m.FEEDBACK_ID
-WHERE e.disposition_dt_tm >= DATE '{WIN_START}'
-  AND e.disposition_dt_tm <  DATE '{WIN_END}'
-"""
-df_q3b = edw_query(sql, "Q3b")
-print(df_q3b.to_string(index=False))
-
-q3b_rows = int(df_q3b.iloc[0]['event_rows_matched_feedback_id'])
-if 'q3a_rows' in globals():
-    pct_b = (q3b_rows / q3a_rows * 100) if q3a_rows else 0
-    print(f"\nQ3b proves: FEEDBACK_ID join matched {q3b_rows:,} of {q3a_rows:,} window rows ({pct_b:.1f}%).")
-    if q3b_rows > q3a_rows:
-        print(f"  WARNING: matched count ABOVE Q3a denominator ({q3b_rows:,} > {q3a_rows:,}) — join fan-out via FEEDBACK_ID "
-              f"(duplicate keys on MASTER side).")
-else:
-    print(f"\nQ3b: FEEDBACK_ID join matched {q3b_rows:,} window rows. (Run Q3a cell for the denominator comparison.)")
-
-
 # %% [9] Q3c — EVENT rows matched to MASTER via consumer_id_hashed + TREATMENT_ID
+# (Former Q3b FEEDBACK_ID join removed — column does not exist; this is the only join path.)
 
 sql = f"""
 SELECT
@@ -232,13 +240,6 @@ if 'q3a_rows' in globals():
               f"consumer_id_hashed+TREATMENT_ID.")
 else:
     print(f"\nQ3c: consumer_id_hashed+TREATMENT_ID join matched {q3c_rows:,} window rows. (Run Q3a cell for the denominator comparison.)")
-
-if 'q3b_rows' in globals():
-    diff_bc = q3c_rows - q3b_rows
-    print(f"  Q3b (FEEDBACK_ID) = {q3b_rows:,} vs Q3c (consumer+treatment) = {q3c_rows:,}, diff = {diff_bc:,}.")
-    if abs(diff_bc) > 0.05 * max(q3b_rows, q3c_rows, 1):
-        print(f"  WARNING: the two join paths differ by >5% of the larger count — pick the higher-coverage path "
-              f"deliberately, they are not interchangeable.")
 
 
 # %% [10] Q4a — Unsub (disposition_cd=4) key coverage, EVENT alone (no join, fan-out-safe)
