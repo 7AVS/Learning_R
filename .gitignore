@@ -4,6 +4,7 @@
 # Allow project instructions
 !CLAUDE.md
 !WORKSTREAMS.md
+!VINTAGE-AUTOMATION-NOTE.md
 
 # Allow CRV bulletproof analysis docs (catalog + metrics dictionary)
 !campaigns/CRV/bulletproof_analysis/METRICS_DICTIONARY.md
