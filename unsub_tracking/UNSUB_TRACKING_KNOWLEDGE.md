@@ -5,6 +5,15 @@ Written 2026-07-14 for migration to a new environment. Repo folder: `unsub_track
 
 ---
 
+## 0. REQUIRED OUTCOMES (locked 2026-07-15, team-confirmed)
+
+1. **Value of an unsub** (exec ask): not all unsubs weigh the same. Segment unsubscribers by **TIBC × age** (TIBC = Transaction/Investment/Borrowing/Credit product-category counts, UCP), apply a per-segment LTV determined by us — "T-only at age 20 = decades of future NIBT lost." Deliverable: LTV given up, campaign by campaign; localization matrix showing where the problem is real vs where raw counts overstate it. UCP `Profitability` field to vet (risk: current-year contribution understates young clients). Enrichment runs Spark-side (UCP, merge clnt_no + MONTH_END_DATE).
+2. **Population lost to campaigns over time — anchored on CPC, not vendor feedback.** Source of truth: `DDWV01.CPC_RB_PREF_LOG` (client preference log; PREF_ID 1014 with CPC='N' = out of ALL RBC marketing). Reason: business partners (Avion) distrust unsub data (suspected double counts). Deliverable: of ~15MM active clients, how many lost, trend vs year ago, campaign source via our unsub attribution chain.
+
+**Mutual validation:** CPC proves unsub numbers (flag change = real, deduplicated); vendor feedback gives CPC its why (campaign/deployment/segment). Double-count answer: EVENT is a journey log — raw code-4 rows DO double count; the defensible number = DISTINCT clients, FIRST unsub (+ CPC confirmation).
+
+These two are guaranteed Power Pack slides; core vintages come after.
+
 ## 1. Mission & design
 
 Holistic unsubscription tracking — not per-campaign. Two axes per unsubscriber:
@@ -151,6 +160,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `03_tactic_join_channel_validation.sql` | MASTER↔tactic join coverage + grain (J1–J4); EM channel-marker discovery (C1–C5) |
 | `04_journey_query_patterns.sql` | disposition_cd usage patterns P1–P3 + sequentiality validation V1 |
 | `05_email_journey_by_mne_cohort.sql` | THE volume summary: decisioned-email denominator (two-field rule) + client-distinct funnel per MNE × cohort month; 30-day disposition window per deployment (editable assumption) |
+| `06_cpc_pref_log_eda.sql` | CPC_RB_PREF_LOG schema discovery (S0 only — extend after real columns reviewed) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
 Python note: `.py` versions discontinued at Andre's request (2026-07-14); SQL is the deliverable. The `.py` pattern, if ever needed again: pre-initialized `EDW` connector, `EDW.cursor()` → fetchall → DataFrame.
