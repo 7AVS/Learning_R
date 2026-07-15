@@ -86,3 +86,27 @@ WHERE CHG_TMSTMP >= DATE '2024-03-01'
   AND PREF_ID IN (1002, 1014)
 GROUP BY 1, 2
 ORDER BY optout_rows DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- Q4 [IN-ENV EXTRACT — pivot base, NOT for screenshots]
+-- The basic timeline cube: month x PREF_ID x consent type
+-- ---------------------------------------------------------------------------
+-- Every switch, every direction (yes/no/blank), by month. Pivot it in your
+-- environment however you want (rows: month; columns: pref/consent; etc.).
+-- ~31 months x ~50 prefs x 3-4 consent values — a few thousand rows by design.
+-- Timeline floor editable: change the DATE literal (or drop the WHERE for
+-- full history back to ~2005).
+-- ---------------------------------------------------------------------------
+
+SELECT
+    EXTRACT(YEAR FROM CHG_TMSTMP) * 100
+      + EXTRACT(MONTH FROM CHG_TMSTMP) AS chg_month_yyyymm,
+    PREF_ID,
+    CLNT_CONSENT_TYP,
+    CAST(COUNT(*) AS BIGINT)   AS change_rows,
+    COUNT(DISTINCT CLNT_NO)    AS distinct_clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE CHG_TMSTMP >= DATE '2024-01-01'
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
