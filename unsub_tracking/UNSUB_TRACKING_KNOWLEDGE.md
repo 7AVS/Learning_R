@@ -114,19 +114,22 @@ Canonical patterns in `04_journey_query_patterns.sql`:
 
 ---
 
-## 6. Email-channel identification (open workstream)
+## 6. Email-channel identification (CONFIRMED — env EDA 2026-07-15)
 
-Goal: identify deployments *targeted* for email (EM) from the tactic side.
-Candidates, in confidence order:
-1. `TACTIC_DECISN_VRB_INFO` pos 121 len 30 — hypothesis: slot holds deployed channel/surface markers (PCQ found `MS` there). Per-client truth if confirmed. Layout may vary by campaign.
-2. `TREATMT_MN` — never profiled; GTM naming may embed channel.
-3. `ADDNL_DECISN_DATA1` — "may contain channel info" per old IMT comment; undecoded.
-4. `channel_type_cd` / `cntct_mthd_typ` on MASTER — feedback-side declaration (only exists where sends happened).
+Validated in Andre's environment (window treatmt_strt_dt 2025-07-01→2026-07-01; ground truth = disposition_cd=1 sent universe, 303 distinct MNEs). Source pics `pics/PXL_20260715_1526*.jpg`.
 
-Ground-truth anchors: (a) tactic appears in VENDOR_FEEDBACK_MASTER at all = de-facto email deployed (can't see fully-suppressed email tactics though); (b) known-email vs known-banner campaigns as labeled examples — eyeball packed strings side by side to learn the layout before formalizing.
+**Production rule (184-MNE scope) — a tactic row is email-decisioned if EITHER fires; no MNE IN-list needed, the signal is the filter:**
+```sql
+   SUBSTR(t.tactic_decisn_vrb_info, 121, 30) LIKE '%EM%'      -- Priority 1: 55 MNEs
+OR UPPER(COALESCE(t.addnl_decisn_data1,'')) LIKE '%EM%'       -- Priority 2: 129 MNEs
+```
+
+**Edge cases OUT of production scope (10 MNEs):** slot 101 of VRB_INFO (HPO, OII, OTC, RMG, SLC, VRE, WWC), TACTIC_CELL_CD (HPE, ZFE), TREATMT_MN (REM).
+**Unresolvable (73 MNEs):** ~68 appear in vendor feedback with ZERO tactic rows in the window (K* block + others — likely a different decisioning system; no tactic-side denominator possible → use the EVENT-only view, 02 tracker); 5 in the tactic table with no EM signal in any field (ACF, BBP, BPU, VO3, ZXX).
+
+Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` (8-statement EDA S1–S8 that derived the rules), `tact/mme_channel_map_final.csv` (complete MNE→detection_field lookup, 267 rows), `email_funnel_by_cohort.sql` (env production funnel).
 `governance/channel_codes.md`: EM=Email; IM=online banner, MB=mobile banner, CC, DM.
-Validation pack: `03_tactic_join_channel_validation.sql` C1–C5 (C5 = 2×2 agreement matrix: in-MASTER × pos-121-EM). LIKE '%EM%' is discovery-only — production logic uses exact positions/codes once located.
-Also worth pursuing: the deployment/CIDM team's tactic configuration record (tactic→channel dictionary) — beats forensic decoding if obtainable.
+⚠ TODO: confirm none of the 17 tracked MNEs (esp. RCU, RCL, VAW, VCN) sit in the 68-MNE unresolvable block — check mme_channel_map_final.csv.
 
 ## 7. Engine rules & gotchas (Teradata-direct)
 
@@ -147,6 +150,7 @@ Also worth pursuing: the deployment/CIDM team's tactic configuration record (tac
 | `02_campaign_unsub_tracker.sql` (+.py, unmaintained) | League table: MNE × month × disposition counts from EVENT alone (no join) + NULL-treatment guard |
 | `03_tactic_join_channel_validation.sql` | MASTER↔tactic join coverage + grain (J1–J4); EM channel-marker discovery (C1–C5) |
 | `04_journey_query_patterns.sql` | disposition_cd usage patterns P1–P3 + sequentiality validation V1 |
+| `05_email_journey_by_mne_cohort.sql` | THE volume summary: decisioned-email denominator (two-field rule) + client-distinct funnel per MNE × cohort month; 30-day disposition window per deployment (editable assumption) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
 Python note: `.py` versions discontinued at Andre's request (2026-07-14); SQL is the deliverable. The `.py` pattern, if ever needed again: pre-initialized `EDW` connector, `EDW.cursor()` → fetchall → DataFrame.
