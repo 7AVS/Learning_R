@@ -43,9 +43,9 @@ So the reachable base for share-for-marketing purposes = explicit 5001 only. Any
 **Information usage:** 1014 Banking Share for Marketing · 1015 Share for Service across RBC · 1036 Share for Online Personalization (auto-Yes at OLB enrol; un-enrol → No; OLB table monthly vs CPC daily = sync drift) · 1057 DI Share for Marketing
 
 **2) Communication channels:**
-Banking: 1007 Direct Mail · 1008 Telephone · 1009 RBC Online · 1012 Mobile · 1013 Face-to-Face · 1048 ATM (2011+)
+Banking: 1007 Direct Mail · 1008 Telephone · 1009 RBC Online · **1012 ⚠ CONFLICT** · 1013 Face-to-Face · 1048 ATM (2011+)
 Direct Investing: 1037 DM · 1038 Telephone · 1039 Online · **1040 E-Mail** · 1041 F2F
-**⚠ NO "Banking — E-Mail" code in the catalog.** Which PREF_ID an email unsub flips is UNKNOWN — discover empirically (06 pack S4: unsub clients → CPC changes within 7 days). Do not hardcode a code until S4 answers.
+**⚠ 1012 conflict (unresolved):** 2007-vintage dictionary page (`pics/PXL_20260715_182439530.jpg`) says 1012 = Banking **Mobile** and no Banking-E-Mail code exists; a newer reference catalog (`pics/PXL_20260715_223246054*.jpg`, source TBD) says 1012 = Banking **E-Mail** and lists no Mobile. Likely a post-2007 relabel; confirm via current dictionary page for 1012 or team before naming the code on any slide. Either way, the empirical finding stands: email unsubs do NOT write CPC (D1 showed only 65 clients setting 1012=No within 7d of unsub, out of 649,885).
 
 **3) Product preferences:** 1006 Credit Cards · 1024 Investments Non-Reg · 1025 Loans & LOC · 1026 Mortgages · personal-only: 1004 Accounts & Packages, 1010 Creditor Ins, 1023 Investments Reg, 1044 Travel Health · business-only: 1027, 1028 (BLIP), 1030, 1031, 1034
 
