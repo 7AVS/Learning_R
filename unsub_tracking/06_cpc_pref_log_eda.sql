@@ -7,6 +7,11 @@
 --
 -- Output contract: each statement returns <=10 rows. Nothing here is an extract.
 -- ENGINE: Teradata-direct.
+--
+-- RESULT (2026-07-15 run): D2 = 649,885 unsub clients / 417 with CPC change in
+-- 7d (0.06%); D1 top cell 1016/5002 (210 clients) — scattered noise, no email
+-- code. FINDING: email unsubs do NOT write to CPC (vendor-level suppression
+-- only). Confirmatory: re-run D2 with INTERVAL '90' DAY — expect ~same rate.
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
