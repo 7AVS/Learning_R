@@ -13,6 +13,26 @@ Written 2026-07-14 for migration to a new environment. Repo folder: `unsub_track
 **FINDING (2026-07-15 run, D1/D2): email unsubs do NOT write to CPC.** 649,885 distinct unsub clients since 2024-01-01; only 417 (0.06%) had ANY CPC change within 7 days, scattered across unrelated codes with mixed values = background noise. Conclusion: disposition_cd=4 is a VENDOR-level one-click unsub — it never touches bank consent; unsubbed clients remain CPC-contactable. Consequences: (1) "CPC validates unsubs" is dead as designed — the double-count objection is answered instead by methodology: DISTINCT clients, FIRST unsub (649,885 is deduplicated by construction); (2) population lost = TWO separate metrics: email-channel lost (vendor unsubs, campaign-attributable via our chain) and bank-consent lost (CPC opt-out trend by PREF_ID, NOT campaign-attributable via unsubs); (3) CONFIRMED with 90-day window: 2,161 of 649,885 (0.33%) — still coincidence-level; no slow batch pipe. Tested-and-refuted hypothesis — share with team before further builds.
 **Switch independence (09 run, 2026-07-15):** (a) writes arrive in bundles — since 2024 ex-HSBC: 1.76M single-switch saves / 1.48M partial / 1.85M full form saves (6+ switches, one microsecond). (b) Dominant bundle = ONBOARDING BLANK-STAMPING: all top-20 same-timestamp pairs are 5003+5003 across product prefs + 1014 (~1.66M clients) — the system instantiates the whole switchboard as "never answered" at relationship open; clients don't choose at onboarding. No 5002+5002 pairs in top 20 → no mass opt-out cascade. (c) Contradiction census: of 50,738 entity-opted-out (1002=No), 3,996 hold explicit YES underneath (storage fully independent; hierarchy lives in suppression engines only) while 47,974 also carry explicit NOs (the opt-out FORM soft-cascades, the system doesn't enforce); 85,726 clients have explicit switch values with 1002 never set. Cross-validation: census 5002 rows sum = 50,738 = stock query exactly. RULE: read each switch independently; apply precedence only at evaluation; never infer one switch from another.
 
+### MASTER SWITCH MAP — what each switch actually controls (the classification that matters)
+
+Three functional classes. **For unsub/reachability work, only the CHANNEL-CLOSERS matter.**
+
+| Class | Switches | Blank default | Closes a contact channel? |
+|---|---|---|---|
+| **CHANNEL-CLOSERS (Banking)** | **1002** entity DNS (master — closes ALL) · 1007 mail · 1008 phone · 1009 online · **1012 E-MAIL** (evidence-resolved, see below) · 1013 F2F · 1048 ATM · **vendor unsub (outside CPC — closes email at the ESP)** | allowed (open) | **YES** |
+| **SHARING-ONLY** (never close contact by Banking) | 1014 share-for-marketing · 1015 share-for-service · 1036 personalization · 1057 DI SfM · 1016 credit bureau | **1014/1015: NO**; others allowed | NO — data usage only |
+| **TOPIC/CONTENT** (limit what, not whether) | products 1004/1006/1010/1023/1024/1025/1026/1044 (+ business codes) · services 1020-1022/1042-1043 · newsletters 1045/1046/1047 (email *content* subscriptions, not the channel) | allowed | NO (topic only) |
+
+**The email-reachability set = vendor unsub + 1012 + 1002.** Everything else is noise for channel questions.
+
+**1012 = Banking E-Mail — RESOLVED BY EVIDENCE (2026-07-15, W4):** Exact Target (the email ESP, APP_SYS_CD 7020) writes `1012=5002` as its dominant output — 11,702 rows, 2014→2026-06, still active. An email platform doesn't write a Mobile switch. Newer catalog agrees; the 2007 dictionary page (1012=Mobile) is stale.
+
+**ESP pipe — final form of the finding:** the Exact Target→CPC pipe EXISTS but is a trickle: ~80 writes/month vs ~35K unsubs/month (~0.2%). It carries deeper opt-outs (preference-center actions: 1012, newsletters 1046/1045, even 54× entity 1002), NOT one-click unsubs. Phrase as "the pipe exists but doesn't carry unsubs," not "no pipe."
+
+**Who writes what (W1-W3, 2026-07-15):** machines instantiate, humans flip. All full-form (6+) bundles are machine-written (7999 default-system; 1.6M of them internally mixed-code). Human channels write single switches (branch 7001: 427K singles vs 4K bundles). First-touch: 7999 (5.0M clients) + batch 7006 (1.4M) = administrative entry at onboarding; OLB (546K) top self-serve entry. Log universe ≈ **7.7M distinct clients** (supersedes earlier ~3.75M estimate from misread digits). Undocumented system codes seen at volume: **7033 (1.6M rows), 7053, 7028** — dictionary stale.
+
+Full cube extract (switch × position × system × save-shape): `11_cpc_master_cube.sql`.
+
 **CPC interpretation (critical):** rows are change events in EITHER direction (5001 Yes / 5002 No / 5003 blank; some 5001s are process-driven, e.g. 1036 auto-Yes at OLB enrol). Presence in table ≠ opt-out. Opted-out population = clients whose LATEST row per (client, pref) is 5002; absence = blank default (YES except 1014/1015 = NO). Stock+flow queries: `07_cpc_optout_stock_trend.sql`.
 
 These two are guaranteed Power Pack slides; core vintages come after.

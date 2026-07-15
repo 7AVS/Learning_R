@@ -46,7 +46,7 @@ So the reachable base for share-for-marketing purposes = explicit 5001 only. Any
 **2) Communication channels:**
 Banking: 1007 Direct Mail · 1008 Telephone · 1009 RBC Online · **1012 ⚠ CONFLICT** · 1013 Face-to-Face · 1048 ATM (2011+)
 Direct Investing: 1037 DM · 1038 Telephone · 1039 Online · **1040 E-Mail** · 1041 F2F
-**⚠ 1012 conflict (unresolved):** 2007-vintage dictionary page (`pics/PXL_20260715_182439530.jpg`) says 1012 = Banking **Mobile** and no Banking-E-Mail code exists; a newer reference catalog (`pics/PXL_20260715_223246054*.jpg`, source TBD) says 1012 = Banking **E-Mail** and lists no Mobile. Likely a post-2007 relabel; confirm via current dictionary page for 1012 or team before naming the code on any slide. Either way, the empirical finding stands: email unsubs do NOT write CPC (D1 showed only 65 clients setting 1012=No within 7d of unsub, out of 649,885).
+**1012 = Banking E-Mail — RESOLVED BY EVIDENCE (2026-07-15):** the 2007 page said Mobile; the newer catalog said E-Mail; W4 settled it — Exact Target (email ESP, APP_SYS_CD 7020) writes `1012=5002` as its dominant output (11,702 rows, 2014→2026-06, active). An email platform doesn't write a Mobile switch. The 2007 dictionary page is stale. (ESP pipe overall: a ~80/month trickle of deep opt-outs vs ~35K/month unsubs — carries preference-center actions, not one-click unsubs.)
 
 **3) Product preferences:** 1006 Credit Cards · 1024 Investments Non-Reg · 1025 Loans & LOC · 1026 Mortgages · personal-only: 1004 Accounts & Packages, 1010 Creditor Ins, 1023 Investments Reg, 1044 Travel Health · business-only: 1027, 1028 (BLIP), 1030, 1031, 1034
 
