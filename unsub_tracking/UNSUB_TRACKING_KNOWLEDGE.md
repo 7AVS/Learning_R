@@ -20,7 +20,7 @@ Three functional classes. **For unsub/reachability work, only the CHANNEL-CLOSER
 | Class | Switches | Blank default | Closes a contact channel? |
 |---|---|---|---|
 | **CHANNEL-CLOSERS (Banking)** | **1002** entity DNS (master — closes ALL) · 1007 mail · 1008 phone · 1009 online · **1012 E-MAIL** (evidence-resolved, see below) · 1013 F2F · 1048 ATM · **vendor unsub (outside CPC — closes email at the ESP)** | allowed (open) | **YES** |
-| **SHARING-ONLY** (never close contact by Banking) | 1014 share-for-marketing · 1015 share-for-service · 1036 personalization · 1057 DI SfM · 1016 credit bureau | **1014/1015: NO**; others allowed | NO — data usage only |
+| **SHARING-ONLY per dictionary — ENFORCEMENT UNVERIFIED** | 1014 share-for-marketing · 1015 share-for-service · 1036 personalization · 1057 DI SfM · 1016 credit bureau | **1014/1015: NO**; others allowed | Dictionary says NO (data usage only) — but team lore says 1014=N = "out of all marketing". Which switches actually stop email = `12_switch_enforcement_test.sql` (state-before-window × received-email cross-tab, 1007 as negative control). Do not present the sharing-only classification as fact until 12 runs. |
 | **TOPIC/CONTENT** (limit what, not whether) | products 1004/1006/1010/1023/1024/1025/1026/1044 (+ business codes) · services 1020-1022/1042-1043 · newsletters 1045/1046/1047 (email *content* subscriptions, not the channel) | allowed | NO (topic only) |
 
 **The email-reachability set = vendor unsub + 1012 + 1002.** Everything else is noise for channel questions.
@@ -32,6 +32,15 @@ Three functional classes. **For unsub/reachability work, only the CHANNEL-CLOSER
 **Who writes what (W1-W3, 2026-07-15):** machines instantiate, humans flip. All full-form (6+) bundles are machine-written (7999 default-system; 1.6M of them internally mixed-code). Human channels write single switches (branch 7001: 427K singles vs 4K bundles). First-touch: 7999 (5.0M clients) + batch 7006 (1.4M) = administrative entry at onboarding; OLB (546K) top self-serve entry. Log universe ≈ **7.7M distinct clients** (supersedes earlier ~3.75M estimate from misread digits). Undocumented system codes seen at volume: **7033 (1.6M rows), 7053, 7028** — dictionary stale.
 
 Full cube extract (switch × position × system × save-shape): `11_cpc_master_cube.sql`.
+
+**Cube pivot findings (Andre's pivot, 2026-07-15 late):**
+- **Two onboarding flavors:** mass blank-stamp = 5003 × 7999 (1.4–1.66M clients per switch) AND an explicit-Yes capture cohort = 5001 × 7033 (~229,265 clients, written to 1002 + all channel doors — except 1012).
+- **7053 = a single-switch Yes engine** (1012: 14,458 · 1015: 13,210 · 1014: 8,294 · smaller others) — consent-capture flavor, possibly CASL express-consent flows. Earlier read of the 14,458 as an opt-out was WRONG — it is 5001 (Yes).
+- **Single-switch email opt-outs 2024+:** 1,386 via 7020 Exact Target (cross-checks W4 ~80/mo) + ~93 branch. Tiny either way.
+- **1012 is excluded from every mass-stamp block** (both onboarding flavors skip it) — only consent flows (7033/7053 Yes) and the ESP (7020 No) ever write it. Third independent evidence 1012 = email, and it means 1012's stored values are all signal, no administrative noise.
+- **7033 and 7053 are undocumented system codes** (dictionary stale). PARKED: both write consents (Yes), not channel closures — ignorable for reachability work; relevant only for "who explicitly consented" questions.
+- **Branch full-form opt-outs** (the soft cascade's mechanism): ~3.3–3.5K clients per switch at 5002 × 7001 in the 6+ block.
+- Excel practice: the long extract IS the cube; pivots are 2D slices — use slicers (bundle/system/consent) to rotate, one small pivot per question, not nested mega-grids.
 
 **CPC interpretation (critical):** rows are change events in EITHER direction (5001 Yes / 5002 No / 5003 blank; some 5001s are process-driven, e.g. 1036 auto-Yes at OLB enrol). Presence in table ≠ opt-out. Opted-out population = clients whose LATEST row per (client, pref) is 5002; absence = blank default (YES except 1014/1015 = NO). Stock+flow queries: `07_cpc_optout_stock_trend.sql`.
 
@@ -183,7 +192,14 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `03_tactic_join_channel_validation.sql` | MASTER↔tactic join coverage + grain (J1–J4); EM channel-marker discovery (C1–C5) |
 | `04_journey_query_patterns.sql` | disposition_cd usage patterns P1–P3 + sequentiality validation V1 |
 | `05_email_journey_by_mne_cohort.sql` | THE volume summary: decisioned-email denominator (two-field rule) + client-distinct funnel per MNE × cohort month; 30-day disposition window per deployment (editable assumption) |
-| `06_cpc_pref_log_eda.sql` | CPC_RB_PREF_LOG schema discovery (S0 only — extend after real columns reviewed) |
+| `06_cpc_pref_log_eda.sql` | CPC decision queries: D1 which code unsubs flip, D2 unsub↔CPC linkage rate (RESULT: no pipe — 0.06%/0.33%) |
+| `07_cpc_optout_stock_trend.sql` | CPC opt-out stock (latest-state) + monthly flow + timeline cube extract (Q4) |
+| `08_reachability_overlap.sql` | Cross-tab unsub × 1002 × 1012 × 1014 flags — overlap/union of exit mechanisms |
+| `09_cpc_switch_independence.sql` | Bundle sizes, same-timestamp pair matrix, contradiction census |
+| `10_cpc_writes_by_system.sql` | APP_SYS_CD overlay: volume/bundle-shape/first-touch by system + Exact Target profile |
+| `11_cpc_master_cube.sql` | THE cube extract: switch × position × system × save-shape (in-env pivot base) |
+| `12_switch_enforcement_test.sql` | Which switch ACTUALLY stops email — state-before-window × received-email, 1007 negative control (settles 1014 dictionary-vs-lore) |
+| `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
 Python note: `.py` versions discontinued at Andre's request (2026-07-14); SQL is the deliverable. The `.py` pattern, if ever needed again: pre-initialized `EDW` connector, `EDW.cursor()` → fetchall → DataFrame.
