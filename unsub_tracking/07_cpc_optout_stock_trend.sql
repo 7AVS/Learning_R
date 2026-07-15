@@ -63,15 +63,16 @@ ORDER BY 1;
 -- RESULTS (2026-07-15 run): Q1 stock — 1002: 50,738 out / 1,179,248 yes /
 -- 2,912,375 blank; 1014: 82,911 out / 555,115 yes / 3,576,392 blank.
 -- Q2 flow — 1002 ~150-350/mo declining; 1014 ~600-800/mo flat; 2024-03 spike
--- ~20.5K on BOTH codes = batch-write artifact, verify via Q3 before publishing.
+-- ~20.5K on BOTH codes = HSBC Canada acquisition migration (confirmed by Andre,
+-- 2026-07-15) — one-time consent onboarding load; EXCLUDE from organic trend.
 -- Contrast: email unsubs ~35K clients/MONTH (649,885 / 18.5mo) vs ~200/mo
 -- entity opt-outs — the reachability loss lives at the vendor level, ~150x.
 
 -- ---------------------------------------------------------------------------
--- Q3: was the 2024-03 spike a batch write? (<=10 rows)
+-- Q3 (OPTIONAL): APP_SYS_CD fingerprint of the 2024-03 HSBC migration load
 -- ---------------------------------------------------------------------------
--- Decision: if one APP_SYS_CD owns the March 2024 opt-outs, it's mechanical
--- (migration/backfill) — annotate/exclude it from any trend read.
+-- Cause already known (HSBC acquisition migration). Run only if a slide needs
+-- the system-code evidence; expect one APP_SYS_CD to own the volume.
 -- ---------------------------------------------------------------------------
 
 SELECT
