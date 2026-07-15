@@ -2,7 +2,8 @@
 
 Source of truth for client contact consent — all campaigns must abide by it.
 Transcribed from S0 run + EDW data-dictionary pages, 2026-07-15.
-Source pics: `pics/PXL_20260715_1823*/1824*.jpg`. Companion monthly snapshot table: `CPC_RB_PREF_MTHLY`.
+Source pics: `pics/PXL_20260715_1823*/1824*.jpg`, `pics/PXL_20260715_2255*.jpg` (APP_SYS_CD).
+Companion tables: **`CPC_RB_PREF` = CURRENT-STATE snapshot** (stock queries can use it directly; also cross-validates latest-state reconstruction) and `CPC_RB_PREF_MTHLY` (monthly).
 
 ## Size / grain
 
@@ -20,7 +21,7 @@ Source pics: `pics/PXL_20260715_1823*/1824*.jpg`. Companion monthly snapshot tab
 | CLNT_CONSENT_TYP | integer; 5001=Yes, 5002=No, 5003=blank/never answered, 5004=Yes CB-pull w/o SIN (1016 only, added 2018) |
 | SLCT_RESTR_TYP | solicitation restriction type, smallint 1-9 (1=General, 2=Loans/Mtg, 3=Credit Card, 4=Dep-Txn, 5=Dep-Inv, 6=Reg Plans, 7=Direct Mail, 8=Telemarketing, 9=Online Banking). ⚠ dictionary page ambiguous SLCT_ vs SLOT_ spelling; S0a column alignment also suspect — re-verify before using |
 | CHG_TMSTMP | change timestamp (timestamp) |
-| APP_SYS_CD | writing system (useful: identifies email-vendor-driven changes) |
+| APP_SYS_CD | writing system. Dictionary decode (pics/PXL_20260715_2255*.jpg): 7001 Sales Platform/branch staff · 7002 DI staff · 7003 Royal Direct contact centre · 7004 Online Banking · 7005 Service Platform · 7006 RBC Banking internal/batch (STAR UI, purge) · 7009 Bridgetrack/Sapient · 7015 SAP (or RCT/LINUX per consents list) · 7016 RBC.COM · 7017/7024/7025/7026 telemarketing vendors · **7020 Exact Target (email ESP — registered writer! yet unsubs produce ~no writes; what 7020 actually writes = open, one query)** · 7021 TSYS · 99999 batch SRF consolidation · 7999 default. Assisted=7001/7003, self-serve=7004/7016, machine=7006/99999 |
 | EMP_ID | mostly masked in samples |
 | CLNT_TYP_CD | 1 = personal (presumed) |
 | SYS_FUNC_CD | 6xxx codes, undecoded |
