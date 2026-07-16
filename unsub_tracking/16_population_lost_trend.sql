@@ -50,26 +50,22 @@ first_unsub AS (
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
 unsub_booked AS (
-    -- book each first unsub to the deployment whose TREATMENT WINDOW contains
-    -- it: TREATMT_STRT_DT <= unsub <= TREATMT_END_DT for that client x tactic
-    -- (exact-key join; the unsub row already names the treatment, this join
-    -- only picks the deployment instance/month). MAX() disambiguates if two
-    -- windows of the same tactic overlap. Unsubs outside every window get
+    -- TACTIC_ID is unique per deployment (MNE + julian date; Andre 2026-07-16)
+    -- and a client never duplicates on one TACTIC_ID -> the exact-key join IS
+    -- the deployment. No time window needed anywhere. Date floor kept only for
+    -- scan pruning; an unsub whose deployment predates the floor gets
     -- trig_strt_dt NULL -> calendar-month fallback downstream.
     SELECT
         u.CLNT_NO,
         u.TREATMENT_ID,
         u.disposition_dt_tm,
-        MAX(t.TREATMT_STRT_DT) AS trig_strt_dt
+        t.TREATMT_STRT_DT AS trig_strt_dt
     FROM first_unsub u
     LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
         ON  t.TACTIC_ID = u.TREATMENT_ID
         AND t.CLNT_NO   = u.CLNT_NO
         AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
-        AND t.TREATMT_STRT_DT <= CAST(u.disposition_dt_tm AS DATE)
-        AND t.TREATMT_END_DT  >= CAST(u.disposition_dt_tm AS DATE)
     WHERE u.rn = 1
-    GROUP BY 1, 2, 3
 ),
 unsubs AS (
     SELECT

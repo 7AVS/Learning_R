@@ -101,6 +101,10 @@ TACTIC_EVNT_IP_AR_HIST (TREATMT_STRT_DT, arm, MNE, packed info)  ← send timing
 
 **Attribution is directly recorded:** an unsub EVENT row carries the `treatment_id` of the send whose link was clicked — no last-touch inference needed. (Verify % non-null via 01 pack Q4a.)
 
+**TACTIC_ID is unique per deployment (Andre, 2026-07-16):** the ID encodes MNE + julian date, so it is time-bound — each wave mints a new TACTIC_ID — and a client never duplicates on one TACTIC_ID. Consequences: `(TACTIC_ID, CLNT_NO)` is unique; **NO time-window conditions are needed in any join** (the exact key pins the deployment instance); all window logic was removed from 05/16/17 same day. Date floors in WHERE clauses are scan pruning only.
+
+**Minimal field sets (all this pack needs):** MASTER → `consumer_id_hashed`, `TREATMENT_ID`, `CLNT_NO` (3 fields: composite key in, client number out). EVENT → `consumer_id_hashed`, `TREATMENT_ID`, `disposition_cd`, `disposition_dt_tm` (4 fields: key, what happened, when).
+
 **Dead ends — columns that DO NOT EXIST (cost us a broken first run):**
 - `SEND_DT` (MASTER) — send timing only via the decisioning join above
 - `FEEDBACK_ID` (both) — auh_explore.sql's join was never valid

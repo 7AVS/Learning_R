@@ -12,19 +12,18 @@
 --                            (tactic_id, clnt_no) — handed to the vendor at some
 --                            point. MASTER has NO date column, so this is
 --                            client x tactic EVER, not per-wave.
---   clients_sent_in_window = of those, with a SENT event (disposition_cd=1)
---                            timestamped inside THIS deployment's treatment
---                            window [TREATMT_STRT_DT, TREATMT_END_DT] — the
---                            per-deployment verified send.
+--   clients_sent           = of those, with a SENT event (disposition_cd=1) for
+--                            this TACTIC_ID. No time window: TACTIC_ID is unique
+--                            per deployment (MNE + julian date; Andre 2026-07-16),
+--                            so the key alone pins the wave.
 --
 -- How to read the gaps:
---   decisioned - in_master       = never reached the vendor: suppression,
---                                  channel reassignment, or a different ESP.
---                                  An MNE at 0 in_master across ALL months =
---                                  not in this vendor universe at all.
---   in_master - sent_in_window   = mastered but no sent event inside this
---                                  window: suppressed at send time, sent in a
---                                  different wave, or sent-event logging gap.
+--   decisioned - in_master = never reached the vendor: suppression, channel
+--                            reassignment, or a different ESP. An MNE at 0
+--                            in_master across ALL months = not in this vendor
+--                            universe at all.
+--   in_master - sent       = mastered but never sent: suppressed at send time
+--                            or sent-event logging gap.
 -- A normally-covered MNE with one month at 0 sent = wave-level gap -> investigate.
 --
 -- Counts only — divide in Excel. ENGINE: Teradata-direct.
@@ -50,20 +49,23 @@ in_master AS (
     FROM DTZV01.VENDOR_FEEDBACK_MASTER m
 ),
 sent_events AS (
-    SELECT DISTINCT e.TREATMENT_ID, e.consumer_id_hashed, e.disposition_dt_tm
+    -- date floor is scan pruning only (2025+ deployments send in 2025+)
+    SELECT DISTINCT e.TREATMENT_ID, e.consumer_id_hashed
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     WHERE e.disposition_cd = 1
       AND e.disposition_dt_tm >= DATE '2025-01-01'
       AND SUBSTR(e.TREATMENT_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
 ),
 flags AS (
-    -- one row per decisioned deployment row, with master/sent flags
+    -- one row per decisioned deployment row, with master/sent flags.
+    -- Exact keys only: TACTIC_ID is unique per deployment, so no time
+    -- conditions are needed to pin the wave.
     SELECT
         d.mne,
         d.cohort_yyyymm,
         d.CLNT_NO,
         MAX(CASE WHEN im.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS f_in_master,
-        MAX(CASE WHEN se.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent_in_window
+        MAX(CASE WHEN se.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent
     FROM em_decis d
     LEFT JOIN in_master im
         ON  im.TREATMENT_ID = d.TACTIC_ID
@@ -71,16 +73,14 @@ flags AS (
     LEFT JOIN sent_events se
         ON  se.TREATMENT_ID       = d.TACTIC_ID
         AND se.consumer_id_hashed = im.consumer_id_hashed
-        AND se.disposition_dt_tm >= CAST(d.TREATMT_STRT_DT AS TIMESTAMP(6))
-        AND se.disposition_dt_tm <  CAST(d.TREATMT_END_DT + INTERVAL '1' DAY AS TIMESTAMP(6))
     GROUP BY 1, 2, 3
 )
 SELECT
     mne,
     cohort_yyyymm,
-    CAST(COUNT(*) AS BIGINT)              AS clients_decisioned_em,
-    CAST(SUM(f_in_master) AS BIGINT)      AS clients_in_master,
-    CAST(SUM(f_sent_in_window) AS BIGINT) AS clients_sent_in_window
+    CAST(COUNT(*) AS BIGINT)         AS clients_decisioned_em,
+    CAST(SUM(f_in_master) AS BIGINT) AS clients_in_master,
+    CAST(SUM(f_sent) AS BIGINT)      AS clients_sent
 FROM flags
 GROUP BY 1, 2
 ORDER BY 1, 2;
