@@ -50,9 +50,12 @@ first_unsub AS (
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
 unsub_booked AS (
-    -- book each first unsub to its triggering deployment: the latest
-    -- TREATMT_STRT_DT <= unsub time for that client x tactic (exact-key join,
-    -- no EM filter needed - the unsub row already names the treatment)
+    -- book each first unsub to the deployment whose TREATMENT WINDOW contains
+    -- it: TREATMT_STRT_DT <= unsub <= TREATMT_END_DT for that client x tactic
+    -- (exact-key join; the unsub row already names the treatment, this join
+    -- only picks the deployment instance/month). MAX() disambiguates if two
+    -- windows of the same tactic overlap. Unsubs outside every window get
+    -- trig_strt_dt NULL -> calendar-month fallback downstream.
     SELECT
         u.CLNT_NO,
         u.TREATMENT_ID,
@@ -64,6 +67,7 @@ unsub_booked AS (
         AND t.CLNT_NO   = u.CLNT_NO
         AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
         AND t.TREATMT_STRT_DT <= CAST(u.disposition_dt_tm AS DATE)
+        AND t.TREATMT_END_DT  >= CAST(u.disposition_dt_tm AS DATE)
     WHERE u.rn = 1
     GROUP BY 1, 2, 3
 ),
