@@ -1,23 +1,36 @@
 -- =============================================================================
--- Population lost trend — THE plain read for Power Pack outcome #2
+-- Population lost trend — month x MNE, ALL campaigns, with emailed base
 -- =============================================================================
--- S0 prints what the output means (keep it in the screenshot).
--- S1 = one row per month, one column per tracked MNE. ~31 rows.
+-- S0 prints what the output means (keep it with the data).
+-- S1 = one row per (MNE, month), long format — pivot in Excel as needed.
+--      Row count = #MNEs x ~31 months; this is an extract, not a screenshot.
 -- ENGINE: Teradata-direct.
 -- =============================================================================
 
--- S0: readme — what S1 is and its constraints (screenshot together with S1)
+-- S0: readme — what S1 is and its constraints
 SELECT 1 AS ord, CAST('QUESTION' AS VARCHAR(20)) AS item,
-       CAST('How many clients do we lose email access to each month, and which tracked campaign triggered it?' AS VARCHAR(200)) AS detail
-UNION ALL SELECT 2, 'POPULATION',  'First-EVER email unsub per client since 2024-01-01 (deduped: 1 row per client, earliest unsub). Vendor feedback disposition_cd=4.'
-UNION ALL SELECT 3, 'ATTRIBUTION', 'Campaign = the send the client unsubscribed FROM (recorded on the unsub row, not inferred). MNE = SUBSTR(TREATMENT_ID,8,3).'
-UNION ALL SELECT 4, 'TRACKED',     'Cards: PCQ PCL PCD AUH CLI MVP CRV CTU O2P | Payments: VDT VUI VUT VDA VAW VCN | Pers.Loans: RCU RCL. other_mne = all remaining NBA campaigns.'
-UNION ALL SELECT 5, 'READ AS',     'clients_lost_all = total RBC email first-unsubs that month. tracked_total = sum of the 17 MNE columns. MNE col = 0 means no data (VAW/VCN presence unconfirmed).'
+       CAST('Per campaign per month: how many clients did we email, and how many clients did we lose (first-ever unsub) to that campaign?' AS VARCHAR(220)) AS detail
+UNION ALL SELECT 2, 'GRAIN',       'One row per (MNE, month), ALL MNEs in the vendor feedback data since 2024-01-01. MNE = SUBSTR(TREATMENT_ID,8,3).'
+UNION ALL SELECT 3, 'EM_CLIENTS',  'em_clients_sent = distinct consumers with a SENT event (disposition_cd=1) for that MNE that month. SENT, not decisioned - tactic-side EM channel codes not locked yet.'
+UNION ALL SELECT 4, 'UNSUBS',      'clients_first_unsub = clients whose FIRST-EVER unsub (disposition_cd=4, deduped 1/client) was on a send of that MNE that month. Recorded attribution, not inferred.'
+UNION ALL SELECT 5, 'TRACKED',     'tracked_mne = Y for: Cards PCQ PCL PCD AUH CLI MVP CRV CTU O2P | Payments VDT VUI VUT VDA VAW VCN | Pers.Loans RCU RCL.'
+UNION ALL SELECT 6, 'CAVEAT',      'Grain differs by column: sends counted by consumer_id_hashed (no join); unsubs counted by CLNT_NO (via MASTER join). Counts only - compute rates downstream.'
 ORDER BY ord;
 
 
--- S1: monthly trend, per-MNE columns
-WITH first_unsub AS (
+-- S1: month x MNE — emailed base + first-unsubs
+WITH sends AS (
+    SELECT
+        SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
+        EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
+          + EXTRACT(MONTH FROM e.disposition_dt_tm) AS yyyymm,
+        COUNT(DISTINCT e.consumer_id_hashed) AS em_clients_sent
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+    GROUP BY 1, 2
+),
+first_unsub AS (
     SELECT
         m.CLNT_NO,
         e.TREATMENT_ID,
@@ -31,38 +44,27 @@ WITH first_unsub AS (
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
-dedup AS (
-    SELECT SUBSTR(TREATMENT_ID, 8, 3) AS mne, disposition_dt_tm
+unsubs AS (
+    SELECT
+        SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+        EXTRACT(YEAR FROM disposition_dt_tm) * 100
+          + EXTRACT(MONTH FROM disposition_dt_tm) AS yyyymm,
+        CAST(COUNT(*) AS BIGINT) AS clients_first_unsub
     FROM first_unsub
     WHERE rn = 1
+    GROUP BY 1, 2
 )
 SELECT
-    EXTRACT(YEAR FROM disposition_dt_tm) * 100
-      + EXTRACT(MONTH FROM disposition_dt_tm)   AS unsub_month_yyyymm,
-    CAST(COUNT(*) AS BIGINT)                    AS clients_lost_all,
-    CAST(SUM(CASE WHEN mne IN ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P',
-                               'VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')
-                  THEN 1 ELSE 0 END) AS BIGINT) AS tracked_total,
-    CAST(SUM(CASE WHEN mne = 'PCQ' THEN 1 ELSE 0 END) AS BIGINT) AS pcq,
-    CAST(SUM(CASE WHEN mne = 'PCL' THEN 1 ELSE 0 END) AS BIGINT) AS pcl,
-    CAST(SUM(CASE WHEN mne = 'PCD' THEN 1 ELSE 0 END) AS BIGINT) AS pcd,
-    CAST(SUM(CASE WHEN mne = 'AUH' THEN 1 ELSE 0 END) AS BIGINT) AS auh,
-    CAST(SUM(CASE WHEN mne = 'CLI' THEN 1 ELSE 0 END) AS BIGINT) AS cli,
-    CAST(SUM(CASE WHEN mne = 'MVP' THEN 1 ELSE 0 END) AS BIGINT) AS mvp,
-    CAST(SUM(CASE WHEN mne = 'CRV' THEN 1 ELSE 0 END) AS BIGINT) AS crv,
-    CAST(SUM(CASE WHEN mne = 'CTU' THEN 1 ELSE 0 END) AS BIGINT) AS ctu,
-    CAST(SUM(CASE WHEN mne = 'O2P' THEN 1 ELSE 0 END) AS BIGINT) AS o2p,
-    CAST(SUM(CASE WHEN mne = 'VDT' THEN 1 ELSE 0 END) AS BIGINT) AS vdt,
-    CAST(SUM(CASE WHEN mne = 'VUI' THEN 1 ELSE 0 END) AS BIGINT) AS vui,
-    CAST(SUM(CASE WHEN mne = 'VUT' THEN 1 ELSE 0 END) AS BIGINT) AS vut,
-    CAST(SUM(CASE WHEN mne = 'VDA' THEN 1 ELSE 0 END) AS BIGINT) AS vda,
-    CAST(SUM(CASE WHEN mne = 'VAW' THEN 1 ELSE 0 END) AS BIGINT) AS vaw,
-    CAST(SUM(CASE WHEN mne = 'VCN' THEN 1 ELSE 0 END) AS BIGINT) AS vcn,
-    CAST(SUM(CASE WHEN mne = 'RCU' THEN 1 ELSE 0 END) AS BIGINT) AS rcu,
-    CAST(SUM(CASE WHEN mne = 'RCL' THEN 1 ELSE 0 END) AS BIGINT) AS rcl,
-    CAST(SUM(CASE WHEN mne NOT IN ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P',
-                                   'VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')
-                  THEN 1 ELSE 0 END) AS BIGINT) AS other_mne
-FROM dedup
-GROUP BY 1
-ORDER BY 1;
+    COALESCE(s.mne, u.mne)          AS mne,
+    COALESCE(s.yyyymm, u.yyyymm)    AS yyyymm,
+    CASE WHEN COALESCE(s.mne, u.mne) IN
+         ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P',
+          'VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')
+         THEN 'Y' ELSE 'N' END      AS tracked_mne,
+    CAST(COALESCE(s.em_clients_sent, 0) AS BIGINT)     AS em_clients_sent,
+    CAST(COALESCE(u.clients_first_unsub, 0) AS BIGINT) AS clients_first_unsub
+FROM sends s
+FULL OUTER JOIN unsubs u
+    ON  s.mne    = u.mne
+    AND s.yyyymm = u.yyyymm
+ORDER BY mne, yyyymm;
