@@ -4,7 +4,7 @@
 -- Question: of clients DECISIONED to email, how many actually appear in the
 -- vendor feedback chain — and where do the losses happen?
 -- SCOPE: Cards personal MNEs ONLY — CRV, PCL, PCQ, PCD, AUH (Andre 2026-07-16).
--- One row per (MNE, cohort month of TREATMT_STRT_DT) since 2024-01-01, ~155 rows.
+-- One row per (MNE, cohort month of TREATMT_STRT_DT) since 2025-01-01, ~95 rows.
 --
 --   clients_decisioned_em  = distinct clients decisioned to email that month
 --                            (two-field rule, tactic table)
@@ -40,7 +40,7 @@ WITH em_decis AS (
         EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
           + EXTRACT(MONTH FROM t.TREATMT_STRT_DT) AS cohort_yyyymm
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
-    WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
+    WHERE t.TREATMT_STRT_DT >= DATE '2025-01-01'
       AND SUBSTR(t.TACTIC_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
       AND (   SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
@@ -53,7 +53,7 @@ sent_events AS (
     SELECT DISTINCT e.TREATMENT_ID, e.consumer_id_hashed, e.disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
+      AND e.disposition_dt_tm >= DATE '2025-01-01'
       AND SUBSTR(e.TREATMENT_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
 ),
 flags AS (
