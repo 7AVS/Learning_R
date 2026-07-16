@@ -1,6 +1,6 @@
 -- pcq_vintage_monthly.sql
 -- Campaign : PCQ Modal Sales (MS)
--- Source   : campaigns/PCQ/modal_sales/pcq_ms_vintage.sql
+-- Source   : campaigns/sales_modal/pcq/pcq_ms_vintage.sql
 -- Engine   : Teradata-direct (SYS_CALENDAR spine, volatile tables for TDWM cross-join clearance)
 -- Success  : DL_MR_PROD.cards_tpa_pcq_decision_resp — app_approved=1 AND asc_on_app_source='Period-ASC'
 --            (Period-ASC gates NUMERATOR only; denominator = all targeted clients in the arm)

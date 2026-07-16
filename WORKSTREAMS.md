@@ -1,8 +1,25 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-05-29
+Last updated: 2026-07-16
 
 ## Priority Stack
+
+### 0. Sales Modal Consolidation (2026-07-16)
+- **What:** Consolidated PCL/PCQ/PCD sales-modal work, previously scattered across
+  `campaigns/PCL_PLI/sales_modal/` and `campaigns/PCQ/modal_sales/`, into `campaigns/sales_modal/`
+  (`pcl/`, `pcq/`, `pcd/`, `shared/`). Old folders removed; see `campaigns/sales_modal/README.md` for
+  the full file-by-file production/superseded breakdown.
+- **Built:** Two shared parameterized templates in `shared/` — `ms_population_success_template.sql`
+  (Teradata-direct, generalizes PCQ's tactic-event + curated two-hop MS pattern for PCQ/PCL) and
+  `ga4_modal_exposure_template.sql` (Trino, generalizes PCL's GA4 exposure/dismiss classification).
+  Also added `pcd/pcd_modal_creative_split.sql` — splits PCD's SalesModal creative out of the pooled
+  async-banner tracker read (does not modify the original tracker).
+- **Flagged, pending Andre sign-off:** two PROPOSED CANON rules on PCQ MS measurement (Period-ASC
+  numerator gate; `ms_targeted` as the population split, not `test_group_latest`) — two existing PCQ
+  files don't apply one or both. Full detail in the shared template header + README.
+- **Known-stale:** `pcl/build_modal_exposure_summary.py` + `.xlsx` hardcode wrong-id ~0.7% reach
+  numbers; real reach is ~76% per `p9_vcl_full_measurement.sql`. Needs regeneration.
+- **Next:** Andre sign-off on the two proposed canon rules; regenerate the exposure summary xlsx.
 
 ### 1. PCD Async Banner Tracking (HIGH)
 - **Ask:** Daily stats for LOB — available leads, banner views, clicks, CTR

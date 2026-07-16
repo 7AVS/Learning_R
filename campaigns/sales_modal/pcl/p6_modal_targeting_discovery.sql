@@ -8,7 +8,7 @@
 --
 -- Table: DG6V01.TACTIC_EVNT_IP_AR_HIST.  Engine: TERADATA-DIRECT (bare names, NO catalog prefix).
 -- Window: May-June 2026 treatment start (matches P3/P4/P5).
--- Pattern borrowed verbatim from campaigns/PCQ/modal_sales/pcq_ms_vs_benchmark.sql:
+-- Pattern borrowed verbatim from campaigns/sales_modal/pcq/pcq_ms_vs_benchmark.sql:
 --   MNE = SUBSTR(TACTIC_ID, 8, 3) = 'PCL'
 --   MS  = SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
 -- WIDTH NOTE: repo consistently uses length 30 for MS; a PCL doc references 31. Position 121

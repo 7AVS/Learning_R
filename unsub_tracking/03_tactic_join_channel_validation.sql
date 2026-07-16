@@ -44,7 +44,7 @@
 --
 -- TACTIC_DECISN_VRB_INFO is a packed string — NEVER GROUP BY the raw column,
 -- only a SUBSTR of it. Position 121, length 30 is the repo-confirmed slot for
--- a channel-ish marker: campaigns/PCQ/modal_sales/pcq_ms_summary.sql and
+-- a channel-ish marker: campaigns/sales_modal/pcq/pcq_ms_summary.sql and
 -- pcq_ms_vs_benchmark.sql both use SUBSTR(TACTIC_DECISN_VRB_INFO,121,30) LIKE
 -- '%MS%' to find modal-sales-flagged tactic rows — same slot, different code.
 -- C3/C5's '%EM%' probe here is DISCOVERY ONLY. Per governance/channel_codes.md,
