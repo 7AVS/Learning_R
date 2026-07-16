@@ -10,11 +10,15 @@
 -- Funnel: of decisioned clients, distinct clients with disposition 1..6
 -- (1=sent 2=opened 3=clicked 4=unsub 5=hardbounce 6=complaint).
 --
--- ASSUMPTION (editable): a disposition belongs to a deployment if
--- disposition_dt_tm falls in [TREATMT_STRT_DT, TREATMT_STRT_DT + 30 days).
--- Without this window, a tactic that redeploys monthly would attach every
--- disposition to every cohort. 30 days ~= cohort month; change both INTERVAL
--- literals to tighten/loosen.
+-- ATTACHMENT RULE (2026-07-16, replaces fixed 30-day window): a disposition
+-- belongs to deployment i of a client x tactic if disposition_dt_tm falls in
+-- [TREATMT_STRT_DT_i, TREATMT_STRT_DT_of_next_deployment). Window length adapts
+-- to each deployment's real cadence; trailing responses (late opens/unsubs after
+-- TREATMT_END_DT) stay attached to the send that caused them; nothing double-
+-- attaches on redeploys. Last deployment per client x tactic is open-ended.
+-- To hard-stop at deployment end instead (drops trailing unsubs - not
+-- recommended), swap the upper bound for:
+--   e.disposition_dt_tm < CAST(s.TREATMT_END_DT + INTERVAL '1' DAY AS TIMESTAMP(6))
 --
 -- Denominator counts DECISIONED (targeted), not sent — suppressed clients stay
 -- in it by design; clients_sent / clients_decisioned is the deliverability read.
@@ -31,6 +35,7 @@ WITH email_decis AS (
         t.CLNT_NO,
         t.TACTIC_ID,
         t.TREATMT_STRT_DT,
+        t.TREATMT_END_DT,
         SUBSTR(t.TACTIC_ID, 8, 3)  AS mne,
         EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
           + EXTRACT(MONTH FROM t.TREATMT_STRT_DT) AS cohort_yyyymm
@@ -48,29 +53,48 @@ denom AS (
     FROM email_decis
     GROUP BY 1, 2
 ),
+deploy_spans AS (
+    -- one row per client x tactic x deployment start; window closes when the
+    -- SAME client's next deployment of the SAME tactic begins (open-ended for
+    -- the last one). DISTINCT first: duplicate decision rows on one start date
+    -- would make LEAD return the same date = zero-length window.
+    SELECT
+        CLNT_NO,
+        TACTIC_ID,
+        mne,
+        cohort_yyyymm,
+        TREATMT_STRT_DT,
+        TREATMT_END_DT,
+        LEAD(TREATMT_STRT_DT) OVER (PARTITION BY CLNT_NO, TACTIC_ID
+                                    ORDER BY TREATMT_STRT_DT) AS next_strt_dt
+    FROM (SELECT DISTINCT CLNT_NO, TACTIC_ID, mne, cohort_yyyymm,
+                 TREATMT_STRT_DT, TREATMT_END_DT
+          FROM email_decis) dd
+),
 client_journeys AS (
     -- one row per MNE x cohort x client, stage flags over dispositions that
-    -- fall inside the 30-day window of ANY of that client's deployments in
-    -- the cohort month (MAX collapses multi-deployment months)
+    -- fall inside the deployment-adaptive window of ANY of that client's
+    -- deployments in the cohort month (MAX collapses multi-deployment months)
     SELECT
-        d.mne,
-        d.cohort_yyyymm,
-        d.CLNT_NO,
+        s.mne,
+        s.cohort_yyyymm,
+        s.CLNT_NO,
         MAX(CASE WHEN e.disposition_cd = 1 THEN 1 ELSE 0 END) AS f_sent,
         MAX(CASE WHEN e.disposition_cd = 2 THEN 1 ELSE 0 END) AS f_opened,
         MAX(CASE WHEN e.disposition_cd = 3 THEN 1 ELSE 0 END) AS f_clicked,
         MAX(CASE WHEN e.disposition_cd = 4 THEN 1 ELSE 0 END) AS f_unsub,
         MAX(CASE WHEN e.disposition_cd = 5 THEN 1 ELSE 0 END) AS f_hardbounce,
         MAX(CASE WHEN e.disposition_cd = 6 THEN 1 ELSE 0 END) AS f_complaint
-    FROM email_decis d
+    FROM deploy_spans s
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.TREATMENT_ID = d.TACTIC_ID
-        AND m.CLNT_NO      = d.CLNT_NO
+        ON  m.TREATMENT_ID = s.TACTIC_ID
+        AND m.CLNT_NO      = s.CLNT_NO
     INNER JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
         ON  e.consumer_id_hashed = m.consumer_id_hashed
         AND e.TREATMENT_ID       = m.TREATMENT_ID
-        AND e.disposition_dt_tm >= CAST(d.TREATMT_STRT_DT AS TIMESTAMP(6))
-        AND e.disposition_dt_tm <  CAST(d.TREATMT_STRT_DT + INTERVAL '30' DAY AS TIMESTAMP(6))
+        AND e.disposition_dt_tm >= CAST(s.TREATMT_STRT_DT AS TIMESTAMP(6))
+        AND (   s.next_strt_dt IS NULL
+             OR e.disposition_dt_tm < CAST(s.next_strt_dt AS TIMESTAMP(6)) )
     GROUP BY 1, 2, 3
 ),
 funnel AS (
