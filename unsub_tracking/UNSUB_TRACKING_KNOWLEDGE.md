@@ -199,6 +199,10 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `10_cpc_writes_by_system.sql` | APP_SYS_CD overlay: volume/bundle-shape/first-touch by system + Exact Target profile |
 | `11_cpc_master_cube.sql` | THE cube extract: switch × position × system × save-shape (in-env pivot base) |
 | `12_switch_enforcement_test.sql` | Which switch ACTUALLY stops email — state-before-window × received-email, 1007 negative control (settles 1014 dictionary-vs-lore) |
+| `13_unsub_value_spine.sql` | Value spine: S1 first-unsub per client (in-env extract; embedded verbatim in 15 — never needs a standalone run) + S2 tracked-MNE league table |
+| `14_cpc_optout_campaign_proximity.sql` | Did campaign sends precede CPC 1002 opt-outs? Backward proximity with base-rate control |
+| `15_unsub_value_enrichment.py` | Spark/UCP (allowed .py — Lumina side): spine → TIBC×age segment matrix by trigger MNE + PROF_TOT_ANNUAL vetting |
+| `16_population_lost_trend.sql` | Month × MNE, ALL MNEs, long format: em_clients_sent (disposition 1) + clients_first_unsub + tracked flag — Excel-pivot extract |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -210,6 +214,19 @@ Python note: `.py` versions discontinued at Andre's request (2026-07-14); SQL is
 2. MASTER grain unverified (one row per client × send?).
 3. Semantics of disposition 4: one-click unsub vs preference-center vs list-level — determines whether an unsub kills all email or one program. Also whether repeated unsubs per client appear.
 4. MASTER col #17: `app_` vs `opp_product_typ_code`.
-5. ⚠ MNE codes to confirm in data: VAW, VCN; presence of CRV/RCU/RCL in the email universe (scope-confirmed by Andre, keep regardless); PFS vs CHQ duplicate description. VVD is NOT an MNE — resolved.
+5. ⚠ MNE presence: **VAW, VCN, CLI show ZERO rows in 16's output (2026-07-16)** — no sends, no unsubs since 2024-01 → apparently not in the vendor email universe. CLI absence is new information (always-on Cards priority #1 with no vendor email footprint — confirm with Andre whether CLI email exists at all). CRV/RCU/RCL confirmed present. PFS vs CHQ duplicate description still open.
 6. Wedge decision (saturation evidence vs campaign league table vs standing monitor) — base layer built to serve all three.
 7. Retention window of vendor feedback tables (Q1c/Q2b outputs will show).
+8. VUT anomaly in 16: unsubs visible (~190 in one month) with little/no sends — verify sent-event coverage for VUT deployments.
+
+## 10. Run results — 16 population lost trend (2026-07-16)
+
+Source: Excel pivot of 16's output, filtered `tracked_mne=Y` (pic `pics/PXL_20260716_180439893.jpg`; phone photo, middle months hidden by scroll — numbers directional until in-env export).
+
+- Ran end-to-end, full span 202401→202607. Two pivot sections: `first_unsub` and `has sent - from deployment` (= em_clients_sent).
+- **PCQ is the biggest tracked burner and growing**: ~350–400 first-unsubs/mo in 2024 → ~600–820/mo in 2026; sends ~475–640K/mo.
+- **PCL steepest rise**: double digits/mo in 2024 → ~270–435/mo in 2026 (sends ~420–575K/mo).
+- PCD rising (~50–85 → ~90–250/mo); RCU steady ~50–190/mo; CRV low double digits; RCL single digits; VDT/VUI/VDA small.
+- MVP and AUH first-unsubs only appear in recent months (late email starters).
+- **Do NOT compute per-month rates naively**: numerator is booked to the UNSUB month, denominator to the SEND month — a campaign can book unsubs in a month it didn't deploy (sends=0 rows with unsubs>0 are expected, not a bug). Rate needs deployment-anchored alignment (05's per-deployment window) or annual aggregation.
+- Scale context: tracked first-unsubs sum to roughly 1–2K/mo against ~35K/mo bank-wide → our tracked campaigns are a small share of total email burn (quantify with the `other_mne` rows, not visible in this pivot).
