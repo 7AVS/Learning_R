@@ -1,20 +1,83 @@
 -- =============================================================================
--- Switch enforcement test — which switch ACTUALLY stops email? (16 rows)
+-- Switch enforcement test — which switches ACTUALLY gate the EMAIL channel?
 -- =============================================================================
--- The cube shows writes; this shows EFFECTS. For clients whose switch was
--- already set BEFORE the window, did email still reach them inside it?
+-- The object of the analysis is the CHANNEL: is email alive or dead for a
+-- client, and what kills it. The cube shows writes; this shows EFFECTS.
+-- E1 makes NO assumption about which switches matter: it scans ALL of them.
 --   State: latest CPC row per (client, switch) with CHG_TMSTMP < window start
 --          (pre-treatment: mid-window flips can't contaminate the read).
 --   Outcome: received any email (disposition_cd = 1) inside the window.
--- Read: a switch enforced against email -> its "=1" rows show received_email
--- collapsing to ~0 vs the all-zeros baseline row. 1007 (direct mail) is the
--- NEGATIVE CONTROL — its No must NOT reduce email receipt; if it does, the
--- test is misreading something structural.
--- Settles: 1014 dictionary ("sharing only") vs team lore ("out of all
--- marketing") — and certifies 1012/1002 as email blockers.
--- Window: Q2 2026 (edit both date pairs together).
+-- Read E1: divide received/clients per PREF_ID downstream and compare to the
+-- BASELINE row (PREF_ID = -1, all clients with any pre-window CPC state).
+-- A switch that gates email shows a collapsed rate; sharing/topic switches
+-- ride at baseline. Whatever collapses IS the email-gating set — discovered,
+-- not assumed. Settles 1014 dictionary-vs-lore and certifies 1012/1002.
+-- E2 (cross-tab) runs AFTER E1, on the shortlist, for interactions.
+-- Window: Q2 2026 (edit all date pairs together).
 -- ENGINE: Teradata-direct.
 -- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- E1: all-switch scan — email receipt among pre-window No-holders, per switch
+-- (~50 rows + 1 baseline row)
+-- ---------------------------------------------------------------------------
+
+WITH state_asof AS (
+    SELECT
+        CLNT_NO,
+        PREF_ID,
+        CLNT_CONSENT_TYP,
+        ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID
+                           ORDER BY CHG_TMSTMP DESC) AS rn
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE CHG_TMSTMP < DATE '2026-04-01'
+),
+emailed AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+),
+no_holders AS (
+    SELECT PREF_ID, CLNT_NO
+    FROM state_asof
+    WHERE rn = 1
+      AND CLNT_CONSENT_TYP = 5002
+),
+per_switch AS (
+    SELECT
+        n.PREF_ID,
+        CAST(COUNT(*) AS BIGINT) AS clients_no_before_window,
+        CAST(SUM(CASE WHEN em.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)
+                                 AS received_email_in_window
+    FROM no_holders n
+    LEFT JOIN emailed em ON em.CLNT_NO = n.CLNT_NO
+    GROUP BY 1
+),
+baseline AS (
+    SELECT
+        -1 AS PREF_ID,
+        CAST(COUNT(*) AS BIGINT) AS clients_no_before_window,   -- here: ALL state-holders
+        CAST(SUM(CASE WHEN em.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)
+                                 AS received_email_in_window
+    FROM (SELECT DISTINCT CLNT_NO FROM state_asof) s
+    LEFT JOIN emailed em ON em.CLNT_NO = s.CLNT_NO
+)
+SELECT * FROM per_switch
+UNION ALL
+SELECT * FROM baseline
+ORDER BY PREF_ID;
+
+
+-- ---------------------------------------------------------------------------
+-- E2: interaction cross-tab on the shortlist (16 rows) — run AFTER E1.
+-- Adjust the IN-list to whatever switches E1 shows as email-gating; 1007
+-- stays as the direct-mail negative control.
+-- ---------------------------------------------------------------------------
 
 WITH state_asof AS (
     SELECT
