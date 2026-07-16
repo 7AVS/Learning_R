@@ -1,25 +1,38 @@
 -- =============================================================================
--- Population lost trend — month x MNE, ALL campaigns, with emailed base
+-- Population lost trend v2 — month x MNE: EM-DECISIONED base + first unsubs
 -- =============================================================================
--- One row per (MNE, month) since 2024-01-01, long format — pivot in Excel.
---   em_clients_sent     = distinct consumers with a SENT event (disposition_cd=1)
---                         for that MNE that month (SENT, not decisioned).
---   clients_first_unsub = clients whose FIRST-EVER unsub (disposition_cd=4,
---                         deduped 1/client) was on a send of that MNE that month.
---   tracked_mne         = Y for the 17 in-scope Cards/Payments/Loans MNEs.
--- Counts only; grain caveat: sends by consumer_id_hashed, unsubs by CLNT_NO.
--- ENGINE: Teradata-direct.
+-- One row per (MNE, deployment-cohort month) since 2024-01-01, ALL MNEs,
+-- long format — pivot in Excel.
+--
+--   clients_decisioned_em = distinct clients DECISIONED to email that month
+--     (tactic table, env-confirmed two-field rule: VRB_INFO pos 121 LIKE '%EM%'
+--      OR ADDNL_DECISN_DATA1 LIKE '%EM%'). Month = TREATMT_STRT_DT month.
+--   clients_first_unsub   = clients whose FIRST-EVER unsub (disposition_cd=4,
+--     deduped 1/client) was triggered by that MNE, booked to the month of the
+--     TRIGGERING DEPLOYMENT (latest TREATMT_STRT_DT <= unsub time for that
+--     client x tactic) — SAME CLOCK as the denominator, so columns divide.
+--     Fallback: unsub calendar month when no tactic row matches (the ~68
+--     vendor-only MNEs with no tactic-side decisioning; their denominator is 0).
+--   tracked_mne = Y for the 17 in-scope Cards/Payments/Loans MNEs.
+--
+-- Counts only — divide in Excel. ENGINE: Teradata-direct.
 -- =============================================================================
 
-WITH sends AS (
+WITH em_decis AS (
     SELECT
-        SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
-        EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
-          + EXTRACT(MONTH FROM e.disposition_dt_tm) AS yyyymm,
-        COUNT(DISTINCT e.consumer_id_hashed) AS em_clients_sent
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
+        t.CLNT_NO,
+        SUBSTR(t.TACTIC_ID, 8, 3) AS mne,
+        EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+          + EXTRACT(MONTH FROM t.TREATMT_STRT_DT) AS yyyymm
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+    WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
+      AND (   SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+           OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+),
+denom AS (
+    SELECT mne, yyyymm,
+           COUNT(DISTINCT CLNT_NO) AS clients_decisioned_em
+    FROM em_decis
     GROUP BY 1, 2
 ),
 first_unsub AS (
@@ -36,27 +49,48 @@ first_unsub AS (
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
+unsub_booked AS (
+    -- book each first unsub to its triggering deployment: the latest
+    -- TREATMT_STRT_DT <= unsub time for that client x tactic (exact-key join,
+    -- no EM filter needed - the unsub row already names the treatment)
+    SELECT
+        u.CLNT_NO,
+        u.TREATMENT_ID,
+        u.disposition_dt_tm,
+        MAX(t.TREATMT_STRT_DT) AS trig_strt_dt
+    FROM first_unsub u
+    LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+        ON  t.TACTIC_ID = u.TREATMENT_ID
+        AND t.CLNT_NO   = u.CLNT_NO
+        AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+        AND t.TREATMT_STRT_DT <= CAST(u.disposition_dt_tm AS DATE)
+    WHERE u.rn = 1
+    GROUP BY 1, 2, 3
+),
 unsubs AS (
     SELECT
         SUBSTR(TREATMENT_ID, 8, 3) AS mne,
-        EXTRACT(YEAR FROM disposition_dt_tm) * 100
-          + EXTRACT(MONTH FROM disposition_dt_tm) AS yyyymm,
+        COALESCE(
+            EXTRACT(YEAR FROM trig_strt_dt) * 100
+              + EXTRACT(MONTH FROM trig_strt_dt),
+            EXTRACT(YEAR FROM disposition_dt_tm) * 100
+              + EXTRACT(MONTH FROM disposition_dt_tm)
+        ) AS yyyymm,
         CAST(COUNT(*) AS BIGINT) AS clients_first_unsub
-    FROM first_unsub
-    WHERE rn = 1
+    FROM unsub_booked
     GROUP BY 1, 2
 )
 SELECT
-    COALESCE(s.mne, u.mne)          AS mne_out,
-    COALESCE(s.yyyymm, u.yyyymm)    AS yyyymm_out,
-    CASE WHEN COALESCE(s.mne, u.mne) IN
+    COALESCE(d.mne, u.mne)       AS mne_out,
+    COALESCE(d.yyyymm, u.yyyymm) AS yyyymm_out,
+    CASE WHEN COALESCE(d.mne, u.mne) IN
          ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P',
           'VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')
-         THEN 'Y' ELSE 'N' END      AS tracked_mne,
-    CAST(COALESCE(s.em_clients_sent, 0) AS BIGINT)     AS em_clients_sent,
-    CAST(COALESCE(u.clients_first_unsub, 0) AS BIGINT) AS clients_first_unsub
-FROM sends s
+         THEN 'Y' ELSE 'N' END   AS tracked_mne,
+    CAST(COALESCE(d.clients_decisioned_em, 0) AS BIGINT) AS clients_decisioned_em,
+    CAST(COALESCE(u.clients_first_unsub, 0)   AS BIGINT) AS clients_first_unsub
+FROM denom d
 FULL OUTER JOIN unsubs u
-    ON  s.mne    = u.mne
-    AND s.yyyymm = u.yyyymm
+    ON  u.mne    = d.mne
+    AND u.yyyymm = d.yyyymm
 ORDER BY 1, 2;
