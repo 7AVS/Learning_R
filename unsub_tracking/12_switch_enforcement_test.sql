@@ -128,3 +128,61 @@ ORDER BY 1, 2, 3, 4;
 -- before the window (states are only observable for them). The all-zeros row
 -- is the baseline receive rate; compare each =1 group against it, not against
 -- the full bank.
+--
+-- E2 RESULT (2026-07-15 run): NOTHING collapses to zero — baseline 57.6%
+-- received; 1012-only 48.7%; 1014-only 37.5%; 1002-only 25.8%; DM control
+-- 34.7% (control FAILED -> selection confounds marginals). Either enforcement
+-- leaks or disposition_cd=1 includes service/transactional sends. E3 decides.
+
+
+-- ---------------------------------------------------------------------------
+-- E3: what KIND of email reaches 1002-opted-out clients? (small cross-tab)
+-- ---------------------------------------------------------------------------
+-- Profiles Q2 sends by contact_purps_typ x cntct_evnt_initiator (MASTER cols,
+-- never profiled), split by whether the recipient was 1002=No BEFORE the
+-- window. If the opted-out group's sends are overwhelmingly service-purpose,
+-- enforcement is intact and E1/E2 must be re-run on MARKETING sends only.
+-- If marketing-purpose sends reach entity-opted-out clients at volume, that
+-- is a serious finding — verify before communicating.
+-- ---------------------------------------------------------------------------
+
+WITH state_asof AS (
+    SELECT
+        CLNT_NO,
+        CLNT_CONSENT_TYP,
+        ROW_NUMBER() OVER (PARTITION BY CLNT_NO
+                           ORDER BY CHG_TMSTMP DESC) AS rn
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1002
+      AND CHG_TMSTMP < DATE '2026-04-01'
+),
+optout_1002 AS (
+    SELECT CLNT_NO
+    FROM state_asof
+    WHERE rn = 1
+      AND CLNT_CONSENT_TYP = 5002
+),
+sends AS (
+    SELECT
+        m.CLNT_NO,
+        m.contact_purps_typ,
+        m.cntct_evnt_initiator
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+)
+SELECT
+    CASE WHEN o.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS is_1002_optout,
+    s.contact_purps_typ,
+    s.cntct_evnt_initiator,
+    CAST(COUNT(*) AS BIGINT)   AS send_rows,
+    COUNT(DISTINCT s.CLNT_NO)  AS distinct_clients
+FROM sends s
+LEFT JOIN optout_1002 o
+    ON o.CLNT_NO = s.CLNT_NO
+GROUP BY 1, 2, 3
+ORDER BY is_1002_optout DESC, send_rows DESC;
