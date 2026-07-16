@@ -11,25 +11,29 @@
 --   field; schemas/nbo_vba_rbol_combined.md notes VBA's analog is visa_asc_on_app, nothing for PCL).
 --
 -- ============================================================================
--- PROPOSED CANON #1 — pending Andre sign-off
--- PCQ success numerators must ALWAYS be Period-ASC-gated: the numerator (SUM/COUNT of
--- app_approved / app_completed) is filtered to TRIM(asc_on_app_source) = 'Period-ASC'; the
--- denominator (clients / cohort_size) stays ALL ms_targeted clients in the window, ungated.
--- This is already memory canon (reference_pcq_measurement_filters.md) but AS READ in this repo,
--- pcq_ms_vs_benchmark.sql (OUTPUT A/B) and pcq_ms_summary.sql (QUERY 1/2) do NOT apply this gate —
--- both sum/count app_approved/app_completed raw, no asc_on_app_source filter anywhere in either file.
--- Only pcq_ms_vintage.sql (Step 3: first_approved_day/first_completed_day) applies it correctly.
--- This template applies the gate per <SUCCESS_ASC_GATE> below. asc_on_app_source is PCQ-ONLY —
--- leave <SUCCESS_ASC_GATE> blank for PCL (no equivalent field confirmed on cards_pli_decision_resp).
+-- OPEN DECISION #1 — Period-ASC gating (two recorded rules CONFLICT — Andre picks per use)
+--   (a) General PCQ measurement canon: success numerators gated to
+--       TRIM(asc_on_app_source) = 'Period-ASC', NUMERATOR only; denominator stays all clients.
+--   (b) Andre's instruction (2026-06, for the MS descriptive read specifically): do NOT gate —
+--       app_approved/app_completed raw, asc_on_app_source kept as a visible column only.
+-- AS READ in this repo: pcq_ms_vs_benchmark.sql and pcq_ms_summary.sql are ungated (rule b);
+-- pcq_ms_vintage.sql gates (rule a). That split is deliberate, not an oversight — but every
+-- filled-in copy of this template must state which rule it uses. <SUCCESS_ASC_GATE> expresses
+-- either choice. asc_on_app_source is PCQ-ONLY — leave the gate as a no-op for PCL (no
+-- equivalent field confirmed on cards_pli_decision_resp).
 --
--- PROPOSED CANON #2 — pending Andre sign-off
--- Canonical PCQ population split = ms_targeted, the Hop-1 tactic-event flag (delivery truth: was this
--- client actually served the MS creative, per DG6V01.TACTIC_EVNT_IP_AR_HIST). test_group_latest
--- (NG3_CHMP / NG3_CHLN / NG3_CHLG) is carried as a DIMENSION only (a column in SELECT/GROUP BY),
--- NEVER as the population-defining split. AS READ, pcq_ms_vintage.sql uses test_group_latest
--- (champion/challenger) AS the arm definition instead of ms_targeted — that file does not apply this
--- rule. This template's Hop 1 (ms_targeted) is the corrected pattern; <POPULATION_DIMENSION> below
--- is where test_group_latest (or PCL's equivalent) gets carried, dimension-only.
+-- OPEN DECISION #2 — population split: TWO DIFFERENT ESTIMANDS, pick per question
+--   (a) test_group_latest (NG3_CHMP champion vs NG3_CHLN/NG3_CHLD challengers) = design
+--       ASSIGNMENT — closest to intent-to-treat; use for any lift-flavored read. Caveats:
+--       deployment variance put both arms across all 10 deciles, so compare decile-matched,
+--       never pooled; arm codes drift across sources (CHLG/CHLN/CHLD seen) — lock exact codes
+--       from data before running.
+--   (b) ms_targeted (Hop-1 tactic-event flag below) = DELIVERY truth (was the MS creative
+--       actually served, per DG6V01.TACTIC_EVNT_IP_AR_HIST). Post-assignment — valid for a
+--       descriptive population comparison, never for lift.
+-- pcq_ms_vintage.sql splits by (a); pcq_ms_vs_benchmark/summary split by (b). Neither is wrong;
+-- they answer different questions. Whichever is NOT the split goes in <POPULATION_DIMENSION>
+-- as a carried dimension.
 -- ============================================================================
 --
 -- PARAMETERS (fill in before running — verify every column against the campaign's curated-table
@@ -56,8 +60,8 @@
 --   <SUCCESS_ASC_GATE>       PCQ-only Period-ASC gate on the numerator, e.g.
 --                              AND TRIM(r.asc_on_app_source) = 'Period-ASC'
 --                            Leave as a no-op (1=1) for PCL — no equivalent field confirmed.
---   <POPULATION_DIMENSION>   curated-table column carried as a DIMENSION only (never the population
---                              split — see Canon #2): PCQ -> r.test_group_latest
+--   <POPULATION_DIMENSION>   curated-table column carried as a DIMENSION (whichever estimand is NOT
+--                              the split — see Decision #2): PCQ -> r.test_group_latest
 --                              PCL -> derive an arm label from report_groups_period (see p9) if needed,
 --                              or set to CAST(NULL AS VARCHAR(20)) if no dimension is wanted yet.
 --

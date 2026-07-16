@@ -33,7 +33,7 @@ campaigns/sales_modal/
 | File | Status | Notes |
 |---|---|---|
 | `pcq_ms_vs_benchmark.sql` | **PRODUCTION** | OUTPUT A (row-level, MS flagged) + OUTPUT B (counts-only rollup). Source generalized into `shared/ms_population_success_template.sql`. |
-| `pcq_ms_vintage.sql` | **PRODUCTION** | Cumulative approved/completed vintage curve, long-format. Correctly applies the Period-ASC numerator gate (Canon #1 below) — but uses `test_group_latest` as the population/arm split rather than `ms_targeted` (Canon #2 below). |
+| `pcq_ms_vintage.sql` | **PRODUCTION** | Cumulative approved/completed vintage curve, long-format. Applies the Period-ASC numerator gate and splits by `test_group_latest` (assignment) — the other two files are ungated and split by `ms_targeted` (delivery). See Open Decisions below: these are different estimands, not errors. |
 | `pcq_ms_summary.sql` | Near-duplicate | QUERY 1 is a GROUPING-SETS restatement of `vs_benchmark` OUTPUT B (same ms_targeted x tactic_id x approved/completed counts). QUERY 2 adds a wide category cube. Keep for the cube; QUERY 1 is redundant with vs_benchmark. |
 | `pcq_ms_banner_engagement_discovery.sql` | Diagnostic | GA4 banner-name discovery for PCQ MS (Starburst/Trino, not Teradata-direct like the other three files here). |
 
@@ -73,21 +73,22 @@ Exposure unit = **distinct session**, decided in `pcl/p2_exposure_universe.sql` 
 served/not-served (or challenger/champion) arm contrast; without a clean no-modal baseline the
 exposure/dismiss split has nothing to compare against.
 
-## PROPOSED CANON — pending Andre sign-off
+## OPEN DECISIONS — Andre picks (documented in full in `shared/ms_population_success_template.sql`'s header)
 
-Both rules are documented in full in `shared/ms_population_success_template.sql`'s header. Summary:
+1. **Period-ASC gating — two recorded rules conflict.** General PCQ measurement canon gates success
+   numerators to `asc_on_app_source = 'Period-ASC'` (numerator only). But Andre's 2026-06 instruction
+   for the MS descriptive read was do NOT gate — count raw `app_approved`/`app_completed`, keep
+   `asc_on_app_source` as a visible column only. As read: `pcq_ms_vs_benchmark.sql` and
+   `pcq_ms_summary.sql` are ungated (per the instruction); `pcq_ms_vintage.sql` gates (per general
+   canon). The split is deliberate, but every filled-in template copy must state which rule it uses.
+2. **Population split — two different estimands.** `test_group_latest` (`NG3_CHMP` champion vs
+   `NG3_CHLN`/`NG3_CHLD` challengers) is design ASSIGNMENT — closest to intent-to-treat, use for
+   lift-flavored reads (decile-matched only, never pooled; arm codes drift across sources — lock from
+   data). `ms_targeted` (tactic-event flag) is DELIVERY truth — post-assignment, valid for descriptive
+   population comparison, never for lift. Vintage splits by assignment; vs_benchmark/summary by
+   delivery. Neither is wrong; pick per question and carry the other as a dimension.
 
-1. **PCQ success numerators are ALWAYS Period-ASC-gated** (`asc_on_app_source = 'Period-ASC'`, numerator
-   only — denominator stays all targeted clients). This is already memory canon
-   (`reference_pcq_measurement_filters.md`), but as read in this repo, `pcq_ms_vs_benchmark.sql`
-   (OUTPUT A/B) and `pcq_ms_summary.sql` (QUERY 1/2) do NOT apply it — both count raw
-   `app_approved`/`app_completed` with no ASC filter. Only `pcq_ms_vintage.sql` applies it correctly.
-2. **Canonical PCQ population split = `ms_targeted`** (the Hop-1 tactic-event delivery-truth flag).
-   `test_group_latest` (`NG3_CHMP`/`NG3_CHLN`/`NG3_CHLG`) is a DIMENSION only, never the population
-   split. As read, `pcq_ms_vintage.sql` uses `test_group_latest` (champion/challenger) AS the arm
-   definition instead of `ms_targeted` — it does not apply this rule.
-
-Neither rule has been signed off by Andre. Don't treat downstream PCQ MS numbers as final until they are.
+Until Andre locks a per-purpose rule for each, treat cross-file PCQ MS comparisons as apples-to-oranges.
 
 ## PCD note
 
@@ -105,5 +106,5 @@ and does NOT modify the original tracker file — it's an additional read run al
 - `pcl/build_modal_exposure_summary.py` + `pcl/modal_exposure_summary.xlsx` hardcode the wrong-id
   exposure numbers (~0.7% reach, from before the P7/P8 arm-contrast id correction). Real reach on the
   confirmed id (i_308392) is ~76% per `p9_vcl_full_measurement.sql`. Regenerate before reusing.
-- The two PROPOSED CANON rules above are unsigned. Any PCQ MS number pulled before sign-off should be
-  treated as directional, not final.
+- The two OPEN DECISIONS above are unresolved. Any PCQ MS number pulled before Andre locks a
+  per-purpose rule should be treated as directional, not final.
