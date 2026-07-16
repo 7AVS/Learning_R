@@ -230,3 +230,11 @@ Source: Excel pivot of 16's output, filtered `tracked_mne=Y` (pic `pics/PXL_2026
 - MVP and AUH first-unsubs only appear in recent months (late email starters).
 - **Do NOT compute per-month rates naively**: numerator is booked to the UNSUB month, denominator to the SEND month — a campaign can book unsubs in a month it didn't deploy (sends=0 rows with unsubs>0 are expected, not a bug). Rate needs deployment-anchored alignment (05's per-deployment window) or annual aggregation.
 - Scale context: tracked first-unsubs sum to roughly 1–2K/mo against ~35K/mo bank-wide → our tracked campaigns are a small share of total email burn (quantify with the `other_mne` rows, not visible in this pivot).
+
+## 11. Run results — 17 EM-decisioned → vendor coverage (2026-07-16, Andre verbal)
+
+Scope: CRV/PCL/PCQ/PCD/AUH, cohorts ≥ 2025-01-01. **sent_in_window / decisioned = 91–98%** across the five Cards MNEs. Verdict: the decisioned→vendor chain is essentially complete for Cards —
+- vendor feedback is a valid measurement base for these campaigns (no material logging holes);
+- the 2–9% gap = send-time suppression/throttling (expected, not data loss);
+- the two-field EM-decisioning rule holds up (a leaky rule would show a much lower ratio).
+Per-MNE/per-month detail and the in_master split not transcribed — headline only.
