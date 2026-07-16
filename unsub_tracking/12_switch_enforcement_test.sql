@@ -70,7 +70,7 @@ baseline AS (
 SELECT * FROM per_switch
 UNION ALL
 SELECT * FROM baseline
-ORDER BY PREF_ID;
+ORDER BY 1;   -- Teradata: UNION ordering must use ordinals
 
 
 -- ---------------------------------------------------------------------------
@@ -162,7 +162,8 @@ optout_1002 AS (
     WHERE rn = 1
       AND CLNT_CONSENT_TYP = 5002
 ),
-sends AS (
+sends_opt AS (
+    -- filter to opted-out clients FIRST (spool control)
     SELECT
         m.CLNT_NO,
         m.contact_purps_typ,
@@ -174,15 +175,35 @@ sends AS (
     WHERE e.disposition_cd = 1
       AND e.disposition_dt_tm >= DATE '2026-04-01'
       AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.CLNT_NO IN (SELECT CLNT_NO FROM optout_1002)
 )
 SELECT
-    CASE WHEN o.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS is_1002_optout,
-    s.contact_purps_typ,
-    s.cntct_evnt_initiator,
+    contact_purps_typ,
+    cntct_evnt_initiator,
     CAST(COUNT(*) AS BIGINT)   AS send_rows,
-    COUNT(DISTINCT s.CLNT_NO)  AS distinct_clients
-FROM sends s
-LEFT JOIN optout_1002 o
-    ON o.CLNT_NO = s.CLNT_NO
-GROUP BY 1, 2, 3
-ORDER BY is_1002_optout DESC, send_rows DESC;
+    COUNT(DISTINCT CLNT_NO)    AS distinct_clients
+FROM sends_opt
+GROUP BY 1, 2
+ORDER BY 3 DESC;
+
+
+-- ---------------------------------------------------------------------------
+-- E3b: baseline purpose mix — ALL Q2 sends, counts only (no DISTINCT: spool)
+-- ---------------------------------------------------------------------------
+-- Compare E3a's mix against this. If spool busts, shrink the window to one
+-- month (edit both dates).
+-- ---------------------------------------------------------------------------
+
+SELECT
+    m.contact_purps_typ,
+    m.cntct_evnt_initiator,
+    CAST(COUNT(*) AS BIGINT)   AS send_rows
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON  m.consumer_id_hashed = e.consumer_id_hashed
+    AND m.TREATMENT_ID       = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-04-01'
+  AND e.disposition_dt_tm <  DATE '2026-07-01'
+GROUP BY 1, 2
+ORDER BY 3 DESC;
