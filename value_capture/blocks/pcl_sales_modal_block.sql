@@ -15,9 +15,11 @@
 --     control_successes(arm=champion)  = SUM(p9.converted_clients)  WHERE arm='champion',   per cohort_month
 --   This holds because p9's per_client CTE groups by clnt_no first (one row per client per cell), so
 --   its cells partition the population with no double-count or gap.
--- Engine: Starburst/Trino (curated table dw00_im.dl_mr_prod.cards_pli_decision_resp). Counts only.
+-- Engine: TERADATA-DIRECT (bare table name, NO catalog prefix -- do NOT run through Starburst).
+--   Curated table DL_MR_PROD.cards_pli_decision_resp. Counts only.
 -- 9881-safe: clnt_no raw, uncast (no Teradata ROUND pushdown), same as p9.
--- cohort_month kept per repo hard rule; pooling across cohort_month happens downstream in the workbook.
+-- cohort_month kept per repo hard rule; pooling across cohort_month happens downstream in
+--   value_capture_report.sql (also Teradata-direct).
 
 WITH pop AS (
   SELECT
@@ -27,13 +29,13 @@ WITH pop AS (
     responder_cli,
     treatmt_strt_dt,
     ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY treatmt_strt_dt) AS rn   -- first deployment, per p9
-  FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+  FROM DL_MR_PROD.cards_pli_decision_resp
   WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
     AND treatmt_strt_dt >= DATE '2026-05-01' AND treatmt_strt_dt < DATE '2026-07-01'   -- EDIT POINT: window
 ),
 pop1 AS (
   SELECT clnt_no, arm, responder_cli,
-         date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month
+         CAST(CAST(treatmt_strt_dt AS DATE FORMAT 'YYYY-MM') AS VARCHAR(7)) AS cohort_month
   FROM pop WHERE rn = 1
 ),
 by_cohort AS (
@@ -45,18 +47,25 @@ by_cohort AS (
     COUNT(DISTINCT CASE WHEN arm = 'champion'   AND responder_cli = 1 THEN clnt_no END)  AS control_successes
   FROM pop1
   GROUP BY cohort_month
+),
+pop_window AS (
+  -- one-row aggregate, CROSS JOINed below (Teradata is unreliable with scalar subselects in a
+  -- CTE's SELECT list, unlike the Trino version this replaces)
+  SELECT MIN(treatmt_strt_dt) AS trt_start_dt, MAX(treatmt_strt_dt) AS trt_end_dt
+  FROM pop
 )
 SELECT
   'PCL'                                                     AS mne,
   'Sales Modal (served) vs BAU (not served)'                 AS test_desc,
-  (SELECT MIN(treatmt_strt_dt) FROM pop)                     AS trt_start_dt,   -- MIN of window dates actually in data
-  (SELECT MAX(treatmt_strt_dt) FROM pop)                     AS trt_end_dt,     -- MAX of window dates actually in data
+  w.trt_start_dt                                             AS trt_start_dt,   -- MIN of window dates actually in data
+  w.trt_end_dt                                               AS trt_end_dt,     -- MAX of window dates actually in data
   'Credit limit increase accepted'                           AS success_name,
   'overall'                                                   AS stratum,
-  cohort_month,
+  by_cohort.cohort_month,
   test_clients,
   test_successes,
   control_clients,
   control_successes
 FROM by_cohort
+CROSS JOIN pop_window w
 ORDER BY cohort_month;

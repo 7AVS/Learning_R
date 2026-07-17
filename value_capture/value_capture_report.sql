@@ -1,19 +1,21 @@
 -- value_capture/value_capture_report.sql
--- SINGLE Trino/Starburst query producing the value-capture FINAL REPORT rows (one row per test
+-- SINGLE Teradata-direct query producing the value-capture FINAL REPORT rows (one row per test
 -- contrast, stratified lift + significance computed in SQL -- no workbook, no Python).
--- Engine: Starburst/Trino throughout. Both curated tables are reachable via Starburst federation
---   (dw00_im.dl_mr_prod.cards_pli_decision_resp, dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp).
---   The PCQ MS files elsewhere in this repo (campaigns/sales_modal/pcq/*) run Teradata-direct only
---   because of the tactic-event (DG6V01.TACTIC_EVNT_IP_AR_HIST) scan for the DELIVERY flag -- this
---   query does NOT use that table (it's the ASSIGNMENT contrast on test_group_latest only), so it
---   can run entirely through Starburst. Trino syntax throughout: no QUALIFY/TOP/NULLIFZERO;
---   NULLIF/CASE guards instead; PCQ's cohort_month uses the Trino date_format pattern (copied from
---   the PCL block below), not Teradata's CAST(... AS DATE FORMAT 'YYYY-MM').
+-- Engine: TERADATA-DIRECT throughout (bare table names, NO catalog prefix -- do NOT run through
+--   Starburst federation). Both curated tables are native Teradata objects here:
+--   DL_MR_PROD.cards_pli_decision_resp, DL_MR_PROD.cards_tpa_pcq_decision_resp. This query does NOT
+--   touch the tactic-event table (DG6V01.TACTIC_EVNT_IP_AR_HIST) -- it's the ASSIGNMENT contrast on
+--   test_group_latest only, so it needs no delivery-flag scan.
+-- No volatile tables needed: both campaign CTEs prune on decsn_year/treatmt-date filters, and the
+--   only join beyond that is against a 3-row literal arm_map (not a cross join against
+--   sys_calendar.calendar, so the TDWM unconstrained-product-join blocker does not apply here). If
+--   spool becomes an issue in practice, pcl_pop / pcq_base are the two CTEs to materialize as
+--   VOLATILE TABLEs with COLLECT STATISTICS -- default here is plain CTEs.
 --
 -- For PER-COHORT presentation (cohort_month grain, not pooled), query blocks/pcl_sales_modal_block.sql
---   and blocks/pcq_ms_block.sql directly -- they are UNCHANGED and stay at that grain. This query
---   pools their same population/arm/success logic across cohort_month and decile to the final
---   per-test-contrast numbers the partner sheet needs.
+--   and blocks/pcq_ms_block.sql directly -- they are UNCHANGED (pcl block also Teradata-direct now;
+--   pcq block already was) and stay at that grain. This query pools their same population/arm/success
+--   logic across cohort_month and decile to the final per-test-contrast numbers the partner sheet needs.
 --
 -- RECONCILIATION (carried over from the two block files):
 --   pcl_rows  -- reconciles to campaigns/sales_modal/pcl/p9_vcl_full_measurement.sql: p9's clients/
@@ -24,8 +26,8 @@
 --     (test_group_latest, model_score_decile) bucketed by cohort_month, equal this query's
 --     clients/approved_asc/approved_raw before arm-mapping and stratum pooling.
 --
--- STATS (spelled out; all in DOUBLE arithmetic on POST-AGGREGATION counts -- 9881-safe, since no
---   ROUND/division ever touches a raw Teradata-sourced column, only Trino-computed SUM() results):
+-- STATS (spelled out; all in FLOAT arithmetic on POST-AGGREGATION counts -- 9881-safe, since no
+--   ROUND/division ever touches a raw Teradata-sourced column, only locally-computed SUM() results):
 --   per (mne, test_desc, stratum), pooling cohort_month: n1=SUM(test_clients), x1=SUM(test_successes),
 --     n0=SUM(control_clients), x0=SUM(control_successes)
 --   d = x1/n1 - x0/n0          (arm rate difference, NULLIF-guarded)
@@ -33,11 +35,14 @@
 --   pbar = (x1+x0)/(n1+n0)     (pooled rate)
 --   v = pbar*(1-pbar)*(1/n1+1/n0)
 --   per (mne, test_desc), pooling stratum: leads=SUM(n1); lift=SUM(w*d)/SUM(w);
---     se=SQRT(SUM(w*w*v))/SUM(w); z=lift/se; p_value=2*(1-normal_cdf(0,1,ABS(z)));
+--     se=SQRT(SUM(w*w*v))/SUM(w); z=lift/se; p_value=2*(1-normal_cdf_approx(ABS(z)));
 --     significance = IF p_value<0.05 THEN 'Y' ELSE 'N'.
 --   Single-stratum tests (PCL: stratum='overall' only) collapse this to the standard two-proportion
 --   z-test automatically -- w/(sum of one w) = 1, so lift=d, se=SQRT(v).
---   normal_cdf(mean, sd, v) is a native Trino function (Mathematical/probability functions).
+--   normal_cdf DOES NOT EXIST IN TERADATA: the standard-normal CDF is approximated below via the
+--   Zelen & Severo / Abramowitz & Stegun 26.2.17 rational approximation (max abs error on the CDF
+--   itself < 7.5e-8; since p_value doubles that, the observed error on p_value is up to ~1.5e-7 --
+--   still many orders of magnitude below anything that could flip a significance call at p<0.05).
 --
 -- OPEN DECISIONS inherited from campaigns/sales_modal/README.md (NOT resolved by this query):
 --   #1 Period-ASC gating (PCQ) -- both variants shipped as separate test_desc rows below, Andre
@@ -61,13 +66,13 @@ pcl_pop AS (
     responder_cli,
     treatmt_strt_dt,
     ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY treatmt_strt_dt) AS rn
-  FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+  FROM DL_MR_PROD.cards_pli_decision_resp
   WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
     AND treatmt_strt_dt >= DATE '2026-05-01' AND treatmt_strt_dt < DATE '2026-07-01'   -- EDIT POINT: window
 ),
 pcl_pop1 AS (
   SELECT clnt_no, arm, responder_cli,
-         date_format(treatmt_strt_dt, '%Y-%m') AS cohort_month
+         CAST(CAST(treatmt_strt_dt AS DATE FORMAT 'YYYY-MM') AS VARCHAR(7)) AS cohort_month
   FROM pcl_pop WHERE rn = 1
 ),
 pcl_by_cohort AS (
@@ -80,50 +85,68 @@ pcl_by_cohort AS (
   FROM pcl_pop1
   GROUP BY cohort_month
 ),
+pcl_window AS (
+  -- one-row aggregate, CROSS JOINed below (Teradata is unreliable with scalar subselects in a
+  -- CTE's SELECT list)
+  SELECT MIN(treatmt_strt_dt) AS trt_start_dt, MAX(treatmt_strt_dt) AS trt_end_dt
+  FROM pcl_pop
+),
 pcl_rows AS (
+  -- UNION-truncation guard: this is the FIRST branch of all_rows below, so its VARCHAR widths fix
+  -- the output column widths for every branch (Teradata rule -- see CLAUDE.md Teradata Quirks #3).
   SELECT
-    CAST('PCL' AS VARCHAR)                                     AS mne,
-    CAST('Sales Modal (served) vs BAU (not served)' AS VARCHAR) AS test_desc,
-    (SELECT MIN(treatmt_strt_dt) FROM pcl_pop)                  AS trt_start_dt,
-    (SELECT MAX(treatmt_strt_dt) FROM pcl_pop)                  AS trt_end_dt,
-    CAST('Credit limit increase accepted' AS VARCHAR)           AS success_name,
-    CAST('overall' AS VARCHAR)                                  AS stratum,
-    cohort_month,
+    CAST('PCL' AS VARCHAR(10))                                     AS mne,
+    CAST('Sales Modal (served) vs BAU (not served)' AS VARCHAR(300)) AS test_desc,
+    w.trt_start_dt                                                  AS trt_start_dt,
+    w.trt_end_dt                                                    AS trt_end_dt,
+    CAST('Credit limit increase accepted' AS VARCHAR(100))          AS success_name,
+    CAST('overall' AS VARCHAR(20))                                  AS stratum,
+    CAST(bc.cohort_month AS VARCHAR(7))                             AS cohort_month,
     test_clients,
     test_successes,
     control_clients,
     control_successes
-  FROM pcl_by_cohort
+  FROM pcl_by_cohort bc
+  CROSS JOIN pcl_window w
 ),
 
 -- ============================================================================
--- PCQ: ported from blocks/pcq_ms_block.sql, converted to Trino + arm-mapped in SQL.
--- Base filters/table copied verbatim from pcq_ms_summary.sql QUERY 2's base CTE.
+-- PCQ: ported from blocks/pcq_ms_block.sql, arm-mapped in SQL. Base filters/table copied verbatim
+-- from pcq_ms_summary.sql QUERY 2's base CTE.
 -- ============================================================================
-arm_map (test_group_latest, arm_role) AS (
+arm_map AS (
   -- EDIT POINT / VERIFY BEFORE RUNNING: codes drift across sources (CHLN/CHLG confirmed in
   -- pcq_ms_vintage.sql 2026-06-19 header note; CHLD reported seen elsewhere but NOT confirmed in
   -- this repo -- NOT added here per the no-guessing-codes rule). Re-pull DISTINCT test_group_latest
   -- from a live query before trusting this map; unmapped codes surface in pcq_unmapped_row below,
   -- they do not silently drop.
-  VALUES
-    ('NG3_CHMP', 'control'),
-    ('NG3_CHLN', 'test'),
-    ('NG3_CHLG', 'test')
+  -- Rewritten as literal UNION ALL (Teradata doesn't reliably support a VALUES row-constructor CTE);
+  -- first branch CAST per the UNION-truncation rule (CLAUDE.md Teradata Quirks #3).
+  SELECT CAST('NG3_CHMP' AS VARCHAR(20)) AS test_group_latest, CAST('control' AS VARCHAR(10)) AS arm_role
+  UNION ALL
+  SELECT 'NG3_CHLN', 'test'
+  UNION ALL
+  SELECT 'NG3_CHLG', 'test'
 ),
 pcq_base AS (
   SELECT
     clnt_no,
-    TRIM(test_group_latest)                             AS test_group_latest,
-    CAST(model_score_decile AS VARCHAR)                 AS decile,
-    date_format(treatmt_start_dt, '%Y-%m')               AS cohort_month,   -- Trino pattern (was Teradata DATE FORMAT in pcq_ms_block.sql)
+    TRIM(test_group_latest)                                            AS test_group_latest,
+    CAST(model_score_decile AS VARCHAR(10))                            AS decile,
+    CAST(CAST(treatmt_start_dt AS DATE FORMAT 'YYYY-MM') AS VARCHAR(7)) AS cohort_month,
     treatmt_start_dt,
     app_approved,
     asc_on_app_source
-  FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
+  FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
   WHERE decsn_year       = 2026
     AND tpa_ita          = 'TPA'
     AND treatmt_start_dt >= DATE '2026-06-01'            -- EDIT POINT: window
+),
+pcq_window AS (
+  -- one-row aggregate, CROSS JOINed below (Teradata is unreliable with scalar subselects in a
+  -- CTE's SELECT list)
+  SELECT MIN(treatmt_start_dt) AS trt_start_dt, MAX(treatmt_start_dt) AS trt_end_dt
+  FROM pcq_base
 ),
 pcq_mapped AS (
   SELECT b.*, m.arm_role
@@ -135,19 +158,21 @@ pcq_unmapped AS (
 ),
 pcq_unmapped_row AS (
   -- Surfaces as a real output row (not a silent drop) if any test_group_latest code fails arm_map.
+  -- No array_agg/array_join in Teradata -- message built from COUNT/MIN/MAX instead of a full list.
   SELECT
-    CAST('PCQ' AS VARCHAR) AS mne,
-    CAST('UNMAPPED test_group codes: check arm_map -- codes seen: '
-         || array_join(array_agg(test_group_latest), ', ') AS VARCHAR)                 AS test_desc,
-    CAST(NULL AS DATE)     AS trt_start_dt,
-    CAST(NULL AS DATE)     AS trt_end_dt,
-    CAST(NULL AS VARCHAR)  AS success_name,
-    CAST('overall' AS VARCHAR) AS stratum,
-    CAST(NULL AS VARCHAR)  AS cohort_month,
-    CAST(NULL AS BIGINT)   AS test_clients,
-    CAST(NULL AS BIGINT)   AS test_successes,
-    CAST(NULL AS BIGINT)   AS control_clients,
-    CAST(NULL AS BIGINT)   AS control_successes
+    CAST('PCQ' AS VARCHAR(10)) AS mne,
+    CAST('UNMAPPED test_group codes: ' || CAST(COUNT(*) AS VARCHAR(5)) || ' code(s), e.g. '
+         || MIN(test_group_latest) || ' .. ' || MAX(test_group_latest)
+         || ' -- fix arm_map and rerun' AS VARCHAR(300))            AS test_desc,
+    CAST(NULL AS DATE)          AS trt_start_dt,
+    CAST(NULL AS DATE)          AS trt_end_dt,
+    CAST(NULL AS VARCHAR(100))  AS success_name,
+    CAST('overall' AS VARCHAR(20)) AS stratum,
+    CAST(NULL AS VARCHAR(7))    AS cohort_month,
+    CAST(NULL AS BIGINT)        AS test_clients,
+    CAST(NULL AS BIGINT)        AS test_successes,
+    CAST(NULL AS BIGINT)        AS control_clients,
+    CAST(NULL AS BIGINT)        AS control_successes
   FROM pcq_unmapped
   HAVING COUNT(*) > 0
 ),
@@ -176,33 +201,35 @@ pcq_agg AS (
 -- reported success metric here; both metrics remain available at cohort grain in pcq_ms_block.sql.
 pcq_rows_gated AS (
   SELECT
-    CAST('PCQ' AS VARCHAR) AS mne,
-    CAST('Modal Sales assignment (challenger) vs champion -- approved (Period-ASC gated)' AS VARCHAR) AS test_desc,
-    (SELECT MIN(treatmt_start_dt) FROM pcq_base) AS trt_start_dt,
-    (SELECT MAX(treatmt_start_dt) FROM pcq_base) AS trt_end_dt,
-    CAST('App approved' AS VARCHAR)              AS success_name,
-    CONCAT('D', decile)                          AS stratum,
-    cohort_month,
+    CAST('PCQ' AS VARCHAR(10)) AS mne,
+    CAST('Modal Sales assignment (challenger) vs champion -- approved (Period-ASC gated)' AS VARCHAR(300)) AS test_desc,
+    w.trt_start_dt                                AS trt_start_dt,
+    w.trt_end_dt                                  AS trt_end_dt,
+    CAST('App approved' AS VARCHAR(100))          AS success_name,
+    CAST('D' || a.decile AS VARCHAR(20))          AS stratum,
+    CAST(a.cohort_month AS VARCHAR(7))            AS cohort_month,
     test_clients,
-    test_successes_asc                           AS test_successes,
+    test_successes_asc                            AS test_successes,
     control_clients,
-    control_successes_asc                        AS control_successes
-  FROM pcq_agg
+    control_successes_asc                         AS control_successes
+  FROM pcq_agg a
+  CROSS JOIN pcq_window w
 ),
 pcq_rows_ungated AS (
   SELECT
-    CAST('PCQ' AS VARCHAR) AS mne,
-    CAST('Modal Sales assignment (challenger) vs champion -- approved (ungated)' AS VARCHAR) AS test_desc,
-    (SELECT MIN(treatmt_start_dt) FROM pcq_base) AS trt_start_dt,
-    (SELECT MAX(treatmt_start_dt) FROM pcq_base) AS trt_end_dt,
-    CAST('App approved' AS VARCHAR)              AS success_name,
-    CONCAT('D', decile)                          AS stratum,
-    cohort_month,
+    CAST('PCQ' AS VARCHAR(10)) AS mne,
+    CAST('Modal Sales assignment (challenger) vs champion -- approved (ungated)' AS VARCHAR(300)) AS test_desc,
+    w.trt_start_dt                                AS trt_start_dt,
+    w.trt_end_dt                                  AS trt_end_dt,
+    CAST('App approved' AS VARCHAR(100))          AS success_name,
+    CAST('D' || a.decile AS VARCHAR(20))          AS stratum,
+    CAST(a.cohort_month AS VARCHAR(7))            AS cohort_month,
     test_clients,
-    test_successes_raw                           AS test_successes,
+    test_successes_raw                            AS test_successes,
     control_clients,
-    control_successes_raw                        AS control_successes
-  FROM pcq_agg
+    control_successes_raw                         AS control_successes
+  FROM pcq_agg a
+  CROSS JOIN pcq_window w
 ),
 
 -- ============================================================================
@@ -237,34 +264,35 @@ paired AS (
 
 -- ============================================================================
 -- strata_stats -- per-stratum building blocks for the stratified two-proportion test.
--- All arithmetic on aggregated (post-SUM) counts, cast to DOUBLE, NULLIF-guarded.
+-- All arithmetic on aggregated (post-SUM) counts, cast to FLOAT, NULLIF-guarded.
 -- ============================================================================
 strata_base AS (
   SELECT
     mne, test_desc, stratum, n1, x1, n0, x0,
-    CAST(x1 AS DOUBLE) / NULLIF(CAST(n1 AS DOUBLE), 0)
-      - CAST(x0 AS DOUBLE) / NULLIF(CAST(n0 AS DOUBLE), 0)                          AS d,
-    (CAST(n1 AS DOUBLE) * CAST(n0 AS DOUBLE))
-      / NULLIF(CAST(n1 AS DOUBLE) + CAST(n0 AS DOUBLE), 0)                          AS w,
-    (CAST(x1 AS DOUBLE) + CAST(x0 AS DOUBLE))
-      / NULLIF(CAST(n1 AS DOUBLE) + CAST(n0 AS DOUBLE), 0)                          AS pbar
+    CAST(x1 AS FLOAT) / NULLIF(CAST(n1 AS FLOAT), 0)
+      - CAST(x0 AS FLOAT) / NULLIF(CAST(n0 AS FLOAT), 0)                          AS d,
+    (CAST(n1 AS FLOAT) * CAST(n0 AS FLOAT))
+      / NULLIF(CAST(n1 AS FLOAT) + CAST(n0 AS FLOAT), 0)                          AS w,
+    (CAST(x1 AS FLOAT) + CAST(x0 AS FLOAT))
+      / NULLIF(CAST(n1 AS FLOAT) + CAST(n0 AS FLOAT), 0)                          AS pbar
   FROM paired
 ),
 strata_stats AS (
   SELECT
     mne, test_desc, stratum, n1, x1, n0, x0, d, w, pbar,
     pbar * (1 - pbar) * (
-      (CASE WHEN n1 = 0 THEN CAST(0 AS DOUBLE) ELSE CAST(1 AS DOUBLE) / n1 END) +
-      (CASE WHEN n0 = 0 THEN CAST(0 AS DOUBLE) ELSE CAST(1 AS DOUBLE) / n0 END)
+      (CASE WHEN n1 = 0 THEN CAST(0 AS FLOAT) ELSE CAST(1 AS FLOAT) / n1 END) +
+      (CASE WHEN n0 = 0 THEN CAST(0 AS FLOAT) ELSE CAST(1 AS FLOAT) / n0 END)
     )                                                                                AS v
   FROM strata_base
 ),
 
 -- ============================================================================
--- test_stats -- pool strata per (mne, test_desc): weighted lift, SE, z, p_value, significance.
--- Single-stratum tests (PCL) reduce to the plain two-proportion z-test automatically, since a
--- single stratum's w cancels out of SUM(w*d)/SUM(w) leaving d, and SUM(w*w*v)/SUM(w) leaves w*v
--- = w * pbar(1-pbar)(1/n1+1/n0); dividing by SUM(w)=w again leaves SQRT(v) = the plain two-prop SE.
+-- test_stats -- pool strata per (mne, test_desc): weighted lift, SE, z. p_value follows below via
+-- the Zelen-Severo CDF approximation. Single-stratum tests (PCL) reduce to the plain two-proportion
+-- z-test automatically, since a single stratum's w cancels out of SUM(w*d)/SUM(w) leaving d, and
+-- SUM(w*w*v)/SUM(w) leaves w*v = w*pbar(1-pbar)(1/n1+1/n0); dividing by SUM(w)=w again leaves
+-- SQRT(v) = the plain two-prop SE.
 -- ============================================================================
 test_stats AS (
   SELECT
@@ -289,11 +317,40 @@ test_stats3 AS (
     CASE WHEN se IS NULL OR se = 0 THEN NULL ELSE lift / se END AS z
   FROM test_stats2
 ),
+
+-- ============================================================================
+-- Zelen & Severo / Abramowitz & Stegun 26.2.17 standard-normal CDF approximation (no normal_cdf in
+-- Teradata). t computed once and carried through the chain; powers done as repeated multiplication
+-- (Teradata-safe, avoids **). Max abs error on the CDF itself < 7.5e-8.
+-- ============================================================================
+zs_base AS (
+  SELECT mne, test_desc, leads, lift, se, z, ABS(z) AS az
+  FROM test_stats3
+),
+zs_t AS (
+  SELECT mne, test_desc, leads, lift, se, z, az,
+         CAST(1 AS FLOAT) / (1 + 0.2316419 * az) AS t
+  FROM zs_base
+),
+zs_phi AS (
+  SELECT mne, test_desc, leads, lift, se, z, az, t,
+         CAST(0.3989422804014327 AS FLOAT) * EXP(-az * az / 2) AS phi
+  FROM zs_t
+),
+zs_cdf AS (
+  SELECT mne, test_desc, leads, lift, se, z,
+         1 - phi * ( 0.319381530 * t
+                   - 0.356563782 * t * t
+                   + 1.781477937 * t * t * t
+                   - 1.821255978 * t * t * t * t
+                   + 1.330274429 * t * t * t * t * t )               AS cdf
+  FROM zs_phi
+),
 test_stats4 AS (
   SELECT
     mne, test_desc, leads, lift, se, z,
-    CASE WHEN z IS NULL THEN NULL ELSE 2 * (1 - normal_cdf(0, 1, ABS(z))) END AS p_value
-  FROM test_stats3
+    CASE WHEN z IS NULL THEN NULL ELSE 2 * (1 - cdf) END AS p_value
+  FROM zs_cdf
 ),
 
 -- ============================================================================
@@ -316,20 +373,20 @@ test_window AS (
 -- ============================================================================
 SELECT
   w.mne,
-  CAST(NULL AS VARCHAR) AS desc_manual,              -- partner sheet: DESC (manual)
-  CAST(NULL AS VARCHAR) AS type_manual,               -- partner sheet: Type (manual)
+  CAST(NULL AS VARCHAR(300)) AS desc_manual,          -- partner sheet: DESC (manual)
+  CAST(NULL AS VARCHAR(300)) AS type_manual,          -- partner sheet: Type (manual)
   w.test_desc,                                        -- partner sheet: Test Desc
-  w.trt_start_dt,                                     -- partner sheet: Treatment Start Date
-  w.trt_end_dt,                                        -- partner sheet: Treatment End Date
+  w.trt_start_dt                             AS trt_start_dt,   -- partner sheet: Treatment Start Date
+  w.trt_end_dt                               AS trt_end_dt,     -- partner sheet: Treatment End Date
   w.success_name,                                      -- partner sheet: Success
   s.leads                                    AS leads_unique_clients,   -- partner sheet: Leads/Unique Clients
   ROUND(s.lift * 100, 2)                     AS lift_pp,                -- partner sheet: Lift (percentage points)
   s.z,                                                                   -- supporting stat (audit)
-  s.p_value,                                                            -- supporting stat (audit)
+  s.p_value,                                                            -- supporting stat (audit; Zelen-Severo approx)
   CASE WHEN s.p_value IS NULL THEN NULL
        WHEN s.p_value < 0.05 THEN 'Y' ELSE 'N' END AS significance,     -- partner sheet: P-value/Significance
-  CAST(NULL AS VARCHAR) AS reference_document,        -- partner sheet: Reference Document (manual)
-  CAST(NULL AS VARCHAR) AS notes                      -- partner sheet: Notes (manual)
+  CAST(NULL AS VARCHAR(300)) AS reference_document,   -- partner sheet: Reference Document (manual)
+  CAST(NULL AS VARCHAR(300)) AS notes                 -- partner sheet: Notes (manual)
 FROM test_stats4 s
 JOIN test_window w ON w.mne = s.mne AND w.test_desc = s.test_desc
 ORDER BY w.mne, w.test_desc;

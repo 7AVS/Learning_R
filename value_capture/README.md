@@ -6,15 +6,23 @@ logic. The design centers on a fixed **interchange contract** so any block — r
 population definition, or arm logic — can target it. Everything downstream (pooling, stratified lift,
 significance) is computed in **SQL** — there is no workbook and no Python layer.
 
+## Engine
+
+Everything under `value_capture/` runs **Teradata-direct** (bare table names, no catalog prefix — do
+NOT run through Starburst federation). This is a change from the pipeline's first version: PCL's block
+originally ran Trino/Starburst; it was converted to Teradata-direct so the whole folder runs in one
+engine, matching PCQ's block (which was already Teradata-direct because of the tactic-event scan its
+per-cohort file uses elsewhere).
+
 ## Directory layout
 
 ```
 value_capture/
   README.md                      this file
   blocks/
-    pcl_sales_modal_block.sql    Trino/Starburst — re-grain of p9_vcl_full_measurement.sql, cohort_month grain
+    pcl_sales_modal_block.sql    Teradata-direct — re-grain of p9_vcl_full_measurement.sql, cohort_month grain
     pcq_ms_block.sql             Teradata-direct — re-aggregation of pcq_ms_summary.sql QUERY 2, cohort_month grain
-  value_capture_report.sql       Trino/Starburst — ONE query, final report rows (pooled + stratified stats)
+  value_capture_report.sql       Teradata-direct — ONE query, final report rows (pooled + stratified stats)
 ```
 
 ## Workflow
@@ -23,16 +31,17 @@ value_capture/
    shape, one CTE per campaign.
 2. Each block's CTE gets UNION'd into `all_rows` inside `value_capture_report.sql` at the
    **TEAMMATE HOOK-UP POINT** marked in that file.
-3. Run `value_capture_report.sql` — it pools cohort_months and strata, computes stratified lift and
-   a two-proportion significance test, and returns one row per test contrast (decision-sized, ~3-4
-   rows currently: PCL, PCQ-gated, PCQ-ungated, plus a validation row only if unmapped codes appear).
+3. Run `value_capture_report.sql` Teradata-direct — it pools cohort_months and strata, computes
+   stratified lift and a two-proportion significance test, and returns one row per test contrast
+   (decision-sized, ~3-4 rows currently: PCL, PCQ-gated, PCQ-ungated, plus a validation row only if
+   unmapped codes appear).
 4. `DESC`, `Type`, `Reference Document`, and `Notes` are typed in by hand on the partner sheet — they're
    business framing, not derivable from the SQL.
 
 For **per-cohort** presentation (cohort_month grain, not pooled), query `blocks/pcl_sales_modal_block.sql`
 or `blocks/pcq_ms_block.sql` directly — they are unchanged and stay at that finer grain.
 `value_capture_report.sql` re-derives their same population/arm/success logic (ported inline, not by
-literally including the files — Trino has no cross-file include) and pools it to the final numbers.
+literally including the files — Teradata has no cross-file include) and pools it to the final numbers.
 
 ## The interchange contract
 
@@ -59,7 +68,7 @@ names and order:
 - Internal logic (population, engine, arm derivation, success definition) is entirely the block
   owner's call — the contract only fixes what comes OUT.
 - If a block can't cleanly split test vs. control per row at build time (arm codes not known/stable),
-  map codes to `test`/`control` in SQL via a small `arm_map` VALUES CTE (see PCQ's pattern in
+  map codes to `test`/`control` in SQL via a small `arm_map` CTE (see PCQ's pattern in
   `value_capture_report.sql`) — and surface any code that fails the map as its own output row
   (`test_clients`/etc = NULL), never a silent drop.
 
@@ -71,15 +80,18 @@ names and order:
   CASE WHEN ...)` inside the query).
 - **PCQ** deliberately does NOT hardcode which `test_group_latest` code is challenger vs. champion in
   the base extraction (codes drift across deployments/sources — see `campaigns/sales_modal/README.md`
-  Open Decision #2). `value_capture_report.sql` maps codes via an explicit `arm_map` CTE
-  (`VALUES ('NG3_CHMP','control'), ('NG3_CHLN','test'), ('NG3_CHLG','test')`, clearly marked EDIT
-  POINT/VERIFY) and joins it in — any `test_group_latest` value not in that list produces a distinct
-  `pcq_unmapped_row` in the final output (test_desc = `'UNMAPPED test_group codes: check arm_map --
-  codes seen: ...'`, counts NULL) instead of silently dropping those clients.
+  Open Decision #2). `value_capture_report.sql` maps codes via an explicit `arm_map` CTE — literal
+  `SELECT ... UNION ALL SELECT ...` rows (`'NG3_CHMP'→'control'`, `'NG3_CHLN'`/`'NG3_CHLG'→'test'`,
+  clearly marked EDIT POINT/VERIFY; not a `VALUES` row-constructor, which Teradata doesn't reliably
+  support as a CTE body) and joins it in — any `test_group_latest` value not in that list produces a
+  distinct `pcq_unmapped_row` in the final output (test_desc = a dynamic
+  `'UNMAPPED test_group codes: N code(s), e.g. X .. Y -- fix arm_map and rerun'` message built from
+  `COUNT`/`MIN`/`MAX`, since Teradata has no `array_agg`/`array_join` to list every code; counts NULL)
+  instead of silently dropping those clients.
 
 ## Stats — implemented as SQL (in `value_capture_report.sql`)
 
-All arithmetic runs on **post-aggregation** counts (`SUM()` results), cast to `DOUBLE`, guarded with
+All arithmetic runs on **post-aggregation** counts (`SUM()` results), cast to `FLOAT`, guarded with
 `NULLIF`/`CASE` against division by zero — never on raw source columns, so it stays 9881-safe.
 
 **`paired`** — pool `cohort_month` per `(mne, test_desc, stratum)`:
@@ -91,13 +103,18 @@ All arithmetic runs on **post-aggregation** counts (`SUM()` results), cast to `D
 **`test_stats`** — pool strata per `(mne, test_desc)` (this is where PCQ's 10 deciles collapse back
 into one number per test):
 `leads = SUM(n1)`; `lift = SUM(w*d)/SUM(w)`; `se = SQRT(SUM(w*w*v))/SUM(w)`; `z = lift/se`;
-`p_value = 2*(1-normal_cdf(0,1,ABS(z)))`; `significance = IF p_value<0.05 THEN 'Y' ELSE 'N'`.
+`p_value = 2*(1-Φ(ABS(z)))`; `significance = IF p_value<0.05 THEN 'Y' ELSE 'N'`.
 
 Single-stratum tests (PCL: `stratum='overall'` only) collapse this to the plain two-proportion
 z-test automatically — the single stratum's `w` cancels out of `SUM(w*d)/SUM(w)` leaving `d`, and
 `SQRT(SUM(w*w*v))/SUM(w)` leaves `SQRT(v)`, the standard SE. No special-casing needed.
 
-`normal_cdf(mean, sd, v)` is a native Trino function.
+**No `normal_cdf` in Teradata** — Φ(z) (the standard-normal CDF) is approximated via the Zelen &
+Severo / Abramowitz & Stegun 26.2.17 rational approximation (`zs_base`/`zs_t`/`zs_phi`/`zs_cdf` CTEs;
+`t` computed once and carried through, powers done as repeated multiplication, not `**`). Max abs
+error on the CDF is < 7.5e-8; since `p_value` doubles that, the observed error on `p_value` runs up to
+~1.5e-7 — verified numerically against `scipy.stats.norm` at z=2.0520/1.96/0.5/3.29, all deltas
+< 1.4e-7, nowhere near enough to flip a significance call at p<0.05.
 
 ## Final report columns
 
