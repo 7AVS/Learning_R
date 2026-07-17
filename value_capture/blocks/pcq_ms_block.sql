@@ -1,4 +1,8 @@
 -- value_capture/blocks/pcq_ms_block.sql
+-- NOTE: this file stays PER-COHORT / START-DATE windowed for granular presentation. The quarterly
+--   partner-sheet rollup (value_capture_report.sql) uses a DIFFERENT window (treatment END date) and
+--   a client-level first-touch dedup across the whole quarter -- do not sum this file's output across
+--   cohort_month, it will double-count multi-cohort clients. See value_capture_report.sql's header.
 -- Value-capture ASSIGNMENT contrast for PCQ Modal Sales.
 -- MINIMAL RE-AGGREGATION of campaigns/sales_modal/pcq/pcq_ms_summary.sql QUERY 2 (same base table,
 --   same filters -- NOT new measurement logic). Changes vs QUERY 2:
