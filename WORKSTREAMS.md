@@ -1,8 +1,27 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ## Priority Stack
+
+### 0a. Value Capture Reporting Pipeline v1 (2026-07-17)
+- **What:** New root-level `value_capture/` folder builds rows for a partner team's Q2
+  entity-reporting Excel table. Fixed interchange contract (`mne, test_desc, trt_start_dt,
+  trt_end_dt, success_name, stratum, cohort_month, test_clients, test_successes, control_clients,
+  control_successes` — counts only, unique clients) so future teammate blocks can target it
+  independently of their internal logic/engine.
+- **Built:** `value_capture/README.md` (contract + partner-sheet mapping), two SQL blocks (strict
+  re-grains/re-aggregations of existing production queries, no new measurement logic — see block
+  header comments for exact reconciliation to `p9_vcl_full_measurement.sql` and
+  `pcq_ms_summary.sql` QUERY 2), and `build_value_capture_workbook.py` generating
+  `value_capture_builder.xlsx` (INPUT/PAIRED/TESTS/REPORT sheets, stratified two-proportion
+  z-test via Excel formulas, verified against a hardcoded worked example by live Excel
+  recalculation).
+- **Open decisions inherited (not resolved here):** PCQ Period-ASC gating and assignment-vs-delivery
+  population split — see `campaigns/sales_modal/README.md`. PCQ block ships both gated/ungated
+  success columns; workbook picks one per test.
+- **Next:** teammates' two remaining blocks; Andre runs the two SQL blocks and pastes real output
+  into INPUT; delete the EXAMPLE verification rows before submitting to the partner.
 
 ### 0. Sales Modal Consolidation (2026-07-16)
 - **What:** Consolidated PCL/PCQ/PCD sales-modal work, previously scattered across

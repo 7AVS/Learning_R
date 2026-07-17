@@ -14,4 +14,7 @@
 
 # Allow sales_modal consolidation README (directory layout + canon-pending flags)
 !campaigns/sales_modal/README.md
+
+# Allow value_capture interchange-contract README (xlsx stays untracked)
+!value_capture/README.md
 .aider*
