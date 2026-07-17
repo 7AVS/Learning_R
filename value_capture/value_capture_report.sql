@@ -7,11 +7,12 @@
 --   DL_MR_PROD.cards_pli_decision_resp, DL_MR_PROD.cards_tpa_pcq_decision_resp. This query does NOT
 --   touch the tactic-event table (DG6V01.TACTIC_EVNT_IP_AR_HIST) -- it's the ASSIGNMENT contrast on
 --   test_group_latest only, so it needs no delivery-flag scan.
--- No volatile tables needed: both campaign chains prune on decsn_year/treatmt-date filters, and the
---   only join beyond that is against a 3-row literal arm_map (not a cross join against
---   sys_calendar.calendar, so the TDWM unconstrained-product-join blocker does not apply here). If
---   spool becomes an issue in practice, pcl_win / pcq_win are the two CTEs to materialize as
---   VOLATILE TABLEs with COLLECT STATISTICS -- default here is plain CTEs.
+-- No volatile tables needed: both campaign chains prune on decsn_year/treatmt-date filters; PCQ's
+--   arm mapping is an inline CASE (no join, no separate arm_map CTE), and the only product joins are
+--   CROSS JOINs against one-row aggregate CTEs (pcl_window/pcq_window), which are bounded and do not
+--   trip the TDWM unconstrained-product-join blocker. If spool becomes an issue in practice, pcl_win /
+--   pcq_win are the two CTEs to materialize as VOLATILE TABLEs with COLLECT STATISTICS -- default
+--   here is plain CTEs.
 --
 -- ============================================================================
 -- WHY THIS IS A CLIENT-DEDUPED REBUILD, NOT A SUM OVER THE PER-COHORT BLOCK FILES
@@ -190,33 +191,27 @@ pcl_conflict_row AS (
 -- ============================================================================
 -- PCQ: population/arm/success FLAGS copied verbatim from pcq_ms_summary.sql / pcq_ms_vintage.sql;
 -- window rule and client-dedup collapse are NEW for this quarterly query (see header).
+-- arm_role mapped INLINE via CASE -- a prior version used a separate arm_map CTE built from a bare
+-- SELECT-of-constants UNION ALL (no FROM clause); Teradata rejects a FROM-less SELECT outright and
+-- the query aborted. Folding the map into a CASE removes both the FROM-less SELECT and the join.
 -- ============================================================================
-arm_map AS (
-  -- EDIT POINT / VERIFY BEFORE RUNNING: codes drift across sources (CHLN/CHLG confirmed in
-  -- pcq_ms_vintage.sql 2026-06-19 header note; CHLD reported seen elsewhere but NOT confirmed in
-  -- this repo -- NOT added here per the no-guessing-codes rule). Re-pull DISTINCT test_group_latest
-  -- from a live query before trusting this map; unmapped codes surface in pcq_unmapped_row below,
-  -- they do not silently drop.
-  -- Literal UNION ALL (Teradata doesn't reliably support a VALUES row-constructor CTE); first branch
-  -- CAST per the UNION-truncation rule (CLAUDE.md Teradata Quirks #3).
-  SELECT CAST('NG3_CHMP' AS VARCHAR(20)) AS test_group_latest, CAST('control' AS VARCHAR(10)) AS arm_role
-  UNION ALL
-  SELECT 'NG3_CHLN', 'test'
-  UNION ALL
-  SELECT 'NG3_CHLG', 'test'
-),
 pcq_win AS (
+  -- EDIT POINT / VERIFY BEFORE RUNNING: codes drift across sources (NG3_CHMP champion; NG3_CHLN/
+  -- NG3_CHLG challengers confirmed in pcq_ms_vintage.sql 2026-06-19 note; CHLD reported seen
+  -- elsewhere but NOT confirmed in this repo -- deliberately left unmapped so it surfaces in
+  -- pcq_unmapped_row rather than being guessed). Re-pull DISTINCT test_group_latest from a live
+  -- query before trusting this map; unmapped codes surface below, they do not silently drop.
   SELECT
     r.clnt_no,
-    TRIM(r.test_group_latest)                AS test_group_latest,
-    m.arm_role,
+    TRIM(r.test_group_latest)                                                 AS test_group_latest,
+    CASE WHEN TRIM(r.test_group_latest) = 'NG3_CHMP'               THEN 'control'
+         WHEN TRIM(r.test_group_latest) IN ('NG3_CHLN','NG3_CHLG') THEN 'test' END AS arm_role,
     CAST(r.model_score_decile AS VARCHAR(10)) AS decile,
     r.treatmt_start_dt,
     r.treatmt_end_dt,
     r.app_approved,
     r.asc_on_app_source
   FROM DL_MR_PROD.cards_tpa_pcq_decision_resp r
-  LEFT JOIN arm_map m ON m.test_group_latest = TRIM(r.test_group_latest)
   WHERE r.decsn_year       = 2026
     AND r.tpa_ita          = 'TPA'
     AND r.treatmt_end_dt BETWEEN DATE '2026-05-01' AND DATE '2026-07-31'  -- EDIT POINT: quarter window (TREATMENT END date)

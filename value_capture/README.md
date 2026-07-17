@@ -116,11 +116,14 @@ dedupe to one row per client for the quarter BEFORE producing your `test_desc x 
 - Internal logic (population, engine, arm derivation, success definition, exact dedup mechanics) is
   entirely the block owner's call — the contract only fixes what comes OUT.
 - If a block can't cleanly split test vs. control per row at build time (arm codes not known/stable),
-  map codes to `test`/`control` in SQL via a small `arm_map` CTE (see PCQ's pattern in
+  map codes to `test`/`control` in SQL via an inline `CASE` (see PCQ's pattern in
   `value_capture_report.sql`) — and surface any code that fails the map as its own output row
-  (`test_clients`/etc = NULL), never a silent drop. Similarly, surface any arm-conflicted clients
-  (first-touch arm differs from a later touch) as their own diagnostic row rather than silently
-  resolving them with no trace.
+  (`test_clients`/etc = NULL), never a silent drop. Note: Teradata rejects a bare, FROM-less
+  `SELECT`/`UNION ALL` of constants (an earlier version of this query used that pattern for a separate
+  `arm_map` CTE and it aborted on Teradata) — fold any code-to-role lookup into a `CASE` on the base
+  extraction instead of a standalone constants table.
+- Similarly, surface any arm-conflicted clients (first-touch arm differs from a later touch) as their
+  own diagnostic row rather than silently resolving them with no trace.
 
 ### Why PCL and PCQ look different internally
 
@@ -130,11 +133,9 @@ dedupe to one row per client for the quarter BEFORE producing your `test_desc x 
   columns filled from the same row.
 - **PCQ** deliberately does NOT hardcode which `test_group_latest` code is challenger vs. champion in
   the base extraction (codes drift across deployments/sources — see `campaigns/sales_modal/README.md`
-  Open Decision #2). `value_capture_report.sql` maps codes via an explicit `arm_map` CTE — literal
-  `SELECT ... UNION ALL SELECT ...` rows (`'NG3_CHMP'→'control'`, `'NG3_CHLN'`/`'NG3_CHLG'→'test'`,
-  clearly marked EDIT POINT/VERIFY; not a `VALUES` row-constructor, which Teradata doesn't reliably
-  support as a CTE body) and joins it in — any `test_group_latest` value not in that list produces a
-  distinct `pcq_unmapped_row` in the final output (test_desc = a dynamic
+  Open Decision #2). `pcq_win` maps codes via an inline `CASE` (`'NG3_CHMP'→'control'`,
+  `'NG3_CHLN'`/`'NG3_CHLG'→'test'`, clearly marked EDIT POINT/VERIFY) — any `test_group_latest` value
+  not in that list produces a distinct `pcq_unmapped_row` in the final output (test_desc = a dynamic
   `'UNMAPPED test_group codes: N code(s), e.g. X .. Y -- fix arm_map and rerun'` message built from
   `COUNT`/`MIN`/`MAX`, since Teradata has no `array_agg`/`array_join` to list every code; counts NULL)
   instead of silently dropping those clients. Its chain (`pcq_win → pcq_ft → pcq_succ → pcq_client →
