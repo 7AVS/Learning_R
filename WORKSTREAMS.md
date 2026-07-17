@@ -4,22 +4,25 @@ Last updated: 2026-07-17
 
 ## Priority Stack
 
-### 0a. Value Capture Reporting Pipeline v1 (2026-07-17)
+### 0a. Value Capture Reporting Pipeline v1 (2026-07-17, reworked SQL-only same day)
 - **What:** New root-level `value_capture/` folder builds rows for a partner team's Q2
   entity-reporting Excel table. Fixed interchange contract (`mne, test_desc, trt_start_dt,
   trt_end_dt, success_name, stratum, cohort_month, test_clients, test_successes, control_clients,
   control_successes` — counts only, unique clients) so future teammate blocks can target it
-  independently of their internal logic/engine.
-- **Built:** `value_capture/README.md` (contract + partner-sheet mapping), two SQL blocks (strict
-  re-grains/re-aggregations of existing production queries, no new measurement logic — see block
-  header comments for exact reconciliation to `p9_vcl_full_measurement.sql` and
-  `pcq_ms_summary.sql` QUERY 2), and `build_value_capture_workbook.py` generating
-  `value_capture_builder.xlsx` (INPUT/PAIRED/TESTS/REPORT sheets, stratified two-proportion
-  z-test via Excel formulas, verified against a hardcoded worked example by live Excel
-  recalculation).
+  independently of their internal logic/engine. **SQL-only per Andre's direction — no Python, no
+  Excel workbook.**
+- **Built:** `value_capture/README.md` (contract + final-column mapping), two per-cohort SQL blocks
+  (`blocks/pcl_sales_modal_block.sql`, `blocks/pcq_ms_block.sql` — strict re-grains/re-aggregations
+  of existing production queries, no new measurement logic, unchanged from v1), and
+  `value_capture_report.sql` — ONE Trino/Starburst query that ports both blocks' logic inline,
+  arm-maps PCQ's raw `test_group_latest` codes in SQL (with an unmapped-code guard row, not a
+  silent drop), pools cohort_months/deciles, and computes stratified lift/SE/z/p-value/significance
+  natively (`normal_cdf`), returning ~3-4 decision-sized rows. Stats formulas hand-verified against
+  the known n1=1000,x1=60,n0=1000,x0=40 case (lift 2.00pp, z=2.052, p=0.0402, Y) by transcribing the
+  exact SQL arithmetic into Python.
 - **Open decisions inherited (not resolved here):** PCQ Period-ASC gating and assignment-vs-delivery
-  population split — see `campaigns/sales_modal/README.md`. PCQ block ships both gated/ungated
-  success columns; workbook picks one per test.
+  population split — see `campaigns/sales_modal/README.md`. `value_capture_report.sql` ships both
+  gated/ungated PCQ rows as separate test contrasts; Andre picks which goes to the partner sheet.
 - **Next:** teammates' two remaining blocks; Andre runs the two SQL blocks and pastes real output
   into INPUT; delete the EXAMPLE verification rows before submitting to the partner.
 

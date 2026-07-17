@@ -3,28 +3,46 @@
 Produces rows for a partner team's Q2 entity-reporting Excel table. Two campaign blocks exist now
 (PCL sales modal, PCQ Modal Sales); two more will arrive later from teammates with different internal
 logic. The design centers on a fixed **interchange contract** so any block — regardless of engine,
-population definition, or arm logic — can target it. The workbook (not the SQL) does all statistics.
+population definition, or arm logic — can target it. Everything downstream (pooling, stratified lift,
+significance) is computed in **SQL** — there is no workbook and no Python layer.
 
 ## Directory layout
 
 ```
 value_capture/
-  README.md                          this file
+  README.md                      this file
   blocks/
-    pcl_sales_modal_block.sql        Trino/Starburst — re-grain of p9_vcl_full_measurement.sql
-    pcq_ms_block.sql                 Teradata-direct — re-aggregation of pcq_ms_summary.sql QUERY 2
-  build_value_capture_workbook.py    openpyxl script — run it to (re)generate the workbook
-  value_capture_builder.xlsx         generated output (untracked — regenerate, don't hand-edit the formulas)
+    pcl_sales_modal_block.sql    Trino/Starburst — re-grain of p9_vcl_full_measurement.sql, cohort_month grain
+    pcq_ms_block.sql             Teradata-direct — re-aggregation of pcq_ms_summary.sql QUERY 2, cohort_month grain
+  value_capture_report.sql       Trino/Starburst — ONE query, final report rows (pooled + stratified stats)
 ```
+
+## Workflow
+
+1. A campaign block (existing or a teammate's new one) emits rows in the **interchange contract**
+   shape, one CTE per campaign.
+2. Each block's CTE gets UNION'd into `all_rows` inside `value_capture_report.sql` at the
+   **TEAMMATE HOOK-UP POINT** marked in that file.
+3. Run `value_capture_report.sql` — it pools cohort_months and strata, computes stratified lift and
+   a two-proportion significance test, and returns one row per test contrast (decision-sized, ~3-4
+   rows currently: PCL, PCQ-gated, PCQ-ungated, plus a validation row only if unmapped codes appear).
+4. `DESC`, `Type`, `Reference Document`, and `Notes` are typed in by hand on the partner sheet — they're
+   business framing, not derivable from the SQL.
+
+For **per-cohort** presentation (cohort_month grain, not pooled), query `blocks/pcl_sales_modal_block.sql`
+or `blocks/pcq_ms_block.sql` directly — they are unchanged and stay at that finer grain.
+`value_capture_report.sql` re-derives their same population/arm/success logic (ported inline, not by
+literally including the files — Trino has no cross-file include) and pools it to the final numbers.
 
 ## The interchange contract
 
-One output row per **(test contrast x stratum x cohort_month)**. Columns, exact names and order:
+One row per **(test contrast x stratum x cohort_month)** out of a campaign block CTE. Columns, exact
+names and order:
 
 | Column | Meaning |
 |---|---|
 | `mne` | campaign mnemonic (e.g. `PCL`, `PCQ`) |
-| `test_desc` | description of the test contrast (must be IDENTICAL text across every row of that test — it's the join key the workbook pools on) |
+| `test_desc` | description of the test contrast (must be IDENTICAL text across every row of that test — it's the pooling key in `value_capture_report.sql`) |
 | `trt_start_dt` | treatment window start actually observed in data |
 | `trt_end_dt` | treatment window end actually observed in data |
 | `success_name` | human label for the success event |
@@ -36,117 +54,95 @@ One output row per **(test contrast x stratum x cohort_month)**. Columns, exact 
 | `control_successes` | distinct clients, control arm, success = 1 |
 
 **Rules for any block (existing or a teammate's new one):**
-- Counts only — unique clients, no rates, no divisions, no lift computed in SQL.
+- Counts only — unique clients, no rates, no divisions, no lift computed in the block itself.
 - `test_clients`/`test_successes` = the TREATED arm only. Never invert this.
 - Internal logic (population, engine, arm derivation, success definition) is entirely the block
   owner's call — the contract only fixes what comes OUT.
-- If a block can't cleanly split test vs. control per row (e.g. arm codes aren't known/stable at
-  SQL-build time), it may emit one row per raw arm code instead and rely on the workbook's manual
-  `arm_role` mapping column on the INPUT sheet — see "PCQ's raw-code rows" below.
+- If a block can't cleanly split test vs. control per row at build time (arm codes not known/stable),
+  map codes to `test`/`control` in SQL via a small `arm_map` VALUES CTE (see PCQ's pattern in
+  `value_capture_report.sql`) — and surface any code that fails the map as its own output row
+  (`test_clients`/etc = NULL), never a silent drop.
 
-### Why the two current blocks look different on the wire
+### Why PCL and PCQ look different internally
 
-- **PCL** (`blocks/pcl_sales_modal_block.sql`) already knows which arm is treated (challenger/WMS) vs.
-  control (champion/NMS) at SQL-build time, so it emits ONE contract row per `cohort_month` with both
-  `test_*` and `control_*` columns filled from the same row (arm pivoted inside the query).
-- **PCQ** (`blocks/pcq_ms_block.sql`) deliberately does NOT hardcode which `test_group_latest` code is
-  challenger vs. champion (codes drift across deployments/sources — see
-  `campaigns/sales_modal/README.md` Open Decision #2). It emits one row per
-  `test_group_latest x decile x cohort_month`, i.e. one row per ARM CODE, not a pre-paired test/control
-  row. Andre (or whoever pastes) reads the raw code off that row and transcribes it into the INPUT
-  sheet's `test_clients`/`control_clients` side per the `arm_role` tag — see next section.
+- **PCL** already knows which arm is treated (challenger/WMS) vs. control (champion/NMS) at SQL-build
+  time (`report_groups_period LIKE` pattern), so its CTE emits ONE contract row per `cohort_month`
+  with both `test_*` and `control_*` columns filled directly (arm pivoted with `CASE`/`COUNT(DISTINCT
+  CASE WHEN ...)` inside the query).
+- **PCQ** deliberately does NOT hardcode which `test_group_latest` code is challenger vs. champion in
+  the base extraction (codes drift across deployments/sources — see `campaigns/sales_modal/README.md`
+  Open Decision #2). `value_capture_report.sql` maps codes via an explicit `arm_map` CTE
+  (`VALUES ('NG3_CHMP','control'), ('NG3_CHLN','test'), ('NG3_CHLG','test')`, clearly marked EDIT
+  POINT/VERIFY) and joins it in — any `test_group_latest` value not in that list produces a distinct
+  `pcq_unmapped_row` in the final output (test_desc = `'UNMAPPED test_group codes: check arm_map --
+  codes seen: ...'`, counts NULL) instead of silently dropping those clients.
 
-## The INPUT sheet and `arm_role`
+## Stats — implemented as SQL (in `value_capture_report.sql`)
 
-`INPUT` holds the contract's 11 columns plus two manual columns:
-- **`arm_role`** — `test`, `control`, or `both`. `both` is for rows like PCL's, which already carry a
-  paired test+control read on one line. `test`/`control` is for rows like PCQ's raw-code output, where
-  a single line is ONE arm and the paste-in step decides which side of the ledger it belongs on (and
-  therefore which pair of contract columns — `test_*` or `control_*` — actually gets a nonzero value on
-  that row; the other pair is left 0/blank).
-- **`success_pick`** — free-text note, e.g. `responder_cli`, `approved_asc`, `completed_raw`. Documents
-  which of a block's success variants was transcribed into `test_successes`/`control_successes` for
-  that row. PCQ ships FOUR success variants (`approved_asc`, `completed_asc`, `approved_raw`,
-  `completed_raw`) — Andre picks one pair per test contrast; this column records which.
+All arithmetic runs on **post-aggregation** counts (`SUM()` results), cast to `DOUBLE`, guarded with
+`NULLIF`/`CASE` against division by zero — never on raw source columns, so it stays 9881-safe.
 
-All downstream formulas (`PAIRED`, `TESTS`) pool `test_role`+`both` rows into the treated-arm totals and
-`control_role`+`both` rows into the control-arm totals, so PCL's pre-paired rows and PCQ's split rows
-both feed the same math without special-casing.
+**`paired`** — pool `cohort_month` per `(mne, test_desc, stratum)`:
+`n1=SUM(test_clients)`, `x1=SUM(test_successes)`, `n0=SUM(control_clients)`, `x0=SUM(control_successes)`.
 
-## PAIRED sheet — pooling cohort_months, pairing arms
+**`strata_stats`** — per stratum:
+`d = x1/n1 - x0/n0`, `w = n1*n0/(n1+n0)`, `pbar = (x1+x0)/(n1+n0)`, `v = pbar*(1-pbar)*(1/n1+1/n0)`.
 
-One row per `(mne, test_desc, stratum)`, pooling every `cohort_month` for that combination:
-`n1`/`x1` (treated clients/successes), `n0`/`x0` (control clients/successes), then the per-stratum
-building blocks for a stratified (Cochran-Mantel-Haenszel-style weighted) two-proportion test:
-`p1=x1/n1`, `p0=x0/n0`, `d=p1-p0`, `w=n1*n0/(n1+n0)`, `pbar=(x1+x0)/(n1+n0)`,
-`var=pbar*(1-pbar)*(1/n1+1/n0)`, plus helper columns `wd=w*d` and `w2var=w^2*var` that `TESTS` sums
-across strata. All ratios are `IF`-guarded against division by zero.
+**`test_stats`** — pool strata per `(mne, test_desc)` (this is where PCQ's 10 deciles collapse back
+into one number per test):
+`leads = SUM(n1)`; `lift = SUM(w*d)/SUM(w)`; `se = SQRT(SUM(w*w*v))/SUM(w)`; `z = lift/se`;
+`p_value = 2*(1-normal_cdf(0,1,ABS(z)))`; `significance = IF p_value<0.05 THEN 'Y' ELSE 'N'`.
 
-## TESTS sheet — one row per test contrast
+Single-stratum tests (PCL: `stratum='overall'` only) collapse this to the plain two-proportion
+z-test automatically — the single stratum's `w` cancels out of `SUM(w*d)/SUM(w)` leaving `d`, and
+`SQRT(SUM(w*w*v))/SUM(w)` leaves `SQRT(v)`, the standard SE. No special-casing needed.
 
-Manual descriptive fields (`mne`, `DESC`, `Type`, `test_desc`, `success_name`, `Reference Document`,
-`Notes`) plus computed fields via `SUMIFS`/formulas over `INPUT`/`PAIRED`:
-- `Leads` = `SUMIFS` of `test_clients` where `arm_role` is `test` or `both`, for that `mne`+`test_desc`
-  — pools across every stratum and cohort_month automatically.
-- `trt_start_dt`/`trt_end_dt` = `MINIFS`/`MAXIFS` over `INPUT` for that `mne`+`test_desc`.
-- Stratified stats: `lift` (raw proportion) `= SUM(wd over matching PAIRED rows) / SUM(w over matching
-  PAIRED rows)`; `se = SQRT(SUM(w^2*var)) / SUM(w)`; `z = lift / se`;
-  `p_value = 2*(1-NORM.S.DIST(ABS(z), TRUE))`; `Significance = IF(p_value<0.05,"Y","N")`.
-  For a single-stratum test (e.g. PCL, `stratum='overall'` only) this algebraically reduces to the
-  plain two-proportion z-test — no special-casing needed.
-- Supporting/audit columns (`p1`, `p0`, `se`, `z`, `p_value`) sit to the LEFT of a blank separator
-  column, which sits to the left of the REPORT-mapped columns (`Leads`, `Lift` in pp, `Significance`) —
-  so the audit trail is visible but visually separated from what actually feeds the partner sheet.
-- `Lift` is displayed as percentage points (`lift * 100`, format `0.00"pp"`).
+`normal_cdf(mean, sd, v)` is a native Trino function.
 
-## REPORT sheet — the partner's 12-column layout
+## Final report columns
 
-Formula-linked from `TESTS`, ready to copy-paste into the partner workbook:
+`value_capture_report.sql`'s final `SELECT`, in partner-template left-to-right order (NULL placeholder
+columns sit in their correct template position so the layout lines up when pasted):
 
-| Partner column | Source |
-|---|---|
-| MNE | `TESTS.mne` |
-| DESC | `TESTS.DESC` (manual) |
-| Type | `TESTS.Type` (manual) |
-| Test Desc | `TESTS.test_desc` |
-| Treatment Start Date | `TESTS.trt_start_dt` |
-| Treatment End Date | `TESTS.trt_end_dt` |
-| Success | `TESTS.success_name` |
-| Leads/Unique Clients | `TESTS.Leads` |
-| Lift | `TESTS.Lift_pp` |
-| P-value/Significance | `TESTS.p_value` and `TESTS.Significance` combined into one text cell |
-| Reference Document | `TESTS.reference_document` (manual) |
-| Notes | `TESTS.notes` (manual) |
-
-`DESC`, `Type`, `Reference Document`, and `Notes` are entered by hand in `TESTS` — they're business
-framing, not something derivable from the SQL output.
-
-## Worked-example check
-
-`TESTS`/`PAIRED`/`INPUT` all carry a hardcoded `EXAMPLE` test contrast
-(`n1=1000, x1=60, n0=1000, x0=40`) so the formula chain is checkable on open without live data:
-`p1=0.06, p0=0.04, lift=2.00pp, se≈0.009747, z≈2.052, p≈0.0402, Significance=Y`. See the build script's
-run log / the agent report for the Python-side verification of this same math.
+| Output column | Partner sheet column | Source |
+|---|---|---|
+| `mne` | MNE | computed |
+| `desc_manual` | DESC | NULL placeholder — fill by hand |
+| `type_manual` | Type | NULL placeholder — fill by hand |
+| `test_desc` | Test Desc | computed |
+| `trt_start_dt` | Treatment Start Date | `MIN` over the test |
+| `trt_end_dt` | Treatment End Date | `MAX` over the test |
+| `success_name` | Success | computed |
+| `leads_unique_clients` | Leads/Unique Clients | `SUM(n1)` across strata/cohorts |
+| `lift_pp` | Lift | `lift * 100`, rounded to 2 decimals |
+| `z` | *(supporting/audit)* | not on the partner sheet, kept for QA |
+| `p_value` | *(supporting/audit)* | not on the partner sheet, kept for QA |
+| `significance` | P-value/Significance | `Y`/`N` at p < 0.05 |
+| `reference_document` | Reference Document | NULL placeholder — fill by hand |
+| `notes` | Notes | NULL placeholder — fill by hand |
 
 ## Open decisions inherited from `campaigns/sales_modal/`
 
 Both still apply and are NOT resolved by this pipeline — see `campaigns/sales_modal/README.md`:
 1. **Period-ASC gating** (PCQ only) — general canon gates success numerators to
    `TRIM(asc_on_app_source)='Period-ASC'`; Andre's 2026-06 instruction for the MS descriptive read was
-   to leave it ungated. `pcq_ms_block.sql` ships BOTH (`*_asc` and `*_raw`) — pick one via `success_pick`
-   when pasting into INPUT.
+   to leave it ungated. `value_capture_report.sql` ships BOTH as separate test contrasts
+   (`... approved (Period-ASC gated)'` / `'... approved (ungated)'`) — Andre picks which row goes to
+   the partner sheet. `completed`-metric variants stay available at cohort/decile grain in
+   `blocks/pcq_ms_block.sql` but are not carried into this rollup (approved was picked as the
+   reported success metric).
 2. **Population split** (PCQ only) — `test_group_latest` (assignment/ITT) vs. `ms_targeted` (delivery,
-   post-assignment, self-selected). `pcq_ms_block.sql` uses assignment (`test_group_latest`) because
-   only ITT is valid for a lift-flavored read — this is fixed for this pipeline, not left open.
+   post-assignment, self-selected). This pipeline uses assignment (`test_group_latest`) because only
+   ITT is valid for a lift-flavored read — fixed for this pipeline, not left open.
 
 ## For teammates adding a new block
 
 1. Write your block's SQL in whatever engine/logic fits your campaign. Output exactly the 11 contract
-   columns (or, if test/control can't be split at build time, one row per raw arm code — see PCQ).
+   columns (or map raw arm codes to `test`/`control` in SQL, PCQ-style, with an unmapped-code guard row).
 2. Counts only. Unique clients. `test_clients`/`test_successes` = treated arm, never inverted.
 3. Keep `cohort_month` even if you plan to pool immediately — it's a repo-wide hard rule.
-4. Give your `test_desc` string ONE fixed, exact value across every row of your test — it's the pooling
-   key in `PAIRED`/`TESTS`.
-5. Paste your output into `INPUT`, tag `arm_role` (`test`/`control`/`both`) and `success_pick`, add a row
-   to `PAIRED` (one per stratum) and `TESTS` (one per test contrast) by copying the formula pattern from
-   the existing PCL/PCQ rows and swapping the `mne`/`test_desc`/`stratum` filter values.
+4. Give your `test_desc` string ONE fixed, exact value across every row of your test — it's the
+   pooling key.
+5. Add your CTE to the `all_rows` UNION ALL at the TEAMMATE HOOK-UP POINT in
+   `value_capture_report.sql`. No other changes needed — `paired`/`strata_stats`/`test_stats` pick up
+   any `(mne, test_desc, stratum)` combination automatically.
