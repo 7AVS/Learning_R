@@ -6,11 +6,11 @@
 --   DL_MR_PROD.cards_pli_decision_resp, DL_MR_PROD.cards_tpa_pcq_decision_resp. This query does NOT
 --   touch the tactic-event table (DG6V01.TACTIC_EVNT_IP_AR_HIST) -- it's the ASSIGNMENT contrast on
 --   test_group_latest only, so it needs no delivery-flag scan.
--- No volatile tables needed: both campaign CTEs prune on decsn_year/treatmt-date filters, and the
---   only join beyond that is against a 3-row literal arm_map (not a cross join against
---   sys_calendar.calendar, so the TDWM unconstrained-product-join blocker does not apply here). If
---   spool becomes an issue in practice, pcl_pop / pcq_base are the two CTEs to materialize as
---   VOLATILE TABLEs with COLLECT STATISTICS -- default here is plain CTEs.
+-- No volatile tables needed: both campaign CTEs prune on decsn_year/treatmt-date filters; arm mapping
+--   is an inline CASE (no join), and the only product joins are CROSS JOINs against one-row aggregate
+--   CTEs (pcl_window/pcq_window), which are bounded and do not trip the TDWM unconstrained-product-join
+--   blocker. If spool becomes an issue in practice, pcl_pop / pcq_base are the two CTEs to materialize
+--   as VOLATILE TABLEs with COLLECT STATISTICS -- default here is plain CTEs.
 --
 -- For PER-COHORT presentation (cohort_month grain, not pooled), query blocks/pcl_sales_modal_block.sql
 --   and blocks/pcq_ms_block.sql directly -- they are UNCHANGED (pcl block also Teradata-direct now;
@@ -111,27 +111,22 @@ pcl_rows AS (
 ),
 
 -- ============================================================================
--- PCQ: ported from blocks/pcq_ms_block.sql, arm-mapped in SQL. Base filters/table copied verbatim
--- from pcq_ms_summary.sql QUERY 2's base CTE.
+-- PCQ: ported from blocks/pcq_ms_block.sql. Base filters/table copied verbatim from
+-- pcq_ms_summary.sql QUERY 2's base CTE; arm_role mapped INLINE via CASE (see note in pcq_base).
 -- ============================================================================
-arm_map AS (
-  -- EDIT POINT / VERIFY BEFORE RUNNING: codes drift across sources (CHLN/CHLG confirmed in
-  -- pcq_ms_vintage.sql 2026-06-19 header note; CHLD reported seen elsewhere but NOT confirmed in
-  -- this repo -- NOT added here per the no-guessing-codes rule). Re-pull DISTINCT test_group_latest
-  -- from a live query before trusting this map; unmapped codes surface in pcq_unmapped_row below,
-  -- they do not silently drop.
-  -- Rewritten as literal UNION ALL (Teradata doesn't reliably support a VALUES row-constructor CTE);
-  -- first branch CAST per the UNION-truncation rule (CLAUDE.md Teradata Quirks #3).
-  SELECT CAST('NG3_CHMP' AS VARCHAR(20)) AS test_group_latest, CAST('control' AS VARCHAR(10)) AS arm_role
-  UNION ALL
-  SELECT 'NG3_CHLN', 'test'
-  UNION ALL
-  SELECT 'NG3_CHLG', 'test'
-),
 pcq_base AS (
+  -- arm_role mapped inline via CASE. This replaces a separate arm_map CTE that used a bare
+  -- SELECT-of-constants UNION ALL: Teradata rejects a FROM-less SELECT, which aborted the query.
+  -- Folding the map into a CASE removes both the FROM-less SELECT and the extra LEFT JOIN.
+  -- EDIT POINT / VERIFY BEFORE RUNNING: codes drift across sources (NG3_CHMP champion; NG3_CHLN/
+  -- NG3_CHLG challengers confirmed in pcq_ms_vintage.sql 2026-06-19 note; CHLD reported seen but NOT
+  -- confirmed in this repo -- deliberately left unmapped so it surfaces in pcq_unmapped_row rather
+  -- than being guessed). Re-pull DISTINCT test_group_latest from a live query before trusting this.
   SELECT
     clnt_no,
     TRIM(test_group_latest)                                            AS test_group_latest,
+    CASE WHEN TRIM(test_group_latest) = 'NG3_CHMP'               THEN 'control'
+         WHEN TRIM(test_group_latest) IN ('NG3_CHLN','NG3_CHLG') THEN 'test' END AS arm_role,
     CAST(model_score_decile AS VARCHAR(10))                            AS decile,
     CAST(CAST(treatmt_start_dt AS DATE FORMAT 'YYYY-MM') AS VARCHAR(7)) AS cohort_month,
     treatmt_start_dt,
@@ -148,13 +143,8 @@ pcq_window AS (
   SELECT MIN(treatmt_start_dt) AS trt_start_dt, MAX(treatmt_start_dt) AS trt_end_dt
   FROM pcq_base
 ),
-pcq_mapped AS (
-  SELECT b.*, m.arm_role
-  FROM pcq_base b
-  LEFT JOIN arm_map m ON m.test_group_latest = b.test_group_latest
-),
 pcq_unmapped AS (
-  SELECT DISTINCT test_group_latest FROM pcq_mapped WHERE arm_role IS NULL
+  SELECT DISTINCT test_group_latest FROM pcq_base WHERE arm_role IS NULL
 ),
 pcq_unmapped_row AS (
   -- Surfaces as a real output row (not a silent drop) if any test_group_latest code fails arm_map.
@@ -192,7 +182,7 @@ pcq_agg AS (
                           AND TRIM(asc_on_app_source) = 'Period-ASC' THEN clnt_no END) AS control_successes_asc,
     COUNT(DISTINCT CASE WHEN arm_role = 'control'
                           AND app_approved = 1 THEN clnt_no END)     AS control_successes_raw
-  FROM pcq_mapped
+  FROM pcq_base
   WHERE arm_role IS NOT NULL
   GROUP BY decile, cohort_month
 ),
