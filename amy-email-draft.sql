@@ -9,15 +9,18 @@ coffee, invited Andre to send her a position he thinks he'd fit.
 Internal board checked: no closer-fitting role in her area, so
 this req is the only option.
 
-POSITIONING NOTE: lead with the ANALYTICS/modelling work, not
-governance. Leading with documentation reads as "governance
-person trying to rebrand" (the exact trap flagged in Andre's own
-career research). Governance is the closer, not the pitch.
+TWO POSITIONING RULES LEARNED HERE:
+1. Analytics leads, governance closes. Leading with documentation
+   reads as "governance person trying to rebrand" for a data
+   science req (the trap named in Andre's own career research).
+2. Keep it short. She already has his background from the first
+   email and she replied. The resume carries the detail, not the
+   email. Long = pitching instead of answering her question.
 ================================================================
 */
 
 -- ---------------------------------------------------------------
--- CURRENT VERSION (send this one) — analytics-led, organic voice
+-- CURRENT VERSION (send this one) — short, analytics-led
 -- ---------------------------------------------------------------
 
 /*
@@ -26,9 +29,35 @@ Hi Amy,
 Thank you for replying so fast, and no problem about the coffee.
 
 The role I have been looking at is the Lead Data Scientist, AML Analytics
-in your team (R-00001739607). Let me be honest about where I fit and
-where I do not.
+in your team (R-00001739607).
 
+Being honest about the fit: my daily work is modelling on transaction
+level data at scale. I built and maintain the measurement engine for the
+Cards portfolio in Python and PySpark, across about 40 programs and 20
+million clients, and I do the clustering and the experiment design behind
+it. A different target variable from yours, but the same kind of problem.
+What I would add on top is the documentation side, from seven years in
+data governance at HSBC. The real gaps are NLP, which I am studying now
+but would not claim today, and the AML domain itself.
+
+So my question is if that is coverable for the right background. I also
+looked at what is posted and did not find anything closer in your area,
+so if you know of something coming that fits better I would be glad to
+hear about it. Happy to send my resume.
+
+Thanks again for the openness.
+
+Andre
+*/
+
+-- ---------------------------------------------------------------
+-- SUPERSEDED v2 — analytics-led but too long (do not send)
+-- Good content, wrong venue. Everything cut here belongs in the
+-- resume: holdouts, power analysis, confidence intervals,
+-- retention curves, the cannibalisation story, the exec review.
+-- ---------------------------------------------------------------
+
+/*
 My daily work is modelling on transaction level data at scale. I built
 the measurement engine for the Cards portfolio in Python and PySpark,
 running across about 40 programs and 20 million clients, doing the lift,
@@ -45,57 +74,22 @@ On top of that I bring the documentation side. Seven years in data
 governance at HSBC, so validation ready documentation and model
 performance evidence in adherence to standards is normal work for me and
 not overhead.
-
-The real gaps are NLP, which I am studying now but would not claim today,
-and the AML domain itself.
-
-So my question is if this is coverable for the right background. I also
-looked at what is posted today and did not find anything closer in your
-area, so if you know of something coming that fits this profile better, I
-would be glad to hear about it. I can send my resume if it helps.
-
-Thanks again for the openness.
-
-Andre
 */
 
 -- ---------------------------------------------------------------
--- SUPERSEDED — governance-led version (do not send)
--- Kept for reference. Under-sold the analytics capability and
--- risked the "governance person rebranding" read.
+-- SUPERSEDED v1 — governance-led (do not send)
+-- Under-sold the analytics capability and risked the
+-- "governance person rebranding" read.
 -- ---------------------------------------------------------------
 
 /*
-Hi Amy,
-
-Thank you for replying so fast, and no problem about the coffee.
-
-The role I have been looking at is the Lead Data Scientist, AML Analytics
-in your team (R-00001739607). I prefer to be honest about it instead of
-selling myself.
-
 The part where I think I can really contribute is the one most data
 scientists do not enjoy. The validation-ready model documentation, the
 performance metrics, the adherence to Enterprise Model Management
 Standards. I worked seven years in data governance at HSBC building
 exactly this, chairing the governance and stewardship forums, writing the
 data quality rules, doing root cause analysis, and later carrying this
-work through the RBC integration. On the technical side I work with
-Python and PySpark every day on transaction level data at Cards scale, so
-the data environment and the tools would not be new for me.
-
-The gaps are real too. The machine learning depth and the NLP that the
-posting asks for, and also the AML domain knowledge. I have started to
-study both, but I would not claim them today.
-
-So my question is if this is a gap you would consider possible to cover
-for the right background, or if there is something else in your area
-where the governance and data quality side has more weight. I can send
-you my resume if it helps.
-
-Thanks again for the openness.
-
-Andre
+work through the RBC integration.
 */
 
 -- ---------------------------------------------------------------
@@ -112,10 +106,6 @@ RBC data estate familiarity (zero ramp).
 
 CANNOT evidence: NLP specifically; deep AML/financial-crime domain;
 quantitative degree (BBA + BA; MBA AI & Analytics in progress).
-
-Earlier assessment said "ML depth" was a gap. That was too harsh —
-clustering and predictive modelling are genuinely his. The honest gaps
-are NLP and AML domain.
 
 Verdict: a stretch on paper, but pursue through the conversation, not a
 cold application. Four weeks to the Aug 16 close: starting the NLP
