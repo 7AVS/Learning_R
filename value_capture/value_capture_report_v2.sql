@@ -184,4 +184,4 @@ SELECT row_type, mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl,
   CAST(NULL AS FLOAT) AS lift_pp, CAST(NULL AS FLOAT) AS z,
   CAST(NULL AS VARCHAR(1)) AS sig80, CAST(NULL AS VARCHAR(1)) AS sig90, CAST(NULL AS VARCHAR(1)) AS sig95
 FROM all_rows WHERE row_type = 'diag'
-ORDER BY row_type, mne;
+ORDER BY 1, 2;  -- Teradata: ORDER BY over a UNION must use ordinal positions, not column names
