@@ -1,6 +1,9 @@
 -- value_capture/value_capture_report_v3.sql
--- Teradata-direct rebuild of value_capture_report.sql (v1). SQL counts clients only -- display
--- formatting, p-value, and partner-template mapping are Andre's job in Excel (REDESIGN_SPEC.md).
+-- Teradata-direct rebuild of value_capture_report.sql (v1). Partner-template mapping (DESC/Type/
+-- Reference Document/Notes) stays Andre's job in Excel (REDESIGN_SPEC.md).
+-- Output: one row per contrast, labelled columns -- experiment | mne | arm_test | arm_ctrl |
+--   action_population | control_population | action_response | control_response |
+--   action_response_rate | control_response_rate | lift | p_value | n_unmapped | n_arm_conflict.
 -- Engine: TERADATA-DIRECT, bare table names, no catalog prefix -- do NOT run through Starburst.
 -- Grain: QUARTERLY, client-deduped -- treatmt_end_dt BETWEEN '2026-05-01' AND '2026-07-31',
 --   first-touch collapse per clnt_no, ever-success over all in-window rows (v1 logic, unchanged).
@@ -15,8 +18,8 @@
 --   n_unmapped/n_arm_conflict are computed ONCE per campaign (not per decile), then CROSS JOINed
 --   onto every decile row identically; the pooling step aggregates them with MAX, not SUM, so the
 --   decile fan-out never inflates them.
--- Stats: MH-weighted two-proportion z-test. sig flags = z-threshold checks (80/90/95%), no CDF/p-value
---   (Andre gets p via Excel NORM.S.DIST).
+-- Stats: MH-weighted two-proportion z-test; z converted to a two-sided p_value via the Zelen-Severo/
+--   Abramowitz-Stegun normal-CDF approximation (Teradata has no NORM.S.DIST). z is internal only.
 --
 -- v3 ADDS three async blocks (PCD, O2P, CTU), summary-converted from
 -- campaigns/PCD/async_banner_vintage_ab.sql -- a transcribed DRAFT (10 phone photos, not yet
@@ -210,7 +213,7 @@ o2p_grp AS (
   -- group-detection kept verbatim from source: collapse multiple tactic events per client+test-group
   -- into one row (MIN treatment dates, MAX has_mb) before arm classification.
   SELECT clnt_no, MIN(treatmt_strt_dt) AS treatmt_strt_dt, tst_grp_cd,
-    MAX(CASE WHEN TACTIC_CELL_CD LIKE 'XMB' THEN 1 ELSE 0 END) AS has_mb   -- [VERIFY: has_mb / TACTIC_CELL_CD pattern unclear across photos]
+    MAX(CASE WHEN TACTIC_CELL_CD LIKE '%MB%' THEN 1 ELSE 0 END) AS has_mb   -- [VERIFY: token is MB per Andre 2026-07-20; wildcard %MB% assumed - confirm exact cell-code form in-env]
   FROM o2p_raw
   GROUP BY clnt_no, tst_grp_cd
 ),
@@ -409,21 +412,64 @@ stats AS (
   SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict,
     CASE WHEN se IS NULL OR se = 0 THEN NULL ELSE lift / se END AS z
   FROM pooled
+),
+
+-- ---- CDF / p-value: Zelen & Severo / Abramowitz & Stegun 26.2.17 rational approximation to the
+-- standard-normal CDF (normal_cdf does not exist in Teradata). Ported verbatim from
+-- value_capture_report.sql (v1), which validated this polynomial against scipy. Max abs error on the
+-- CDF itself < 7.5e-8; p_value doubles that (~1.5e-7), far below anything that could flip a
+-- significance call. z stays internal to this chain -- it does NOT appear in the final output.
+zs_base AS (
+  SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict,
+    z, ABS(z) AS az
+  FROM stats
+),
+zs_t AS (
+  SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict,
+    z, az,
+    CAST(1 AS FLOAT) / (1 + 0.2316419 * az) AS t
+  FROM zs_base
+),
+zs_phi AS (
+  SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict,
+    z, az, t,
+    CAST(0.3989422804014327 AS FLOAT) * EXP(-az * az / 2) AS phi
+  FROM zs_t
+),
+zs_cdf AS (
+  SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict, z,
+    1 - phi * ( 0.319381530 * t
+              - 0.356563782 * t * t
+              + 1.781477937 * t * t * t
+              - 1.821255978 * t * t * t * t
+              + 1.330274429 * t * t * t * t * t )               AS cdf
+  FROM zs_phi
+),
+stats_p AS (
+  SELECT mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl, lift, n_unmapped, n_arm_conflict,
+    CASE WHEN z IS NULL THEN NULL ELSE 2 * (1 - cdf) END AS p_value
+  FROM zs_cdf
 )
 
--- ---- final output: one row per campaign, stats + diagnostic columns together -----------------------
--- rate_test/rate_ctrl are CRUDE (pooled counts). lift_pp for a stratified campaign (PCQ) is
--- MH-WEIGHTED across deciles, so rate_test - rate_ctrl will NOT equal lift_pp there. Expected.
+-- ---- final output: one row per campaign/arm-contrast, partner-required column layout ---------------
+-- experiment groups mne into the partner's experiment buckets: PCL and PCQ are both Sales Modal
+-- experiments run on different campaigns; PCD/O2P/CTU are the Async Banner experiment. AUH would be
+-- 'Authorized Users' when its block is added.
+-- rate columns are CRUDE (pooled counts). lift for a stratified campaign (PCQ) is MH-WEIGHTED across
+-- deciles, so action_response_rate - control_response_rate will NOT equal lift there. Expected.
 -- Single SELECT, no UNION ALL at this level -- ORDER BY column names is safe here (the "positional
--- only" rule applies to a query with UNION ALL at the outer level, which this no longer has).
+-- only" rule applies to a query with UNION ALL at the outer level, which this does not have).
 SELECT
-  mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl,
-  100.0 * CAST(x_test AS FLOAT) / NULLIF(CAST(n_test AS FLOAT), 0) AS rate_test_pct,
-  100.0 * CAST(x_ctrl AS FLOAT) / NULLIF(CAST(n_ctrl AS FLOAT), 0) AS rate_ctrl_pct,
-  lift * 100 AS lift_pp, z,
-  CASE WHEN z IS NULL THEN NULL WHEN ABS(z) >= 1.2816 THEN 'Y' ELSE 'N' END AS sig80,
-  CASE WHEN z IS NULL THEN NULL WHEN ABS(z) >= 1.6449 THEN 'Y' ELSE 'N' END AS sig90,
-  CASE WHEN z IS NULL THEN NULL WHEN ABS(z) >= 1.9600 THEN 'Y' ELSE 'N' END AS sig95,
+  CASE WHEN mne IN ('PCL','PCQ') THEN 'Sales Modal'
+       WHEN mne IN ('PCD','O2P','CTU') THEN 'Async Banner'
+       ELSE mne END AS experiment,
+  mne, arm_test, arm_ctrl,
+  n_test AS action_population, n_ctrl AS control_population,
+  x_test AS action_response, x_ctrl AS control_response,
+  100.0 * CAST(x_test AS FLOAT) / NULLIF(CAST(n_test AS FLOAT), 0) AS action_response_rate,
+  100.0 * CAST(x_ctrl AS FLOAT) / NULLIF(CAST(n_ctrl AS FLOAT), 0) AS control_response_rate,
+  lift * 100 AS lift,
+  CAST(p_value AS FLOAT) AS p_value,
   n_unmapped, n_arm_conflict
-FROM stats
+FROM stats_p
 ORDER BY mne, arm_test;
