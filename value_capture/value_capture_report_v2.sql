@@ -162,8 +162,12 @@ stats AS (
 )
 
 -- ---- final output: 'total' rows carry stats; 'diag' rows pass through with stats columns NULL ----
+-- rate_test/rate_ctrl are CRUDE (pooled counts). lift_pp for a stratified campaign (PCQ) is
+-- MH-WEIGHTED across deciles, so rate_test - rate_ctrl will NOT equal lift_pp there. Expected.
 SELECT
   CAST('total' AS VARCHAR(10)) AS row_type, mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl,
+  100.0 * CAST(x_test AS FLOAT) / NULLIF(CAST(n_test AS FLOAT), 0) AS rate_test_pct,
+  100.0 * CAST(x_ctrl AS FLOAT) / NULLIF(CAST(n_ctrl AS FLOAT), 0) AS rate_ctrl_pct,
   lift * 100 AS lift_pp, z,
   CASE WHEN z IS NULL THEN NULL WHEN ABS(z) >= 1.2816 THEN 'Y' ELSE 'N' END AS sig80,
   CASE WHEN z IS NULL THEN NULL WHEN ABS(z) >= 1.6449 THEN 'Y' ELSE 'N' END AS sig90,
@@ -171,6 +175,7 @@ SELECT
 FROM stats
 UNION ALL
 SELECT row_type, mne, arm_test, arm_ctrl, n_test, x_test, n_ctrl, x_ctrl,
+  CAST(NULL AS FLOAT) AS rate_test_pct, CAST(NULL AS FLOAT) AS rate_ctrl_pct,
   CAST(NULL AS FLOAT) AS lift_pp, CAST(NULL AS FLOAT) AS z,
   CAST(NULL AS VARCHAR(1)) AS sig80, CAST(NULL AS VARCHAR(1)) AS sig90, CAST(NULL AS VARCHAR(1)) AS sig95
 FROM all_rows WHERE row_type = 'diag'
