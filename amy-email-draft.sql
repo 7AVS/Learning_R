@@ -20,7 +20,11 @@ TWO POSITIONING RULES LEARNED HERE:
 */
 
 -- ---------------------------------------------------------------
--- CURRENT VERSION (send this one) — short, analytics-led
+-- FINAL VERSION (send this one) — short, analytics-led, polished
+-- Changes from v3: "Being honest about the fit:" -> "To be honest
+-- about the fit," (dropped the dramatic colon) and
+-- "Thanks again for the openness." -> "Thanks again for taking a
+-- look." (warmer, points at what she actually offered to do).
 -- ---------------------------------------------------------------
 
 /*
@@ -31,7 +35,7 @@ Thank you for replying so fast, and no problem about the coffee.
 The role I have been looking at is the Lead Data Scientist, AML Analytics
 in your team (R-00001739607).
 
-Being honest about the fit: my daily work is modelling on transaction
+To be honest about the fit, my daily work is modelling on transaction
 level data at scale. I built and maintain the measurement engine for the
 Cards portfolio in Python and PySpark, across about 40 programs and 20
 million clients, and I do the clustering and the experiment design behind
@@ -45,9 +49,42 @@ looked at what is posted and did not find anything closer in your area,
 so if you know of something coming that fits better I would be glad to
 hear about it. Happy to send my resume.
 
-Thanks again for the openness.
+Thanks again for taking a look.
 
 Andre
+*/
+
+-- ---------------------------------------------------------------
+-- DESIGN NOTES (why it is built this way)
+-- ---------------------------------------------------------------
+/*
+THE TASK: Amy asked one question — show me a position you think you'd
+fit. Three jobs only: name the role, give her just enough to judge, make
+it easy to answer. Do NOT re-introduce (she has that) or argue a case
+(she didn't ask for one).
+
+Note the ask is unusual: this is HER OWN req, so he is asking a hiring
+manager to pre-screen him, not asking a connector for a pointer. Hence
+"is that coverable" — a cheap judgment she can give, not a favour.
+
+GAPS stay embedded in the fit paragraph, not standalone. A separate
+sentence would spotlight them; embedded they read as balanced
+self-assessment. State once, plainly, move on.
+
+TWO ASKS by design: (1) is this coverable, (2) anything coming that fits
+better. The second is the safety net — it lets a "no" still produce
+something useful, and only she can answer it (she knows unposted roles;
+he can only see posted ones).
+
+DELIBERATELY LEFT OUT: an explicit "I would really like to be
+considered." The email is analytical about fit but never states want.
+"The role I have been looking at" implies it. Adding explicit desire
+tips toward needy, and restraint plays better on an internal move.
+Judgment call — add one clause if Andre's read of Amy says otherwise.
+
+NON-NATIVE CADENCE IS INTENTIONAL: "replying so fast", "no problem about
+the coffee", "my question is if", fewer contractions. Reads as Andre,
+not as generated text.
 */
 
 -- ---------------------------------------------------------------
