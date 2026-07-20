@@ -92,36 +92,27 @@ pcq_ft AS (
 pcq_succ AS (
   SELECT clnt_no,
     MAX(CASE WHEN app_approved = 1 AND TRIM(asc_on_app_source) = 'Period-ASC' THEN 1 ELSE 0 END) AS ever_approved_asc,
-    MAX(CASE WHEN app_approved = 1 THEN 1 ELSE 0 END) AS ever_approved_raw,
     COUNT(DISTINCT arm_role) AS n_arms
   FROM pcq_win GROUP BY clnt_no
 ),
 pcq_client AS (
-  SELECT f.clnt_no, f.arm_role, f.decile, s.ever_approved_asc, s.ever_approved_raw, s.n_arms
+  SELECT f.clnt_no, f.arm_role, f.decile, s.ever_approved_asc, s.n_arms
   FROM pcq_ft f JOIN pcq_succ s ON s.clnt_no = f.clnt_no WHERE f.rn = 1
 ),
 pcq_cells AS (
   -- one row per decile -- internal stratification only, decile never reaches the output
   SELECT decile,
     COUNT(DISTINCT CASE WHEN arm_role = 'test'    THEN clnt_no END)                          AS test_clients,
-    COUNT(DISTINCT CASE WHEN arm_role = 'test'    AND ever_approved_asc = 1 THEN clnt_no END) AS test_successes_asc,
-    COUNT(DISTINCT CASE WHEN arm_role = 'test'    AND ever_approved_raw = 1 THEN clnt_no END) AS test_successes_raw,
+    COUNT(DISTINCT CASE WHEN arm_role = 'test'    AND ever_approved_asc = 1 THEN clnt_no END) AS test_successes,
     COUNT(DISTINCT CASE WHEN arm_role = 'control' THEN clnt_no END)                          AS control_clients,
-    COUNT(DISTINCT CASE WHEN arm_role = 'control' AND ever_approved_asc = 1 THEN clnt_no END) AS control_successes_asc,
-    COUNT(DISTINCT CASE WHEN arm_role = 'control' AND ever_approved_raw = 1 THEN clnt_no END) AS control_successes_raw
+    COUNT(DISTINCT CASE WHEN arm_role = 'control' AND ever_approved_asc = 1 THEN clnt_no END) AS control_successes
   FROM pcq_client GROUP BY decile
 ),
-pcq_rows_gated AS (
-  -- Period-ASC gated success (Open Decision #1 -- both variants shipped, Andre picks one)
-  SELECT CAST('total' AS VARCHAR(10)) AS row_type, CAST('PCQ_gated' AS VARCHAR(20)) AS mne,
+pcq_rows AS (
+  -- success = app_approved gated on Period-ASC (canon: numerator only, denominator = all targeted)
+  SELECT CAST('total' AS VARCHAR(10)) AS row_type, CAST('PCQ' AS VARCHAR(20)) AS mne,
     CAST('NG3_CHLN+NG3_CHLG' AS VARCHAR(30)) AS arm_test, CAST('NG3_CHMP' AS VARCHAR(30)) AS arm_ctrl,
-    test_clients AS n_test, test_successes_asc AS x_test, control_clients AS n_ctrl, control_successes_asc AS x_ctrl
-  FROM pcq_cells
-),
-pcq_rows_ungated AS (
-  SELECT CAST('total' AS VARCHAR(10)) AS row_type, CAST('PCQ_ungated' AS VARCHAR(20)) AS mne,
-    CAST('NG3_CHLN+NG3_CHLG' AS VARCHAR(30)) AS arm_test, CAST('NG3_CHMP' AS VARCHAR(30)) AS arm_ctrl,
-    test_clients AS n_test, test_successes_raw AS x_test, control_clients AS n_ctrl, control_successes_raw AS x_ctrl
+    test_clients AS n_test, test_successes AS x_test, control_clients AS n_ctrl, control_successes AS x_ctrl
   FROM pcq_cells
 ),
 pcq_conflict_row AS (
@@ -134,8 +125,7 @@ pcq_conflict_row AS (
 -- ==== TEAMMATE HOOK-UP POINT: add a new campaign as one more UNION ALL branch, same 8 columns ====
 all_rows AS (
   SELECT * FROM pcl_rows
-  UNION ALL SELECT * FROM pcq_rows_gated
-  UNION ALL SELECT * FROM pcq_rows_ungated
+  UNION ALL SELECT * FROM pcq_rows
   UNION ALL SELECT * FROM pcl_conflict_row
   UNION ALL SELECT * FROM pcq_unmapped_row
   UNION ALL SELECT * FROM pcq_conflict_row
