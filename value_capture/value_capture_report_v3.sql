@@ -34,11 +34,14 @@
 -- NON_MB_CHALLENGER vs HOLDOUT); the stats layer below is unchanged and treats each row as an
 -- independent single-stratum test, which is correct since they don't share a GROUP BY key.
 --
--- SPOOL: the O2P converter (CR_APP 4-table daily join) is materialized into a VOLATILE table BEFORE
--- the main query -- as a plain CTE hit by the EXISTS correlation it re-runs per client and spools out
--- (validated source async_banner_summary_success.sql does the same). Run this pre-step, then the query.
+-- SPOOL + RERUN: the O2P converter (CR_APP 4-table daily join) is materialized into a VOLATILE table
+-- BEFORE the main query -- as a plain CTE hit by the EXISTS correlation it re-runs per client and spools
+-- (validated source async_banner_summary_success.sql does the same). Volatile tables live only for the
+-- session, so a FRESH session needs no DROP -- and a DROP of a non-existent table errors 3807 and can
+-- abort the batch, so it is deliberately NOT here.
+-- >> RERUNNING IN THE SAME SESSION? Run  DROP TABLE o2p_conv_vt;  by itself FIRST, then this. <<
+-- Run this CREATE (+ COLLECT STATS), then the WITH query below, in the SAME session.
 
-DROP TABLE o2p_conv_vt;   -- rerun-safe: ignore "table does not exist" on the first run
 CREATE VOLATILE TABLE o2p_conv_vt AS (
   SELECT a.clnt_no, d.prod_app_dt AS app_dt
   FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
