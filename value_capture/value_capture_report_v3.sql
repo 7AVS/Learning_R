@@ -30,29 +30,10 @@
 -- deployment-2 ASYNC TEST/CONTROL only (deployment 1 and the NON_ASYNC arm have no control,
 -- excluded). arm_test/arm_ctrl for all three are DERIVED LABELS, not raw codes -- async has no
 -- single raw code per arm, it's a suffix pattern over many codes (see note at each *_rows CTE).
--- O2P emits TWO contract rows sharing one HOLDOUT control (MB_CHAMPION vs HOLDOUT,
--- NON_MB_CHALLENGER vs HOLDOUT); the stats layer below is unchanged and treats each row as an
--- independent single-stratum test, which is correct since they don't share a GROUP BY key.
---
--- SPOOL + RERUN: the O2P converter (CR_APP 4-table daily join) is materialized into a VOLATILE table
--- BEFORE the main query -- as a plain CTE hit by the EXISTS correlation it re-runs per client and spools
--- (validated source async_banner_summary_success.sql does the same). Volatile tables live only for the
--- session, so a FRESH session needs no DROP -- and a DROP of a non-existent table errors 3807 and can
--- abort the batch, so it is deliberately NOT here.
--- >> RERUNNING IN THE SAME SESSION? Run  DROP TABLE o2p_conv_vt;  by itself FIRST, then this. <<
--- Run this CREATE (+ COLLECT STATS), then the WITH query below, in the SAME session.
-
-CREATE VOLATILE TABLE o2p_conv_vt AS (
-  SELECT a.clnt_no, d.prod_app_dt AS app_dt
-  FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
-  JOIN DDWV01.OVRL_CR_APP_DLY AS b ON b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
-  JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c ON c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no AND c.sys_src_id = a.sys_src_id
-  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no AND d.sys_src_id = c.sys_src_id
-  WHERE b.app_typ = 'P' AND d.appl_for_prod_typ IN ('40','41','43')
-    AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
-    AND d.prod_app_compl_dt IS NOT NULL AND d.prod_app_compl_dt >= DATE '2026-04-01'
-) WITH DATA PRIMARY INDEX (clnt_no) ON COMMIT PRESERVE ROWS;
-COLLECT STATISTICS COLUMN (clnt_no) ON o2p_conv_vt;
+-- O2P emits ONE contract row: MB_CHAMPION (got the mobile async banner) vs NON_MB_CHALLENGER (did
+-- not). The TG7 holdout is filtered out -- not the contrast measured here. No volatile table: the
+-- converter is a pre-aggregated CTE joined once (no correlated EXISTS), so nothing to CREATE/DROP and
+-- no spool from per-client re-runs. This file is a single statement -- run it as one query.
 
 WITH
 
@@ -218,10 +199,9 @@ pcd_rows AS (
   FROM pcd_cells cells CROSS JOIN pcd_unmapped u CROSS JOIN pcd_conflict c
 ),
 
--- ---- O2P: NEW deployment only (3-arm: HOLDOUT / MB_CHAMPION / NON_MB_CHALLENGER), summary-
--- converted from async_banner_vintage_ab.sql. OLD deployments (TG4=TEST/TG7=CONTROL, no holdout)
--- are excluded -- not the randomized contrast this block measures. Emits TWO contract rows below,
--- both sharing the same HOLDOUT n/x. -------------------------------------------------------------
+-- ---- O2P: NEW deployment only. Contrast = MB_CHAMPION vs NON_MB_CHALLENGER (both TG4; has_mb
+-- splits them). TG7 holdout is filtered out -- not measured here. Converter is a pre-aggregated CTE
+-- (no volatile, no correlated EXISTS). ------------------------------------------------------------
 o2p_raw AS (
   SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt, TRIM(tst_grp_cd) AS tst_grp_cd, TACTIC_CELL_CD
   FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
@@ -238,74 +218,55 @@ o2p_grp AS (
   GROUP BY clnt_no, tst_grp_cd
 ),
 o2p_win AS (
+  -- champion vs challenger only (both TG4; has_mb splits them). TG7 holdout filtered out per Andre.
   SELECT clnt_no, treatmt_strt_dt,
-    CASE
-      WHEN tst_grp_cd = 'TG7' THEN 'HOLDOUT'
-      WHEN tst_grp_cd = 'TG4' AND has_mb = 1 THEN 'MB_CHAMPION'
-      WHEN tst_grp_cd = 'TG4' AND has_mb = 0 THEN 'NON_MB_CHALLENGER'
-    END AS arm_role
+    CASE WHEN has_mb = 1 THEN 'MB_CHAMPION' ELSE 'NON_MB_CHALLENGER' END AS arm_role
   FROM o2p_grp
+  WHERE tst_grp_cd = 'TG4'
 ),
-o2p_ft AS (
-  SELECT clnt_no, arm_role,
-    ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY treatmt_strt_dt ASC) AS rn
-  FROM o2p_win
+o2p_conv AS (
+  -- converter: ONE row per client, earliest completed O2P application. Pre-aggregated + joined once
+  -- below (no volatile, no correlated EXISTS) so the 4-table CR_APP join runs a single time.
+  SELECT a.clnt_no, MIN(d.prod_app_dt) AS first_app_dt
+  FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
+  JOIN DDWV01.OVRL_CR_APP_DLY AS b ON b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
+  JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c ON c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no AND c.sys_src_id = a.sys_src_id
+  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no AND d.sys_src_id = c.sys_src_id
+  WHERE b.app_typ = 'P' AND d.appl_for_prod_typ IN ('40','41','43')
+    AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
+    AND d.prod_app_compl_dt IS NOT NULL AND d.prod_app_compl_dt >= DATE '2026-04-01'
+  GROUP BY a.clnt_no
 ),
-o2p_arms AS (
-  SELECT clnt_no, COUNT(DISTINCT arm_role) AS n_arms FROM o2p_win GROUP BY clnt_no
-),
-o2p_succ_flag AS (
-  -- EXISTS against the pre-materialized VOLATILE converter (o2p_conv_vt, created above) -- Teradata
-  -- gotcha: no EXISTS inside CASE WHEN, so it's here in WHERE, LEFT JOIN back below.
-  SELECT DISTINCT w.clnt_no
+o2p_succ AS (
+  SELECT w.clnt_no,
+    MAX(CASE WHEN oc.first_app_dt BETWEEN w.treatmt_strt_dt AND w.treatmt_strt_dt + 60 THEN 1 ELSE 0 END) AS ever_success
   FROM o2p_win w
-  WHERE EXISTS (
-    SELECT 1 FROM o2p_conv_vt oc
-    WHERE oc.clnt_no = w.clnt_no AND oc.app_dt BETWEEN w.treatmt_strt_dt AND w.treatmt_strt_dt + 60
-  )
+  LEFT JOIN o2p_conv oc ON oc.clnt_no = w.clnt_no
+  GROUP BY w.clnt_no
 ),
 o2p_client AS (
-  SELECT f.clnt_no, f.arm_role, a.n_arms,
-    CASE WHEN sf.clnt_no IS NOT NULL THEN 1 ELSE 0 END AS ever_success
-  FROM o2p_ft f
-  JOIN o2p_arms a ON a.clnt_no = f.clnt_no
-  LEFT JOIN o2p_succ_flag sf ON sf.clnt_no = f.clnt_no
-  WHERE f.rn = 1
+  SELECT w.clnt_no, w.arm_role, COALESCE(s.ever_success, 0) AS ever_success
+  FROM o2p_win w
+  LEFT JOIN o2p_succ s ON s.clnt_no = w.clnt_no
 ),
 o2p_cells AS (
   SELECT
-    COUNT(DISTINCT CASE WHEN arm_role = 'MB_CHAMPION'       THEN clnt_no END)                        AS mb_champion_n,
-    COUNT(DISTINCT CASE WHEN arm_role = 'MB_CHAMPION'       AND ever_success = 1 THEN clnt_no END)    AS mb_champion_x,
+    COUNT(DISTINCT CASE WHEN arm_role = 'MB_CHAMPION'       THEN clnt_no END)                        AS champion_n,
+    COUNT(DISTINCT CASE WHEN arm_role = 'MB_CHAMPION'       AND ever_success = 1 THEN clnt_no END)    AS champion_x,
     COUNT(DISTINCT CASE WHEN arm_role = 'NON_MB_CHALLENGER' THEN clnt_no END)                        AS challenger_n,
-    COUNT(DISTINCT CASE WHEN arm_role = 'NON_MB_CHALLENGER' AND ever_success = 1 THEN clnt_no END)    AS challenger_x,
-    COUNT(DISTINCT CASE WHEN arm_role = 'HOLDOUT'            THEN clnt_no END)                        AS holdout_n,
-    COUNT(DISTINCT CASE WHEN arm_role = 'HOLDOUT'            AND ever_success = 1 THEN clnt_no END)    AS holdout_x
+    COUNT(DISTINCT CASE WHEN arm_role = 'NON_MB_CHALLENGER' AND ever_success = 1 THEN clnt_no END)    AS challenger_x
   FROM o2p_client
 ),
-o2p_unmapped AS (
-  -- tst_grp_cd values outside TG4/TG7 (e.g. other test groups on the same tactic) resolve to NULL
-  SELECT COUNT(DISTINCT clnt_no) AS n_unmapped FROM o2p_win WHERE arm_role IS NULL
-),
-o2p_conflict AS (
-  SELECT COUNT(*) AS n_arm_conflict FROM o2p_client WHERE n_arms > 1
-),
 o2p_rows AS (
-  -- arm_test/arm_ctrl are DERIVED LABELS, not raw source codes -- async has no single raw code per
-  -- arm (see header note). TWO rows, same mne, sharing the HOLDOUT n/x -- they don't share a
-  -- (mne, arm_test, arm_ctrl) key so the pooling GROUP BY downstream keeps them as separate strata.
+  -- ONE row: champion (action) vs challenger (control). Labels are derived, not raw codes.
+  -- n_unmapped = 0 (only TG4 kept, every client is champion or challenger); n_arm_conflict = 0
+  -- (one row per client after the TG4 collapse).
   SELECT CAST('O2P' AS VARCHAR(20)) AS mne,
-    CAST('MB_CHAMPION' AS VARCHAR(30)) AS arm_test, CAST('HOLDOUT' AS VARCHAR(30)) AS arm_ctrl,
-    cells.mb_champion_n AS n_test, cells.mb_champion_x AS x_test,
-    cells.holdout_n AS n_ctrl, cells.holdout_x AS x_ctrl,
-    CAST(u.n_unmapped AS BIGINT) AS n_unmapped, CAST(c.n_arm_conflict AS BIGINT) AS n_arm_conflict
-  FROM o2p_cells cells CROSS JOIN o2p_unmapped u CROSS JOIN o2p_conflict c
-  UNION ALL
-  SELECT CAST('O2P' AS VARCHAR(20)) AS mne,
-    CAST('NON_MB_CHALLENGER' AS VARCHAR(30)) AS arm_test, CAST('HOLDOUT' AS VARCHAR(30)) AS arm_ctrl,
-    cells.challenger_n AS n_test, cells.challenger_x AS x_test,
-    cells.holdout_n AS n_ctrl, cells.holdout_x AS x_ctrl,
-    CAST(u.n_unmapped AS BIGINT) AS n_unmapped, CAST(c.n_arm_conflict AS BIGINT) AS n_arm_conflict
-  FROM o2p_cells cells CROSS JOIN o2p_unmapped u CROSS JOIN o2p_conflict c
+    CAST('MB_CHAMPION' AS VARCHAR(30)) AS arm_test, CAST('NON_MB_CHALLENGER' AS VARCHAR(30)) AS arm_ctrl,
+    cells.champion_n AS n_test, cells.champion_x AS x_test,
+    cells.challenger_n AS n_ctrl, cells.challenger_x AS x_ctrl,
+    CAST(0 AS BIGINT) AS n_unmapped, CAST(0 AS BIGINT) AS n_arm_conflict
+  FROM o2p_cells cells
 ),
 
 -- ---- CTU: deployment-2 ASYNC arm only (TEST vs CONTROL), summary-converted from
