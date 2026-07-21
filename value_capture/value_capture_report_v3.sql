@@ -243,7 +243,7 @@ o2p_conv AS (
   FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
   JOIN DDWV01.OVRL_CR_APP_DLY AS b ON b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
   JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c ON c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no AND c.sys_src_id = a.sys_src_id
-  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_prod_seq_no = c.cr_prod_seq_no AND d.sys_src_id = c.sys_src_id
+  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no AND d.sys_src_id = c.sys_src_id
   WHERE b.app_typ = 'P' AND d.appl_for_prod_typ IN ('40','41','43')
     AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
     AND d.prod_app_compl_dt IS NOT NULL AND d.prod_app_compl_dt >= DATE '2026-04-01'
