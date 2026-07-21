@@ -33,6 +33,23 @@
 -- O2P emits TWO contract rows sharing one HOLDOUT control (MB_CHAMPION vs HOLDOUT,
 -- NON_MB_CHALLENGER vs HOLDOUT); the stats layer below is unchanged and treats each row as an
 -- independent single-stratum test, which is correct since they don't share a GROUP BY key.
+--
+-- SPOOL: the O2P converter (CR_APP 4-table daily join) is materialized into a VOLATILE table BEFORE
+-- the main query -- as a plain CTE hit by the EXISTS correlation it re-runs per client and spools out
+-- (validated source async_banner_summary_success.sql does the same). Run this pre-step, then the query.
+
+DROP TABLE o2p_conv_vt;   -- rerun-safe: ignore "table does not exist" on the first run
+CREATE VOLATILE TABLE o2p_conv_vt AS (
+  SELECT a.clnt_no, d.prod_app_dt AS app_dt
+  FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
+  JOIN DDWV01.OVRL_CR_APP_DLY AS b ON b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
+  JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c ON c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no AND c.sys_src_id = a.sys_src_id
+  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no AND d.sys_src_id = c.sys_src_id
+  WHERE b.app_typ = 'P' AND d.appl_for_prod_typ IN ('40','41','43')
+    AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
+    AND d.prod_app_compl_dt IS NOT NULL AND d.prod_app_compl_dt >= DATE '2026-04-01'
+) WITH DATA PRIMARY INDEX (clnt_no) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS COLUMN (clnt_no) ON o2p_conv_vt;
 
 WITH
 
@@ -234,26 +251,13 @@ o2p_ft AS (
 o2p_arms AS (
   SELECT clnt_no, COUNT(DISTINCT arm_role) AS n_arms FROM o2p_win GROUP BY clnt_no
 ),
-o2p_conv AS (
-  -- success source, verbatim 4-table join from async_banner_vintage_ab.sql -- PLAIN CTE, not a
-  -- volatile table: there's no day-spine cross join on this path, so spool pressure is far lower
-  -- than the vintage version. If this still spools out in-env, fall back to the volatile pre-step
-  -- (o2p_conv_vt) from the source file.
-  SELECT a.clnt_no, d.prod_app_dt AS app_dt
-  FROM DDWV01.CR_APP_CLNT_RELTN_DLY AS a
-  JOIN DDWV01.OVRL_CR_APP_DLY AS b ON b.cr_app_id = a.cr_app_id AND b.sys_src_id = a.sys_src_id
-  JOIN DDWV01.CR_APP_CLNT_PROD_RELTN_DLY AS c ON c.cr_app_id = a.cr_app_id AND c.cr_app_clnt_seq_no = a.cr_app_clnt_seq_no AND c.sys_src_id = a.sys_src_id
-  JOIN DDWV01.CR_APP_PROD_DLY AS d ON d.cr_app_id = c.cr_app_id AND d.cr_app_prod_seq_no = c.cr_app_prod_seq_no AND d.sys_src_id = c.sys_src_id
-  WHERE b.app_typ = 'P' AND d.appl_for_prod_typ IN ('40','41','43')
-    AND d.prod_app_sts_cd IN (32,37,45,47,51,56,62)
-    AND d.prod_app_compl_dt IS NOT NULL AND d.prod_app_compl_dt >= DATE '2026-04-01'
-),
 o2p_succ_flag AS (
-  -- EXISTS-in-WHERE CTE, LEFT JOIN back below -- Teradata gotcha: no EXISTS inside CASE WHEN.
+  -- EXISTS against the pre-materialized VOLATILE converter (o2p_conv_vt, created above) -- Teradata
+  -- gotcha: no EXISTS inside CASE WHEN, so it's here in WHERE, LEFT JOIN back below.
   SELECT DISTINCT w.clnt_no
   FROM o2p_win w
   WHERE EXISTS (
-    SELECT 1 FROM o2p_conv oc
+    SELECT 1 FROM o2p_conv_vt oc
     WHERE oc.clnt_no = w.clnt_no AND oc.app_dt BETWEEN w.treatmt_strt_dt AND w.treatmt_strt_dt + 60
   )
 ),
