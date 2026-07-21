@@ -253,8 +253,8 @@ o2p_succ_flag AS (
   SELECT DISTINCT w.clnt_no
   FROM o2p_win w
   WHERE EXISTS (
-    SELECT 1 FROM o2p_conv cv
-    WHERE cv.clnt_no = w.clnt_no AND cv.app_dt BETWEEN w.treatmt_strt_dt AND w.treatmt_strt_dt + 60
+    SELECT 1 FROM o2p_conv oc
+    WHERE oc.clnt_no = w.clnt_no AND oc.app_dt BETWEEN w.treatmt_strt_dt AND w.treatmt_strt_dt + 60
   )
 ),
 o2p_client AS (
