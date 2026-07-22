@@ -1,6 +1,6 @@
 # %% [0] Config — paths, tracked-MNE list, EDW helper, env patches
 # Enriches the unsub value spine (13_unsub_value_spine.sql, S1) with UCP attributes
-# at the month-end BEFORE each client's first unsub, then builds the TIBC x age
+# at the month-end BEFORE each client's first unsub, then builds the TIBC x tenure
 # segment matrix by triggering MNE. Env: Lumina/AI Farm YARN-Spark — `spark` and
 # `EDW` are pre-initialized (no builder/stop, no teradatasql import).
 
@@ -20,7 +20,7 @@ UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
 HDFS_OUT = "/user/427966379/unsub_value/enriched_spine"
 
 UCP_COLS = ["CLNT_NO", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
-            "AGE", "AGE_RNG", "TENURE_RBC_YEARS", "PROF_TOT_ANNUAL",
+            "TENURE_RBC_YEARS", "PROF_TOT_ANNUAL",
             "PROF_SEG_CD", "CLNT_TYP"]
 
 TRACKED_MNES = ['PCQ', 'PCL', 'PCD', 'AUH', 'CLI', 'MVP', 'CRV', 'CTU', 'O2P',
@@ -193,7 +193,7 @@ if match_pct < 90:
     print(f"WARNING: match rate {match_pct:.1f}% is below the 90% threshold — investigate before trusting the matrix.")
 
 
-# %% [4] Segment bands — tibc_band and age_band
+# %% [4] Segment bands — tibc_band and tenure_band
 
 # NOTE: nulls -> 0 per spec means an unmatched client (no UCP row at all) and a
 # matched client with genuinely zero TIBC products both land in tibc_band '0'.
@@ -213,21 +213,26 @@ enriched = enriched.withColumn(
      .otherwise("4+")
 )
 
-# age is NULL for unmatched clients too -> falls into 'unknown', consistent with spec.
+# tenure_rbc_years confirmed UCP field (schemas/ucp_business_curated_fields.md L41-42;
+# corroborated by campaigns/CRV/ucp_profiling/profile_4groups.py L31 "confirmed, VBA
+# UCP field list"). Already pulled in UCP_COLS and already used at cell [7] before
+# this swap. NULL -> 'unknown' for unmatched clients, same as age was.
+# Bucket cut points are an editable assumption (like MIN_MNE_ROWS above) -- no
+# standard tenure bands are documented anywhere in the repo; adjust freely.
 enriched = enriched.withColumn(
-    "age_band",
-    F.when(F.col("age").isNull(), "unknown")
-     .when(F.col("age") < 25, "<25")
-     .when(F.col("age") <= 34, "25-34")
-     .when(F.col("age") <= 49, "35-49")
-     .when(F.col("age") <= 64, "50-64")
-     .otherwise("65+")
+    "tenure_band",
+    F.when(F.col("tenure_rbc_years").isNull(), "unknown")
+     .when(F.col("tenure_rbc_years") < 1, "<1yr")
+     .when(F.col("tenure_rbc_years") <= 3, "1-3yr")
+     .when(F.col("tenure_rbc_years") <= 7, "4-7yr")
+     .when(F.col("tenure_rbc_years") <= 15, "8-15yr")
+     .otherwise("16yr+")
 )
 
 print("tibc_band distribution:")
 print(enriched.groupBy("tibc_band").count().orderBy("tibc_band").toPandas().to_string(index=False))
-print("\nage_band distribution:")
-print(enriched.groupBy("age_band").count().orderBy("age_band").toPandas().to_string(index=False))
+print("\ntenure_band distribution:")
+print(enriched.groupBy("tenure_band").count().orderBy("tenure_band").toPandas().to_string(index=False))
 
 
 # %% [5] Save enriched spine to HDFS
@@ -238,15 +243,15 @@ print(f"Saved: {HDFS_OUT}")
 print(f"Rows: {n_saved:,}")
 
 
-# %% [6] THE SEGMENT MATRIX — age_band x tibc_band, overall and per tracked MNE
+# %% [6] THE SEGMENT MATRIX — tenure_band x tibc_band, overall and per tracked MNE
 
-AGE_ORDER = ["<25", "25-34", "35-49", "50-64", "65+", "unknown"]
+TENURE_ORDER = ["<1yr", "1-3yr", "4-7yr", "8-15yr", "16yr+", "unknown"]
 
-overall_pd = enriched.groupBy("age_band", "tibc_band").count().toPandas()
-overall_piv = overall_pd.pivot_table(index="age_band", columns="tibc_band",
+overall_pd = enriched.groupBy("tenure_band", "tibc_band").count().toPandas()
+overall_piv = overall_pd.pivot_table(index="tenure_band", columns="tibc_band",
                                       values="count", fill_value=0, aggfunc="sum")
-overall_piv = overall_piv.reindex(AGE_ORDER)
-print(f"OVERALL — age_band x tibc_band ({n_saved:,} first-unsubs, counts only):")
+overall_piv = overall_piv.reindex(TENURE_ORDER)
+print(f"OVERALL — tenure_band x tibc_band ({n_saved:,} first-unsubs, counts only):")
 print(overall_piv.to_string())
 
 mne_counts = (enriched.groupBy("trigger_mne").count().toPandas()
@@ -257,33 +262,36 @@ for mne in TRACKED_MNES:
     n = mne_counts.get(mne, 0)
     if n >= MIN_MNE_ROWS:
         sub_pd = (enriched.filter(F.col("trigger_mne") == mne)
-                  .groupBy("age_band", "tibc_band").count().toPandas())
-        piv = sub_pd.pivot_table(index="age_band", columns="tibc_band",
-                                  values="count", fill_value=0, aggfunc="sum").reindex(AGE_ORDER)
-        print(f"\n{mne} — age_band x tibc_band ({n:,} first-unsubs):")
+                  .groupBy("tenure_band", "tibc_band").count().toPandas())
+        piv = sub_pd.pivot_table(index="tenure_band", columns="tibc_band",
+                                  values="count", fill_value=0, aggfunc="sum").reindex(TENURE_ORDER)
+        print(f"\n{mne} — tenure_band x tibc_band ({n:,} first-unsubs):")
         print(piv.to_string())
     else:
         print(f"{mne}: {n:,} first-unsubs (below {MIN_MNE_ROWS:,} threshold — not shown as matrix)")
 
 
-# %% [7] Value-fields preview — PROF_TOT_ANNUAL and TENURE_RBC_YEARS by age_band
+# %% [7] Value-field preview — PROF_TOT_ANNUAL by tenure_band
 
 # Vetting the profitability field, not reporting it: PROF_TOT_ANNUAL, if it is a
-# current-year contribution figure (not lifetime/projected), will understate young
-# clients who are early in their RBC relationship. Confirm the field's definition
-# before using it downstream as an LTV proxy.
+# current-year contribution figure (not lifetime/projected), will understate
+# clients early in their RBC relationship — the same risk flagged for age,
+# now read directly against tenure instead of via age as a proxy for it.
+# Confirm the field's definition before using it downstream as an LTV proxy.
+# tenure_rbc_years dropped from this loop — it now defines tenure_band itself,
+# so percentiling it against its own band would be circular.
 PCTS = [0.10, 0.25, 0.50, 0.75, 0.90]
 matched_df = enriched.filter(F.col("ucp_matched"))
 
-for field in ["prof_tot_annual", "tenure_rbc_years"]:
+for field in ["prof_tot_annual"]:
     rows = []
-    for band in AGE_ORDER:
-        sub = matched_df.filter(F.col("age_band") == band)
+    for band in TENURE_ORDER:
+        sub = matched_df.filter(F.col("tenure_band") == band)
         n = sub.count()
         if n == 0:
             continue
         q = sub.approxQuantile(field, PCTS, 0.01)
-        rows.append({"age_band": band, "n": n, "p10": q[0], "p25": q[1],
+        rows.append({"tenure_band": band, "n": n, "p10": q[0], "p25": q[1],
                      "p50": q[2], "p75": q[3], "p90": q[4]})
-    print(f"\n{field} percentiles by age_band (matched clients only):")
+    print(f"\n{field} percentiles by tenure_band (matched clients only):")
     print(pd.DataFrame(rows).to_string(index=False))

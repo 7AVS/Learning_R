@@ -207,6 +207,8 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `14_cpc_optout_campaign_proximity.sql` | Did campaign sends precede CPC 1002 opt-outs? Backward proximity with base-rate control |
 | `15_unsub_value_enrichment.py` | Spark/UCP (allowed .py — Lumina side): spine → TIBC×age segment matrix by trigger MNE + PROF_TOT_ANNUAL vetting |
 | `16_population_lost_trend.sql` | Month × MNE, ALL MNEs, long format: em_clients_sent (disposition 1) + clients_first_unsub + tracked flag — Excel-pivot extract |
+| `18_vendor_retention_probe.sql` | Quarterly rows/distinct-clients/min-max for MASTER (load_tm proxy) and EVENT (disposition_dt_tm) separately, unwindowed — settles how far back coverage goes |
+| `19_unsub_journey_lookback.sql` | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -242,3 +244,16 @@ Scope: CRV/PCL/PCQ/PCD/AUH, cohorts ≥ 2025-01-01. **sent_in_window / decisione
 - the 2–9% gap = send-time suppression/throttling (expected, not data loss);
 - the two-field EM-decisioning rule holds up (a leaky rule would show a much lower ratio).
 Per-MNE/per-month detail and the in_master split not transcribed — headline only.
+
+## 12. Power Pack Q3 spotlight — "Anatomy of an Unsub" design LOCKED (2026-07-22)
+
+Three numbers, locked scope:
+1. **Share of quarterly unsubs with Cards last-touch** — already built (`16_population_lost_trend.sql` v2). Not touched by this lock.
+2. **Journey** — contacts in the 12 months before first-unsub vs. a contacted-but-stayed baseline. New build: `19_unsub_journey_lookback.sql`. Baseline is a **symmetric send-indexed risk set** (index on the client's own last send in the window, NOT a fixed calendar cutoff) — avoids conditioning bias from indexing only the unsub group on an event.
+3. **Value matrix** — TIBC × **TENURE** (not age) profile of unsubbers. Framed as "value now unreachable by email." Revolver/transactor explicitly dropped as a segmentation axis for this spotlight.
+
+Other decisions folded in:
+- **CPC cold-open cut (Andre's call):** the CPC-anchored "population lost" narrative (§0 outcome 2) is NOT one of this spotlight's three numbers — parked separately, not part of the cold open.
+- **Tenure over age:** `TENURE_RBC_YEARS` is a confirmed UCP field (`schemas/ucp_business_curated_fields.md` L41-42, corroborated `campaigns/CRV/ucp_profiling/profile_4groups.py` L31) and was already being pulled/used in `15_unsub_value_enrichment.py` before this lock — swap, not a new dependency.
+- **New retention check:** `18_vendor_retention_probe.sql` settles how far back MASTER/EVENT coverage goes (quarterly, unwindowed) — feeds the "is 12 months of lookback covered" question behind #2.
+- Packs 18 and 19 added to the file index (§8); 13 and 16 untouched.
