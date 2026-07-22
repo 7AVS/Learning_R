@@ -27,7 +27,13 @@
 -- If either block returns more than ~20 quarters, that IS the finding
 -- (coverage goes back further than expected) — do not truncate the WHERE
 -- clause to force the row count down.
--- ENGINE: Starburst/Trino.
+--
+-- Reviewed 2026-07-22 for Teradata-direct: the quarter-bucket arithmetic below
+-- (EXTRACT + integer division) is portable as written — EXTRACT(MONTH ...)
+-- returns INTEGER on both engines, and INTEGER/INTEGER truncates identically
+-- in Trino and Teradata, so month 1-12 maps to quarter 1-4 the same way on
+-- either side. No functional change needed; only the engine tag was wrong.
+-- ENGINE: Teradata-direct.
 -- =============================================================================
 
 

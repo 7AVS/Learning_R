@@ -207,8 +207,9 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `14_cpc_optout_campaign_proximity.sql` | Did campaign sends precede CPC 1002 opt-outs? Backward proximity with base-rate control |
 | `15_unsub_value_enrichment.py` | Spark/UCP (allowed .py — Lumina side): spine → TIBC×age segment matrix by trigger MNE + PROF_TOT_ANNUAL vetting |
 | `16_population_lost_trend.sql` | Month × MNE, ALL MNEs, long format: em_clients_sent (disposition 1) + clients_first_unsub + tracked flag — Excel-pivot extract |
-| `18_vendor_retention_probe.sql` | Quarterly rows/distinct-clients/min-max for MASTER (load_tm proxy) and EVENT (disposition_dt_tm) separately, unwindowed — settles how far back coverage goes |
-| `19_unsub_journey_lookback.sql` | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary |
+| `17_em_decision_vendor_coverage.sql` | EM-decisioned → vendor coverage: sent_in_window/decisioned ratio, Cards five (CRV/PCL/PCQ/PCD/AUH) — 91–98% headline (§11, 2026-07-16). **RE-RAN 2026-07-22** with full per-MNE × month detail now transcribed (§13) |
+| `18_vendor_retention_probe.sql` (Teradata-direct) | Quarterly rows/distinct-clients/min-max for MASTER (load_tm proxy) and EVENT (disposition_dt_tm) separately, unwindowed — settles how far back coverage goes. **RAN 2026-07-22** — retention resolved: ~7-yr rolling window, 12-mo lookback fully covered (§13) |
+| `19_unsub_journey_lookback.sql` (Teradata-direct) | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary. v1 (Trino, `APPROX_PERCENTILE`) errored 3706 running Teradata-direct in-env 2026-07-22 — converted; percentiles → banded distribution (see §12) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -257,3 +258,136 @@ Other decisions folded in:
 - **Tenure over age:** `TENURE_RBC_YEARS` is a confirmed UCP field (`schemas/ucp_business_curated_fields.md` L41-42, corroborated `campaigns/CRV/ucp_profiling/profile_4groups.py` L31) and was already being pulled/used in `15_unsub_value_enrichment.py` before this lock — swap, not a new dependency.
 - **New retention check:** `18_vendor_retention_probe.sql` settles how far back MASTER/EVENT coverage goes (quarterly, unwindowed) — feeds the "is 12 months of lookback covered" question behind #2.
 - Packs 18 and 19 added to the file index (§8); 13 and 16 untouched.
+
+**2026-07-22 engine fix — both packs run Teradata-direct, not Trino:** 18 and 19 were
+drafted with a `-- ENGINE: Starburst/Trino` header even though they touch only DTZV01
+tables (single-source EDW, same as siblings 13/16). Andre ran 19 Teradata-direct and hit
+**error 3706** ("Data type lookback_contacts does not match a defined type name") —
+Teradata's signature error for an unknown function, here `APPROX_PERCENTILE` (Trino-only,
+no Teradata equivalent). Both files converted in place:
+- **19:** `APPROX_PERCENTILE(25/50/75)` on `lookback_contacts` and `lookback_mnes` replaced
+  with a **banded distribution** (exact counts of clients per band, per cohort_group ×
+  cohort_month) — median is read off the bands instead. Bands (editable assumption, set in
+  the final SELECT's CASE WHEN): contacts = 0 / 1 / 2 / 3-4 / 5-6 / 7-9 / 10-14 / 15+; mnes
+  = 0 / 1 / 2 / 3 / 4 / 5+. Added `AVG` of both (CAST to `DECIMAL(10,1)`) alongside the
+  bands — safe Teradata-direct since the 9881 pushdown-ROUND hazard is a Starburst
+  artifact that never fires on a native Teradata session. Also fixed a latent UNION ALL
+  truncation bug in the `population` CTE: `'unsub'` (5 chars) as the first UNION branch
+  would have silently truncated `'stayed'` (6 chars) to `'staye'` per the CLAUDE.md hard
+  rule — both branches now `CAST(... AS VARCHAR(10))`. The 12-month lookback join swapped
+  Trino's `p.index_dt - INTERVAL '12' MONTH` for `ADD_MONTHS(CAST(p.index_dt AS DATE), -12)`
+  (Teradata-native; the CAST-to-DATE-before-arithmetic idiom matches pack 14's
+  `CAST(o.CHG_TMSTMP AS DATE) - 30`).
+- **18:** no real Trino-only construct was present — the quarter-bucket arithmetic
+  (`EXTRACT(...) * 10 + ((EXTRACT(MONTH ...) - 1) / 3 + 1)`) is portable as written
+  (INTEGER/INTEGER truncates the same way on both engines). Only the header tag was wrong;
+  fixed to `ENGINE: Teradata-direct`, no query-body changes.
+- Both headers' engine tags now read `Teradata-direct`; Trino/pushdown-specific caveats
+  (APPROX_PERCENTILE caution, Starburst pushdown-guard comment) rewritten to Teradata-direct
+  framing (spool guard instead of pushdown guard).
+
+## 13. Run results — 18 vendor retention probe + 17 re-run (2026-07-22)
+
+### Pack 18 — vendor retention probe RESULTS (run 2026-07-22, Teradata-direct)
+Source pics: `pics/PXL_20260722_233811045.jpg` (MASTER tab), `pics/PXL_20260722_233958940.jpg` (EVENT tab).
+
+- **MASTER (load_tm proxy):** coverage 2019Q3 → today. Earliest load_tm **2019-07-22 20:29 — exactly 7 years before run date** → strongly suggests a **rolling 7-year retention window**, not table birth. Recent quarters ~80–128M rows, ~10M distinct clients/quarter. 2026Q3 partial (10.7M rows, 4.55M clients through 2026-07-22).
+- **EVENT (disposition_dt_tm):** coverage back to 2018Q2 but sparse/unreliable before 2019Q4 (20182: 101K rows; 20183: 295 rows; 20192: 9K rows — clearly a partial early feed). Solid from 2019Q4 on. Recent quarters ~120–180M rows, ~11M distinct clients. 2026Q3 partial through 2026-07-22.
+- OCR caution: EVENT 20193 row transcribed as n_rows 4,628,956 < n_distinct 6,323,849 — impossible, phone-photo misread, treat that cell as unreliable.
+- **DECISION RESOLVED:** the 12-month lookback for pack 19 is fully covered for any plausible spotlight cohort. Earlier "mid-2025 retention" note and the "2023" belief (§9 Q7) were both wrong — coverage is ~7 years.
+
+### Pack 17 — decisioned→vendor funnel, per-MNE × month RESULTS (run 2026-07-22, Cards five, 202501–202607)
+Source pics (scrolled views of one grid, cross-checked): `pics/PXL_20260722_233607118.jpg`, `pics/PXL_20260722_233625550.jpg`, `pics/PXL_20260722_233634398.jpg`. Columns: mne, cohort_yyyymm, clients_decisioned_em, in_master, sent, opened, clicked, unsub, hardbounce, complaint.
+
+Numbers are **directional from phone OCR** — overlapping shots disagreed on a few cells (a PCL row read 202501 in one shot, 202601 in another; a couple of unsub cells shifted by one row between reads). Ranges (`~lo–hi`) mark the disagreement; slide-final numbers must come from the in-env export.
+
+| MNE | Month | Dec | Master | Sent | Open | Click | Unsub | HB | Compl |
+|---|---|---|---|---|---|---|---|---|---|
+| AUH | 202602 | 94,846 | 86,575 | 86,575 | 56,032 | 324 | 147 | 69 | 3 |
+| AUH | 202604 | 661,591 | 555,967 | 555,967 | 360,808 | 2,389 | 765 | 301 | 12 |
+| CRV | 202501 | 52,745 | 24,567 | 24,567 | 15,003 | 223 | 26 | 9 | 0 |
+| CRV | 202502 | 57,235 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| CRV | 202503 | 63,871 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| CRV | 202504 | 57,748 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| CRV | 202505 | 51,806 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| CRV | 202506 | 55,392 | 40,171 | 40,171 | 23,593 | 350 | 81 | 41 | 1 |
+| CRV | 202507 | 20,646 | 15,196 | 15,196 | 8,938 | 117 | 25 | 13 | 0 |
+| CRV | 202508 | 49,703 | 39,175 | 39,175 | 24,431 | 279 | 107 | 58 | 2 |
+| CRV | 202509 | 60,427 | 53,986 | 53,986 | 31,069 | 520 | 167 | 70 | 1 |
+| CRV | 202510 | 59,205 | 49,435 | 49,435 | 29,993 | 445 | 121 | 74 | 1 |
+| CRV | 202511 | 59,144 | 52,846 | 52,846 | 33,183 | 453 | 117 | 89 | 2 |
+| CRV | 202512 | 58,606 | 51,612 | 51,612 | 30,913 | 463 | 148 | 91 | 2 |
+| CRV | 202601 | 57,858 | 49,283 | 49,283 | 30,812 | 501 | 167 | 84 | 2 |
+| CRV | 202602 | 60,355 | 56,422 | 56,422 | 37,780 | 420 | 140 | 74 | 2 |
+| CRV | 202603 | 76,043 | 70,751 | 70,751 | 44,877 | 609 | 184 | 76 | 1 |
+| CRV | 202604 | 59,696 | 55,638 | 55,638 | 33,329 | 394 | 106 | 59 | 0 |
+| CRV | 202605 | 56,161 | 49,126 | 49,126 | 33,217 | 342 | 81 | 40 | 1 |
+| CRV | 202606 | 72,190 | 53,141 | 53,141 | 29,819 | 384 | 55 | 58 | 0 |
+| CRV | 202607 | 40,885 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| PCD | 202501 | 410,427 | 383,705 | 383,705 | 261,797 | 17,013 | 150 | 274 | 13 |
+| PCD | 202502 | 455,880 | 426,915 | 426,915 | 292,341 | 20,503 | 126 | 291 | 15 |
+| PCD | 202503 | 447,749 | 420,463 | 420,463 | 266,389 | 21,098 | 170 | 291 | 9 |
+| PCD | 202504 | 259,627 | 243,476 | 243,476 | 164,822 | 10,436 | 111 | 251 | 5 |
+| PCD | 202505 | 451,149 | 423,571 | 423,571 | 294,561 | 21,126 | 244 | 478 | 7 |
+| PCD | 202506 | 420,082 | 392,697 | 392,697 | 262,160 | 14,731 | 363 | 372 | 9 |
+| PCD | 202507 | 453,788 | 421,844 | 421,844 | 284,023 | 16,956 | 853 | 438 | 10 |
+| PCD | 202508 | 342,576 | 317,116 | 317,116 | 209,537 | 12,187 | 801 | 423 | 5 |
+| PCD | 202509 | 411,126 | 380,070 | 380,070 | 260,132 | 16,729 | 748 | 342 | 9 |
+| PCD | 202510 | 429,228 | 394,905 | 394,905 | 259,457 | 17,462 | 728 | 340 | 9 |
+| PCD | 202511 | 127,047 | 116,637 | 116,637 | 80,447 | 4,416 | 197 | 98 | 1 |
+| PCD | 202512 | 486,351 | 448,928 | 448,928 | 315,630 | 20,037 | 819 | 384 | 11 |
+| PCD | 202601 | 326,672 | 300,050 | 300,050 | 212,422 | 17,554 | 535 | 232 | 11 |
+| PCD | 202602 | 369,123 | 337,606 | 337,606 | 234,266 | 16,590 | 618 | 230 | 12 |
+| PCD | 202603 | 573,375 | 523,827 | 523,827 | 362,475 | 25,665 | 914 | 353 | 10 |
+| PCD | 202604 | 335,381 | 303,977 | 303,977 | 209,248 | 11,128 | 429 | 151 | 5 |
+| PCD | 202605 | 339,381 | 306,638 | 306,638 | 215,070 | 15,650 | 418 | 227 | 2 |
+| PCD | 202606 | 413,173 | 372,171 | 372,171 | 261,834 | 16,578 | 388 | 269 | 10 |
+| PCD | 202607 | 244,841 | 219,081 | 219,081 | 141,029 | 6,438 | 83 | 129 | 1 |
+| PCL* | 202501 | 854,240 | 845,933 | 845,933 | 484,377 | 55,839 | 435 | 595 | ~20 |
+| PCL* | 202502 | 472,945 | 468,381 | 468,381 | 275,713 | 18,554 | ~297 | ~327 | ~12 |
+| PCL* | 202503 | 433,133 | 429,049 | 429,049 | 237,708 | 23,525 | ~297 | ~327 | ~12 |
+| PCL* | 202504 | 519,774 | 514,768 | 514,768 | 288,235 | 26,019 | 221 | 253 | 6 |
+| PCL* | 202505 | 620,383 | 614,204 | 614,204 | 337,726 | 26,783 | 286 | 355 | 10 |
+| PCL* | 202506 | 507,237 | 501,952 | 501,952 | 284,024 | 21,220 | 334 | 437 | 5 |
+| PCL* | 202507 | 713,603 | 703,685 | 703,685 | 418,068 | 36,736 | 581 | 322 | 3 |
+| PCL* | 202508 | 498,706 | 492,960 | 492,960 | 245,845 | 23,102 | 1,579 | 615 | 11 |
+| PCL* | 202509 | 534,024 | 527,351 | 527,351 | 301,820 | 27,543 | ~1,076–1,141 | ~470–799 | ~4–9 |
+| PCL* | 202510 | 497,200 | 489,468 | 489,468 | 276,373 | 24,642 | ~1,060–1,141 | ~605–799 | ~9–10 |
+| PCL* | 202511 | 537,507 | 530,201 | 530,201 | 331,363 | 43,976 | ~1,060–1,093 | ~605–655 | ~7–10 |
+| PCL* | 202512 | 634,078 | 624,815 | 624,815 | 369,932 | 37,521 | ~1,093–1,296 | ~655–816 | ~6–7 |
+| PCL* | 202601 | 783,382 | 771,046 | 771,046 | 454,584 | 38,298 | ~1,296–1,524 | ~816–903 | ~6–11 |
+| PCL* | 202602 | 481,256 | 473,220 | 473,220 | 274,998 | 26,774 | ~984–1,524 | ~496–903 | ~4–11 |
+| PCL* | 202603 | 573,045 | 562,891 | 562,891 | 309,574 | 27,821 | ~984–1,046 | ~447 | ~3–4 |
+| PCL* | 202604 | 577,889 | 567,377 | 567,377 | 325,223 | 28,781 | 881 | 402 | ~3–9 |
+| PCL* | 202605 | 550,780 | 540,602 | 540,602 | 303,760 | 24,596 | 602 | 397 | ~6–9 |
+| PCL* | 202606 | 585,309 | 574,179 | 574,179 | 314,283 | 29,729 | 392 | 400 | ~5–6 |
+| PCL* | 202607 | 444,355 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| PCQ | 202501 | 505,008 | 476,191 | 476,191 | 298,472 | 7,698 | 391 | ~652 | ~20 |
+| PCQ | 202502 | 549,813 | 518,634 | 518,634 | 316,230 | 7,460 | ~391–425 | ~652–769 | ~18–20 |
+| PCQ | 202503 | 522,234 | 492,147 | 492,147 | 276,839 | 6,517 | ~398–425 | ~717–769 | ~18–20 |
+| PCQ | 202504 | 536,000 | 508,762 | 508,762 | 286,840 | 5,894 | ~398–563 | ~717–870 | ~19–20 |
+| PCQ | 202505 | 531,482 | 504,471 | 504,471 | 289,273 | 5,620 | ~540–563 | ~740–870 | ~14–19 |
+| PCQ | 202506 | 506,899 | 478,750 | 478,750 | 273,142 | 5,374 | ~540–666 | ~621–740 | ~13–14 |
+| PCQ | 202507 | 485,324 | 446,906 | 446,906 | 259,713 | 4,576 | 1,050 | ~621–676 | ~11–13 |
+| PCQ | 202508 | 480,443 | 448,176 | 448,176 | 258,210 | 5,351 | ~1,050–1,399 | ~676–842 | ~11–18 |
+| PCQ | 202509 | 487,178 | 458,320 | 458,320 | 281,433 | 5,440 | ~1,193–1,399 | ~842–1,027 | ~18–27 |
+| PCQ | 202510 | 515,491 | 479,370 | 479,370 | 292,306 | 5,654 | 1,174 | ~929–1,027 | ~22–27 |
+| PCQ | 202511 | 557,684 | 517,749 | 517,749 | 321,095 | 14,598 | 1,377 | ~929–1,214 | ~22–24 |
+| PCQ | 202512 | 567,988 | 533,166 | 533,166 | 324,131 | 7,868 | 1,464 | 1,095 | 22 |
+| PCQ | 202601 | 536,613 | 503,316 | 503,316 | 298,209 | 4,924 | 1,295 | 953 | 16 |
+| PCQ | 202602 | 594,348 | 551,781 | 551,781 | 317,752 | 14,009 | 1,451 | 852 | 25 |
+| PCQ | 202603 | 595,044 | 556,129 | 556,129 | 302,423 | 8,406 | 1,359 | 641 | 14 |
+| PCQ | 202604 | 599,479 | 559,295 | 559,295 | 315,637 | 6,436 | 1,295 | 543 | 15 |
+| PCQ | 202605 | 222,201 | 206,970 | 206,970 | 113,360 | 1,872 | 442 | 179 | 6 |
+| PCQ | 202606 | 721,489 | 657,880 | 657,880 | 381,038 | 9,903 | 1,204 | 899 | 23 |
+| PCQ | 202607 | 357,771 | 328,227 | 328,227 | 184,132 | 2,788 | 198 | 371 | 2 |
+
+*PCL rows carry the most cross-shot OCR disagreement — treat all PCL cells as directional pending in-env export.
+
+**Findings:**
+1. **PCL unsub step-change at 202508:** ~300–600/mo (202501–202507) → 1,579 (202508), sustained ~1,000–1,500/mo after. PCQ shows a similar climb (~400/mo → ~1,000–1,400/mo) starting ~202507–202509. Hypothesis to investigate: what deployed/changed Aug–Sep 2025 — open question, not answered.
+2. **CRV vendor black hole:** 202502–202505 have 51–64K decisioned/mo but ZERO vendor rows (in_master=0) — vendor gap or CRV email not routed through this vendor those months. Exclude/footnote in any CRV trend.
+3. **clients_in_master == clients_sent in every single row** — funnel step degenerate; presence in MASTER implies sent.
+4. **July 2026 (202607) feed is partial and per-campaign:** PCD flowing, CRV/PCL zero → spotlight quarter must stop at 202606.
+5. **Scale check for the spotlight "share" number:** Cards-five unsubs sum ≈1.5–4K/mo vs ~35K/mo program-wide (§10 finding) → Cards' share of program unsubs is plausibly ~5–10%; if 16 v2 confirms, the slide story flips from "Cards drive unsubs" to "Cards are a minor contributor — the problem is program-level." Awaiting 16 v2 for last-touch confirmation.
+6. **AUH appears only episodically** (202602, 202604) — consistent with phased deployments, not monthly cadence.

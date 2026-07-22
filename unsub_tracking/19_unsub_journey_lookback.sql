@@ -24,21 +24,28 @@
 -- STRICTLY BEFORE index_dt, per client. ALL MNEs at extraction — no campaign
 -- filter here; slice by MNE downstream in Excel/pivot, not in this query.
 --
--- Pushdown guard (canon Federation Perf rule #1): the base send scan keeps a
--- static 2024-01-01 floor (pushes to Teradata); the per-client 12-month cutoff
--- is a dynamic join condition layered ON TOP of that floor, not a substitute
--- for it.
+-- Spool guard: the base send scan keeps a static 2024-01-01 floor to prune the
+-- scan up front; the per-client 12-month cutoff is a dynamic join condition
+-- layered ON TOP of that floor, not a substitute for it.
 --
 -- Output: ONE decision-sized summary, cohort_group x cohort_month (hard rule:
--- cohort_month on every row). Counts + APPROX_PERCENTILE(25/50/75) of counts
--- only — no rate division, no decimal casts (Teradata 9881 ROUND hazard).
+-- cohort_month on every row): n_clients, AVG contacts / AVG distinct MNEs
+-- (DECIMAL(10,1) — Teradata-direct, so the 9881 pushdown-ROUND hazard does NOT
+-- apply here; that error only fires when Starburst pushes a Teradata-only
+-- statement down and wraps the arithmetic in ROUND — there is no Starburst in
+-- this path), plus a BANDED distribution of clients per lookback-contact count
+-- and per lookback-MNE count (median is read off the bands downstream). Bands
+-- are an EDITABLE ASSUMPTION — adjust the CASE WHEN breakpoints in the final
+-- SELECT if the shape doesn't fit:
+--   contacts: 0 / 1 / 2 / 3-4 / 5-6 / 7-9 / 10-14 / 15+
+--   mnes:     0 / 1 / 2 / 3 / 4 / 5+
 --
--- CAUTION: this statement touches ONLY DTZV01 tables (single-source Teradata).
--- APPROX_PERCENTILE is a Trino builtin with no Teradata equivalent. If
--- Starburst fully pushes this down and the call errors, fall back to
--- MIN/MAX/AVG/STDDEV_POP (the same swap PCD's curated-EDA E3/E4 made — see
--- campaigns/PCD/pcd_2026111_curated_eda.sql) or export lookback_contacts /
--- lookback_mnes at client grain and percentile downstream in Excel.
+-- CAUTION: this statement touches ONLY DTZV01 tables. Converted 2026-07-22
+-- from a Trino draft that called APPROX_PERCENTILE — Teradata has no
+-- percentile-approx builtin (error 3706 "Data type lookback_contacts does not
+-- match a defined type name" in-env, Teradata's signature error for an unknown
+-- function). Banded exact counts replace the percentiles; no accuracy lost —
+-- these are exact, not approximated.
 --
 -- SPOTLIGHT WINDOW (edit all four literals below together; example = Q2 2026):
 --   start (inclusive) = DATE '2026-04-01'    end (exclusive) = DATE '2026-07-01'
@@ -46,7 +53,7 @@
 -- client whose TRUE first unsub predates 2024-01-01 would be misread here as
 -- "never unsubbed." Accepted for consistency with the rest of the repo; note
 -- it if precision below the floor ever matters.
--- ENGINE: Starburst/Trino.
+-- ENGINE: Teradata-direct.
 -- =============================================================================
 
 WITH first_unsub_all AS (          -- mirrors 13_unsub_value_spine.sql S1 exactly
@@ -83,7 +90,7 @@ sends AS (                         -- disposition_cd=1 = sent; reused for baseli
         ON  m.consumer_id_hashed = e.consumer_id_hashed
         AND m.TREATMENT_ID       = e.TREATMENT_ID
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'   -- static floor -> pushes down (canon rule #1)
+      AND e.disposition_dt_tm >= DATE '2024-01-01'   -- static floor -> spool guard (see header)
 ),
 window_sends AS (                  -- sends landing inside the spotlight window (baseline candidate pool)
     SELECT CLNT_NO, MAX(disposition_dt_tm) AS last_send_dt
@@ -99,9 +106,12 @@ baseline_cohort AS (               -- group B: sent in window, never unsubbed an
     WHERE au.CLNT_NO IS NULL
 ),
 population AS (
-    SELECT CLNT_NO, index_dt, 'unsub'  AS cohort_group FROM unsub_cohort
+    -- CAST on the first branch's literal: Teradata sizes a UNION ALL string
+    -- column from the FIRST SELECT alone ('unsub' = 5 chars would otherwise
+    -- truncate 'stayed' = 6 chars to 'staye' — CLAUDE.md hard rule #3).
+    SELECT CLNT_NO, index_dt, CAST('unsub'  AS VARCHAR(10)) AS cohort_group FROM unsub_cohort
     UNION ALL
-    SELECT CLNT_NO, index_dt, 'stayed' AS cohort_group FROM baseline_cohort
+    SELECT CLNT_NO, index_dt, CAST('stayed' AS VARCHAR(10)) AS cohort_group FROM baseline_cohort
 ),
 lookback AS (                      -- 12 months strictly before each client's OWN index date
     SELECT
@@ -113,20 +123,32 @@ lookback AS (                      -- 12 months strictly before each client's OW
     FROM population p
     LEFT JOIN sends s
         ON  s.CLNT_NO = p.CLNT_NO
-        AND s.disposition_dt_tm >= p.index_dt - INTERVAL '12' MONTH
+        AND s.disposition_dt_tm >= ADD_MONTHS(CAST(p.index_dt AS DATE), -12)
         AND s.disposition_dt_tm <  p.index_dt
     GROUP BY 1, 2, 3
 )
 SELECT
     cohort_group,
     EXTRACT(YEAR FROM index_dt) * 100 + EXTRACT(MONTH FROM index_dt) AS cohort_month,
-    COUNT(DISTINCT CLNT_NO)                    AS n_clients,
-    approx_percentile(lookback_contacts, 0.25) AS contacts_p25,
-    approx_percentile(lookback_contacts, 0.50) AS contacts_p50,
-    approx_percentile(lookback_contacts, 0.75) AS contacts_p75,
-    approx_percentile(lookback_mnes, 0.25)     AS mnes_p25,
-    approx_percentile(lookback_mnes, 0.50)     AS mnes_p50,
-    approx_percentile(lookback_mnes, 0.75)     AS mnes_p75
+    COUNT(DISTINCT CLNT_NO)                       AS n_clients,
+    CAST(AVG(lookback_contacts) AS DECIMAL(10,1)) AS avg_contacts,
+    CAST(AVG(lookback_mnes)     AS DECIMAL(10,1)) AS avg_mnes,
+    -- lookback_contacts bands (editable breakpoints — see header)
+    SUM(CASE WHEN lookback_contacts = 0             THEN 1 ELSE 0 END) AS contacts_0,
+    SUM(CASE WHEN lookback_contacts = 1             THEN 1 ELSE 0 END) AS contacts_1,
+    SUM(CASE WHEN lookback_contacts = 2             THEN 1 ELSE 0 END) AS contacts_2,
+    SUM(CASE WHEN lookback_contacts BETWEEN 3 AND 4 THEN 1 ELSE 0 END) AS contacts_3_4,
+    SUM(CASE WHEN lookback_contacts BETWEEN 5 AND 6 THEN 1 ELSE 0 END) AS contacts_5_6,
+    SUM(CASE WHEN lookback_contacts BETWEEN 7 AND 9 THEN 1 ELSE 0 END) AS contacts_7_9,
+    SUM(CASE WHEN lookback_contacts BETWEEN 10 AND 14 THEN 1 ELSE 0 END) AS contacts_10_14,
+    SUM(CASE WHEN lookback_contacts >= 15           THEN 1 ELSE 0 END) AS contacts_15p,
+    -- lookback_mnes bands (editable breakpoints — see header)
+    SUM(CASE WHEN lookback_mnes = 0                 THEN 1 ELSE 0 END) AS mnes_0,
+    SUM(CASE WHEN lookback_mnes = 1                 THEN 1 ELSE 0 END) AS mnes_1,
+    SUM(CASE WHEN lookback_mnes = 2                 THEN 1 ELSE 0 END) AS mnes_2,
+    SUM(CASE WHEN lookback_mnes = 3                 THEN 1 ELSE 0 END) AS mnes_3,
+    SUM(CASE WHEN lookback_mnes = 4                 THEN 1 ELSE 0 END) AS mnes_4,
+    SUM(CASE WHEN lookback_mnes >= 5                THEN 1 ELSE 0 END) AS mnes_5p
 FROM lookback
 GROUP BY 1, 2
 ORDER BY 1, 2;
