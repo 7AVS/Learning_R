@@ -203,11 +203,14 @@ pcd_rows AS (
 -- splits them). TG7 holdout is filtered out -- not measured here. Converter is a pre-aggregated CTE
 -- (no volatile, no correlated EXISTS). ------------------------------------------------------------
 o2p_raw AS (
+  -- OCR-robust: NO exact tactic_id / rpt_grp_cd literals (those were photo guesses that matched zero
+  -- rows). Scope by mnemonic + start-date floor. treatmt_end_dt window REMOVED -- in-flight deployments
+  -- have NULL/future end dates the window silently dropped -> blank population (that was the bug).
   SELECT clnt_no, treatmt_strt_dt, treatmt_end_dt, TRIM(tst_grp_cd) AS tst_grp_cd, TACTIC_CELL_CD
   FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-  WHERE tactic_id = '20261680Z0P'   -- [VERIFY tactic_id: OCR uncertain, formats conflict across photos -- header comment in source says "20261602P", code used "20261680Z0P"; kept the operative code-branch literal]
-    AND TRIM(rpt_grp_cd) IN ('PO2PHL01','PO2PHL03','PO2PHL07','PO2P0101','PO2P0103','PO2P0107','PO2PPR01','PO2PPR03','PO2PPR07')   -- [VERIFY: rpt_grp_cd allowlist may be cut off at screen edge]
-    AND treatmt_end_dt BETWEEN DATE '2026-05-01' AND DATE '2026-07-31'  -- EDIT POINT: quarter window (tactic_id already scopes this to the single new deployment)
+  WHERE tactic_id LIKE '%O2P'                 -- EDIT POINT: matches O2P deployments regardless of exact id
+    AND treatmt_strt_dt >= DATE '2026-06-01'   -- EDIT POINT: floor to the NEW champion/challenger wave; earlier O2P waves are TG4/TG7 only (no mobile split), and an earlier floor would dump their no-mobile TG4 clients into the challenger arm
+    AND TRIM(tst_grp_cd) = 'TG4'               -- champion vs challenger are both TG4 (has_mb splits them); TG7 holdout excluded
 ),
 o2p_grp AS (
   -- group-detection kept verbatim from source: collapse multiple tactic events per client+test-group
