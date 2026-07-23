@@ -1,6 +1,19 @@
 -- 19 v5: Unsub journey lookback — window-bounded cohort vs baseline, 12mo contact history
 -- ENGINE: Teradata-direct. Unsub = address-level; no first-ever/history semantics.
--- Rerun: DROP TABLE block at EOF (4 tables), then rerun from top.
+-- Always run top to bottom. Pre-clean DROPs below: 'does not exist' errors on a fresh session are harmless.
+
+-- Pre-clean: clear any leftover tables from a previous/aborted run (stale tables poison results silently)
+DROP TABLE vt_unsub_journey_pop;
+DROP TABLE vt_baseline_spine;
+DROP TABLE vt_unsub_cohort;
+DROP TABLE vt_unsub_events;
+DROP TABLE vt_params;
+
+-- editable: THE ONLY PLACE to set the spotlight window
+CREATE VOLATILE TABLE vt_params AS (
+    SELECT DATE '2026-04-01' AS window_start, DATE '2026-07-01' AS window_end
+) WITH DATA PRIMARY INDEX (window_start) ON COMMIT PRESERVE ROWS;
+
 
 -- VT1: unsub events, window-bounded (spotlight only)
 CREATE VOLATILE TABLE vt_unsub_events AS (
@@ -9,9 +22,10 @@ CREATE VOLATILE TABLE vt_unsub_events AS (
         e.TREATMENT_ID,
         e.disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    CROSS JOIN vt_params vp
     WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
-      AND e.disposition_dt_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
+      AND e.disposition_dt_tm >= vp.window_start   -- SPOTLIGHT start (inclusive)
+      AND e.disposition_dt_tm <  vp.window_end     -- SPOTLIGHT end (exclusive)
 ) WITH DATA PRIMARY INDEX (consumer_id_hashed, TREATMENT_ID) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_unsub_events COLUMN (consumer_id_hashed, TREATMENT_ID);
@@ -29,8 +43,9 @@ CREATE VOLATILE TABLE vt_unsub_cohort AS (
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
             ON  m.consumer_id_hashed = u.consumer_id_hashed
             AND m.TREATMENT_ID       = u.TREATMENT_ID
-        WHERE m.load_tm >= ADD_MONTHS(DATE '2026-04-01', -1)   -- SPOTLIGHT start - 1mo margin
-          AND m.load_tm <  ADD_MONTHS(DATE '2026-07-01',  1)   -- SPOTLIGHT end + 1mo margin
+        CROSS JOIN vt_params vp
+        WHERE m.load_tm >= ADD_MONTHS(vp.window_start, -1)   -- SPOTLIGHT start - 1mo margin
+          AND m.load_tm <  ADD_MONTHS(vp.window_end,  1)     -- SPOTLIGHT end + 1mo margin
     ),
     client_index AS (
         SELECT CLNT_NO, disposition_dt_tm AS index_dt
@@ -57,11 +72,12 @@ CREATE VOLATILE TABLE vt_baseline_spine AS (
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
             ON  m.consumer_id_hashed = e.consumer_id_hashed
             AND m.TREATMENT_ID       = e.TREATMENT_ID
+        CROSS JOIN vt_params vp
         WHERE e.disposition_cd = 1
-          AND e.disposition_dt_tm >= DATE '2026-04-01'                     -- SPOTLIGHT start (inclusive)
-          AND e.disposition_dt_tm <  DATE '2026-07-01'                     -- SPOTLIGHT end (exclusive)
-          AND m.load_tm           >= ADD_MONTHS(DATE '2026-04-01', -1)     -- SPOTLIGHT start - 1mo margin
-          AND m.load_tm           <  ADD_MONTHS(DATE '2026-07-01',  1)     -- SPOTLIGHT end + 1mo margin
+          AND e.disposition_dt_tm >= vp.window_start                     -- SPOTLIGHT start (inclusive)
+          AND e.disposition_dt_tm <  vp.window_end                       -- SPOTLIGHT end (exclusive)
+          AND m.load_tm           >= ADD_MONTHS(vp.window_start, -1)     -- SPOTLIGHT start - 1mo margin
+          AND m.load_tm           <  ADD_MONTHS(vp.window_end,  1)       -- SPOTLIGHT end + 1mo margin
           AND MOD(m.CLNT_NO, 10) = 0                                       -- editable: slice modulus (1-in-10)
     ),
     client_index AS (
@@ -109,9 +125,10 @@ WITH sends AS (
         e.disposition_dt_tm,
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    CROSS JOIN vt_params vp
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= ADD_MONTHS(DATE '2026-04-01', -12)  -- window start - 12mo
-      AND e.disposition_dt_tm <  DATE '2026-07-01'                   -- window end (exclusive)
+      AND e.disposition_dt_tm >= ADD_MONTHS(vp.window_start, -12)  -- window start - 12mo
+      AND e.disposition_dt_tm <  vp.window_end                     -- window end (exclusive)
 ),
 lookback AS (                      -- 12mo strictly before each client's OWN index_dt
     SELECT
@@ -177,6 +194,7 @@ DROP TABLE vt_unsub_journey_pop;
 DROP TABLE vt_baseline_spine;
 DROP TABLE vt_unsub_cohort;
 DROP TABLE vt_unsub_events;
+DROP TABLE vt_params;
 
 -- OPTIONAL: chunked fallback if CPU abort persists
 -- CREATE VOLATILE TABLE vt_lookback_chunks AS (
