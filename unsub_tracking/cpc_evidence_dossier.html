@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CPC Evidence Dossier — unsub↔CPC study (2026-07-23)</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #55606b;
+    --border: #d7dce1;
+    --card-bg: #f7f8fa;
+    --head-bg: #eef1f4;
+    --shows-bg: #edf7ee;
+    --shows-border: #a9d3ac;
+    --notshows-bg: #fdeeee;
+    --notshows-border: #e3a9a9;
+    --trust-bg: #eef3fb;
+    --trust-border: #aac4e6;
+    --code-bg: #eef0f2;
+    --proven-bg: #dff0d8;
+    --caveat-bg: #fcf3cf;
+    --pending-bg: #f2dede;
+    --link: #1a4b8c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c;
+      --fg: #e4e7ea;
+      --muted: #9aa5b1;
+      --border: #3a4048;
+      --card-bg: #1c2126;
+      --head-bg: #23292f;
+      --shows-bg: #1c2b1e;
+      --shows-border: #3d6b41;
+      --notshows-bg: #2b1c1c;
+      --notshows-border: #6b3d3d;
+      --trust-bg: #1c2430;
+      --trust-border: #3d5a80;
+      --code-bg: #23292f;
+      --proven-bg: #234a2a;
+      --caveat-bg: #4a4423;
+      --pending-bg: #4a2323;
+      --link: #7ba7e0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 5rem;
+  }
+  h1 {
+    font-size: 1.55rem;
+    margin-bottom: 0.2rem;
+  }
+  h2 {
+    font-size: 1.2rem;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0.35rem;
+    margin-top: 3rem;
+  }
+  h3 {
+    font-size: 1rem;
+    margin-top: 1.4rem;
+    margin-bottom: 0.4rem;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin-bottom: 1.4rem;
+  }
+  .meta-box {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+    font-size: 0.92rem;
+    margin-bottom: 1.6rem;
+  }
+  .meta-box p { margin: 0.3rem 0; }
+  .warn-box {
+    background: var(--caveat-bg);
+    border: 1px solid var(--shows-border);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+    font-size: 0.92rem;
+    margin-bottom: 1.6rem;
+  }
+  .warn-box p:first-child { margin-top: 0; }
+  .warn-box p:last-child { margin-bottom: 0; }
+  code, .mono {
+    font-family: Consolas, "SF Mono", Menlo, monospace;
+    background: var(--code-bg);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  .toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.4rem;
+    margin-bottom: 2rem;
+    font-size: 0.92rem;
+  }
+  .toc ol { margin: 0.3rem 0 0 0.6rem; padding-left: 1rem; }
+  .toc li { margin-bottom: 0.15rem; }
+  .toc a { color: var(--link); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.3rem 1.4rem 1.5rem;
+    margin-bottom: 2rem;
+    background: var(--bg);
+  }
+  .item-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    background: var(--head-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.86rem;
+    margin-bottom: 1rem;
+  }
+  .item-header div { white-space: nowrap; }
+  .item-header b { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 600; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.6rem 0 1rem;
+    font-size: 0.87rem;
+  }
+  caption {
+    text-align: left;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 0.3rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.35rem 0.6rem;
+    text-align: right;
+  }
+  th { background: var(--head-bg); text-align: center; font-size: 0.82rem; }
+  td:first-child, th:first-child { text-align: left; }
+  tr.total td, tr.highlight td { font-weight: 600; }
+  .scroll-wrap { overflow-x: auto; }
+
+  .shows, .notshows, .trust {
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    margin: 0.55rem 0;
+    font-size: 0.92rem;
+  }
+  .shows { background: var(--shows-bg); border: 1px solid var(--shows-border); }
+  .notshows { background: var(--notshows-bg); border: 1px solid var(--notshows-border); }
+  .trust { background: var(--trust-bg); border: 1px solid var(--trust-border); }
+  .label { font-weight: 700; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; display: block; margin-bottom: 0.15rem; }
+
+  .footnote { font-size: 0.82rem; color: var(--muted); margin-top: 0.4rem; }
+
+  .status-proven { background: var(--proven-bg); font-weight: 600; text-align: center; }
+  .status-caveat { background: var(--caveat-bg); font-weight: 600; text-align: center; }
+  .status-pending { background: var(--pending-bg); font-weight: 600; text-align: center; }
+
+  a.back-top { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+  a.back-top:hover { text-decoration: underline; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0 1rem; }
+  footer { color: var(--muted); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+
+<h1 id="top">CPC Evidence Dossier — unsub↔CPC study (2026-07-23)</h1>
+<p class="subtitle">Working reference for Andre. One section per source image / evidence item: what was transcribed, what it shows, what it does not show, and how much to trust the transcription. Findings only — no recommendations.</p>
+
+<div class="meta-box">
+<p><b>Source:</b> <code>unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md</code> §14 (all subsections, A–D), as of 2026-07-23.</p>
+<p><b>Underlying queries:</b> <code>21a_cpc_landscape.sql</code> (Z2, Z3, E1/E2 purpose-fill), <code>21b_cpc_bridge.sql</code> (B-reverse, O), <code>12_switch_enforcement_test.sql</code> (recovered pack-12 E1/E2/E3, run 2026-07-16).</p>
+<p><b>Nothing in this document has been re-verified in-env.</b> Every number below traces to a phone photo of a screen, transcribed by hand or OCR. Treat "trust level" per section as the operative caveat, not the presence of a number.</p>
+</div>
+
+<div class="warn-box">
+<p><b>Naming collision warning:</b> there are <b>two unrelated pairs of blocks both labeled "E1/E2"</b> in the source material:</p>
+<p>&bull; <b>Pack 21a's E1/E2</b> (2026-07-23) = purpose-field fill-rate probes (<code>CONTACT_PURPS_TYP</code> / <code>CNTCT_EVNT_INITIATOR</code>) — covered in <a href="#item3">Section 3</a>.<br>
+&bull; <b>Pack 12's E1/E2</b> (2026-07-16) = the all-switch scan and the 16-combo cross-tab — covered in <a href="#item6">Section 6</a>. Pack 12 also has a separate E3, which was its own (inconclusive) attempt at the purpose split that Section 3's probes later settled.</p>
+<p>They test different things and were run a week apart. Do not conflate them — the source doc uses the same letter labels for both because each pack numbers its own blocks independently.</p>
+</div>
+
+<nav class="toc">
+<b>Contents</b>
+<ol>
+<li><a href="#item1">Z2 — monthly flip trend (1002/1012/1014)</a></li>
+<li><a href="#item2">Z3 — writer attribution (APP_SYS_CD)</a></li>
+<li><a href="#item3">Pack 21a E1/E2 — purpose-fill probes</a></li>
+<li><a href="#item4">B-reverse — flip-to-nearest-prior-unsub gap distribution</a></li>
+<li><a href="#item5">O — overlap 24-combo table</a></li>
+<li><a href="#item6">Recovered pack-12 E1/E2 — all-switch scan &amp; 16-combo cross-tab</a></li>
+<li><a href="#item7">MTEC-12644 — "Real-time CPC Unsubscribe" blueprint</a></li>
+<li><a href="#claims">Claims register</a></li>
+</ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="item1">1. Z2 — monthly flip trend (1002/1012/1014 → 5002)</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Image</b><span class="mono">pics/PXL_20260723_224049343.jpg</span></div>
+  <div><b>Query / block</b><span class="mono">21a_cpc_landscape.sql</span>, block <span class="mono">Z2</span></div>
+  <div><b>Window</b>202507–202607 (13 months; 202607 partial)</div>
+</div>
+
+<p>The photo shows the monthly count of new 5002 ("No") flips per switch across the 13-month window. The source doc records the transcription as a <b>range + total per switch</b>, not a month-by-month grid — no monthly breakout table was legible/transcribed.</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>Table — monthly flip volume by switch, 202507–202607</caption>
+<thead>
+<tr><th>PREF_ID</th><th>Monthly range</th><th>13-mo total</th></tr>
+</thead>
+<tbody>
+<tr><td>1002 (entity DNS)</td><td>≈126–230 / mo</td><td>2,168</td></tr>
+<tr><td>1012 (Banking E-Mail)</td><td>≈38–189 / mo</td><td>1,541</td></tr>
+<tr><td>1014 (Share for Marketing)</td><td>≈366–907 / mo</td><td>8,642</td></tr>
+<tr class="total"><td>All three combined</td><td>≈1,000 / mo (approx.)</td><td>≈12,351</td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">Reading: no trend across the window (stable, not rising or falling) for any of the three switches. 202607 is a partial month (in progress as of the run date) — do not read it as a low month.</p>
+
+<h3>The 35× vs. 150× correction</h3>
+<p>Total CPC opt-outs across all three switches run ≈1K/month against ≈35K/month vendor (email) unsubs (per §0 of the knowledge doc) → gap ≈<b>35×</b>. An earlier "150×" figure that had been circulating was based on <b>1002 alone</b> (the narrowest switch, ~200/mo) compared against the same ~35K/mo unsub figure. The 150× number is not wrong on its own terms, but it answers a narrower question (entity-level opt-out only) than the headline gap being cited. The all-three-switch ratio — the more complete answer to "does CPC see the same volume as the vendor" — is ≈35×.</p>
+
+<div class="shows"><span class="label">What this shows</span>CPC-side opt-out volume (any of the three channel-relevant switches) is stable over 13 months and is roughly two orders of magnitude smaller than vendor-side unsub volume. It also shows that the previously-quoted "150×" figure was scope-narrower (1002-only), not a different measurement of the same thing.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>Why the gap exists (mechanism) — that is addressed by Z3 and B-reverse (Sections 2 and 4), not by Z2 itself. Z2 is a volume/trend read only.</div>
+<div class="trust"><span class="label">Trust level</span>Single-read (one photo, summary figures only — no month-by-month grid was captured). The <b>totals</b> are cross-checked independently against B-reverse's <code>cpc_flips</code> column (Section 4) and match exactly for 1002 and 1012; the 1014 total required a correction (see Section 4) that was resolved using this same Z2 total. Treat the per-switch monthly range as single-read; treat the totals as verified-by-cross-check.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item2">2. Z3 — writer attribution (flips by APP_SYS_CD)</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Image</b><span class="mono">pics/PXL_20260723_224056279.jpg</span></div>
+  <div><b>Query / block</b><span class="mono">21a_cpc_landscape.sql</span>, block <span class="mono">Z3</span></div>
+</div>
+
+<div class="scroll-wrap">
+<table>
+<caption>Table — flip counts by writing system (APP_SYS_CD), per switch</caption>
+<thead>
+<tr><th>PREF_ID</th><th>7001 (branch)</th><th>7003 (contact centre)</th><th>7006 (batch)</th><th>7020 (SFMC/ESP)</th><th>7033</th><th>7053</th></tr>
+</thead>
+<tbody>
+<tr><td>1002</td><td>1,160</td><td>644</td><td>147</td><td>1</td><td>—</td><td>216</td></tr>
+<tr><td>1012</td><td>689</td><td>578</td><td>29</td><td>201</td><td>—</td><td>44</td></tr>
+<tr><td>1014</td><td>5,756</td><td>539</td><td>219</td><td>— (no row)</td><td>2,128</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>What 7001 / 7003 / 7020 decode to (canon: schema doc APP_SYS_CD line)</h3>
+<p><code>schemas/cpc_rb_pref_log_schema.md</code> carries the authoritative decode. Relevant codes:</p>
+<ul>
+<li><b>7001</b> — Sales Platform / branch staff (assisted channel)</li>
+<li><b>7003</b> — Royal Direct contact centre (assisted channel)</li>
+<li><b>7006</b> — RBC Banking internal/batch (STAR UI, purge) — machine</li>
+<li><b>7020</b> — Exact Target, the email ESP (registered writer)</li>
+<li><b>99999</b> — batch SRF consolidation — machine (absent entirely from this table)</li>
+</ul>
+<p>The schema doc itself labels the assisted/self-serve/machine split explicitly: <b>Assisted = 7001/7003, self-serve = 7004/7016, machine = 7006/99999.</b></p>
+<p><b>7033 and 7053 are NOT in the canon APP_SYS_CD decode list.</b> The knowledge doc's §0 (cube-pivot findings, 2026-07-15) flags both as undocumented system codes at volume and offers a working characterization — not a formal decode — from a separate pivot: 7033 tracks with an explicit-Yes onboarding capture cohort (~229K clients), and 7053 tracks with a single-switch "Yes" pattern possibly tied to CASL express-consent flows. Neither is confirmed as human- or machine-operated. For 1014 specifically, 7033 accounts for 2,128 of the 8,642 flips (≈25%) — a sizeable share riding on an undecoded code.</p>
+
+<h3>Reading</h3>
+<p>Humans (branch 7001 + contact-centre 7003 combined) write the large majority of flips on all three switches. SFMC/7020 is small and effectively 1012-only (≈16/mo, consistent with the separately-documented Exact Target trickle). The batch code 7006 is trivial everywhere, and 99999 does not appear at all — read together, this is the writer-side half of the "no hidden batch sync" conclusion.</p>
+
+<h3>Open question this does NOT yet answer</h3>
+<p>Z3 gives the writer distribution across <b>all</b> flips, not specifically the small subset of flips that B-reverse (Section 4) found <i>bridged</i> to a prior vendor unsub (10 / 30 / 100 clients for 1002/1012/1014). Whether those specific bridged flips skew toward a particular writer system — which would matter for judging whether any sync-like mechanism touches even a handful of records — is an open join not yet run (referred to informally as "pack 22-A": join B-reverse's bridged-flip client list back to Z3's writer attribution).</p>
+
+<div class="shows"><span class="label">What this shows</span>Flips on 1002/1012/1014 are overwhelmingly written through assisted-channel system codes (branch, contact centre), not through the batch code (7006) or the SRF batch-consolidation code (99999, absent). This is the writer-side evidence supporting "no hidden batch sync."</div>
+<div class="notshows"><span class="label">What this does NOT show</span>Direct proof of human authorship — the table records which <i>system</i> wrote the row, not that a person, rather than an automated process behind that system, made the decision. "Assisted channel" is the recorded fact; "human-authored" is an inference from it. It also does not tell us anything about the writer mix specifically among the small bridged-flip subset (open question above), and it does not explain what 7033/7053 actually are.</div>
+<div class="trust"><span class="label">Trust level</span>Single-read (one photo). The table's own top-line conclusion (no batch-writer footprint) is independently corroborated by B-reverse's timing analysis (Section 4), which was built from a different query against different columns — two independent reads arriving at the same verdict raises confidence in the conclusion, though not in every individual cell value.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item3">3. Pack 21a E1/E2 — purpose-fill probes</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Images</b><span class="mono">pics/PXL_20260723_224116877.jpg</span>, <span class="mono">pics/PXL_20260723_224123242.jpg</span></div>
+  <div><b>Query / block</b><span class="mono">21a_cpc_landscape.sql</span>, blocks <span class="mono">E1</span> / <span class="mono">E2</span></div>
+  <div><b>Sample</b>1-in-10 client slice, trailing 3 months, ≈16.08M sampled send-rows</div>
+</div>
+
+<div class="scroll-wrap">
+<table>
+<caption>Table — fill rate of the two candidate purpose fields</caption>
+<thead>
+<tr><th>Field</th><th>Distinct values observed</th><th>Result</th></tr>
+</thead>
+<tbody>
+<tr><td>CONTACT_PURPS_TYP</td><td>1 (NULL)</td><td>100% empty</td></tr>
+<tr><td>CNTCT_EVNT_INITIATOR</td><td>1 ('1')</td><td>100% constant, no variation</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>What this closes</h3>
+<p>Pack 12's E3 (Section 6) attempted a marketing-vs-service split using these same fields and came back with a mostly-empty, hard-to-interpret result (≈9.6K distinct clients with a populated purpose field against ≈155K send-rows) — inconclusive, not definitive. This probe, run against a much larger sample (≈16.08M send-rows) specifically to test fill rate rather than attempt the split directly, gives an unambiguous answer: one field is fully NULL, the other is a constant with zero informational content. Per the knowledge doc: <b>a marketing-vs-service split is impossible from the vendor MASTER as currently populated — pack 12's E3 route is permanently closed.</b></p>
+
+<div class="shows"><span class="label">What this shows</span>Neither <code>CONTACT_PURPS_TYP</code> nor <code>CNTCT_EVNT_INITIATOR</code> carries any usable signal in the vendor MASTER table as currently populated. This closes off using these two fields for a marketing-vs-service split of sends.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>It does not settle the separate "1014 dictionary-vs-lore" question (whether the sharing-only switch 1014 actually stops email in practice) — the knowledge doc is explicit that this requires a matched-control design instead, and stays open. It also does not mean no purpose signal exists anywhere in the environment, only that these two specific fields don't carry it.</div>
+<div class="trust"><span class="label">Trust level</span>Single-read (two photos), but the result is a degenerate/extreme value (100% one value in both cases) — the kind of result a misread is unlikely to produce by accident, since any transcription error would still have to land on "totally uniform," not a plausible middle number.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item4">4. B-reverse — flip-to-nearest-prior-unsub gap distribution</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Images</b><span class="mono">pics/PXL_20260723_225203502.jpg</span>, <span class="mono">225214372.jpg</span>, <span class="mono">225222322.jpg</span> — three scrolled views of one table</div>
+  <div><b>Query / block</b><span class="mono">21b_cpc_bridge.sql</span>, block <span class="mono">B-reverse</span></div>
+  <div><b>Window</b>12-month lookback, no fixed date window (Andre's design)</div>
+</div>
+
+<div class="scroll-wrap">
+<table>
+<caption>Table — for each CPC 5002 flip, nearest prior vendor unsub (if any)</caption>
+<thead>
+<tr><th>PREF_ID</th><th>cpc_flips</th><th>no_prior_unsub_found</th><th>bridged</th><th>bridged %</th><th>avg gap (bridged)</th></tr>
+</thead>
+<tbody>
+<tr><td>1002</td><td>2,168</td><td>2,158</td><td>10</td><td>0.5%</td><td>~52–101d</td></tr>
+<tr><td>1012</td><td>1,541</td><td>1,511</td><td>30</td><td>1.9%</td><td>~52–101d</td></tr>
+<tr><td>1014</td><td>8,642</td><td>8,542</td><td>100</td><td>1.2%</td><td>~52–101d</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Arithmetic reconciliation (the 1014 misread)</h3>
+<p>The 1014 <code>cpc_flips</code> figure was initially photo-misread as <b>3,642</b>. It was corrected to <b>8,642</b> using two independent checks that both had to agree:</p>
+<ul>
+<li>Cross-check against Z2 (Section 1): Z2's independently-built 13-month total for 1014 is 8,642 — an exact match to the corrected figure, not the misread one.</li>
+<li>Internal arithmetic: <code>cpc_flips</code> must equal <code>no_prior_unsub_found + bridged</code>. With <code>bridged = 100</code> (legibly read) and <code>no_prior_unsub_found = 8,542</code> (legibly read), the total must be 8,642 — 8,542 + 100 = 8,642 ✓. The misread total (3,642) would have required <code>no_prior_unsub_found</code> to be 3,542, which is not what the photo shows.</li>
+</ul>
+<p>The 1002 and 1012 rows needed no correction — they check out on both fronts already: 2,158 + 10 = 2,168 ✓ (matches Z2's 1002 total exactly); 1,511 + 30 = 1,541 ✓ (matches Z2's 1012 total exactly).</p>
+
+<h3>The "no cadence" reading</h3>
+<p>Where a CPC flip does bridge back to a prior vendor unsub, the gap between the two events is smeared across a wide range (average roughly 52–101 days across the three switches) with no visible clustering at a fixed interval that would suggest a periodic batch job (e.g., a consistent 7-day or 30-day lag). This is the timing-side half of the "no hidden sync" conclusion, independent of Z3's writer-side evidence.</p>
+
+<div class="shows"><span class="label">What this shows</span>The overwhelming majority of CPC flips (98–99.5% depending on switch) have no vendor unsub anywhere in the prior 12 months — most flips are not preceded by an unsub at all. Of the small minority that are, the timing gap doesn't cluster at any regular interval, arguing against a periodic sync/middleman process.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>Nothing about whether suppression/enforcement actually works — i.e., whether flipping a switch to "No" stops email from going out. That is a completely separate question (the 1014 dictionary-vs-lore enforcement question, covered in Section 6) and B-reverse says nothing about it either way. The bridged-row averages are also built on very small denominators (10 / 30 / 100 clients) — treat the "52–101 day" figure as a rough band, not a precise estimate.</div>
+<div class="trust"><span class="label">Trust level</span>Verified-by-cross-check, after correction. Three scrolled photos of the same table exist (built-in redundancy), yet one figure was still misread on first pass — a reminder that having multiple angle-shots of a table does not by itself guarantee a correct read; the correction here relied on an independent arithmetic tie-out, not just re-looking at the photos.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item5">5. O — overlap 24-combo table</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Image</b><span class="mono">pics/PXL_20260723_225232706.jpg</span></div>
+  <div><b>Query / block</b><span class="mono">21b_cpc_bridge.sql</span>, block <span class="mono">O</span></div>
+  <div><b>Basis</b>trailing-12mo first-unsubs (flow) × CPC latest-state flags (stock)</div>
+</div>
+
+<p>Columns: <code>is_unsub</code> (vendor unsub in trailing 12mo) × <code>out_1002</code> × <code>out_1012</code> × <code>out_1014_explicit</code> × <code>out_1014_effective</code> → client count. <code>effective=0</code> forces <code>explicit=0</code>, which prunes the theoretical 32 combinations down to the 24 that can actually occur.</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>Full 24-combo cross-tab</caption>
+<thead>
+<tr><th>is_unsub</th><th>out_1002</th><th>out_1012</th><th>out_1014_explicit</th><th>out_1014_effective</th><th>clients</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>123</td></tr>
+<tr><td>1</td><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td></tr>
+<tr><td>1</td><td>1</td><td>1</td><td>0</td><td>0</td><td>14</td></tr>
+<tr><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td><td>210</td></tr>
+<tr><td>1</td><td>1</td><td>0</td><td>0</td><td>1</td><td>13</td></tr>
+<tr><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>9</td></tr>
+<tr><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td>5</td></tr>
+<tr><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>5</td></tr>
+<tr><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td><td>423</td></tr>
+<tr><td>1</td><td>0</td><td>0</td><td>1</td><td>1</td><td>540</td></tr>
+<tr><td>1</td><td>0</td><td>0</td><td>0</td><td>1</td><td>87,182</td></tr>
+<tr class="highlight"><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td><td>223,851</td></tr>
+<tr><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td><td>18,300</td></tr>
+<tr><td>0</td><td>1</td><td>1</td><td>0</td><td>1</td><td>52</td></tr>
+<tr><td>0</td><td>1</td><td>1</td><td>0</td><td>0</td><td>1,368</td></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>1</td><td>1</td><td>27,474</td></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td><td>1,001</td></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td><td>1,346</td></tr>
+<tr><td>0</td><td>0</td><td>1</td><td>1</td><td>1</td><td>208</td></tr>
+<tr><td>0</td><td>0</td><td>1</td><td>0</td><td>1</td><td>205</td></tr>
+<tr><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>12,613</td></tr>
+<tr><td>0</td><td>0</td><td>0</td><td>1</td><td>1</td><td>34,770</td></tr>
+<tr><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>3,467,252</td></tr>
+<tr><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>583,632</td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">Row totals (computed here for a sanity check, not themselves stated in the source photo): unsub side (is_unsub=1) sums to 312,376 clients, matching the headline figure below exactly. Non-unsub side (is_unsub=0) sums to 4,148,221 clients. Combined table = 4,460,597 clients.</p>
+
+<h3>The 99.6% headline, as a state fact</h3>
+<p>Of 312,376 clients with a vendor unsub in the trailing 12 months: 223,851 have all CPC flags at zero (no explicit opt-out anywhere), and a further 87,182 show only <code>out_1014_effective=1</code> — which is the <b>blank default</b> for 1014, not an explicit action. Combined, 311,033 of 312,376 (≈99.6%) hold <b>no explicit CPC opt-out</b> as of the snapshot.</p>
+
+<div class="shows"><span class="label">What this shows</span>As a snapshot state fact: the CPC preference log does not carry an explicit opt-out flag for the large majority of clients who separately told the email vendor to stop sending. The consent gate and the vendor unsub list are, for most clients, two disconnected records.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>Whether these clients actually continue to receive email. This table describes the <b>state of the CPC log only</b> — it says nothing about delivery, suppression-list behavior, or whether the vendor platform is separately honoring the unsub outside of CPC. Confirming continued receipt is a distinct piece of work (referred to informally as "pack 22-B").</div>
+<div class="trust"><span class="label">Trust level</span>Single-read (one photo). Flag: the knowledge doc's own running text contains an internal inconsistency here — it states "full 24-row table not reproduced cell-by-cell here" immediately after actually listing all 24 rows in the preceding bullet. The doc appears to want an in-env export as final confirmation despite already having transcribed the full table by hand. Treat this table as photo-quality/single-read pending that re-export, not as fully closed.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item6">6. Recovered pack-12 E1/E2 — all-switch scan &amp; 16-combo cross-tab (2026-07-16)</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Images</b>E1: <span class="mono">pics/PXL_20260716_001838168.jpg</span> &nbsp;|&nbsp; E2: <span class="mono">000048758.jpg</span>, <span class="mono">000523483.jpg</span>, <span class="mono">001843490.jpg</span> (three captures, values identical/stable across all three)</div>
+  <div><b>Query / block</b><span class="mono">12_switch_enforcement_test.sql</span>, blocks <span class="mono">E1</span> / <span class="mono">E2</span> — ran 2026-07-16, recovered from photo backlog 2026-07-23</div>
+</div>
+
+<h3>E1 — all-switch scan</h3>
+<p>For every switch: clients whose latest state was No (5002) <i>before</i> the window, vs. how many of those received an email <i>in</i> the window. Full 33 rows (rate computed for readability, not part of the source screenshot):</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>E1 — 33-row all-switch scan</caption>
+<thead>
+<tr><th>Switch</th><th>Clients (No/5002 pre-window)</th><th>Received email in window</th><th>Rate</th></tr>
+</thead>
+<tbody>
+<tr><td>-1 (baseline, all)</td><td>7,563,199</td><td>3,688,588</td><td>48.8%</td></tr>
+<tr><td>1002</td><td>50,271</td><td>9,676</td><td>19.2%</td></tr>
+<tr><td>1004</td><td>47,095</td><td>9,576</td><td>20.3%</td></tr>
+<tr><td>1006</td><td>48,600</td><td>9,798</td><td>20.2%</td></tr>
+<tr><td>1007</td><td>47,984</td><td>9,345</td><td>19.5%</td></tr>
+<tr><td>1008</td><td>47,482</td><td>10,067</td><td>21.2%</td></tr>
+<tr><td>1009</td><td>49,068</td><td>9,905</td><td>20.2%</td></tr>
+<tr><td>1010</td><td>46,240</td><td>9,182</td><td>19.9%</td></tr>
+<tr><td>1012</td><td>33,964</td><td>10,232</td><td>30.1%</td></tr>
+<tr><td>1013</td><td>48,075</td><td>9,351</td><td>19.5%</td></tr>
+<tr><td>1014</td><td>80,750</td><td>21,195</td><td>26.3%</td></tr>
+<tr><td>1015</td><td>151,708</td><td>39,917</td><td>26.3%</td></tr>
+<tr><td>1016</td><td>1,454,381</td><td>647,683</td><td>44.5%</td></tr>
+<tr><td>1020</td><td>17,000</td><td>1,583</td><td>9.3%</td></tr>
+<tr><td>1021</td><td>18,237</td><td>1,655</td><td>9.1%</td></tr>
+<tr><td>1022</td><td>17,004</td><td>1,569</td><td>9.2%</td></tr>
+<tr><td>1023</td><td>46,378</td><td>9,244</td><td>19.9%</td></tr>
+<tr><td>1024</td><td>47,910</td><td>9,370</td><td>19.6%</td></tr>
+<tr><td>1025</td><td>48,558</td><td>9,606</td><td>19.8%</td></tr>
+<tr><td>1026</td><td>47,809</td><td>9,392</td><td>19.6%</td></tr>
+<tr><td>1027</td><td>1,314</td><td>103</td><td>7.8%</td></tr>
+<tr><td>1028</td><td>1,312</td><td>100</td><td>7.6%</td></tr>
+<tr><td>1030</td><td>1,312</td><td>102</td><td>7.8%</td></tr>
+<tr><td>1031</td><td>1,310</td><td>98</td><td>7.5%</td></tr>
+<tr><td>1032</td><td>1,235</td><td>76</td><td>6.2%</td></tr>
+<tr><td>1033</td><td>1,229</td><td>75</td><td>6.1%</td></tr>
+<tr><td>1034</td><td>1,316</td><td>103</td><td>7.8%</td></tr>
+<tr><td>1036</td><td>145,602</td><td>47,932</td><td>32.9%</td></tr>
+<tr><td>1042</td><td>40,239</td><td>11,002</td><td>27.3%</td></tr>
+<tr><td>1044</td><td>46,186</td><td>9,155</td><td>19.8%</td></tr>
+<tr><td>1045</td><td>125</td><td>70</td><td>56.0%†</td></tr>
+<tr><td>1046</td><td>2,419</td><td>1,835</td><td>75.9%†</td></tr>
+<tr><td>1048</td><td>47,822</td><td>9,272</td><td>19.4%</td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">† 1045/1046 denominators are tiny (125, 2,419) — treat as noise, not signal.</p>
+
+<h3>E2 — 16-combo cross-tab</h3>
+<p><code>out_1002 × out_1012 × out_1014 × out_1007_dm_control</code> (flag order as labeled in the query) vs. clients / received-email-in-window. 1 = switch was No (out) before the window, 0 = not.</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>E2 — 16-row cross-tab</caption>
+<thead>
+<tr><th>1002</th><th>1012</th><th>1014</th><th>1007 (DM ctrl)</th><th>Clients</th><th>Received email</th><th>Rate</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>0</td><td>0</td><td>0</td><td>3,999,323</td><td>2,304,010</td><td>57.6%</td></tr>
+<tr><td>0</td><td>0</td><td>0</td><td>1</td><td>395</td><td>137</td><td>34.7%</td></tr>
+<tr><td>0</td><td>0</td><td>1</td><td>0</td><td>34,096</td><td>12,795</td><td>37.5%</td></tr>
+<tr><td>0</td><td>0</td><td>1</td><td>1</td><td>61</td><td>27</td><td>44.3%</td></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>0</td><td>12,228</td><td>5,956</td><td>48.7%</td></tr>
+<tr><td>0</td><td>1</td><td>0</td><td>1</td><td>1,362</td><td>408</td><td>30.0%</td></tr>
+<tr><td>0</td><td>1</td><td>1</td><td>0</td><td>157</td><td>61</td><td>38.9%</td></tr>
+<tr><td>0</td><td>1</td><td>1</td><td>1</td><td>62</td><td>25</td><td>40.3%</td></tr>
+<tr><td>1</td><td>0</td><td>0</td><td>0</td><td>993</td><td>256</td><td>25.8%</td></tr>
+<tr><td>1</td><td>0</td><td>0</td><td>1</td><td>1,411</td><td>514</td><td>36.4%</td></tr>
+<tr><td>1</td><td>0</td><td>1</td><td>0</td><td>2,475</td><td>384</td><td>15.5%</td></tr>
+<tr><td>1</td><td>0</td><td>1</td><td>1</td><td>25,237</td><td>4,740</td><td>18.8%</td></tr>
+<tr><td>1</td><td>1</td><td>0</td><td>0</td><td>529</td><td>178</td><td>33.6%</td></tr>
+<tr><td>1</td><td>1</td><td>0</td><td>1</td><td>964</td><td>441</td><td>45.7%</td></tr>
+<tr><td>1</td><td>1</td><td>1</td><td>0</td><td>170</td><td>110</td><td>64.7%</td></tr>
+<tr><td>1</td><td>1</td><td>1</td><td>1</td><td>18,492</td><td>3,053</td><td>16.5%</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>The leak hint, and the DM-control confound</h3>
+<p>Baseline receive rate (no switches out) is ≈48.8% (E1) / 57.6% (E2's 0-0-0-0 row — different denominator, both from the same pack). Nearly all No-switches in E1 cluster in a ≈19–30% band regardless of whether the switch is plausibly email-relevant at all: 1007 (mail) sits at 19.5%, 1012 (the actual email switch) sits at 30.1% — a channel-specific switch and an obviously irrelevant one land in nearly the same band. That similarity is the "leak hint": clients who marked themselves "No" on switches that shouldn't touch email are still receiving email in-window at rates not far off from the switches that should. The repeated ~46–50K holder counts recurring across many unrelated switches point to the same bundled opt-out population (per the separately-documented bundle/selection finding) showing up again and again, rather than each switch individually gating email.</p>
+<p>1007 was intended as a negative control (direct mail, not email — should show no relationship to email receipt), but E2 crosses it with the other three flags rather than isolating it, so its role as a clean control is muddied in this particular table.</p>
+
+<div class="shows"><span class="label">What this shows</span>A raw association: clients flagged "No" on almost any switch — email-relevant or not — receive email in-window at broadly similar, reduced rates relative to baseline, consistent with a bundle/selection confound (the same clients hit many switches at once) rather than each switch cleanly and individually gating email delivery.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>No enforcement conclusion should be drawn from E1/E2 alone. Neither screenshot shows the underlying SQL or the date window — the window is unconfirmed (likely Q2-2026 per the file's design intent, but not verified). This is a raw cross-tab, not a matched-control comparison; it does not settle whether any specific switch actually stops email.</div>
+<div class="trust"><span class="label">Trust level</span>Photo-read. E2 has three independent captures with identical/stable values — a real reproducibility check, and it passes. E1 has a single capture with no independent cross-check found elsewhere in the doc. Both share the same design-level caveat regardless of photo quality: unconfirmed window, no controlled comparison.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item7">7. MTEC-12644 — "Real-time CPC Unsubscribe" blueprint</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Images</b><span class="mono">pics/PXL_20260715_2315*.jpg</span>, <span class="mono">2316*.jpg</span> (Confluence page), <span class="mono">pics/PXL_20260715_231554794.jpg</span> (Lucid architecture diagram)</div>
+  <div><b>Source</b>Confluence page, MarTech, project MTEC-12644; author T.S., diagram owner H. (first names only); last updated 2026-06-18</div>
+</div>
+
+<p>This item is a project document, not a query result — there is no query/table to transcribe. The transcribed content below is the page's own structure.</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>Transcribed blueprint content</caption>
+<thead><tr><th>Section</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td>Status</td><td>Blueprint PARTIALLY complete — objectives, functional requirements, and assumptions sections are still template placeholders. The Jira ticket MTEC-12644 itself is inaccessible (the page says so).</td></tr>
+<tr><td>Business context</td><td>The existing daily batch integration for RBC email opt-out is being enhanced with a real-time capability. Drivers: Gmail's Feb-2024 inbox-provider unsub requirements; decoupling from ESPs (reusable across Salesforce, Sendgrid, AWS); decoupling the surrogate vendor ID from API consumers.</td></tr>
+<tr><td>Key quote 1</td><td>"Preserving the batch process ensures a 100% match between RBC and SFMC unsubscribe data as of a given date/time."</td></tr>
+<tr><td>Key quote 2</td><td>"The Client Communication domain (PRSO application) has no access to channel consent today."</td></tr>
+<tr><td>Architecture (diagram)</td><td>SFMC → Email → Public Secure Opt-Out Page → (surrogate ID + address) → new PRSO Opt-Out API, sitting between the CPC-CC API and CPC-PC API → CPC-PC; new PRSO ID Table (future). Existing daily batch path (files → CPC-CC API → Daily Delta cylinders) explicitly unchanged.</td></tr>
+<tr><td>In scope</td><td>S4 Multi-Org only; PRSO onboarded to CPC-CC APIs; new client + non-client public unsubscribe pages (CASL-compliant, API refs C000-CPC-CC-CustPrefMod / C000-CPC-PC-CustContactPrefMod); new external PRSO API.</td></tr>
+<tr><td>Out of scope</td><td>CPC-CC opt-out to SRF# (future phase); changes to the existing batch; changes to CPC C000 APIs.</td></tr>
+<tr><td>NFRs</td><td>&lt;1 TPS, ≤2s response, 24/7, external Apigee, PingF auth.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>The ambiguity in the "100% match" claim</h3>
+<p>The direction of the batch-match claim (does RBC's system push to SFMC, or does SFMC push to RBC, or is it reconciled both ways) is <b>not stated</b> in the source document — the quote asserts the match exists but not which side is authoritative or which side updates the other. This should be treated as ambiguous, not assumed in either direction.</p>
+
+<h3>Sharpened MarTech questions this evidence pass produces</h3>
+<p>Given Section 1–5's empirical finding that no batch-writer footprint or sync-cadence clustering shows up in the CPC log today, the open questions to put to the MarTech team narrow to two: (1) confirm explicitly that nothing currently syncs from the email/unsub side into CPC at scale (the data is consistent with this, but MarTech ownership of the batch process can confirm it directly); (2) get the MTEC-12644 go-live date, since that is when a real bridge would first appear and the "no sync" baseline in this dossier would need to be re-checked against post-launch data.</p>
+
+<div class="shows"><span class="label">What this shows</span>A MarTech-owned initiative to build a NEW real-time bridge between the email/vendor unsubscribe world and CPC, explicitly because no such real-time bridge exists today, and because the Client Communication domain "has no access to channel consent today." It also shows that the existing daily batch process is intentionally left unchanged by this work.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>It does not confirm which direction the "100% match" claim runs, does not give a go-live date, and does not constitute a completed technical spec — the objectives/functional-requirements/assumptions sections are still placeholders, and the underlying Jira ticket could not be opened to check further.</div>
+<div class="trust"><span class="label">Trust level</span>Single-read of a Confluence page via phone photos. Document-quality caveat, not just photo-quality: the source document itself is partially template/placeholder, so even a perfect transcription would still be transcribing an incomplete document.</div>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="claims">Claims register</h2>
+<div class="scroll-wrap">
+<table>
+<caption>Every claim in circulation from this evidence pass, its status, and what supports it</caption>
+<thead><tr><th>Claim</th><th>Status</th><th>Supporting evidence</th><th>Note</th></tr></thead>
+<tbody>
+<tr>
+  <td>No hidden batch sync / middleman exists between vendor unsub and CPC</td>
+  <td class="status-proven">PROVEN</td>
+  <td><a href="#item2">§2 Z3</a> + <a href="#item4">§4 B-reverse</a></td>
+  <td>Two independently-built blocks (writer-side and timing-side) agree: no batch-writer footprint (7006/99999 trivial or absent), no cadence clustering in bridged gaps.</td>
+</tr>
+<tr>
+  <td>Flips are written via assisted channels (branch/contact-centre); this means humans authored them</td>
+  <td class="status-caveat">PROVEN-WITH-CAVEAT</td>
+  <td><a href="#item2">§2 Z3</a></td>
+  <td>The channel-code fact (assisted vs. self-serve vs. machine) is solid; "human authored" is an inference from it, not a directly observed fact. 7033 alone carries ≈25% of 1014's flips and is undecoded. Open join (informally "pack 22-A": bridged flips × writer) not yet run.</td>
+</tr>
+<tr>
+  <td>Purpose fields (CONTACT_PURPS_TYP / CNTCT_EVNT_INITIATOR) are unusable for a marketing-vs-service split</td>
+  <td class="status-proven">PROVEN</td>
+  <td><a href="#item3">§3 pack 21a E1/E2</a></td>
+  <td>100% NULL / 100% constant on a 16.08M-row sample. Closes pack-12's inconclusive E3 (§6) for good.</td>
+</tr>
+<tr>
+  <td>Consent-state blindness: the CPC log does not reflect vendor-side unsub state for the large majority of unsubscribers</td>
+  <td class="status-caveat">PROVEN-WITH-CAVEAT</td>
+  <td><a href="#item5">§5 O overlap</a></td>
+  <td>≈99.6% state fact, internally consistent (row sums tie to the stated total). Caveat: single-photo source; the knowledge doc itself flags this table as pending in-env re-export.</td>
+</tr>
+<tr>
+  <td>Gate leak: clients marked "No" / unsubscribed continue to actually receive email</td>
+  <td class="status-pending">PENDING pack 22</td>
+  <td><a href="#item5">§5 O</a> + <a href="#item6">§6 pack-12 E1</a></td>
+  <td>Directional only. O establishes the state precondition (no explicit flag) but not delivery. Pack-12 E1 shows a same-band receive-rate hint (≈19–30%) across relevant and irrelevant switches alike, but the window is unconfirmed and there is no matched-control design. Settling this is informally "pack 22-B."</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<p style="margin-top:2rem;"><a class="back-top" href="#top">&uarr; back to top</a></p>
+
+<footer>
+<hr>
+<p>Rendered from <code>unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md</code> §14, 2026-07-23. No recommendations included by design — findings only.</p>
+</footer>
+
+</body>
+</html>

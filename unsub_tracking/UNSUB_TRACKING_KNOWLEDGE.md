@@ -534,7 +534,7 @@ Bridged gaps are SMEARED across every band (avg 52–101 days) — no cluster at
 - Full 24-combo cross-tab (is_unsub / out_1002 / out_1012 / out_1014_explicit / out_1014_effective → clients; explicit=1 forces effective=1, so 24 valid combos = complete; source pic PXL_20260723_225232706.jpg):
   Unsub rows: (1,1,1,1,1)=123, (1,1,1,0,1)=1, (1,1,1,0,0)=14, (1,1,0,1,1)=210, (1,1,0,0,1)=13, (1,1,0,0,0)=9, (1,0,1,1,1)=5, (1,0,1,0,1)=5, (1,0,1,0,0)=423, (1,0,0,1,1)=540, (1,0,0,0,1)=87,182, (1,0,0,0,0)=223,851. Non-unsub rows: (0,1,1,1,1)=18,300, (0,1,1,0,1)=52, (0,1,1,0,0)=1,368, (0,1,0,1,1)=27,474, (0,1,0,0,1)=1,001, (0,1,0,0,0)=1,346, (0,0,1,1,1)=208, (0,0,1,0,1)=205, (0,0,1,0,0)=12,613, (0,0,0,1,1)=34,770, (0,0,0,0,1)=3,467,252, (0,0,0,0,0)=583,632.
 - Non-unsub side: 3,467,252 only-1014-effective (blank default) + 583,632 all-zero (= explicit 1014 Yes) + small opt-out cells (e.g. 1002-explicit combos ≈18–27K).
-- Full 24-row table not reproduced cell-by-cell here — these are the headline cells; exact per-cell counts sit in the source photos pending in-env export.
+- Full 24-row table IS reproduced above (added 2026-07-23 from photo transcript); treat as photo-read until in-env export confirms.
 
 **HEADLINE:** the consent gate does not know about ≈312K/yr clients who told the vendor to stop — they remain "marketable" per CPC.
 
