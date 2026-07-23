@@ -1,8 +1,8 @@
--- 19: Unsub journey lookback — contact history before first-unsub vs stayed baseline
--- ENGINE: Teradata-direct.
--- Rerun: if a run fails midway, run the 4 DROP TABLE lines at EOF, then rerun from top. 5 statements.
+-- 19 v5: Unsub journey lookback — window-bounded cohort vs baseline, 12mo contact history
+-- ENGINE: Teradata-direct. Unsub = address-level; no first-ever/history semantics.
+-- Rerun: DROP TABLE block at EOF (4 tables), then rerun from top.
 
--- VT1: unsub events, all history
+-- VT1: unsub events, window-bounded (spotlight only)
 CREATE VOLATILE TABLE vt_unsub_events AS (
     SELECT
         e.consumer_id_hashed,
@@ -10,33 +10,48 @@ CREATE VOLATILE TABLE vt_unsub_events AS (
         e.disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
+      AND e.disposition_dt_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
 ) WITH DATA PRIMARY INDEX (consumer_id_hashed, TREATMENT_ID) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_unsub_events COLUMN (consumer_id_hashed, TREATMENT_ID);
 
 
--- VT2: resolve to CLNT_NO via MASTER, rn=1 = first-ever unsub
-CREATE VOLATILE TABLE vt_unsub_resolved AS (
-    SELECT
-        m.CLNT_NO,
-        u.disposition_dt_tm AS first_unsub_tm,
-        ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO
-                           ORDER BY u.disposition_dt_tm ASC) AS rn
-    FROM vt_unsub_events u
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = u.consumer_id_hashed
-        AND m.TREATMENT_ID       = u.TREATMENT_ID
+-- VT2: cohort — resolve CLNT_NO, index_dt = earliest unsub in window, all addresses kept
+CREATE VOLATILE TABLE vt_unsub_cohort AS (
+    WITH resolved AS (
+        SELECT
+            m.CLNT_NO,
+            u.consumer_id_hashed,
+            u.disposition_dt_tm,
+            ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO ORDER BY u.disposition_dt_tm ASC) AS rn
+        FROM vt_unsub_events u
+        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+            ON  m.consumer_id_hashed = u.consumer_id_hashed
+            AND m.TREATMENT_ID       = u.TREATMENT_ID
+        WHERE m.load_tm >= ADD_MONTHS(DATE '2026-04-01', -1)   -- SPOTLIGHT start - 1mo margin
+          AND m.load_tm <  ADD_MONTHS(DATE '2026-07-01',  1)   -- SPOTLIGHT end + 1mo margin
+    ),
+    client_index AS (
+        SELECT CLNT_NO, disposition_dt_tm AS index_dt
+        FROM resolved
+        WHERE rn = 1
+    )
+    SELECT DISTINCT r.CLNT_NO, r.consumer_id_hashed, ci.index_dt
+    FROM resolved r
+    INNER JOIN client_index ci ON ci.CLNT_NO = r.CLNT_NO
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_unsub_resolved COLUMN (CLNT_NO);
+COLLECT STATISTICS ON vt_unsub_cohort COLUMN (CLNT_NO);
+COLLECT STATISTICS ON vt_unsub_cohort COLUMN (consumer_id_hashed);
 
 
--- VT3: baseline candidates (sliced, deduped, never-unsubbed)
--- baseline is 1-in-10 sliced: compare within-group shares, never raw counts vs unsub
+-- VT3: baseline spine — disp=1 in window, 1-in-10 sliced, excl. VT2 clients (window-scoped)
 CREATE VOLATILE TABLE vt_baseline_spine AS (
     WITH baseline_sends AS (
         SELECT
             m.CLNT_NO,
+            e.consumer_id_hashed,
             e.disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT e
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
@@ -47,76 +62,74 @@ CREATE VOLATILE TABLE vt_baseline_spine AS (
           AND e.disposition_dt_tm <  DATE '2026-07-01'                     -- SPOTLIGHT end (exclusive)
           AND m.load_tm           >= ADD_MONTHS(DATE '2026-04-01', -1)     -- SPOTLIGHT start - 1mo margin
           AND m.load_tm           <  ADD_MONTHS(DATE '2026-07-01',  1)     -- SPOTLIGHT end + 1mo margin
-          -- editable: slice modulus (1-in-10)
-          AND MOD(m.CLNT_NO, 10) = 0
+          AND MOD(m.CLNT_NO, 10) = 0                                       -- editable: slice modulus (1-in-10)
     ),
-    window_sends AS (
-        SELECT CLNT_NO, MAX(disposition_dt_tm) AS last_send_dt
+    client_index AS (
+        SELECT CLNT_NO, MAX(disposition_dt_tm) AS index_dt
         FROM baseline_sends
         GROUP BY CLNT_NO
     )
-    SELECT w.CLNT_NO, w.last_send_dt AS index_dt
-    FROM window_sends w
+    SELECT DISTINCT b.CLNT_NO, b.consumer_id_hashed, ci.index_dt
+    FROM baseline_sends b
+    INNER JOIN client_index ci ON ci.CLNT_NO = b.CLNT_NO
     WHERE NOT EXISTS (
-        SELECT 1 FROM vt_unsub_resolved au WHERE au.CLNT_NO = w.CLNT_NO
+        SELECT 1 FROM vt_unsub_cohort u WHERE u.CLNT_NO = b.CLNT_NO
     )
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_baseline_spine COLUMN (CLNT_NO);
 
 
--- VT4: population spine — unsub cohort UNION ALL baseline
+-- VT4: population spine — VT2 cohort UNION ALL VT3 baseline
 CREATE VOLATILE TABLE vt_unsub_journey_pop AS (
-    SELECT CLNT_NO, first_unsub_tm AS index_dt, CAST('unsub' AS VARCHAR(10)) AS cohort_group
-    FROM vt_unsub_resolved
-    WHERE rn = 1
-      AND first_unsub_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
-      AND first_unsub_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
+    SELECT
+        consumer_id_hashed, CLNT_NO,
+        CAST('unsub' AS VARCHAR(10)) AS cohort_group,
+        EXTRACT(YEAR FROM index_dt) * 100 + EXTRACT(MONTH FROM index_dt) AS cohort_month,
+        index_dt
+    FROM vt_unsub_cohort
     UNION ALL
-    SELECT CLNT_NO, index_dt, CAST('stayed' AS VARCHAR(10)) AS cohort_group
+    SELECT
+        consumer_id_hashed, CLNT_NO,
+        CAST('stayed' AS VARCHAR(10)) AS cohort_group,
+        EXTRACT(YEAR FROM index_dt) * 100 + EXTRACT(MONTH FROM index_dt) AS cohort_month,
+        index_dt
     FROM vt_baseline_spine
-) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+) WITH DATA PRIMARY INDEX (consumer_id_hashed) ON COMMIT PRESERVE ROWS;
 
+COLLECT STATISTICS ON vt_unsub_journey_pop COLUMN (consumer_id_hashed);
 COLLECT STATISTICS ON vt_unsub_journey_pop COLUMN (CLNT_NO);
 
 
--- STEP 5: 12-month lookback + final rollup
+-- STEP 5: 12mo lookback — EVENT joined directly on consumer_id_hashed (no MASTER), banded rollup
 WITH sends AS (
     SELECT
-        m.CLNT_NO,
+        e.consumer_id_hashed,
         e.TREATMENT_ID,
         e.disposition_dt_tm,
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = e.consumer_id_hashed
-        AND m.TREATMENT_ID       = e.TREATMENT_ID
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= ADD_MONTHS(DATE '2026-04-01', -12)  -- 12mo before SPOTLIGHT start = 2025-04-01
-      AND e.disposition_dt_tm <  DATE '2026-07-01'                   -- SPOTLIGHT end (exclusive)
+      AND e.disposition_dt_tm >= ADD_MONTHS(DATE '2026-04-01', -12)  -- window start - 12mo
+      AND e.disposition_dt_tm <  DATE '2026-07-01'                   -- window end (exclusive)
 ),
-sends_pop AS (                     -- narrow to population clients BEFORE the per-client date range/aggregation
-    SELECT s.CLNT_NO, s.TREATMENT_ID, s.disposition_dt_tm, s.mne
-    FROM sends s
-    INNER JOIN vt_unsub_journey_pop p ON p.CLNT_NO = s.CLNT_NO
-),
-lookback AS (                      -- 12 months strictly before each client's OWN index date
+lookback AS (                      -- 12mo strictly before each client's OWN index_dt
     SELECT
         p.CLNT_NO,
         p.cohort_group,
-        p.index_dt,
+        p.cohort_month,
         COUNT(DISTINCT s.TREATMENT_ID) AS lookback_contacts,
         COUNT(DISTINCT s.mne)          AS lookback_mnes
     FROM vt_unsub_journey_pop p
-    LEFT JOIN sends_pop s
-        ON  s.CLNT_NO = p.CLNT_NO
+    LEFT JOIN sends s
+        ON  s.consumer_id_hashed = p.consumer_id_hashed
         AND s.disposition_dt_tm >= ADD_MONTHS(CAST(p.index_dt AS DATE), -12)
         AND s.disposition_dt_tm <  p.index_dt
     GROUP BY 1, 2, 3
 )
 SELECT
     cohort_group,
-    EXTRACT(YEAR FROM index_dt) * 100 + EXTRACT(MONTH FROM index_dt) AS cohort_month,
+    cohort_month,
     COUNT(DISTINCT CLNT_NO)                       AS n_clients,
     CAST(AVG(lookback_contacts) AS DECIMAL(10,1)) AS avg_contacts,
     CAST(AVG(lookback_mnes)     AS DECIMAL(10,1)) AS avg_mnes,
@@ -140,7 +153,46 @@ FROM lookback
 GROUP BY 1, 2
 ORDER BY 1, 2;
 
+
+-- DIAGNOSTIC: multi-unsub scale — is the multi-address blind spot real?
+WITH client_unsub_counts AS (
+    SELECT
+        v2.CLNT_NO,
+        COUNT(*)                             AS n_unsub_events,
+        COUNT(DISTINCT v1.consumer_id_hashed) AS n_unsub_addresses
+    FROM vt_unsub_events v1
+    INNER JOIN vt_unsub_cohort v2 ON v2.consumer_id_hashed = v1.consumer_id_hashed
+    GROUP BY v2.CLNT_NO
+)
+SELECT
+    CASE WHEN n_unsub_events = 1 THEN '1' WHEN n_unsub_events = 2 THEN '2' ELSE '3+' END AS unsub_event_band,
+    CASE WHEN n_unsub_addresses = 1 THEN '1' ELSE '2+' END AS unsub_address_band,
+    COUNT(*) AS n_clients
+FROM client_unsub_counts
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
 DROP TABLE vt_unsub_journey_pop;
 DROP TABLE vt_baseline_spine;
-DROP TABLE vt_unsub_resolved;
+DROP TABLE vt_unsub_cohort;
 DROP TABLE vt_unsub_events;
+
+-- OPTIONAL: chunked fallback if CPU abort persists
+-- CREATE VOLATILE TABLE vt_lookback_chunks AS (
+--     SELECT p.CLNT_NO, p.cohort_group, p.cohort_month,
+--            COUNT(DISTINCT s.TREATMENT_ID)              AS lookback_contacts,
+--            COUNT(DISTINCT SUBSTR(s.TREATMENT_ID,8,3))  AS lookback_mnes
+--     FROM vt_unsub_journey_pop p
+--     LEFT JOIN DTZV01.VENDOR_FEEDBACK_EVENT s
+--            ON s.consumer_id_hashed = p.consumer_id_hashed AND s.disposition_cd = 1
+--           AND s.disposition_dt_tm >= ADD_MONTHS(CAST(p.index_dt AS DATE), -12)
+--           AND s.disposition_dt_tm <  p.index_dt
+--     WHERE MOD(p.CLNT_NO, 4) = 0
+--     GROUP BY 1, 2, 3
+--     -- UNION ALL  SELECT ... same joins ...  WHERE MOD(p.CLNT_NO, 4) = 1  GROUP BY 1, 2, 3
+--     -- UNION ALL  SELECT ... same joins ...  WHERE MOD(p.CLNT_NO, 4) = 2  GROUP BY 1, 2, 3
+--     -- UNION ALL  SELECT ... same joins ...  WHERE MOD(p.CLNT_NO, 4) = 3  GROUP BY 1, 2, 3
+-- ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+-- then run STEP 5's final banded SELECT against vt_lookback_chunks instead of the lookback CTE
+-- DROP TABLE vt_lookback_chunks;
