@@ -1,6 +1,7 @@
 -- 21_cpc_study_consolidated.sql — CPC landscape (Z), vendor-bridge timing (B), overlap redo w/ 1014 fix (O), enforcement field-fill probe (E)
 -- Schema: schemas/cpc_rb_pref_log_schema.md (5001 Yes/5002 No/5003 blank; blank=NO only for 1014/1015). ENGINE: Teradata-direct.
 -- vt_params below is the ONLY place to edit trend_start; asof = run date (CURRENT_DATE), all window ends exclusive of asof.
+-- MASTER is scanned ONCE (24mo, staged per 19's proven tiny-probe-then-join pattern); floor_dt is a global belt-and-suspenders floor on every EVENT/MASTER scan.
 -- Pre-clean DROPs immediately follow; 'does not exist' errors on a fresh session are harmless.
 
 -- pre-clean: clear leftover volatile tables from a prior/aborted run
@@ -8,15 +9,17 @@ DROP TABLE vt_cpc_latest;
 DROP TABLE vt_cpc_flips;
 DROP TABLE vt_vendor_unsub;
 DROP TABLE vt_vendor_unsub_hist;
+DROP TABLE vt_unsub_resolved;
+DROP TABLE vt_unsub_evt24;
 DROP TABLE vt_params;
 
--- editable: trend_start is the ONLY window edit point; asof is implicit run date
+-- editable: trend_start is the ONLY window edit point; asof is implicit run date; floor_dt = hard floor, no scan reaches earlier (per Andre)
 CREATE VOLATILE TABLE vt_params AS (
-    SELECT DATE '2025-07-01' AS trend_start, CURRENT_DATE AS asof
+    SELECT DATE '2025-07-01' AS trend_start, CURRENT_DATE AS asof, DATE '2024-01-01' AS floor_dt
 ) WITH DATA PRIMARY INDEX (trend_start) ON COMMIT PRESERVE ROWS;
 
 
--- vt_cpc_latest: current state per (CLNT_NO, PREF_ID) for 1002/1012/1014, feeds Z1 + O
+-- vt_cpc_latest: current state per (CLNT_NO, PREF_ID) for 1002/1012/1014, feeds Z1 + O -- state recon: no floor (latest row may be old)
 CREATE VOLATILE TABLE vt_cpc_latest AS (
     WITH ranked AS (
         SELECT
@@ -50,58 +53,72 @@ CREATE VOLATILE TABLE vt_cpc_flips AS (
     WHERE c.PREF_ID IN (1002, 1012, 1014)
       AND c.CLNT_CONSENT_TYP = 5002
       AND c.CHG_TMSTMP >= vp.trend_start
+      AND c.CHG_TMSTMP >= vp.floor_dt      -- floor: belt-and-suspenders
       AND c.CHG_TMSTMP <  vp.asof
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_cpc_flips COLUMN (CLNT_NO);
 
 
--- vt_vendor_unsub: first vendor unsub per client, trailing 12mo, feeds B-main + O is_unsub (idiom copied from 19 VT2)
+-- vt_unsub_evt24: STAGE 1 of the single MASTER pass — tiny EVENT-only probe, disp=4, 24mo bounded (staged pattern: 19 VT1)
+CREATE VOLATILE TABLE vt_unsub_evt24 AS (
+    SELECT
+        e.consumer_id_hashed,
+        e.TREATMENT_ID,
+        e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    CROSS JOIN vt_params vp
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= ADD_MONTHS(vp.asof, -24)   -- 24mo lookback start
+      AND e.disposition_dt_tm >= vp.floor_dt                 -- floor: belt-and-suspenders
+      AND e.disposition_dt_tm <  vp.asof
+) WITH DATA PRIMARY INDEX (consumer_id_hashed, TREATMENT_ID) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_unsub_evt24 COLUMN (consumer_id_hashed, TREATMENT_ID);
+
+
+-- vt_unsub_resolved: STAGE 2 of the single MASTER pass — MASTER joined ONCE against the stats-collected probe (staged pattern: 19 VT2); this is the only MASTER touch in the file
+CREATE VOLATILE TABLE vt_unsub_resolved AS (
+    SELECT DISTINCT
+        m.CLNT_NO,
+        u.disposition_dt_tm AS unsub_tm
+    FROM vt_unsub_evt24 u
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = u.consumer_id_hashed
+        AND m.TREATMENT_ID       = u.TREATMENT_ID
+    CROSS JOIN vt_params vp
+    WHERE m.load_tm >= ADD_MONTHS(vp.asof, -25)      -- 24mo span - 1mo margin
+      AND m.load_tm >= ADD_MONTHS(vp.floor_dt, -1)    -- floor - 1mo margin: belt-and-suspenders
+      AND m.load_tm <  ADD_MONTHS(vp.asof, 1)         -- asof + 1mo margin
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_unsub_resolved COLUMN (CLNT_NO);
+
+
+-- vt_vendor_unsub: first vendor unsub per client, trailing 12mo, derived FROM vt_unsub_resolved (no further MASTER access) -- feeds B-main + O is_unsub
 CREATE VOLATILE TABLE vt_vendor_unsub AS (
-    WITH events AS (
-        SELECT e.consumer_id_hashed, e.TREATMENT_ID, e.disposition_dt_tm
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-        CROSS JOIN vt_params vp
-        WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= ADD_MONTHS(vp.asof, -12)   -- trailing 12mo start
-          AND e.disposition_dt_tm <  vp.asof
-    ),
-    resolved AS (
+    WITH ranked AS (
         SELECT
-            m.CLNT_NO,
-            u.disposition_dt_tm,
-            ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO ORDER BY u.disposition_dt_tm ASC) AS rn
-        FROM events u
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-            ON  m.consumer_id_hashed = u.consumer_id_hashed
-            AND m.TREATMENT_ID       = u.TREATMENT_ID
+            r.CLNT_NO,
+            r.unsub_tm AS first_unsub_tm,
+            ROW_NUMBER() OVER (PARTITION BY r.CLNT_NO ORDER BY r.unsub_tm ASC) AS rn
+        FROM vt_unsub_resolved r
         CROSS JOIN vt_params vp
-        WHERE m.load_tm >= ADD_MONTHS(vp.asof, -13)   -- trailing-12mo start - 1mo margin
-          AND m.load_tm <  ADD_MONTHS(vp.asof, 1)      -- asof + 1mo margin
+        WHERE r.unsub_tm >= ADD_MONTHS(vp.asof, -12)   -- trailing 12mo start
+          AND r.unsub_tm <  vp.asof
     )
-    SELECT CLNT_NO, disposition_dt_tm AS first_unsub_tm
-    FROM resolved
+    SELECT CLNT_NO, first_unsub_tm
+    FROM ranked
     WHERE rn = 1
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_vendor_unsub COLUMN (CLNT_NO);
 
 
--- vt_vendor_unsub_hist: undeduped vendor unsub events, 24mo lookback from asof, feeds B-reverse nearest-prior gap analysis
+-- vt_vendor_unsub_hist: undeduped vendor unsub events, 24mo lookback, derived FROM vt_unsub_resolved (no further MASTER access) -- feeds B-reverse nearest-prior gap analysis
 CREATE VOLATILE TABLE vt_vendor_unsub_hist AS (
-    SELECT DISTINCT
-        m.CLNT_NO,
-        e.disposition_dt_tm AS unsub_tm
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = e.consumer_id_hashed
-        AND m.TREATMENT_ID       = e.TREATMENT_ID
-    CROSS JOIN vt_params vp
-    WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= ADD_MONTHS(vp.asof, -24)   -- 24mo lookback from asof
-      AND e.disposition_dt_tm <  vp.asof
-      AND m.load_tm           >= ADD_MONTHS(vp.asof, -25)   -- 24mo span - 1mo margin
-      AND m.load_tm           <  ADD_MONTHS(vp.asof, 1)      -- asof + 1mo margin
+    SELECT CLNT_NO, unsub_tm
+    FROM vt_unsub_resolved
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_vendor_unsub_hist COLUMN (CLNT_NO);
@@ -253,7 +270,7 @@ ORDER BY 1 DESC, 2 DESC, 3 DESC, 4 DESC, 5 DESC;
 -- ===== BLOCK E: enforcement probe — are purpose/initiator fields filled enough to ever separate marketing vs service sends =====
 -- source copied from 12_switch_enforcement_test.sql E3b (lines 190-209); contact_purps_typ/cntct_evnt_initiator confirmed cols #25/#8 in schemas/vendor_feedback_tables_schema.md
 
--- E1: send-row fill rate by contact_purps_typ, trailing 3mo (NULL forms its own GROUP BY bucket)
+-- E1: send-row fill rate by contact_purps_typ, trailing 3mo, 1-in-10 client slice -- fill-RATE estimate, counts are 1/10 scale (NULL forms its own GROUP BY bucket)
 SELECT
     m.contact_purps_typ,
     CAST(COUNT(*) AS BIGINT) AS send_rows
@@ -264,12 +281,15 @@ INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
 CROSS JOIN vt_params vp
 WHERE e.disposition_cd = 1
   AND e.disposition_dt_tm >= ADD_MONTHS(vp.asof, -3)
+  AND e.disposition_dt_tm >= vp.floor_dt            -- floor: belt-and-suspenders
   AND e.disposition_dt_tm <  vp.asof
+  AND m.load_tm           >= vp.floor_dt            -- floor: belt-and-suspenders (MASTER side had no bound at all)
+  AND MOD(m.CLNT_NO, 10) = 0                         -- editable: slice modulus (1-in-10)
 GROUP BY 1
 ORDER BY 2 DESC;
 
 
--- E2: send-row fill rate by cntct_evnt_initiator, trailing 3mo (NULL forms its own GROUP BY bucket)
+-- E2: send-row fill rate by cntct_evnt_initiator, trailing 3mo, 1-in-10 client slice -- fill-RATE estimate, counts are 1/10 scale (NULL forms its own GROUP BY bucket)
 SELECT
     m.cntct_evnt_initiator,
     CAST(COUNT(*) AS BIGINT) AS send_rows
@@ -280,7 +300,10 @@ INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
 CROSS JOIN vt_params vp
 WHERE e.disposition_cd = 1
   AND e.disposition_dt_tm >= ADD_MONTHS(vp.asof, -3)
+  AND e.disposition_dt_tm >= vp.floor_dt            -- floor: belt-and-suspenders
   AND e.disposition_dt_tm <  vp.asof
+  AND m.load_tm           >= vp.floor_dt            -- floor: belt-and-suspenders (MASTER side had no bound at all)
+  AND MOD(m.CLNT_NO, 10) = 0                         -- editable: slice modulus (1-in-10)
 GROUP BY 1
 ORDER BY 2 DESC;
 
@@ -290,4 +313,6 @@ DROP TABLE vt_cpc_latest;
 DROP TABLE vt_cpc_flips;
 DROP TABLE vt_vendor_unsub;
 DROP TABLE vt_vendor_unsub_hist;
+DROP TABLE vt_unsub_resolved;
+DROP TABLE vt_unsub_evt24;
 DROP TABLE vt_params;
