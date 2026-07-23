@@ -210,6 +210,8 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `17_em_decision_vendor_coverage.sql` | EM-decisioned → vendor coverage: sent_in_window/decisioned ratio, Cards five (CRV/PCL/PCQ/PCD/AUH) — 91–98% headline (§11, 2026-07-16). **RE-RAN 2026-07-22** with full per-MNE × month detail now transcribed (§13) |
 | `18_vendor_retention_probe.sql` (Teradata-direct) | Quarterly rows/distinct-clients/min-max for MASTER (load_tm proxy) and EVENT (disposition_dt_tm) separately, unwindowed — settles how far back coverage goes. **RAN 2026-07-22** — retention resolved: ~7-yr rolling window, 12-mo lookback fully covered (§13) |
 | `19_unsub_journey_lookback.sql` (Teradata-direct) | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary. v1 (Trino, `APPROX_PERCENTILE`) errored 3706 running Teradata-direct in-env 2026-07-22 — converted; percentiles → banded distribution (see §12) |
+| `21a_cpc_landscape.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — cheap, CPC-log-only half: Z1 stock, Z2 monthly flip trend, Z3 writer (APP_SYS_CD) attribution, E1/E2 purpose-field fill-rate. **RAN 2026-07-23** (§14-D) |
+| `21b_cpc_bridge.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — expensive half, run alone in a fresh session: unsub-resolution pipeline feeding B-main/B-reverse (vendor-unsub↔CPC-flip gap timing) + O (5-flag reachability overlap). **RAN 2026-07-23** (§14-D) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -415,7 +417,7 @@ The 2026-07-15/16 photo backlog (29 shots) was fully reviewed and identified. Th
   - **In scope:** S4 Multi-Org only; PRSO onboarded to CPC-CC APIs; new client + non-client public unsubscribe pages (CASL-compliant, API refs `C000-CPC-CC-CustPrefMod` / `C000-CPC-PC-CustContactPrefMod`); new external PRSO API.
   - **Out of scope:** CPC-CC opt-out to SRF# (future phase); changes to the existing batch; changes to CPC C000 APIs.
   - **NFRs:** <1 TPS, ≤2s response, 24/7, external Apigee, PingF auth.
-- **INTERPRETATION (flag as interpretation, not fact):** together with the 0.06% CPC linkage (§0 D2) and the ~80/mo Exact Target trickle (§0 ESP-pipe finding), the coherent reading is that email unsubs live in the ESP/SFMC suppression world (batch-file sync) and do NOT write to `CPC_RB_PREF_LOG` at scale today; CPC channel consent is a separate universe PRSO cannot read; MTEC-12644 builds the real-time bridge. Direction of the "100% match" batch claim (RBC→SFMC vs SFMC→RBC) is AMBIGUOUS in the source doc — do not state as fact.
+- **INTERPRETATION (flag as interpretation, not fact):** together with the 0.06% CPC linkage (§0 D2) and the ~80/mo Exact Target trickle (§0 ESP-pipe finding), the coherent reading is that email unsubs live in the ESP/SFMC suppression world (batch-file sync) and do NOT write to `CPC_RB_PREF_LOG` at scale today; CPC channel consent is a separate universe PRSO cannot read; MTEC-12644 builds the real-time bridge. Direction of the "100% match" batch claim (RBC→SFMC vs SFMC→RBC) is AMBIGUOUS in the source doc — do not state as fact. **UPDATE (2026-07-23, §14-D):** the "does this batch write to CPC" half is now EMPIRICALLY CONFIRMED, not just a coherent reading — Z2/Z3/B-reverse/O (packs 21a/21b) show no batch-writer footprint and no sync-cadence clustering. Direction of the "100% match" claim itself remains unconfirmed; sharpened MarTech ask: confirm nothing syncs today + get the MTEC-12644 go-live date.
 
 ### B. Pack 12 results RECOVERED from photos — E1 + E2 ran 2026-07-16, never catalogued until now
 
@@ -497,3 +499,43 @@ Flag order convention: columns read `1002, 1012, 1014, 1007` left to right; 1 = 
 The 2026-07-15/16 photo backlog (29 shots) is now fully identified: MTEC-12644 Confluence set (5 shots, §A), CPC query results (E1/E2/E3 + cube pivots + bundle/system scans, §B and the §0 cube-pivot findings), and the RBC consent-code dictionary page (`pics/PXL_20260715_223246054.jpg`).
 
 **§8 flag update:** pack 08 (`08_reachability_overlap.sql`) — still no run output found anywhere in the backlog; remains UNRUN or unphotographed. Pack 12 (`12_switch_enforcement_test.sql`) — E1+E2 results RECOVERED above (directional, window unconfirmed); E3 ran but purpose fields came back empty, inconclusive. Neither settles the §0 "1014 dictionary-vs-lore" enforcement question — see the updated MASTER SWITCH MAP cross-reference in §0.
+
+### D. Run results — 21a/21b (2026-07-23)
+
+The planned `21_cpc_study_consolidated.sql` was SPLIT before running into `21a_cpc_landscape.sql` (cheap, CPC-log-only) and `21b_cpc_bridge.sql` (expensive, unsub-resolution + bridge pipeline, run alone in a fresh session) — see §8. **Both RAN 2026-07-23.** Source pics: `pics/PXL_20260723_2240*.jpg`/`2241*.jpg` (21a), `pics/PXL_20260723_2252*.jpg` (21b).
+
+**Z2 — monthly flip trend (1002/1012/1014 → 5002, 202507–202607):** stable, no trend across the 13-month window. 1002 ≈126–230/mo (13-mo total 2,168); 1012 ≈38–189/mo (total 1,541); 1014 ≈366–907/mo (total 8,642). 202607 is a partial month. Total CPC opt-outs across all three switches ≈1K/mo against ~35K/mo vendor unsubs (§0 finding) → gap ≈35×. **Correction:** an earlier "150×" figure in circulation was 1002-only; the all-three-switch ratio is ≈35×.
+
+**Z3 — writer attribution (flips by APP_SYS_CD):**
+
+| PREF_ID | 7001 (branch) | 7003 (contact centre) | 7006 (batch) | 7020 (SFMC/ESP) | 7033 | 7053 |
+|---|---|---|---|---|---|---|
+| 1002 | 1,160 | 644 | 147 | 1 | — | 216 |
+| 1012 | 689 | 578 | 29 | 201 | — | 44 |
+| 1014 | 5,756 | 539 | 219 | — (no row) | 2,128 | — |
+
+READING: humans (branch 7001 + contact-centre 7003) write the vast majority of flips on all three switches. SFMC/7020 is small and 1012-only (≈16/mo, consistent with §0's Exact Target trickle). No batch writer: 7006 is trivial everywhere and 99999 is absent entirely → no hidden sync process exists on the writer side.
+
+**E1/E2 — purpose-fill probes (1-in-10 client slice, trailing 3mo, ≈16.08M sampled send-rows):** `CONTACT_PURPS_TYP` is a single distinct value, NULL — 100% empty. `CNTCT_EVNT_INITIATOR` is constant `'1'`. **DECISION:** a marketing-vs-service split is IMPOSSIBLE from the vendor MASTER as currently populated — pack 12's E3 route is permanently closed; the switch-enforcement question (§0 MASTER SWITCH MAP, 1014 dictionary-vs-lore) requires a matched-control design, or stays out of scope.
+
+**B-reverse — CPC flip → nearest prior vendor unsub (12-mo lookback, no fixed window — Andre's design):**
+
+| PREF_ID | cpc_flips | no_prior_unsub_found | bridged | bridged % | avg gap (bridged) |
+|---|---|---|---|---|---|
+| 1002 | 2,168 | 2,158 | 10 | 0.5% | ~52–101d |
+| 1012 | 1,541 | 1,511 | 30 | 1.9% | ~52–101d |
+| 1014 | 8,642 | 8,542 | 100 | 1.2% | ~52–101d |
+
+Bridged gaps are SMEARED across every band (avg 52–101 days) — no cluster at a batch-cadence interval. **Cross-check:** B-reverse's `cpc_flips` totals match Z2's monthly sums EXACTLY for 1002 and 1012 — two independently-built blocks agree. The 1014 `cpc_flips` figure photo-misread as 3,642; corrected to 8,642 via the Z2 monthly sum plus the bridged arithmetic (8,642 − 8,542 = 100 ✓). **VERDICT: no hidden sync/middleman** — confirmed from both the writer side (Z3) and the timing side (B-reverse).
+
+**O — overlap** (trailing-12mo first-unsubs × CPC latest-state flags; `is_unsub × out_1002 × out_1012 × out_1014_explicit × out_1014_effective` — `effective=0` forces `explicit=0`, pruning the theoretical 32 combos to the 24 actually produced):
+
+- Unsub side (312,376 clients total): 223,851 all-flags-zero + 87,182 only-1014-effective (blank default, not an explicit action) → **≈99.6% of unsubscribers hold no explicit CPC opt-out.**
+- Full 24-combo cross-tab (is_unsub / out_1002 / out_1012 / out_1014_explicit / out_1014_effective → clients; explicit=1 forces effective=1, so 24 valid combos = complete; source pic PXL_20260723_225232706.jpg):
+  Unsub rows: (1,1,1,1,1)=123, (1,1,1,0,1)=1, (1,1,1,0,0)=14, (1,1,0,1,1)=210, (1,1,0,0,1)=13, (1,1,0,0,0)=9, (1,0,1,1,1)=5, (1,0,1,0,1)=5, (1,0,1,0,0)=423, (1,0,0,1,1)=540, (1,0,0,0,1)=87,182, (1,0,0,0,0)=223,851. Non-unsub rows: (0,1,1,1,1)=18,300, (0,1,1,0,1)=52, (0,1,1,0,0)=1,368, (0,1,0,1,1)=27,474, (0,1,0,0,1)=1,001, (0,1,0,0,0)=1,346, (0,0,1,1,1)=208, (0,0,1,0,1)=205, (0,0,1,0,0)=12,613, (0,0,0,1,1)=34,770, (0,0,0,0,1)=3,467,252, (0,0,0,0,0)=583,632.
+- Non-unsub side: 3,467,252 only-1014-effective (blank default) + 583,632 all-zero (= explicit 1014 Yes) + small opt-out cells (e.g. 1002-explicit combos ≈18–27K).
+- Full 24-row table not reproduced cell-by-cell here — these are the headline cells; exact per-cell counts sit in the source photos pending in-env export.
+
+**HEADLINE:** the consent gate does not know about ≈312K/yr clients who told the vendor to stop — they remain "marketable" per CPC.
+
+**Resolves §14-A's open interpretation:** whatever the MTEC-12644 doc's "100% match" batch does, it does NOT write vendor unsubs into `CPC_RB_PREF_LOG` — confirmed empirically by all four evidence lines above (Z2, Z3, B-reverse, O), not merely inferred as before. Direction of the "100% match" claim itself is still unconfirmed. Sharpened MarTech question: confirm nothing syncs today + get the MTEC-12644 go-live date.
