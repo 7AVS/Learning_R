@@ -1,4 +1,4 @@
--- 19 v5: Unsub journey lookback — window-bounded cohort vs baseline, 12mo contact history
+-- 19 v6: Unsub journey lookback — window-bounded cohort vs PER-MONTH baseline, 12mo contact history
 -- ENGINE: Teradata-direct. Unsub = address-level; no first-ever/history semantics.
 -- Always run top to bottom. Pre-clean DROPs below: 'does not exist' errors on a fresh session are harmless.
 
@@ -61,7 +61,8 @@ COLLECT STATISTICS ON vt_unsub_cohort COLUMN (CLNT_NO);
 COLLECT STATISTICS ON vt_unsub_cohort COLUMN (consumer_id_hashed);
 
 
--- VT3: baseline spine — disp=1 in window, 1-in-10 sliced, excl. VT2 clients (window-scoped)
+-- VT3: baseline spine — disp=1 in window, PER-MONTH client cohorts, 1-in-10 sliced, excl. VT2 clients (window-scoped)
+-- NOTE: rows now ~3x (client-month grain, not client); MOD slice still applied at scan time
 CREATE VOLATILE TABLE vt_baseline_spine AS (
     WITH baseline_sends AS (
         SELECT
@@ -80,14 +81,17 @@ CREATE VOLATILE TABLE vt_baseline_spine AS (
           AND m.load_tm           <  ADD_MONTHS(vp.window_end,  1)       -- SPOTLIGHT end + 1mo margin
           AND MOD(m.CLNT_NO, 10) = 0                                       -- editable: slice modulus (1-in-10)
     ),
-    client_index AS (
-        SELECT CLNT_NO, MAX(disposition_dt_tm) AS index_dt
+    client_month_index AS (   -- one row per CLNT_NO per month mailed: index_dt = LAST send that month
+        SELECT
+            CLNT_NO,
+            EXTRACT(YEAR FROM disposition_dt_tm) * 100 + EXTRACT(MONTH FROM disposition_dt_tm) AS send_month,
+            MAX(disposition_dt_tm) AS index_dt
         FROM baseline_sends
-        GROUP BY CLNT_NO
+        GROUP BY 1, 2
     )
     SELECT DISTINCT b.CLNT_NO, b.consumer_id_hashed, ci.index_dt
     FROM baseline_sends b
-    INNER JOIN client_index ci ON ci.CLNT_NO = b.CLNT_NO
+    INNER JOIN client_month_index ci ON ci.CLNT_NO = b.CLNT_NO
     WHERE NOT EXISTS (
         SELECT 1 FROM vt_unsub_cohort u WHERE u.CLNT_NO = b.CLNT_NO
     )
