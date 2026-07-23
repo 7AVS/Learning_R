@@ -1,8 +1,47 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-07-17
+Last updated: 2026-07-22
 
 ## Priority Stack
+
+### 0c. Vintages One-Stop Shop (2026-07-22, BUILT & PUSHED — commit 04a6b9f)
+- **What:** `vintages/` = standardized simple vintage set. 14 Teradata-direct files: 7 campaigns
+  {CRV, PCL, PCQ, PCD, AUH, VBA, VBU} × {monthly, quarterly}. One output contract:
+  `campaign, cohort, arm_raw, arm, vintage_day, cohort_size, cum_responses` (counts only,
+  arms VARCHAR(30)). Simple version per Andre: arms only (Action/Control; PCQ Champion/Challenger),
+  one success metric, no slicers. `vintages/README.md` = full inventory + validation checklist.
+- **Construction (Andre's spec):** DENOMINATOR deduped per bin — client once per bin, anchored/armed
+  at FIRST in-bin deployment. NUMERATOR not deduped — one success max per deployment window,
+  last-touch attribution. Therefore quarterly cum_responses = Σ monthly; quarterly cohort_size ≤
+  Σ monthly (gap = repeat-contact clients). Monthly/quarterly twins differ ONLY in bin expression.
+- **Key changes vs old files:** CRV success = RAW `cards_crv_install_details` (off datalab curated
+  flag) + canon GREATEST clamp, cap per cohort×arm; PCL anchor → `treatmt_strt_dt` (Andre override);
+  VBA/VBU success = Casper+SCOT union; deleted 5 dead `*_monthly_cohort.sql` + absorbed
+  `crv_vintage_monthly_raw.sql` + deduped root `imt_pipeline*.py`.
+- **OPEN — Andre must answer (all flagged [VERIFY] in files/README):**
+  1. SCOT path `edl0_im...` reachable from Teradata-direct? If not → VBA/VBU run via Starburst.
+  2. AUH `_C` = Control — confirm (documented as unconfirmed working assumption).
+  3. VBU success: Casper/SCOT application signal (current build) vs product-change (Daniel's original).
+  4. Before first use: PCL strt_dt reliability check (query in file top) + CRV raw-vs-curated
+     reconciliation vs `campaigns/CRV/vintage_reconciliation/crv_vintage_v1_datalab.sql`.
+- **Later:** converge to one parameterized SQL per engine; migrate success defs to
+  measurement_events_v2 where codes exist (see 0d).
+
+### 0d. measurement_events_v2 Event Catalog (2026-07-22, Q0 RUN)
+- **What:** Andre ran the event_cd list (Starburst, `event_date > 2026-01-01`) → **42 codes**,
+  transcribed to `schemas/measurement_events_v2_event_catalog.md` (**gitignored/local-only —
+  won't travel via git**). Card codes: `p_card_installmt_purch` (CRV, confirmed),
+  `p_card_credlmt_inc` (PCL/CLI cand.), `p_card_apply`/`p_card_open`/`p_card_actvn` (PCQ cands.),
+  `p_card_upgrade` (PCD or VBU cand.). **No AUH code — AUH likely cannot migrate.**
+- **Next:** re-run Q0 with volume + date-range columns (`schemas/measurement_events_v2_eda.py`);
+  resolve 3 OCR [VERIFY] codes; then per-campaign ACCOUNT-level validation (event fires where
+  curated responder=1).
+
+### 0e. Unsub outputs captured (2026-07-22)
+- Email funnel by mne×cohort (202501–202607), first-unsub table, vendor-table quarterly profiling —
+  transcribed to `unsub_tracking/results_2026-07-22_transcriptions.md` (**gitignored/local-only**).
+  Finding: reliable vendor history starts ~2019Q3 (bounds pack 19 lookback). Numbers are phone-photo
+  OCR — re-extract in-env before publishing.
 
 ### 0a. Value Capture Reporting Pipeline v1 (2026-07-17, reworked SQL-only same day)
 - **What:** New root-level `value_capture/` folder builds rows for a partner team's Q2
