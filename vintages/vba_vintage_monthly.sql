@@ -1,147 +1,253 @@
 -- vba_vintage_monthly.sql
 -- Campaign : VBA (Visa Benefit Add)
--- Source   : campaigns/VBA_VBU/vba_vintage_curves.sql (Query 2 — PRIMARY Casper path)
--- Engine   : Teradata-direct (SYS_CALENDAR spine, Teradata date arithmetic)
--- Success  : p3c.appl_fact_dly — Status='A', PROD_APPRVD IN ('B','E'),
---            CR_LMT_CHG_IND='N', visa_prod_cd NOT IN ('CCL','BXX'),
---            Cell_Code NOT IN ('PATACT','GV0320'), app_rcv_dt within treatment window
+-- Source   : DG6V01.tactic_evnt_ip_ar_hist (population) + p3c.appl_fact_dly (Casper) +
+--          edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot (SCOT) —
+--          RAW success event tables, no deployment key on either
+-- Engine   : Teradata-direct (SYS_CALENDAR spine, volatile tables for TDWM cross-join clearance).
+--          SCOT (tsz_00222) is an EDL-catalog table but is reachable Teradata-direct per the
+--          older campaigns/VBA_VBU/vba_vintage_curves.sql ("Run in: Teradata (uses SYS_CALENDAR)").
+-- [VERIFY] ENGINE: SCOT source uses EDL catalog path (edl0_im...) — confirm reachable from
+--          Teradata-direct (QueryGrid/foreign server); if NOT, run these two campaigns via
+--          Starburst federation instead (then Trino syntax rules apply).
+-- Success  : RESTORED 2026-07-22 review — Casper + SCOT UNIONED AND DEDUPED to one
+--          earliest-approval-per-client-per-deployment event; single metric (approval), two
+--          systems. Casper: Status='A', PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND='N',
+--          visa_prod_cd NOT IN ('CCL','BXX'), Cell_Code NOT IN ('PATACT','GV0320'), event date =
+--          app_rcv_dt. SCOT: productcategory='CREDIT_CARD', statuscode='FULFILLED', event date =
+--          creditapplication_createddatetime (collapsed to one row per client — SCOT's own
+--          snapshot structure supports only one signal ever per client, not one per deployment;
+--          see scot_events below). Union/dedup pattern per
+--          campaigns/VBA_VBU/vba_vintage_curves_trino.sql (all_responses/success CTEs). Union
+--          happens BEFORE last-touch deployment attribution: the physical event is deduped
+--          first (plain UNION, not UNION ALL, on (clnt_no,event_date)), then attributed.
+-- Anchor   : treatmt_strt_dt (treatment start), per deployment
 -- Grain    : client (clnt_no)
--- Arm field: tst_grp_cd (raw code from DG6V01.tactic_evnt_ip_ar_hist)
--- Cohort   : calendar month of treatmt_strt_dt, Jan 2026 onward
--- Window   : 0–90 vintage days
+-- Arm      : tst_grp_cd — LEFT(tst_grp_cd,1)='C' -> Control, ='T' -> Action, ELSE -> Other.
+--          [VERIFY] this C/T-prefix split is NOT documented in campaigns/VBA_VBU/
+--          vba_vintage_curves.sql (the canon source named for this file, which carries
+--          tst_grp_cd raw with no split); it is confirmed instead in the sibling harness
+--          campaigns/VBA_VBU/vba_summary_vintage_cell.py (`tc()`, line ~68) as VBA/VBU's
+--          real Test/Control rollup rule. Used here to satisfy the standard Action/Control
+--          output contract, but confirm before trusting the 'Other' bucket.
+-- Population filter: SUBSTR(tactic_id,8,3)='VBA', SUBSTR(tactic_id,8,1)<>'J'
+-- Cohort bin: calendar month 'YYYYMM' of a deployment's own treatmt_strt_dt
+-- Day window: 0-90
+-- Denominator: one row per (clnt_no, bin) = first in-bin deployment (MIN treatmt_strt_dt within
+--          the bin). Arm = that deployment's arm; first-anchor wins on conflict.
+-- Numerator: NOT deduped — every deployment gets its own success lookup, one success max per
+--          deployment window. Neither Casper nor SCOT carries a deployment key, so an approved
+--          application (from either source) inside TWO overlapping deployment windows for the
+--          same client is attributed via LAST-TOUCH: the most recent deployment start on/before
+--          the event date wins (touch_rank=1 below). Rolls up under the client's bin arm.
+--          cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT clients.
+-- Sourced from: campaigns/VBA_VBU/vba_vintage_curves.sql Query 2 (Casper+SCOT union path) +
+--          campaigns/VBA_VBU/vba_vintage_curves_trino.sql (union/dedup pattern)
 --
--- NOTE: SYS_CALENDAR CROSS JOIN is on the cohort_month × arm cell (small set),
--- not on the full population — TDWM cross-join blocker does not apply here.
--- If TDWM complains anyway, materialize pop_cells and days_spine as volatile tables
--- with COLLECT STATISTICS before the cross-join (same pattern as pcq_ms_vintage.sql).
+-- Drop residual volatile tables if rerunning in the same session:
+--   DROP TABLE vt_vba_monthly_cells;
+--   DROP TABLE vt_vba_monthly_spine;
 
+-- ============================================================================
+-- STEP 1: denominator cells
+-- ============================================================================
+CREATE VOLATILE TABLE vt_vba_monthly_cells AS (
+    WITH bin_arm_lookup AS (
+        SELECT
+            clnt_no,
+            CAST(
+                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
+                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(10))                          AS cohort,
+            CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
+            CASE
+                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(30))
+                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(30))
+                ELSE CAST('Other' AS VARCHAR(30))
+            END                                        AS arm
+        FROM DG6V01.tactic_evnt_ip_ar_hist
+        WHERE treatmt_strt_dt >= DATE '2026-01-01'
+          AND SUBSTR(tactic_id, 8, 3) = 'VBA'
+          AND SUBSTR(tactic_id, 8, 1) <> 'J'
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY clnt_no, cohort
+            ORDER BY treatmt_strt_dt ASC
+        ) = 1
+    )
+    SELECT cohort, arm_raw, arm, COUNT(DISTINCT clnt_no) AS cohort_size
+    FROM bin_arm_lookup
+    GROUP BY cohort, arm_raw, arm
+) WITH DATA PRIMARY INDEX (cohort, arm) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_vba_monthly_cells COLUMN (cohort, arm);
+
+-- ============================================================================
+-- STEP 2: day spine 0-90
+-- ============================================================================
+CREATE VOLATILE TABLE vt_vba_monthly_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_vba_monthly_spine COLUMN (vintage_day);
+
+-- ============================================================================
+-- STEP 3: final curve
+-- ============================================================================
 WITH
--- population: one row per client per cohort_month × arm
-pop AS (
+bin_arm_lookup AS (
     SELECT
+        clnt_no,
+        CAST(
+            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
+            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(10))                          AS cohort,
+        CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
+        CASE
+            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(30))
+            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(30))
+            ELSE CAST('Other' AS VARCHAR(30))
+        END                                        AS arm
+    FROM DG6V01.tactic_evnt_ip_ar_hist
+    WHERE treatmt_strt_dt >= DATE '2026-01-01'
+      AND SUBSTR(tactic_id, 8, 3) = 'VBA'
+      AND SUBSTR(tactic_id, 8, 1) <> 'J'
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clnt_no, cohort
+        ORDER BY treatmt_strt_dt ASC
+    ) = 1
+),
+
+-- every deployment (NOT deduped)
+all_deployments AS (
+    SELECT DISTINCT
         clnt_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        tst_grp_cd                             AS arm,
-        (treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1)) AS cohort_month
+        CAST(
+            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
+            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(10))                          AS cohort
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE treatmt_strt_dt >= DATE '2026-01-01'
       AND SUBSTR(tactic_id, 8, 3) = 'VBA'
       AND SUBSTR(tactic_id, 8, 1) <> 'J'
 ),
 
--- de-duplicate: one row per distinct clnt_no × cohort_month × arm
--- (a client may appear in multiple waves within a month; keep their earliest treatmt_strt_dt)
-pop_dedup AS (
-    SELECT
-        clnt_no,
-        MIN(treatmt_strt_dt)   AS treatmt_strt_dt,
-        MAX(treatmt_end_dt)    AS treatmt_end_dt,
-        arm,
-        cohort_month
-    FROM pop
-    GROUP BY clnt_no, arm, cohort_month
-),
-
--- cohort size: distinct clients per cohort_month × arm
-pop_cells AS (
-    SELECT
-        cohort_month,
-        arm,
-        COUNT(DISTINCT clnt_no) AS cohort_size
-    FROM pop_dedup
-    GROUP BY cohort_month, arm
-),
-
--- Casper applications: all status rows filtered by campaign rules
-casper_raw AS (
-    SELECT
-        p.clnt_no,
-        p.arm,
-        p.cohort_month,
-        p.treatmt_strt_dt,
-        app.app_rcv_dt         AS response_dt
-    FROM pop_dedup p
-    INNER JOIN p3c.appl_fact_dly app
-        ON  app.bus_clnt_no = p.clnt_no
-        AND app.app_rcv_dt BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
-    WHERE app.Status IN ('A')                         -- approved only (primary success)
+-- raw candidate success events, Casper (PRIMARY) — no deployment key on the event table itself
+casper_events AS (
+    SELECT DISTINCT app.bus_clnt_no AS clnt_no, app.app_rcv_dt AS event_date
+    FROM p3c.appl_fact_dly app
+    WHERE app.Status IN ('A')
       AND app.PROD_APPRVD IN ('B', 'E')
       AND app.CR_LMT_CHG_IND = 'N'
       AND app.visa_prod_cd NOT IN ('CCL', 'BXX')
       AND (app.Cell_Code IS NULL OR app.Cell_Code NOT IN ('PATACT', 'GV0320'))
 ),
 
--- first approved response per client per cohort_month × arm
-first_response AS (
+-- raw candidate success events, SCOT (SECONDARY) — one row per client (SCOT's snapshot
+-- structure has no per-deployment key; MIN date + fulfilled flag is the most it supports)
+scot_events_raw AS (
     SELECT
-        clnt_no,
-        arm,
-        cohort_month,
-        MIN(response_dt) AS first_response_dt
-    FROM casper_raw
-    GROUP BY clnt_no, arm, cohort_month
+        CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
+        MIN(CAST(creditapplication_createddatetime AS DATE))           AS event_date,
+        MAX(CASE
+            WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
+        END)                                                           AS approved
+    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
+    WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory
+          IN ('CREDIT_CARD')
+    GROUP BY 1
+),
+scot_events AS (
+    SELECT clnt_no, event_date FROM scot_events_raw WHERE approved = 1
 ),
 
--- vintage days 0–90 (anchor date is arbitrary; only the integer offset matters)
-days_spine AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-01-01' + 90
+-- union FIRST, dedupe the physical event (clnt_no, event_date) — plain UNION, not UNION ALL —
+-- THEN attribute to a deployment (last-touch, below)
+events AS (
+    SELECT clnt_no, event_date FROM casper_events
+    UNION
+    SELECT clnt_no, event_date FROM scot_events
 ),
 
--- dense grid: one row per cohort_month × arm × vintage_day
-grid AS (
+-- last-touch: an event matching >1 deployment window for the same client is attributed to the
+-- most-recently-started deployment (prevents double-counting under overlapping windows)
+event_attribution AS (
     SELECT
-        c.cohort_month,
-        c.arm,
-        c.cohort_size,
-        d.vintage_day
-    FROM pop_cells c
-    CROSS JOIN days_spine d
+        e.clnt_no, e.event_date, d.treatmt_strt_dt, d.cohort,
+        ROW_NUMBER() OVER (
+            PARTITION BY e.clnt_no, e.event_date
+            ORDER BY d.treatmt_strt_dt DESC
+        ) AS touch_rank
+    FROM events e
+    INNER JOIN all_deployments d
+        ON  d.clnt_no = e.clnt_no
+        AND e.event_date BETWEEN d.treatmt_strt_dt AND d.treatmt_end_dt
 ),
 
--- vintage_day per client = first_response_dt - their own treatmt_strt_dt
-client_vintage AS (
-    SELECT
-        r.cohort_month,
-        r.arm,
-        r.clnt_no,
-        CAST(r.first_response_dt - p.treatmt_strt_dt AS INTEGER) AS vintage_day
-    FROM first_response r
-    INNER JOIN pop_dedup p
-        ON  p.clnt_no      = r.clnt_no
-        AND p.arm          = r.arm
-        AND p.cohort_month = r.cohort_month
-    WHERE CAST(r.first_response_dt - p.treatmt_strt_dt AS INTEGER) BETWEEN 0 AND 90
+event_claimed AS (
+    SELECT clnt_no, event_date, treatmt_strt_dt, cohort
+    FROM event_attribution
+    WHERE touch_rank = 1
 ),
 
--- daily event counts per cohort_month × arm × vintage_day
+-- at most one success per deployment window
+deployment_success AS (
+    SELECT clnt_no, treatmt_strt_dt, cohort, MIN(event_date) AS first_event_date
+    FROM event_claimed
+    GROUP BY clnt_no, treatmt_strt_dt, cohort
+),
+
+deployment_vintage AS (
+    SELECT clnt_no, cohort,
+           CAST(first_event_date - treatmt_strt_dt AS INTEGER) AS vintage_day
+    FROM deployment_success
+),
+
+-- roll up under the client's BIN arm (first-in-bin deployment), not this deployment's own arm
+numerator_binned AS (
+    SELECT bl.cohort, bl.arm_raw, bl.arm, dv.vintage_day
+    FROM deployment_vintage dv
+    INNER JOIN bin_arm_lookup bl
+        ON bl.clnt_no = dv.clnt_no AND bl.cohort = dv.cohort
+),
+
 daily_counts AS (
-    SELECT
-        cohort_month,
-        arm,
-        vintage_day,
-        COUNT(DISTINCT clnt_no) AS n_events
-    FROM client_vintage
-    GROUP BY cohort_month, arm, vintage_day
+    SELECT cohort, arm_raw, arm, vintage_day, COUNT(*) AS n_events
+    FROM numerator_binned
+    WHERE vintage_day BETWEEN 0 AND 90
+    GROUP BY cohort, arm_raw, arm, vintage_day
+),
+
+dense_grid AS (
+    SELECT c.cohort, c.arm_raw, c.arm, c.cohort_size, s.vintage_day
+    FROM vt_vba_monthly_cells c
+    CROSS JOIN vt_vba_monthly_spine s
 )
 
 SELECT
-    CAST('VBA' AS VARCHAR(10))                          AS campaign,
-    g.cohort_month,
-    CAST(g.arm AS VARCHAR(50))                          AS arm,
-    CAST('approved_casper' AS VARCHAR(30))              AS metric,
+    CAST('VBA' AS VARCHAR(10)) AS campaign,
+    g.cohort,
+    g.arm_raw,
+    g.arm,
     g.vintage_day,
     g.cohort_size,
     SUM(COALESCE(dc.n_events, 0)) OVER (
-        PARTITION BY g.cohort_month, g.arm
+        PARTITION BY g.cohort, g.arm_raw, g.arm
         ORDER BY g.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    )                                                   AS cum_events
-FROM grid g
+    ) AS cum_responses
+FROM dense_grid g
 LEFT JOIN daily_counts dc
-    ON  dc.cohort_month = g.cohort_month
-    AND dc.arm          = g.arm
-    AND dc.vintage_day  = g.vintage_day
-ORDER BY g.cohort_month, g.arm, g.vintage_day;
+    ON  dc.cohort      = g.cohort
+    AND dc.arm_raw     = g.arm_raw
+    AND dc.arm         = g.arm
+    AND dc.vintage_day = g.vintage_day
+ORDER BY g.cohort, g.arm, g.vintage_day;
+
+DROP TABLE vt_vba_monthly_cells;
+DROP TABLE vt_vba_monthly_spine;

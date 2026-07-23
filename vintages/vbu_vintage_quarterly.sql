@@ -1,4 +1,4 @@
--- vbu_vintage_monthly.sql
+-- vbu_vintage_quarterly.sql
 -- Campaign : VBU (Visa Benefit Upgrade)
 -- Source   : DG6V01.tactic_evnt_ip_ar_hist (population) + p3c.appl_fact_dly (Casper) +
 --          edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot (SCOT) —
@@ -32,7 +32,7 @@
 --          snapshot structure supports only one signal ever per client, not one per deployment;
 --          see scot_events below). Union/dedup pattern per
 --          campaigns/VBA_VBU/vba_vintage_curves_trino.sql (all_responses/success CTEs), same
---          tables/filters as vba_vintage_monthly.sql. Union happens BEFORE last-touch
+--          tables/filters as vba_vintage_quarterly.sql. Union happens BEFORE last-touch
 --          deployment attribution: the physical event is deduped first (plain UNION, not UNION
 --          ALL, on (clnt_no,event_date)), then attributed.
 -- Anchor   : treatmt_strt_dt (treatment start), per deployment
@@ -50,35 +50,42 @@
 --          column, never inside the SUBSTR filter itself). FIXED 2026-07-22 review — the prior
 --          version of this file wrapped SUBSTR in an extra CAST(tactic_id AS VARCHAR(50)) not
 --          present in either canon; removed for consistency with vba_vintage_monthly.sql.
--- Cohort bin: calendar month 'YYYYMM' of a deployment's own treatmt_strt_dt
+-- Cohort bin: CALENDAR quarter 'YYYYQn' (Jan-Mar=Q1) of a deployment's own treatmt_strt_dt
 -- Day window: 0-90
 -- Denominator: one row per (clnt_no, bin) = first in-bin deployment (MIN treatmt_strt_dt within
---          the bin). Arm = that deployment's arm; first-anchor wins on conflict.
+--          the bin). Arm = that deployment's arm; first-anchor wins on conflict. Quarterly
+--          cohort_size <= sum of the 3 monthly cohort_sizes — gap = clients contacted in more
+--          than one month of the quarter.
 -- Numerator: NOT deduped — every deployment gets its own success lookup, one success max per
 --          deployment window. Neither Casper nor SCOT carries a deployment key, so an approved
 --          application (from either source) inside TWO overlapping deployment windows for the
 --          same client is attributed via LAST-TOUCH: the most recent deployment start on/before
 --          the event date wins (touch_rank=1 below). Rolls up under the client's bin arm.
---          cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT clients.
+--          cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT clients —
+--          sums cleanly: quarterly cum_responses = sum of the 3 monthly files' cum_responses.
 -- Sourced from: campaigns/VBA_VBU/vba_vintage_curves.sql Query 2 pattern (Casper+SCOT union,
 --          applied to VBU population) + campaigns/VBA_VBU/vbu_summary_vintage_cell.py
 --          (validated VBU success definition)
 --
 -- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_vbu_monthly_cells;
---   DROP TABLE vt_vbu_monthly_spine;
+--   DROP TABLE vt_vbu_quarterly_cells;
+--   DROP TABLE vt_vbu_quarterly_spine;
 
 -- ============================================================================
 -- STEP 1: denominator cells
 -- ============================================================================
-CREATE VOLATILE TABLE vt_vbu_monthly_cells AS (
+CREATE VOLATILE TABLE vt_vbu_quarterly_cells AS (
     WITH bin_arm_lookup AS (
         SELECT
             clnt_no,
             CAST(
                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+                CASE
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+                END
             AS VARCHAR(10))                          AS cohort,
             CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
             CASE
@@ -100,18 +107,18 @@ CREATE VOLATILE TABLE vt_vbu_monthly_cells AS (
     GROUP BY cohort, arm_raw, arm
 ) WITH DATA PRIMARY INDEX (cohort, arm) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_vbu_monthly_cells COLUMN (cohort, arm);
+COLLECT STATISTICS ON vt_vbu_quarterly_cells COLUMN (cohort, arm);
 
 -- ============================================================================
 -- STEP 2: day spine 0-90
 -- ============================================================================
-CREATE VOLATILE TABLE vt_vbu_monthly_spine AS (
+CREATE VOLATILE TABLE vt_vbu_quarterly_spine AS (
     SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM SYS_CALENDAR.CALENDAR
     WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
 ) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_vbu_monthly_spine COLUMN (vintage_day);
+COLLECT STATISTICS ON vt_vbu_quarterly_spine COLUMN (vintage_day);
 
 -- ============================================================================
 -- STEP 3: final curve
@@ -122,8 +129,12 @@ bin_arm_lookup AS (
         clnt_no,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                          AS cohort,
         CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
         CASE
@@ -149,8 +160,12 @@ all_deployments AS (
         treatmt_end_dt,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                          AS cohort
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
     WHERE SUBSTR(tactic_id, 8, 3) = 'VBU'
@@ -246,8 +261,8 @@ daily_counts AS (
 
 dense_grid AS (
     SELECT c.cohort, c.arm_raw, c.arm, c.cohort_size, s.vintage_day
-    FROM vt_vbu_monthly_cells c
-    CROSS JOIN vt_vbu_monthly_spine s
+    FROM vt_vbu_quarterly_cells c
+    CROSS JOIN vt_vbu_quarterly_spine s
 )
 
 SELECT
@@ -270,5 +285,5 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day = g.vintage_day
 ORDER BY g.cohort, g.arm, g.vintage_day;
 
-DROP TABLE vt_vbu_monthly_cells;
-DROP TABLE vt_vbu_monthly_spine;
+DROP TABLE vt_vbu_quarterly_cells;
+DROP TABLE vt_vbu_quarterly_spine;

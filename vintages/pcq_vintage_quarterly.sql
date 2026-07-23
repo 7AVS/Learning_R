@@ -1,4 +1,4 @@
--- pcq_vintage_monthly.sql
+-- pcq_vintage_quarterly.sql
 -- Campaign : PCQ Modal Sales (MS)
 -- Source   : DL_MR_PROD.cards_tpa_pcq_decision_resp
 -- Engine   : Teradata-direct (SYS_CALENDAR spine, volatile tables for TDWM cross-join clearance)
@@ -9,33 +9,40 @@
 -- Arm      : test_group_latest — 'NG3_CHMP' -> Champion; IN ('NG3_CHLN','NG3_CHLG') ->
 --          Challenger (PCQ is the one campaign using Champion/Challenger, not Action/Control)
 -- Population filters: decsn_year=2026, tpa_ita='TPA' (mandatory — PCQ has no ITA arm)
--- Cohort bin: calendar month 'YYYYMM' of a deployment's own treatmt_start_dt
+-- Cohort bin: CALENDAR quarter 'YYYYQn' (Jan-Mar=Q1) of a deployment's own treatmt_start_dt
 -- Day window: 0-90
 -- Denominator: one row per (clnt_no, bin) = first in-bin deployment (MIN treatmt_start_dt within
---          the bin). Arm = that deployment's arm; first-anchor wins on conflict.
+--          the bin). Arm = that deployment's arm; first-anchor wins on conflict. PCQ deploys
+--          monthly, so quarterly cohort_size <= sum of the 3 monthly cohort_sizes is expected —
+--          gap = clients contacted in more than one month of the quarter.
 -- Numerator: NOT deduped — every deployment gets its own success lookup. days_to_respond already
 --          lives on that same row (curated table = one row per deployment/wave), so no cross-
 --          deployment / last-touch attribution is needed here. Rolls up under the client's bin
 --          arm. cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT
---          clients.
+--          clients — sums cleanly: quarterly cum_responses = sum of the 3 monthly files'
+--          cum_responses.
 -- Sourced from: campaigns/sales_modal/pcq/pcq_ms_vintage.sql (production, decile-scope slicer
 --          dropped here per the simple-version spec — single metric, no slicers)
 --
 -- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_pcq_monthly_cells;
---   DROP TABLE vt_pcq_monthly_spine;
+--   DROP TABLE vt_pcq_quarterly_cells;
+--   DROP TABLE vt_pcq_quarterly_spine;
 
 -- ============================================================================
 -- STEP 1: denominator cells
 -- ============================================================================
-CREATE VOLATILE TABLE vt_pcq_monthly_cells AS (
+CREATE VOLATILE TABLE vt_pcq_quarterly_cells AS (
     WITH bin_arm_lookup AS (
         SELECT
             clnt_no,
             CAST(
                 CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+                CASE
+                    WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (1,2,3)    THEN 'Q1'
+                    WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (4,5,6)    THEN 'Q2'
+                    WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (7,8,9)    THEN 'Q3'
+                    WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (10,11,12) THEN 'Q4'
+                END
             AS VARCHAR(10))                                        AS cohort,
             CAST(TRIM(test_group_latest) AS VARCHAR(30))            AS arm_raw,
             CASE
@@ -57,18 +64,18 @@ CREATE VOLATILE TABLE vt_pcq_monthly_cells AS (
     GROUP BY cohort, arm_raw, arm
 ) WITH DATA PRIMARY INDEX (cohort, arm) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_pcq_monthly_cells COLUMN (cohort, arm);
+COLLECT STATISTICS ON vt_pcq_quarterly_cells COLUMN (cohort, arm);
 
 -- ============================================================================
 -- STEP 2: day spine 0-90
 -- ============================================================================
-CREATE VOLATILE TABLE vt_pcq_monthly_spine AS (
+CREATE VOLATILE TABLE vt_pcq_quarterly_spine AS (
     SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM SYS_CALENDAR.CALENDAR
     WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
 ) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_pcq_monthly_spine COLUMN (vintage_day);
+COLLECT STATISTICS ON vt_pcq_quarterly_spine COLUMN (vintage_day);
 
 -- ============================================================================
 -- STEP 3: final curve
@@ -79,8 +86,12 @@ bin_arm_lookup AS (
         clnt_no,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                                        AS cohort,
         CAST(TRIM(test_group_latest) AS VARCHAR(30))            AS arm_raw,
         CASE
@@ -105,8 +116,12 @@ all_deployments_raw AS (
         treatmt_start_dt,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_start_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                                         AS cohort,
         CASE
             WHEN app_approved = 1 AND TRIM(asc_on_app_source) = 'Period-ASC'
@@ -148,8 +163,8 @@ daily_counts AS (
 
 dense_grid AS (
     SELECT c.cohort, c.arm_raw, c.arm, c.cohort_size, s.vintage_day
-    FROM vt_pcq_monthly_cells c
-    CROSS JOIN vt_pcq_monthly_spine s
+    FROM vt_pcq_quarterly_cells c
+    CROSS JOIN vt_pcq_quarterly_spine s
 )
 
 SELECT
@@ -172,5 +187,5 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day = g.vintage_day
 ORDER BY g.cohort, g.arm, g.vintage_day;
 
-DROP TABLE vt_pcq_monthly_cells;
-DROP TABLE vt_pcq_monthly_spine;
+DROP TABLE vt_pcq_quarterly_cells;
+DROP TABLE vt_pcq_quarterly_spine;

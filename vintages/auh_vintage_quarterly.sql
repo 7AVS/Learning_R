@@ -1,4 +1,4 @@
--- auh_vintage_monthly.sql
+-- auh_vintage_quarterly.sql
 -- Campaign : AUH (Authorized Users)
 -- Source   : DG6V01.tactic_evnt_ip_ar_hist (population) + D3CV12A.CR_CRD_ACCT_EVNT_DLY joined
 --          to D3CV12A.DLY_FULL_PORTFOLIO (RAW success event table — no deployment key on the
@@ -26,37 +26,44 @@
 --          confirming `_C` = Control. Treat as a TEMP label until confirmed — same caveat
 --          class as PCL/VBA/VBU's unconfirmed arm derivations.
 -- Population filter: tactic_id IN ('2026042AUH','2026119AUH')
--- Cohort bin: calendar month 'YYYYMM' of a deployment's own treatmt_strt_dt
+-- Cohort bin: CALENDAR quarter 'YYYYQn' (Jan-Mar=Q1) of a deployment's own treatmt_strt_dt
 -- Day window: 0-30 (canon window, per auh_vintage_reconstructed.sql's vintage_days spine.
 --          REVERTED 2026-07-22 review — was extended to 90 in the first pass; cross-campaign
 --          comparability was not requested, canon windows stand as-is)
 -- Denominator: one row per (acct_no, bin) = first in-bin deployment (MIN treatmt_strt_dt within
 --          the bin). Arm = that deployment's arm; first-anchor wins on conflict. Strategy_arm /
 --          model_arm slicers dropped per the simple-version spec (single metric, no slicers).
+--          The 2 AUH tactics are one-time deployments each, but if a client falls in BOTH within
+--          the same quarter, quarterly cohort_size <= sum of the 3 monthly cohort_sizes applies.
 -- Numerator: NOT deduped — every deployment gets its own success lookup, one success max per
 --          deployment window. The event table (CR_CRD_ACCT_EVNT_DLY) carries no deployment key,
 --          so an add event that falls inside TWO overlapping deployment windows for the same
---          account (e.g. both 2026042AUH and 2026119AUH windows) is attributed via LAST-TOUCH:
---          the most recent deployment start on/before the event date wins (touch_rank=1 below).
---          At most one success counted per deployment. Rolls up under the client's bin arm.
---          cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT clients.
+--          account is attributed via LAST-TOUCH: the most recent deployment start on/before the
+--          event date wins (touch_rank=1 below). At most one success counted per deployment.
+--          Rolls up under the client's bin arm. cum_responses = cumulative SUCCESS EVENTS (one
+--          per deployment window), NOT clients — sums cleanly: quarterly cum_responses = sum of
+--          the 3 monthly files' cum_responses.
 -- Sourced from: campaigns/AUH/auh_vintage_reconstructed.sql
 --
 -- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_auh_monthly_cells;
---   DROP TABLE vt_auh_monthly_spine;
+--   DROP TABLE vt_auh_quarterly_cells;
+--   DROP TABLE vt_auh_quarterly_spine;
 
 -- ============================================================================
 -- STEP 1: denominator cells
 -- ============================================================================
-CREATE VOLATILE TABLE vt_auh_monthly_cells AS (
+CREATE VOLATILE TABLE vt_auh_quarterly_cells AS (
     WITH bin_arm_lookup AS (
         SELECT
             CAST(tactic_evnt_id AS BIGINT) AS acct_no,
             CAST(
                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+                CASE
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                    WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+                END
             AS VARCHAR(10))                          AS cohort,
             CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
             CASE WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(30))
@@ -74,18 +81,18 @@ CREATE VOLATILE TABLE vt_auh_monthly_cells AS (
     GROUP BY cohort, arm_raw, arm
 ) WITH DATA PRIMARY INDEX (cohort, arm) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_auh_monthly_cells COLUMN (cohort, arm);
+COLLECT STATISTICS ON vt_auh_quarterly_cells COLUMN (cohort, arm);
 
 -- ============================================================================
 -- STEP 2: day spine 0-30
 -- ============================================================================
-CREATE VOLATILE TABLE vt_auh_monthly_spine AS (
+CREATE VOLATILE TABLE vt_auh_quarterly_spine AS (
     SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
     FROM SYS_CALENDAR.CALENDAR
     WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 30
 ) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_auh_monthly_spine COLUMN (vintage_day);
+COLLECT STATISTICS ON vt_auh_quarterly_spine COLUMN (vintage_day);
 
 -- ============================================================================
 -- STEP 3: final curve
@@ -96,8 +103,12 @@ bin_arm_lookup AS (
         CAST(tactic_evnt_id AS BIGINT) AS acct_no,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                          AS cohort,
         CAST(TRIM(tst_grp_cd) AS VARCHAR(30))     AS arm_raw,
         CASE WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(30))
@@ -119,8 +130,12 @@ all_deployments AS (
         treatmt_end_dt,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            CASE
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (1,2,3)    THEN 'Q1'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (4,5,6)    THEN 'Q2'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (7,8,9)    THEN 'Q3'
+                WHEN EXTRACT(MONTH FROM treatmt_strt_dt) IN (10,11,12) THEN 'Q4'
+            END
         AS VARCHAR(10))                          AS cohort
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
@@ -196,8 +211,8 @@ daily_counts AS (
 
 dense_grid AS (
     SELECT c.cohort, c.arm_raw, c.arm, c.cohort_size, s.vintage_day
-    FROM vt_auh_monthly_cells c
-    CROSS JOIN vt_auh_monthly_spine s
+    FROM vt_auh_quarterly_cells c
+    CROSS JOIN vt_auh_quarterly_spine s
 )
 
 SELECT
@@ -220,5 +235,5 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day = g.vintage_day
 ORDER BY g.cohort, g.arm, g.vintage_day;
 
-DROP TABLE vt_auh_monthly_cells;
-DROP TABLE vt_auh_monthly_spine;
+DROP TABLE vt_auh_quarterly_cells;
+DROP TABLE vt_auh_quarterly_spine;
