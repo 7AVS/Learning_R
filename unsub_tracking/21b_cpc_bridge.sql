@@ -18,6 +18,8 @@ CREATE VOLATILE TABLE vt_params AS (
     SELECT DATE '2025-07-01' AS trend_start, CURRENT_DATE AS asof, DATE '2024-01-01' AS floor_dt
 ) WITH DATA PRIMARY INDEX (trend_start) ON COMMIT PRESERVE ROWS;
 
+COLLECT STATISTICS ON vt_params COLUMN (trend_start);
+
 
 -- vt_cpc_latest: re-declared here (session-scoped) for O's cpc_flags -- state recon: no floor (latest row may be old)
 CREATE VOLATILE TABLE vt_cpc_latest AS (

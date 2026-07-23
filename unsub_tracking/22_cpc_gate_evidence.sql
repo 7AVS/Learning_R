@@ -20,6 +20,8 @@ CREATE VOLATILE TABLE vt_params AS (
     SELECT DATE '2025-07-01' AS trend_start, DATE '2026-04-01' AS window_start, CURRENT_DATE AS asof, DATE '2024-01-01' AS floor_dt
 ) WITH DATA PRIMARY INDEX (trend_start) ON COMMIT PRESERVE ROWS;
 
+COLLECT STATISTICS ON vt_params COLUMN (trend_start);
+
 
 -- ===== VOLATILES + STATS — 22-A pieces first, then 22-B pieces =====
 

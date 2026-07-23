@@ -212,6 +212,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `19_unsub_journey_lookback.sql` (Teradata-direct) | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary. v1 (Trino, `APPROX_PERCENTILE`) errored 3706 running Teradata-direct in-env 2026-07-22 — converted; percentiles → banded distribution (see §12) |
 | `21a_cpc_landscape.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — cheap, CPC-log-only half: Z1 stock, Z2 monthly flip trend, Z3 writer (APP_SYS_CD) attribution, E1/E2 purpose-field fill-rate. **RAN 2026-07-23** (§14-D) |
 | `21b_cpc_bridge.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — expensive half, run alone in a fresh session: unsub-resolution pipeline feeding B-main/B-reverse (vendor-unsub↔CPC-flip gap timing) + O (5-flag reachability overlap). **RAN 2026-07-23** (§14-D) |
+| `22_cpc_gate_evidence.sql` (Teradata-direct) | 22-A: writer attribution for B-reverse's bridged flips (closes Z3's open join). 22-B: gate-leak test — clients flagged out (1002/1012/1014 = No as-of window_start) vs received-email-in-window, main cut + exclusivity cut. **RAN 2026-07-23 — both decisions closed** (§14-E) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -539,3 +540,55 @@ Bridged gaps are SMEARED across every band (avg 52–101 days) — no cluster at
 **HEADLINE:** the consent gate does not know about ≈312K/yr clients who told the vendor to stop — they remain "marketable" per CPC.
 
 **Resolves §14-A's open interpretation:** whatever the MTEC-12644 doc's "100% match" batch does, it does NOT write vendor unsubs into `CPC_RB_PREF_LOG` — confirmed empirically by all four evidence lines above (Z2, Z3, B-reverse, O), not merely inferred as before. Direction of the "100% match" claim itself is still unconfirmed. Sharpened MarTech question: confirm nothing syncs today + get the MTEC-12644 go-live date.
+
+### E. Run results — 22 gate evidence (2026-07-23)
+
+`22_cpc_gate_evidence.sql` ran end-to-end 2026-07-23, closing both decisions the file was built for (22-A: who writes the bridged flips; 22-B: gate-leak test). Source pics: uploads 2026-07-23 16:28 (phone).
+
+**22-B — gate-leak test.** State as-of 2026-04-01 (`window_start`), email received in the 3-month window Apr–Jun 2026. Main cut:
+
+| gate_cohort | flagged_clients | received_email_in_window | rate |
+|---|---|---|---|
+| 1002 | 49,407 | 9,491 | 19.2% |
+| 1012 | 33,051 | 9,975 | 30.2% |
+| 1014 | 79,298 | 20,766 | 26.2% |
+| NONE_baseline_1in10 | 394,840 | 228,664 | 57.9% |
+
+Exclusivity cut (splits each flagged cohort by whether the client also carries another gate flag — partial bundle-confound control, per the switch-independence pattern in §0):
+
+| PREF_ID | exclusivity | flagged_clients | received_email_in_window | rate |
+|---|---|---|---|---|
+| 1002 | multi_flag | 47,077 | 8,746 | 18.6% |
+| 1002 | only_this_flag | 2,330 | 745 | 32.0% |
+| 1012 | multi_flag | 19,865 | 3,755 | 18.9% |
+| 1012 | only_this_flag | 13,186 | 6,220 | **47.2%** |
+| 1014 | multi_flag | 45,856 | 8,229 | 17.9% |
+| 1014 | only_this_flag | 33,442 | 12,537 | 37.5% |
+
+READINGS:
+1. Main-cut rates reproduce the recovered pack-12 E1 rates (§14-B) almost exactly — 30.1/26.2/19.2 there vs 30.2/26.2/19.2 here — two independently-windowed runs (E1's unconfirmed window vs 22-B's confirmed 2026-04-01 anchor) agree to within noise.
+2. The exclusivity cut removes the bundle confound and the leak WORSENS, not improves: 1012-only (the purest single-switch email opt-out population) receives email at 47.2% — above several multi-flag cells and not far below the 57.9% baseline. The email-specific switch barely moves campaign email delivery once bundling is stripped out.
+3. Construction note: the vendor feed is built from NBA campaign TREATMENT_IDs — these are marketing sends by construction, so "it's all service mail, not marketing" is not an available explanation for the leak. Residual caveat: a minority of MNEs may carry non-promotional content (per the MNE dictionary, §4); one follow-up worth doing is which specific MNEs reach flagged clients.
+4. Scale: ~9.5K entity-DNS (1002) clients received a campaign email in the quarter despite being flagged out at the master switch.
+
+**VERDICT (22-B):** gate leak PROVEN — descriptive/compliance-flavored finding (state-vs-outcome cross-tab, not a controlled experiment; cause unattributed). Either targeting/suppression logic does not consult CPC at send time, or CPC→SFMC suppression-list sync is partial/broken — this run does not distinguish the two. Direction symmetry with §14-D noted: consent fails to flow BOTH ways — vendor unsubs don't reach CPC (§14-D), and CPC opt-outs don't reliably suppress vendor sends (here).
+
+**22-A — bridged-flip writer attribution.** Joins B-reverse's bridged-flip client list (§14-D) back to writer (`APP_SYS_CD`), banded by gap-to-prior-unsub. Full 7 rows:
+
+| PREF_ID | APP_SYS_CD | gap 0-1d | gap 2-7d | gap 8-30d | gap 31+d | bridged_flips |
+|---|---|---|---|---|---|---|
+| 1002 | 7003 (contact centre) | 1 | 0 | 2 | 6 | 9 |
+| 1002 | 7001 (branch) | 0 | 0 | 0 | 1 | 1 |
+| 1012 | 7020 (SFMC/ESP) | 8 | 4 | 1 | 2 | **15** |
+| 1012 | 7003 (contact centre) | 1 | 1 | 2 | 6 | 10 |
+| 1012 | 7001 (branch) | 0 | 1 | 0 | 4 | 5 |
+| 1014 | 7001 (branch) | 1 | 7 | 20 | 66 | 94 |
+| 1014 | 7003 (contact centre) | 1 | 0 | 1 | 4 | 6 |
+
+Row totals tie exactly to B-reverse's bridged counts (§14-D): 1002 = 9+1 = 10 ✓; 1012 = 15+10+5 = 30 ✓; 1014 = 94+6 = 100 ✓.
+
+**VERDICT (22-A):** the only genuine automated crossing is SFMC/7020 on 1012 — ~15/yr, clustered same-day-to-week (12 of the 15 land in the 0-1d/2-7d bands). Every other bridge (all of 1002, all of 1014, and the non-7020 rows on 1012) is assisted-channel (branch/contact-centre) at long gaps, mostly 31+ days — consistent with a person acting on a customer request weeks after the client had already unsubscribed by email, not a pipe. Closes 22-A's decision: bridged flips are not evidence of a hidden sync; the one real automated crossing is tiny and email-specific.
+
+**Engine note:** one statement in this run hit TDWM error 3149 ("F-uncnstrn PJ rowtest" filter violation) — `CROSS JOIN vt_params` without collected statistics on that volatile table means the optimizer can't prove it's a 1-row join, so it gets treated as an unconstrained product join. Fix: `COLLECT STATISTICS` on `vt_params` — being applied to 21a/21b/22 (none of the three currently collect stats on it in the checked-in SQL).
+
+**Photo note:** the rotated printout photo of the O cross-tab (§14-D) was re-received during this pass; the 2026-07-23 screen read already on file stands as the source of record — no re-transcription performed.

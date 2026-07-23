@@ -184,10 +184,11 @@
 
 <h1 id="top">CPC Evidence Dossier — unsub↔CPC study (2026-07-23)</h1>
 <p class="subtitle">Working reference for Andre. One section per source image / evidence item: what was transcribed, what it shows, what it does not show, and how much to trust the transcription. Findings only — no recommendations.</p>
+<p class="subtitle"><b>Addendum (2026-07-23, same day):</b> pack 22 (<code>22_cpc_gate_evidence.sql</code>) ran and closed both open questions this dossier had flagged as pending — the gate-leak test (<a href="#item8">Section 8</a>) and the bridged-flip writer attribution (<a href="#item9">Section 9</a>). Claims register updated accordingly.</p>
 
 <div class="meta-box">
-<p><b>Source:</b> <code>unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md</code> §14 (all subsections, A–D), as of 2026-07-23.</p>
-<p><b>Underlying queries:</b> <code>21a_cpc_landscape.sql</code> (Z2, Z3, E1/E2 purpose-fill), <code>21b_cpc_bridge.sql</code> (B-reverse, O), <code>12_switch_enforcement_test.sql</code> (recovered pack-12 E1/E2/E3, run 2026-07-16).</p>
+<p><b>Source:</b> <code>unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md</code> §14 (all subsections, A–E), as of 2026-07-23.</p>
+<p><b>Underlying queries:</b> <code>21a_cpc_landscape.sql</code> (Z2, Z3, E1/E2 purpose-fill), <code>21b_cpc_bridge.sql</code> (B-reverse, O), <code>12_switch_enforcement_test.sql</code> (recovered pack-12 E1/E2/E3, run 2026-07-16), <code>22_cpc_gate_evidence.sql</code> (22-A writer attribution, 22-B gate-leak test, run 2026-07-23).</p>
 <p><b>Nothing in this document has been re-verified in-env.</b> Every number below traces to a phone photo of a screen, transcribed by hand or OCR. Treat "trust level" per section as the operative caveat, not the presence of a number.</p>
 </div>
 
@@ -208,6 +209,8 @@
 <li><a href="#item5">O — overlap 24-combo table</a></li>
 <li><a href="#item6">Recovered pack-12 E1/E2 — all-switch scan &amp; 16-combo cross-tab</a></li>
 <li><a href="#item7">MTEC-12644 — "Real-time CPC Unsubscribe" blueprint</a></li>
+<li><a href="#item8">22-B — gate-leak test (main + exclusivity cuts)</a></li>
+<li><a href="#item9">22-A — bridged-flip writer attribution</a></li>
 <li><a href="#claims">Claims register</a></li>
 </ol>
 </nav>
@@ -549,6 +552,101 @@
 <div class="trust"><span class="label">Trust level</span>Single-read of a Confluence page via phone photos. Document-quality caveat, not just photo-quality: the source document itself is partially template/placeholder, so even a perfect transcription would still be transcribing an incomplete document.</div>
 </div>
 
+<!-- ============================================================ -->
+<h2 id="item8">8. 22-B — gate-leak test (main cut + exclusivity cut)</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Image</b><span class="mono">upload, 2026-07-23 16:28 (phone)</span></div>
+  <div><b>Query / block</b><span class="mono">22_cpc_gate_evidence.sql</span>, block <span class="mono">22-B</span> (both cuts)</div>
+  <div><b>Basis</b>state as-of 2026-04-01 (<code>window_start</code>) vs. email received in the 3-month window Apr–Jun 2026</div>
+</div>
+
+<p>This is the pack informally flagged as "22-B" in <a href="#item2">Section 2</a>, <a href="#item5">Section 5</a> and the claims register (<a href="#claims">below</a>): does a client explicitly flagged out on 1002, 1012, or 1014 still receive campaign email?</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>Main cut — flagged clients vs. received-email-in-window, by gate</caption>
+<thead>
+<tr><th>gate_cohort</th><th>flagged_clients</th><th>received_email_in_window</th><th>rate</th></tr>
+</thead>
+<tbody>
+<tr><td>1002</td><td>49,407</td><td>9,491</td><td>19.2%</td></tr>
+<tr><td>1012</td><td>33,051</td><td>9,975</td><td>30.2%</td></tr>
+<tr><td>1014</td><td>79,298</td><td>20,766</td><td>26.2%</td></tr>
+<tr class="total"><td>NONE_baseline_1in10</td><td>394,840</td><td>228,664</td><td>57.9%</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="scroll-wrap">
+<table>
+<caption>Exclusivity cut — same cohorts split by whether the client also carries another gate flag</caption>
+<thead>
+<tr><th>PREF_ID</th><th>exclusivity</th><th>flagged_clients</th><th>received_email_in_window</th><th>rate</th></tr>
+</thead>
+<tbody>
+<tr><td>1002</td><td>multi_flag</td><td>47,077</td><td>8,746</td><td>18.6%</td></tr>
+<tr><td>1002</td><td>only_this_flag</td><td>2,330</td><td>745</td><td>32.0%</td></tr>
+<tr><td>1012</td><td>multi_flag</td><td>19,865</td><td>3,755</td><td>18.9%</td></tr>
+<tr class="highlight"><td>1012</td><td>only_this_flag</td><td>13,186</td><td>6,220</td><td>47.2%</td></tr>
+<tr><td>1014</td><td>multi_flag</td><td>45,856</td><td>8,229</td><td>17.9%</td></tr>
+<tr><td>1014</td><td>only_this_flag</td><td>33,442</td><td>12,537</td><td>37.5%</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Reproduces pack-12 E1, independently</h3>
+<p>The main-cut rates (30.2% / 26.2% / 19.2% for 1012/1014/1002) match the recovered pack-12 E1 rates (<a href="#item6">Section 6</a>: 30.1% / 26.3% / 19.2%) almost exactly, despite the two runs using different windows — E1's window is unconfirmed (likely Q2-2026) while 22-B anchors state to a confirmed 2026-04-01 date and measures receipt over the following quarter. Two differently-built reads landing on the same numbers is a real cross-check, not a rounding coincidence.</p>
+
+<h3>Removing the confound makes the leak worse, not better</h3>
+<p>The exclusivity cut isolates clients who hold <i>only</i> the named flag (no other gate flag set) — the cleanest available cut against the bundle/selection confound flagged in <a href="#item6">Section 6</a>. If 1012 (the email-specific switch) actually gated email, the "only_this_flag" cut should show a markedly lower rate than the bundled population. It does not: 1012-only clients receive email at <b>47.2%</b> — higher than the 1012 multi-flag cut (18.9%) and not far below the 57.9% unflagged baseline. Stripping out the confound did not reveal a hidden enforcement effect; it removed the one thing that had been holding the rate down.</p>
+
+<h3>Construction note and residual caveat</h3>
+<p>The vendor feed used for "received_email_in_window" is built from NBA campaign <code>TREATMENT_ID</code>s — these are marketing sends by construction, so "this is all service mail, not marketing" is not an available explanation for the observed rates. The narrower residual caveat: a minority of MNEs in the tracked universe may carry non-promotional content (see the MNE dictionary, knowledge doc §4); which specific MNEs reach flagged clients is a follow-up, not yet run.</p>
+
+<div class="shows"><span class="label">What this shows</span>Clients who explicitly opted out on 1002, 1012, or 1014 as of 2026-04-01 nonetheless received campaign email in the following quarter at rates (19–30% in the main cut, up to 47% in the 1012-only exclusivity cut) not far below the unflagged baseline (57.9%). The gap does not close when the bundle confound is removed — for 1012 it widens.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>A confirmed root cause. This is a state-vs-outcome cross-tab, not a controlled experiment, so it cannot distinguish "targeting logic never checks CPC at send time" from "CPC→SFMC suppression sync is partial/broken" — both are consistent with the same numbers. It is also an upper-bound read in one respect: the purpose fields that would let "marketing send" be verified row-by-row are known to be unusable (<a href="#item3">Section 3</a>), so the finding rests on the construction argument (campaign TREATMENT_IDs = marketing by definition) rather than a direct per-row purpose check.</div>
+<div class="trust"><span class="label">Trust level</span>Single-read, phone photos (uploaded 2026-07-23 16:28). The rates independently reproduce the recovered pack-12 E1 numbers from a differently-windowed run, which raises confidence in the top-line numbers specifically, even though no in-env export exists yet for either run.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="item9">9. 22-A — bridged-flip writer attribution</h2>
+<div class="item">
+<div class="item-header">
+  <div><b>Image</b><span class="mono">upload, 2026-07-23 16:28 (phone)</span></div>
+  <div><b>Query / block</b><span class="mono">22_cpc_gate_evidence.sql</span>, block <span class="mono">22-A</span></div>
+  <div><b>Basis</b>B-reverse's bridged-flip client list (<a href="#item4">Section 4</a>) joined back to writer (APP_SYS_CD), banded by gap-to-prior-unsub</div>
+</div>
+
+<p>This is the open join flagged in <a href="#item2">Section 2</a> as "informally pack 22-A": does the small bridged-flip subset (10 / 30 / 100 clients for 1002 / 1012 / 1014) skew toward a particular writer system? Full 7 rows:</p>
+
+<div class="scroll-wrap">
+<table>
+<caption>Bridged flips by PREF_ID × writer, banded by gap to prior vendor unsub</caption>
+<thead>
+<tr><th>PREF_ID</th><th>APP_SYS_CD</th><th>gap 0-1d</th><th>gap 2-7d</th><th>gap 8-30d</th><th>gap 31+d</th><th>bridged_flips</th></tr>
+</thead>
+<tbody>
+<tr><td>1002</td><td>7003 (contact centre)</td><td>1</td><td>0</td><td>2</td><td>6</td><td>9</td></tr>
+<tr><td>1002</td><td>7001 (branch)</td><td>0</td><td>0</td><td>0</td><td>1</td><td>1</td></tr>
+<tr class="highlight"><td>1012</td><td>7020 (SFMC/ESP)</td><td>8</td><td>4</td><td>1</td><td>2</td><td>15</td></tr>
+<tr><td>1012</td><td>7003 (contact centre)</td><td>1</td><td>1</td><td>2</td><td>6</td><td>10</td></tr>
+<tr><td>1012</td><td>7001 (branch)</td><td>0</td><td>1</td><td>0</td><td>4</td><td>5</td></tr>
+<tr><td>1014</td><td>7001 (branch)</td><td>1</td><td>7</td><td>20</td><td>66</td><td>94</td></tr>
+<tr><td>1014</td><td>7003 (contact centre)</td><td>1</td><td>0</td><td>1</td><td>4</td><td>6</td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">Row totals tie exactly to B-reverse's bridged counts (Section 4): 1002 = 9+1 = 10 ✓; 1012 = 15+10+5 = 30 ✓; 1014 = 94+6 = 100 ✓.</p>
+
+<h3>One real pipe; everything else is coincidence</h3>
+<p>The 1012/7020 row is the exception to every other row in the table: 15 bridged flips, clustered same-day-to-week (12 of the 15 fall in the 0-1d/2-7d bands). Every other row — all of 1002, all of 1014, and the non-7020 rows on 1012 — is written through an assisted channel (branch 7001 or contact-centre 7003) and skews heavily to the 31+ day band, consistent with a person acting on a customer's request some weeks after the client had already unsubscribed by email, not an automated crossing.</p>
+
+<div class="shows"><span class="label">What this shows</span>Exactly one genuine automated crossing exists between the email-unsub world and CPC: SFMC/7020 writing 1012 flips at ~15/year, with same-day-to-week timing consistent with a real (if tiny) system pipe. Every other bridged flip, on any switch, is assisted-channel and long-gapped — i.e. coincidence, not a pipe.</div>
+<div class="notshows"><span class="label">What this does NOT show</span>Volume context: 15/year sits against ≈1,541 total 1012 CPC flips over the 13-month Z2 window (<a href="#item1">Section 1</a>) — the SFMC pipe accounts for roughly 1% of 1012 flips, not a meaningful share of overall CPC activity. This table also does not revisit whether 1012 itself gates email (that is <a href="#item8">Section 8</a>'s question) — it only settles who wrote the bridged flips.</div>
+<div class="trust"><span class="label">Trust level</span>Single read (phone photo, uploaded 2026-07-23 16:28). Internal arithmetic ties out exactly against B-reverse's independently-recorded bridged totals (Section 4) — a real cross-check at the row-count level, even though the underlying photo itself was read once.</div>
+</div>
+
 <hr>
 
 <!-- ============================================================ -->
@@ -568,7 +666,7 @@
   <td>Flips are written via assisted channels (branch/contact-centre); this means humans authored them</td>
   <td class="status-caveat">PROVEN-WITH-CAVEAT</td>
   <td><a href="#item2">§2 Z3</a></td>
-  <td>The channel-code fact (assisted vs. self-serve vs. machine) is solid; "human authored" is an inference from it, not a directly observed fact. 7033 alone carries ≈25% of 1014's flips and is undecoded. Open join (informally "pack 22-A": bridged flips × writer) not yet run.</td>
+  <td>The channel-code fact (assisted vs. self-serve vs. machine) is solid; "human authored" is an inference from it, not a directly observed fact. 7033 alone carries ≈25% of 1014's flips and is undecoded. The open join into the bridged-flip subset specifically has now run — see <a href="#item9">§9 22-A</a> and the new "bridged flips attribution" row below — same conclusion holds there too, with one small exception (SFMC/7020 on 1012).</td>
 </tr>
 <tr>
   <td>Purpose fields (CONTACT_PURPS_TYP / CNTCT_EVNT_INITIATOR) are unusable for a marketing-vs-service split</td>
@@ -584,9 +682,15 @@
 </tr>
 <tr>
   <td>Gate leak: clients marked "No" / unsubscribed continue to actually receive email</td>
-  <td class="status-pending">PENDING pack 22</td>
-  <td><a href="#item5">§5 O</a> + <a href="#item6">§6 pack-12 E1</a></td>
-  <td>Directional only. O establishes the state precondition (no explicit flag) but not delivery. Pack-12 E1 shows a same-band receive-rate hint (≈19–30%) across relevant and irrelevant switches alike, but the window is unconfirmed and there is no matched-control design. Settling this is informally "pack 22-B."</td>
+  <td class="status-proven">PROVEN</td>
+  <td><a href="#item8">§8 22-B</a> (cross-checked by <a href="#item6">§6 pack-12 E1</a>)</td>
+  <td>19–30% of explicitly-flagged clients received campaign email in-window (main cut); up to 47% for 1012 once the bundle confound is stripped out via the exclusivity cut. Independently reproduces pack-12 E1's rates. Upper-bound / construction nuance: this is a state-vs-outcome cross-tab with no purpose-field verification and no root-cause attribution — it proves the leak exists and is not explained by service mail (feed = campaign TREATMENT_IDs by construction), not why it happens (targeting-side vs. sync-side is not distinguished).</td>
+</tr>
+<tr>
+  <td>Bridged flips (a CPC flip preceded by a vendor unsub) are evidence of an automated sync pipe</td>
+  <td class="status-proven">PROVEN</td>
+  <td><a href="#item9">§9 22-A</a> (built on <a href="#item4">§4 B-reverse</a>)</td>
+  <td>One real pipe found: SFMC/7020 writes ~15/yr of 1012's bridged flips, clustered same-day-to-week. Every other bridged flip (all of 1002, all of 1014, non-7020 rows on 1012) is assisted-channel at long gaps — coincidence, not a sync. Sharpens, and is consistent with, the "no hidden batch sync" verdict in row 1.</td>
 </tr>
 </tbody>
 </table>
