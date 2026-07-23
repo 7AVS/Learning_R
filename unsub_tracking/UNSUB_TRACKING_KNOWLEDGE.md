@@ -20,7 +20,7 @@ Three functional classes. **For unsub/reachability work, only the CHANNEL-CLOSER
 | Class | Switches | Blank default | Closes a contact channel? |
 |---|---|---|---|
 | **CHANNEL-CLOSERS (Banking)** | **1002** entity DNS (master — closes ALL) · 1007 mail · 1008 phone · 1009 online · **1012 E-MAIL** (evidence-resolved, see below) · 1013 F2F · 1048 ATM · **vendor unsub (outside CPC — closes email at the ESP)** | allowed (open) | **YES** |
-| **SHARING-ONLY per dictionary — ENFORCEMENT UNVERIFIED** | 1014 share-for-marketing · 1015 share-for-service · 1036 personalization · 1057 DI SfM · 1016 credit bureau | **1014/1015: NO**; others allowed | Dictionary says NO (data usage only) — but team lore says 1014=N = "out of all marketing". Which switches actually stop email = `12_switch_enforcement_test.sql` (state-before-window × received-email cross-tab, 1007 as negative control). Do not present the sharing-only classification as fact until 12 runs. |
+| **SHARING-ONLY per dictionary — ENFORCEMENT UNVERIFIED** | 1014 share-for-marketing · 1015 share-for-service · 1036 personalization · 1057 DI SfM · 1016 credit bureau | **1014/1015: NO**; others allowed | Dictionary says NO (data usage only) — but team lore says 1014=N = "out of all marketing". Which switches actually stop email = `12_switch_enforcement_test.sql` (state-before-window × received-email cross-tab, 1007 as negative control). **12 ran 2026-07-16** (E1+E2 recovered from photos 2026-07-23, §14) — but the raw cross-tab shows a bundle/selection confound, not a clean per-switch enforcement signal. Do not present the sharing-only classification as fact; still unresolved. |
 | **TOPIC/CONTENT** (limit what, not whether) | products 1004/1006/1010/1023/1024/1025/1026/1044 (+ business codes) · services 1020-1022/1042-1043 · newsletters 1045/1046/1047 (email *content* subscriptions, not the channel) | allowed | NO (topic only) |
 
 **The email-reachability set = vendor unsub + 1012 + 1002.** Everything else is noise for channel questions.
@@ -198,11 +198,11 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `05_email_journey_by_mne_cohort.sql` | THE volume summary: decisioned-email denominator (two-field rule) + client-distinct funnel per MNE × cohort month; 30-day disposition window per deployment (editable assumption) |
 | `06_cpc_pref_log_eda.sql` | CPC decision queries: D1 which code unsubs flip, D2 unsub↔CPC linkage rate (RESULT: no pipe — 0.06%/0.33%) |
 | `07_cpc_optout_stock_trend.sql` | CPC opt-out stock (latest-state) + monthly flow + timeline cube extract (Q4) |
-| `08_reachability_overlap.sql` | Cross-tab unsub × 1002 × 1012 × 1014 flags — overlap/union of exit mechanisms |
+| `08_reachability_overlap.sql` | Cross-tab unsub × 1002 × 1012 × 1014 flags — overlap/union of exit mechanisms. **Status (confirmed 2026-07-23, §14):** no run output found anywhere in the photo backlog — still UNRUN or unphotographed. |
 | `09_cpc_switch_independence.sql` | Bundle sizes, same-timestamp pair matrix, contradiction census |
 | `10_cpc_writes_by_system.sql` | APP_SYS_CD overlay: volume/bundle-shape/first-touch by system + Exact Target profile |
 | `11_cpc_master_cube.sql` | THE cube extract: switch × position × system × save-shape (in-env pivot base) |
-| `12_switch_enforcement_test.sql` | Which switch ACTUALLY stops email — state-before-window × received-email, 1007 negative control (settles 1014 dictionary-vs-lore) |
+| `12_switch_enforcement_test.sql` | Which switch ACTUALLY stops email — state-before-window × received-email, 1007 negative control (settles 1014 dictionary-vs-lore). **RAN 2026-07-16, results recovered from photos 2026-07-23** — E1 (all-switch scan) + E2 (16-combo cross-tab) done, E3 (purpose-split) inconclusive; window unconfirmed; does NOT settle the 1014 dictionary-vs-lore question yet (§14) |
 | `13_unsub_value_spine.sql` | Value spine: S1 first-unsub per client (in-env extract; embedded verbatim in 15 — never needs a standalone run) + S2 tracked-MNE league table |
 | `14_cpc_optout_campaign_proximity.sql` | Did campaign sends precede CPC 1002 opt-outs? Backward proximity with base-rate control |
 | `15_unsub_value_enrichment.py` | Spark/UCP (allowed .py — Lumina side): spine → TIBC×age segment matrix by trigger MNE + PROF_TOT_ANNUAL vetting |
@@ -401,3 +401,99 @@ Cards-five × month first-unsub + sent table ran (16 v3, rollup (a), Teradata-di
 Preliminary findings below are **directional, pending v4 re-run** — do not cite as final:
 - **PCQ first-unsub/sent rate ≈ 0.10–0.14%/mo**, roughly 2–3× PCL's rate (~0.04–0.06%/mo). CRV/PCL/PCQ deploy mid-month often enough that the axis mismatch is smaller — these three reads are directionally OK; AUH/PCD are not.
 - **Cards-five first-unsubs ≈ 1,200–1,800/mo** vs program-wide ~26K+/mo → Cards' share of program unsubs ≈ 5–7%, consistent with the §13 Pack-17 scale check (finding 5). Awaiting rollup (b) confirmation on the v4 re-run before this share is final.
+
+## 14. CPC study reopened — recovered artifacts (2026-07-23)
+
+The 2026-07-15/16 photo backlog (29 shots) was fully reviewed and identified. This recovers Pack 12's E1/E2/E3 results — run 2026-07-16, never catalogued until now — and surfaces an adjacent MarTech initiative relevant to the CPC↔vendor-unsub boundary (§0 finding).
+
+### A. MTEC-12644 "Real-time CPC Unsubscribe" (Confluence, transcribed from `pics/PXL_20260715_2315*.jpg` / `2316*.jpg`)
+
+- Project: MarTech, author T.S. (MarTech; diagram owner H., first name only on page — full names withheld from repo, known to Andre), last updated 2026-06-18. Jira MTEC-12644 itself inaccessible (the page says so). Blueprint PARTIALLY complete — objectives/functional-reqs/assumptions sections are still template placeholders.
+- **Business context:** the existing daily batch integration for RBC email opt-out is being enhanced with a REAL-TIME capability. Drivers: Gmail's Feb-2024 inbox-provider unsub requirements; decoupling from ESPs (reusable across Salesforce, Sendgrid, AWS); decoupling the surrogate vendor ID from API consumers.
+- **Key quotes:** "Preserving the batch process ensures a 100% match between RBC and SFMC unsubscribe data as of a given date/time." — and — "The Client Communication domain (PRSO application) has no access to channel consent today."
+- **Architecture** (Lucid diagram, `pics/PXL_20260715_231554794.jpg`): SFMC → Email → Public Secure Opt-Out Page → (surrogate ID + address) → new PRSO Opt-Out API, sitting between the CPC-CC API and CPC-PC API → CPC-PC; new PRSO ID Table (future). Existing daily batch path (files → CPC-CC API → Daily Delta cylinders) explicitly unchanged.
+  - **In scope:** S4 Multi-Org only; PRSO onboarded to CPC-CC APIs; new client + non-client public unsubscribe pages (CASL-compliant, API refs `C000-CPC-CC-CustPrefMod` / `C000-CPC-PC-CustContactPrefMod`); new external PRSO API.
+  - **Out of scope:** CPC-CC opt-out to SRF# (future phase); changes to the existing batch; changes to CPC C000 APIs.
+  - **NFRs:** <1 TPS, ≤2s response, 24/7, external Apigee, PingF auth.
+- **INTERPRETATION (flag as interpretation, not fact):** together with the 0.06% CPC linkage (§0 D2) and the ~80/mo Exact Target trickle (§0 ESP-pipe finding), the coherent reading is that email unsubs live in the ESP/SFMC suppression world (batch-file sync) and do NOT write to `CPC_RB_PREF_LOG` at scale today; CPC channel consent is a separate universe PRSO cannot read; MTEC-12644 builds the real-time bridge. Direction of the "100% match" batch claim (RBC→SFMC vs SFMC→RBC) is AMBIGUOUS in the source doc — do not state as fact.
+
+### B. Pack 12 results RECOVERED from photos — E1 + E2 ran 2026-07-16, never catalogued until now
+
+Pack 12 (`12_switch_enforcement_test.sql`) DID run. Its output sat in phone photos, uncatalogued, until this recovery pass.
+
+**E1 — all-switch scan** (`pics/PXL_20260716_001838168.jpg`): for every switch, clients whose latest state was No (5002) BEFORE the window, vs. how many of those received an email IN the window. Full 33 rows (rate computed for readability, not part of the source screenshot):
+
+| Switch | Clients (No/5002 pre-window) | Received email in window | Rate |
+|---|---|---|---|
+| -1 (baseline, all) | 7,563,199 | 3,688,588 | 48.8% |
+| 1002 | 50,271 | 9,676 | 19.2% |
+| 1004 | 47,095 | 9,576 | 20.3% |
+| 1006 | 48,600 | 9,798 | 20.2% |
+| 1007 | 47,984 | 9,345 | 19.5% |
+| 1008 | 47,482 | 10,067 | 21.2% |
+| 1009 | 49,068 | 9,905 | 20.2% |
+| 1010 | 46,240 | 9,182 | 19.9% |
+| 1012 | 33,964 | 10,232 | 30.1% |
+| 1013 | 48,075 | 9,351 | 19.5% |
+| 1014 | 80,750 | 21,195 | 26.3% |
+| 1015 | 151,708 | 39,917 | 26.3% |
+| 1016 | 1,454,381 | 647,683 | 44.5% |
+| 1020 | 17,000 | 1,583 | 9.3% |
+| 1021 | 18,237 | 1,655 | 9.1% |
+| 1022 | 17,004 | 1,569 | 9.2% |
+| 1023 | 46,378 | 9,244 | 19.9% |
+| 1024 | 47,910 | 9,370 | 19.6% |
+| 1025 | 48,558 | 9,606 | 19.8% |
+| 1026 | 47,809 | 9,392 | 19.6% |
+| 1027 | 1,314 | 103 | 7.8% |
+| 1028 | 1,312 | 100 | 7.6% |
+| 1030 | 1,312 | 102 | 7.8% |
+| 1031 | 1,310 | 98 | 7.5% |
+| 1032 | 1,235 | 76 | 6.2% |
+| 1033 | 1,229 | 75 | 6.1% |
+| 1034 | 1,316 | 103 | 7.8% |
+| 1036 | 145,602 | 47,932 | 32.9% |
+| 1042 | 40,239 | 11,002 | 27.3% |
+| 1044 | 46,186 | 9,155 | 19.8% |
+| 1045 | 125 | 70 | 56.0%† |
+| 1046 | 2,419 | 1,835 | 75.9%† |
+| 1048 | 47,822 | 9,272 | 19.4% |
+
+†1045/1046 denominators are tiny (125, 2,419) — treat as noise, not signal.
+
+**E1 reading:** baseline receive rate ≈48.8%; nearly ALL No-switches cluster ~19–30% regardless of channel relevance (1007 mail 19.5% vs 1012 email 30.1% — a channel-specific switch and an irrelevant one land in the same band). Consistent with a bundle/selection confound (same clients hit many switches at once, per the §0 pack-09 bundle finding) rather than each switch individually gating email. Repeated ~46–50K holder counts recurring across many unrelated switches = the same bundled opt-out population showing up again and again.
+
+**E2 — 16-combo cross-tab** (`pics/PXL_20260716_000048758.jpg`, `000523483.jpg`, `001843490.jpg` — three separate captures, values identical/stable across all three): `out_1002 × out_1012 × out_1014 × out_1007_dm_control` (flag order as labeled in the query) vs. clients / received_email_in_window. Full 16 rows:
+
+| 1002 | 1012 | 1014 | 1007 (DM ctrl) | Clients | Received email | Rate |
+|---|---|---|---|---|---|---|
+| 0 | 0 | 0 | 0 | 3,999,323 | 2,304,010 | 57.6% |
+| 0 | 0 | 0 | 1 | 395 | 137 | 34.7% |
+| 0 | 0 | 1 | 0 | 34,096 | 12,795 | 37.5% |
+| 0 | 0 | 1 | 1 | 61 | 27 | 44.3% |
+| 0 | 1 | 0 | 0 | 12,228 | 5,956 | 48.7% |
+| 0 | 1 | 0 | 1 | 1,362 | 408 | 30.0% |
+| 0 | 1 | 1 | 0 | 157 | 61 | 38.9% |
+| 0 | 1 | 1 | 1 | 62 | 25 | 40.3% |
+| 1 | 0 | 0 | 0 | 993 | 256 | 25.8% |
+| 1 | 0 | 0 | 1 | 1,411 | 514 | 36.4% |
+| 1 | 0 | 1 | 0 | 2,475 | 384 | 15.5% |
+| 1 | 0 | 1 | 1 | 25,237 | 4,740 | 18.8% |
+| 1 | 1 | 0 | 0 | 529 | 178 | 33.6% |
+| 1 | 1 | 0 | 1 | 964 | 441 | 45.7% |
+| 1 | 1 | 1 | 0 | 170 | 110 | 64.7% |
+| 1 | 1 | 1 | 1 | 18,492 | 3,053 | 16.5% |
+
+Flag order convention: columns read `1002, 1012, 1014, 1007` left to right; 1 = switch was No (out) before the window, 0 = not.
+
+**CAVEAT (unverified):** none of the E1/E2 screenshots show the underlying SQL or the date window — window boundaries are unconfirmed (likely Q2-2026 per the file's design intent, but mark unverified, not confirmed). No enforcement conclusion should be drawn from E1/E2 alone until the window is confirmed and a proper controlled comparison (not a raw cross-tab) is run.
+
+**E3 — purpose-split** (per photo IDs `pics/PXL_20260716_001847332.jpg`, `001852198.jpg`): attempted split by `CONTACT_PURPS_TYP` / `CNTCT_EVNT_INITIATOR` (marketing vs. service). Fields came back MOSTLY EMPTY — one summary showed ~155K send-rows against only ~9.6K distinct clients with a populated purpose field. Reading: purpose fields are likely too sparse to support a marketing-vs-service split as currently populated; needs a fill-rate probe before use in any enforcement redesign.
+
+**Also recovered:** `pics/PXL_20260715_234124009.jpg` is an Excel "cpc cube" pivot (`PREF_ID × CLNT_CONSENT_TYP × APP_SYS_CD`) — NOT the E2 table as earlier assumed. Notable legible cells: 1012/5002/7020 = 1,386; 1012/5001/7999 = 14,458; the 1016 row dominates volumes overall. Partial read only — needs an in-env export if this cube is ever needed for real.
+
+### C. Photo-index note
+
+The 2026-07-15/16 photo backlog (29 shots) is now fully identified: MTEC-12644 Confluence set (5 shots, §A), CPC query results (E1/E2/E3 + cube pivots + bundle/system scans, §B and the §0 cube-pivot findings), and the RBC consent-code dictionary page (`pics/PXL_20260715_223246054.jpg`).
+
+**§8 flag update:** pack 08 (`08_reachability_overlap.sql`) — still no run output found anywhere in the backlog; remains UNRUN or unphotographed. Pack 12 (`12_switch_enforcement_test.sql`) — E1+E2 results RECOVERED above (directional, window unconfirmed); E3 ran but purpose fields came back empty, inconclusive. Neither settles the §0 "1014 dictionary-vs-lore" enforcement question — see the updated MASTER SWITCH MAP cross-reference in §0.
