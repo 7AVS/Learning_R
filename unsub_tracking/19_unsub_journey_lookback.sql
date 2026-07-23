@@ -1,4 +1,4 @@
--- 19 v6: Unsub journey lookback — window-bounded cohort vs PER-MONTH baseline, 12mo contact history
+-- 19 v7: Unsub journey lookback — window-bounded cohort vs PER-MONTH baseline, split by engagement
 -- ENGINE: Teradata-direct. Unsub = address-level; no first-ever/history semantics.
 -- Always run top to bottom. Pre-clean DROPs below: 'does not exist' errors on a fresh session are harmless.
 
@@ -121,16 +121,17 @@ COLLECT STATISTICS ON vt_unsub_journey_pop COLUMN (consumer_id_hashed);
 COLLECT STATISTICS ON vt_unsub_journey_pop COLUMN (CLNT_NO);
 
 
--- STEP 5: 12mo lookback — EVENT joined directly on consumer_id_hashed (no MASTER), banded rollup
-WITH sends AS (
+-- STEP 5: 12mo lookback — EVENT joined directly on consumer_id_hashed (no MASTER), banded rollup, engagement split
+WITH events AS (
     SELECT
         e.consumer_id_hashed,
         e.TREATMENT_ID,
         e.disposition_dt_tm,
+        e.disposition_cd,
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     CROSS JOIN vt_params vp
-    WHERE e.disposition_cd = 1
+    WHERE e.disposition_cd IN (1, 2, 3)                             -- 1=sent 2=opened 3=clicked
       AND e.disposition_dt_tm >= ADD_MONTHS(vp.window_start, -12)  -- window start - 12mo
       AND e.disposition_dt_tm <  vp.window_end                     -- window end (exclusive)
 ),
@@ -139,10 +140,12 @@ lookback AS (                      -- 12mo strictly before each client's OWN ind
         p.CLNT_NO,
         p.cohort_group,
         p.cohort_month,
-        COUNT(DISTINCT s.TREATMENT_ID) AS lookback_contacts,
-        COUNT(DISTINCT s.mne)          AS lookback_mnes
+        COUNT(DISTINCT CASE WHEN s.disposition_cd = 1 THEN s.TREATMENT_ID END) AS lookback_contacts,
+        COUNT(DISTINCT CASE WHEN s.disposition_cd = 1 THEN s.mne END)          AS lookback_mnes,
+        COUNT(DISTINCT CASE WHEN s.disposition_cd = 2 THEN s.TREATMENT_ID END) AS lookback_opens,
+        COUNT(DISTINCT CASE WHEN s.disposition_cd = 3 THEN s.TREATMENT_ID END) AS lookback_clicks
     FROM vt_unsub_journey_pop p
-    LEFT JOIN sends s
+    LEFT JOIN events s
         ON  s.consumer_id_hashed = p.consumer_id_hashed
         AND s.disposition_dt_tm >= ADD_MONTHS(CAST(p.index_dt AS DATE), -12)
         AND s.disposition_dt_tm <  p.index_dt
@@ -150,10 +153,15 @@ lookback AS (                      -- 12mo strictly before each client's OWN ind
 )
 SELECT
     cohort_group,
+    CASE WHEN lookback_clicks > 0 THEN 'clicked'          -- engagement class, applies to stayed+unsub alike
+         WHEN lookback_opens  > 0 THEN 'opened'
+         ELSE 'dark' END                            AS engagement,
     cohort_month,
     COUNT(DISTINCT CLNT_NO)                       AS n_clients,
     CAST(AVG(lookback_contacts) AS DECIMAL(10,1)) AS avg_contacts,
     CAST(AVG(lookback_mnes)     AS DECIMAL(10,1)) AS avg_mnes,
+    CAST(AVG(lookback_opens)    AS DECIMAL(10,1)) AS avg_opens,
+    CAST(AVG(lookback_clicks)   AS DECIMAL(10,1)) AS avg_clicks,
     -- editable: contact bands
     SUM(CASE WHEN lookback_contacts = 0             THEN 1 ELSE 0 END) AS contacts_0,
     SUM(CASE WHEN lookback_contacts = 1             THEN 1 ELSE 0 END) AS contacts_1,
@@ -171,8 +179,8 @@ SELECT
     SUM(CASE WHEN lookback_mnes = 4                 THEN 1 ELSE 0 END) AS mnes_4,
     SUM(CASE WHEN lookback_mnes >= 5                THEN 1 ELSE 0 END) AS mnes_5p
 FROM lookback
-GROUP BY 1, 2
-ORDER BY 1, 2;
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
 
 
 -- DIAGNOSTIC: multi-unsub scale — is the multi-address blind spot real?
@@ -203,11 +211,13 @@ DROP TABLE vt_params;
 -- OPTIONAL: chunked fallback if CPU abort persists
 -- CREATE VOLATILE TABLE vt_lookback_chunks AS (
 --     SELECT p.CLNT_NO, p.cohort_group, p.cohort_month,
---            COUNT(DISTINCT s.TREATMENT_ID)              AS lookback_contacts,
---            COUNT(DISTINCT SUBSTR(s.TREATMENT_ID,8,3))  AS lookback_mnes
+--            COUNT(DISTINCT CASE WHEN s.disposition_cd=1 THEN s.TREATMENT_ID END)             AS lookback_contacts,
+--            COUNT(DISTINCT CASE WHEN s.disposition_cd=1 THEN SUBSTR(s.TREATMENT_ID,8,3) END) AS lookback_mnes,
+--            COUNT(DISTINCT CASE WHEN s.disposition_cd=2 THEN s.TREATMENT_ID END)             AS lookback_opens,
+--            COUNT(DISTINCT CASE WHEN s.disposition_cd=3 THEN s.TREATMENT_ID END)             AS lookback_clicks
 --     FROM vt_unsub_journey_pop p
 --     LEFT JOIN DTZV01.VENDOR_FEEDBACK_EVENT s
---            ON s.consumer_id_hashed = p.consumer_id_hashed AND s.disposition_cd = 1
+--            ON s.consumer_id_hashed = p.consumer_id_hashed AND s.disposition_cd IN (1, 2, 3)
 --           AND s.disposition_dt_tm >= ADD_MONTHS(CAST(p.index_dt AS DATE), -12)
 --           AND s.disposition_dt_tm <  p.index_dt
 --     WHERE MOD(p.CLNT_NO, 4) = 0
@@ -216,5 +226,5 @@ DROP TABLE vt_params;
 --     -- UNION ALL  SELECT ... same joins ...  WHERE MOD(p.CLNT_NO, 4) = 2  GROUP BY 1, 2, 3
 --     -- UNION ALL  SELECT ... same joins ...  WHERE MOD(p.CLNT_NO, 4) = 3  GROUP BY 1, 2, 3
 -- ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
--- then run STEP 5's final banded SELECT against vt_lookback_chunks instead of the lookback CTE
+-- then run STEP 5's final banded SELECT (engagement CASE + GROUP BY) against vt_lookback_chunks
 -- DROP TABLE vt_lookback_chunks;
