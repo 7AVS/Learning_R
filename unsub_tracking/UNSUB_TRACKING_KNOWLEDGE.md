@@ -206,7 +206,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `13_unsub_value_spine.sql` | Value spine: S1 first-unsub per client (in-env extract; embedded verbatim in 15 — never needs a standalone run) + S2 tracked-MNE league table |
 | `14_cpc_optout_campaign_proximity.sql` | Did campaign sends precede CPC 1002 opt-outs? Backward proximity with base-rate control |
 | `15_unsub_value_enrichment.py` | Spark/UCP (allowed .py — Lumina side): spine → TIBC×age segment matrix by trigger MNE + PROF_TOT_ANNUAL vetting |
-| `16_population_lost_trend.sql` | Month × MNE, ALL MNEs, long format: em_clients_sent (disposition 1) + clients_first_unsub + tracked flag — Excel-pivot extract |
+| `16_population_lost_trend.sql` | Month × MNE, ALL MNEs, long format: em_clients_sent (disposition 1) + clients_first_unsub + tracked flag — Excel-pivot extract. **v4 (2026-07-23):** `clients_sent` re-booked to deployment month (was disposition month) — v3 rates were unusable for month-end deployers AUH/PCD (§13) |
 | `17_em_decision_vendor_coverage.sql` | EM-decisioned → vendor coverage: sent_in_window/decisioned ratio, Cards five (CRV/PCL/PCQ/PCD/AUH) — 91–98% headline (§11, 2026-07-16). **RE-RAN 2026-07-22** with full per-MNE × month detail now transcribed (§13) |
 | `18_vendor_retention_probe.sql` (Teradata-direct) | Quarterly rows/distinct-clients/min-max for MASTER (load_tm proxy) and EVENT (disposition_dt_tm) separately, unwindowed — settles how far back coverage goes. **RAN 2026-07-22** — retention resolved: ~7-yr rolling window, 12-mo lookback fully covered (§13) |
 | `19_unsub_journey_lookback.sql` (Teradata-direct) | THE journey number: first-unsub cohort vs symmetric send-indexed stayed baseline, 12-mo lookback contacts + distinct MNEs, cohort_group × cohort_month summary. v1 (Trino, `APPROX_PERCENTILE`) errored 3706 running Teradata-direct in-env 2026-07-22 — converted; percentiles → banded distribution (see §12) |
@@ -391,3 +391,13 @@ Numbers are **directional from phone OCR** — overlapping shots disagreed on a 
 4. **July 2026 (202607) feed is partial and per-campaign:** PCD flowing, CRV/PCL zero → spotlight quarter must stop at 202606.
 5. **Scale check for the spotlight "share" number:** Cards-five unsubs sum ≈1.5–4K/mo vs ~35K/mo program-wide (§10 finding) → Cards' share of program unsubs is plausibly ~5–10%; if 16 v2 confirms, the slide story flips from "Cards drive unsubs" to "Cards are a minor contributor — the problem is program-level." Awaiting 16 v2 for last-touch confirmation.
 6. **AUH appears only episodically** (202602, 202604) — consistent with phased deployments, not monthly cadence.
+
+### 16 v3 rollup (a) first read (2026-07-23, pics/PXL_20260723_000436256.jpg)
+
+Cards-five × month first-unsub + sent table ran (16 v3, rollup (a), Teradata-direct).
+
+**BOOKING MISMATCH found:** `clients_sent` was booked to the vendor's `disposition_dt_tm` calendar month while `clients_first_unsub` was booked to the triggering-deployment month — two different clocks on the same row. For campaigns deploying near month-end this splits one deployment's sends across the month boundary from its unsubs: AUH 202604 shows 356 unsubs vs only 8 sent, and 202605 shows 0 unsubs vs 555,967 sent — same deployment, torn in half by the axis mismatch. PCD's sent column alternates ~84K/598K/157K/633K month-to-month for the same reason. **Monthly unsub/sent rate math from this v3 output is unusable for AUH/PCD.** → **v4 fix:** `clients_sent` re-booked to the deployment month using the identical mechanism `clients_first_unsub` already uses (see `16_population_lost_trend.sql` `sent_raw`/`sent_a` CTEs, 2026-07-23).
+
+Preliminary findings below are **directional, pending v4 re-run** — do not cite as final:
+- **PCQ first-unsub/sent rate ≈ 0.10–0.14%/mo**, roughly 2–3× PCL's rate (~0.04–0.06%/mo). CRV/PCL/PCQ deploy mid-month often enough that the axis mismatch is smaller — these three reads are directionally OK; AUH/PCD are not.
+- **Cards-five first-unsubs ≈ 1,200–1,800/mo** vs program-wide ~26K+/mo → Cards' share of program unsubs ≈ 5–7%, consistent with the §13 Pack-17 scale check (finding 5). Awaiting rollup (b) confirmation on the v4 re-run before this share is final.

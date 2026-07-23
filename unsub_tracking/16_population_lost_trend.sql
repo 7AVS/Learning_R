@@ -3,6 +3,9 @@
 -- =============================================================================
 -- v3 2026-07-22: + clients_sent (vendor-only, rate denominator downstream),
 --                + decision-sized rollup blocks (end of file).
+-- v4 2026-07-23: clients_sent re-booked to deployment month (same axis as
+--                unsubs) — v3 monthly rates invalid for month-end deployers
+--                (AUH/PCD).
 --
 -- One row per (MNE, deployment-cohort month) since 2024-01-01, ALL MNEs,
 -- long format — pivot in Excel.
@@ -18,10 +21,19 @@
 --     vendor-only MNEs with no tactic-side decisioning; their denominator is 0).
 --   clients_sent          = distinct clients with a SENT disposition
 --     (disposition_cd=1, same vendor idiom as 17_em_decision_vendor_coverage.sql)
---     for that MNE x month. VENDOR-ONLY: mne from SUBSTR(TREATMENT_ID,8,3) same
---     as everywhere else in this file; month from the vendor's own
---     disposition_dt_tm — no tactic join, so this also covers the ~68
---     vendor-only MNEs the decisioned denominator can't see.
+--     for that MNE x month. mne from SUBSTR(TREATMENT_ID,8,3) same as
+--     everywhere else in this file. Month = SAME booking mechanism as
+--     clients_first_unsub (v4 fix): exact-key join TREATMENT_ID=TACTIC_ID x
+--     CLNT_NO to DG6V01.TACTIC_EVNT_IP_AR_HIST, take TREATMT_STRT_DT (the
+--     DEPLOYMENT month) — not the vendor's disposition_dt_tm calendar month.
+--     v3 booked sends to disposition month while unsubs booked to deployment
+--     month; for campaigns deploying near month-end the vendor logs the SENT
+--     disposition a few days later, in the NEXT calendar month, splitting one
+--     deployment's sends across two months and breaking the unsub/sent axis
+--     match (e.g. AUH 202604: 356 unsubs vs 8 sent; 202605: 0 vs 555,967 —
+--     same deployment). Fallback: disposition calendar month when no tactic
+--     row matches (the ~68 vendor-only MNEs with no tactic-side decisioning;
+--     same fallback unsubs already use).
 --     This is the RATE denominator (unsub rate = unsubs/sent) — divide
 --     downstream in Excel, not here.
 --   tracked_mne = Y for the 17 in-scope Cards/Payments/Loans MNEs.
@@ -92,18 +104,30 @@ unsubs AS (
     GROUP BY 1, 2
 ),
 sent_raw AS (
-    -- vendor-only: no tactic join, no dependency on the decisioned denominator.
-    -- mne = same SUBSTR used everywhere in this file; month = the vendor's own
-    -- disposition_dt_tm (no TREATMT_STRT_DT to borrow without a tactic join).
+    -- v4: booked to DEPLOYMENT month, same mechanism as unsub_booked above —
+    -- exact-key join TREATMENT_ID=TACTIC_ID x CLNT_NO (TACTIC_ID unique per
+    -- deployment per client; Andre 2026-07-16 -> no time-window join needed),
+    -- take TREATMT_STRT_DT as the month. Fallback: disposition_dt_tm calendar
+    -- month when no tactic row matches (the ~68 vendor-only MNEs with no
+    -- tactic-side decisioning) — same fallback unsub_booked already uses.
+    -- mne = same SUBSTR used everywhere in this file.
     SELECT
         m.CLNT_NO,
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
-        EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
-          + EXTRACT(MONTH FROM e.disposition_dt_tm) AS yyyymm
+        COALESCE(
+            EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+              + EXTRACT(MONTH FROM t.TREATMT_STRT_DT),
+            EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
+              + EXTRACT(MONTH FROM e.disposition_dt_tm)
+        ) AS yyyymm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = e.consumer_id_hashed
         AND m.TREATMENT_ID       = e.TREATMENT_ID
+    LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+        ON  t.TACTIC_ID = e.TREATMENT_ID
+        AND t.CLNT_NO   = m.CLNT_NO
+        AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
     WHERE e.disposition_cd = 1
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
@@ -187,17 +211,28 @@ unsubs_a AS (
     GROUP BY 1, 2
 ),
 sent_a AS (
-    -- vendor-only sent idiom, same as the main query's sent_raw/sent CTEs,
-    -- mne filter pushed down here since sent has no cross-mne dedup to protect.
+    -- v4: same deployment-month booking mechanism as sent_raw in the main
+    -- query above (exact-key TREATMENT_ID=TACTIC_ID x CLNT_NO join, take
+    -- TREATMT_STRT_DT, fallback to disposition_dt_tm calendar month for the
+    -- vendor-only MNEs). mne filter pushed down since sent has no cross-mne
+    -- dedup to protect.
     SELECT
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
-        EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
-          + EXTRACT(MONTH FROM e.disposition_dt_tm) AS yyyymm,
+        COALESCE(
+            EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+              + EXTRACT(MONTH FROM t.TREATMT_STRT_DT),
+            EXTRACT(YEAR FROM e.disposition_dt_tm) * 100
+              + EXTRACT(MONTH FROM e.disposition_dt_tm)
+        ) AS yyyymm,
         CAST(COUNT(DISTINCT m.CLNT_NO) AS BIGINT) AS clients_sent
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = e.consumer_id_hashed
         AND m.TREATMENT_ID       = e.TREATMENT_ID
+    LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+        ON  t.TACTIC_ID = e.TREATMENT_ID
+        AND t.CLNT_NO   = m.CLNT_NO
+        AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
     WHERE e.disposition_cd = 1
       AND SUBSTR(e.TREATMENT_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
       AND e.disposition_dt_tm >= ADD_MONTHS(CURRENT_DATE, -9)
@@ -223,6 +258,9 @@ ORDER BY 1, 2;
 -- ONE decision this answers: which MNEs drive program unsubs — is Cards
 -- share small? All-MNE, full window (since 2024-01-01), one row per MNE,
 -- ranked by total first-ever unsubs, cut to TOP 15. Counts only.
+-- v4 note: no month axis here (full-window totals only) -> the deployment-
+-- month vs disposition-month booking mismatch fixed above in sent_raw/sent_a
+-- does not apply to sent_b; left unchanged.
 -- =============================================================================
 WITH first_unsub_b AS (
     SELECT
