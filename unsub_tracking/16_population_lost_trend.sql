@@ -1,47 +1,9 @@
--- =============================================================================
--- Population lost trend v3 — month x MNE: EM-DECISIONED base + first unsubs
--- =============================================================================
--- v3 2026-07-22: + clients_sent (vendor-only, rate denominator downstream),
---                + decision-sized rollup blocks (end of file).
--- v4 2026-07-23: clients_sent re-booked to deployment month (same axis as
---                unsubs) — v3 monthly rates invalid for month-end deployers
---                (AUH/PCD).
---
--- One row per (MNE, deployment-cohort month) since 2024-01-01, ALL MNEs,
--- long format — pivot in Excel.
---
---   clients_decisioned_em = distinct clients DECISIONED to email that month
---     (tactic table, env-confirmed two-field rule: VRB_INFO pos 121 LIKE '%EM%'
---      OR ADDNL_DECISN_DATA1 LIKE '%EM%'). Month = TREATMT_STRT_DT month.
---   clients_first_unsub   = clients whose FIRST-EVER unsub (disposition_cd=4,
---     deduped 1/client) was triggered by that MNE, booked to the month of the
---     TRIGGERING DEPLOYMENT (latest TREATMT_STRT_DT <= unsub time for that
---     client x tactic) — SAME CLOCK as the denominator, so columns divide.
---     Fallback: unsub calendar month when no tactic row matches (the ~68
---     vendor-only MNEs with no tactic-side decisioning; their denominator is 0).
---   clients_sent          = distinct clients with a SENT disposition
---     (disposition_cd=1, same vendor idiom as 17_em_decision_vendor_coverage.sql)
---     for that MNE x month. mne from SUBSTR(TREATMENT_ID,8,3) same as
---     everywhere else in this file. Month = SAME booking mechanism as
---     clients_first_unsub (v4 fix): exact-key join TREATMENT_ID=TACTIC_ID x
---     CLNT_NO to DG6V01.TACTIC_EVNT_IP_AR_HIST, take TREATMT_STRT_DT (the
---     DEPLOYMENT month) — not the vendor's disposition_dt_tm calendar month.
---     v3 booked sends to disposition month while unsubs booked to deployment
---     month; for campaigns deploying near month-end the vendor logs the SENT
---     disposition a few days later, in the NEXT calendar month, splitting one
---     deployment's sends across two months and breaking the unsub/sent axis
---     match (e.g. AUH 202604: 356 unsubs vs 8 sent; 202605: 0 vs 555,967 —
---     same deployment). Fallback: disposition calendar month when no tactic
---     row matches (the ~68 vendor-only MNEs with no tactic-side decisioning;
---     same fallback unsubs already use).
---     This is the RATE denominator (unsub rate = unsubs/sent) — divide
---     downstream in Excel, not here.
---   tracked_mne = Y for the 17 in-scope Cards/Payments/Loans MNEs.
---
--- Counts only — divide in Excel. ENGINE: Teradata-direct.
--- =============================================================================
+-- 16: Population lost trend v3 — month x MNE: EM-decisioned base + first unsubs
+-- ENGINE: Teradata-direct.
+-- 3 statements → 3 result tabs: grid / rollup a / rollup b
 
 WITH em_decis AS (
+    -- decisioned base: tactic EM rule (VRB_INFO/ADDNL_DECISN_DATA1 LIKE '%EM%')
     SELECT
         t.CLNT_NO,
         SUBSTR(t.TACTIC_ID, 8, 3) AS mne,
@@ -59,6 +21,7 @@ denom AS (
     GROUP BY 1, 2
 ),
 first_unsub AS (
+    -- first-ever unsub per client (disposition_cd=4), rn=1 = first
     SELECT
         m.CLNT_NO,
         e.TREATMENT_ID,
@@ -73,11 +36,7 @@ first_unsub AS (
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
 unsub_booked AS (
-    -- TACTIC_ID is unique per deployment (MNE + julian date; Andre 2026-07-16)
-    -- and a client never duplicates on one TACTIC_ID -> the exact-key join IS
-    -- the deployment. No time window needed anywhere. Date floor kept only for
-    -- scan pruning; an unsub whose deployment predates the floor gets
-    -- trig_strt_dt NULL -> calendar-month fallback downstream.
+    -- book first unsub to triggering deployment month (TACTIC_ID exact-key join)
     SELECT
         u.CLNT_NO,
         u.TREATMENT_ID,
@@ -104,13 +63,7 @@ unsubs AS (
     GROUP BY 1, 2
 ),
 sent_raw AS (
-    -- v4: booked to DEPLOYMENT month, same mechanism as unsub_booked above —
-    -- exact-key join TREATMENT_ID=TACTIC_ID x CLNT_NO (TACTIC_ID unique per
-    -- deployment per client; Andre 2026-07-16 -> no time-window join needed),
-    -- take TREATMT_STRT_DT as the month. Fallback: disposition_dt_tm calendar
-    -- month when no tactic row matches (the ~68 vendor-only MNEs with no
-    -- tactic-side decisioning) — same fallback unsub_booked already uses.
-    -- mne = same SUBSTR used everywhere in this file.
+    -- book sends to deployment month (v4 fix), same mechanism as unsub_booked
     SELECT
         m.CLNT_NO,
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
@@ -139,6 +92,7 @@ sent AS (
 SELECT
     COALESCE(d.mne, u.mne, s.mne)           AS mne_out,
     COALESCE(d.yyyymm, u.yyyymm, s.yyyymm)  AS yyyymm_out,
+    -- editable: tracked MNE list
     CASE WHEN COALESCE(d.mne, u.mne, s.mne) IN
          ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV','CTU','O2P',
           'VDT','VUI','VUT','VDA','VAW','VCN','RCU','RCL')
@@ -156,19 +110,7 @@ FULL OUTER JOIN sent s
 ORDER BY 1, 2;
 
 
--- =============================================================================
--- ROLLUP (a): Cards five trend for spotlight — photograph this
--- =============================================================================
--- ONE decision this answers: is the Cards-five first-unsub trend (against
--- sent volume) moving the right way, month over month? Trailing ~8 months
--- (self-maintaining off CURRENT_DATE), Cards five only -> stays screenshot
--- sized (5 MNE x ~8 months, <= ~40 rows).
--- Recomputed per house style (see 13_unsub_value_spine.sql S1/S2 precedent —
--- CTEs don't carry across statements). Same first-EVER-unsub dedup as the
--- main query: the mne filter is applied AFTER rn=1, so a client's true first
--- unsub still counts even though it was found across all MNEs, not just
--- these five. Counts only.
--- =============================================================================
+-- ROLLUP (a): Cards five trend — photograph this
 WITH first_unsub_a AS (
     SELECT
         m.CLNT_NO,
@@ -207,15 +149,12 @@ unsubs_a AS (
         ) AS yyyymm,
         CAST(COUNT(*) AS BIGINT) AS clients_first_unsub
     FROM unsub_booked_a
+    -- editable: Cards five MNE list
     WHERE SUBSTR(TREATMENT_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
     GROUP BY 1, 2
 ),
 sent_a AS (
-    -- v4: same deployment-month booking mechanism as sent_raw in the main
-    -- query above (exact-key TREATMENT_ID=TACTIC_ID x CLNT_NO join, take
-    -- TREATMT_STRT_DT, fallback to disposition_dt_tm calendar month for the
-    -- vendor-only MNEs). mne filter pushed down since sent has no cross-mne
-    -- dedup to protect.
+    -- same deployment-month booking as sent_raw; mne filter pushed down
     SELECT
         SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
         COALESCE(
@@ -234,7 +173,9 @@ sent_a AS (
         AND t.CLNT_NO   = m.CLNT_NO
         AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
     WHERE e.disposition_cd = 1
+      -- editable: Cards five MNE list
       AND SUBSTR(e.TREATMENT_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
+      -- editable: trailing window (9mo scan)
       AND e.disposition_dt_tm >= ADD_MONTHS(CURRENT_DATE, -9)
     GROUP BY 1, 2
 )
@@ -246,22 +187,14 @@ SELECT
 FROM unsubs_a u
 FULL OUTER JOIN sent_a s
     ON  s.mne = u.mne AND s.yyyymm = u.yyyymm
+-- editable: trailing window (7mo display)
 WHERE COALESCE(u.yyyymm, s.yyyymm) >=
       EXTRACT(YEAR FROM ADD_MONTHS(CURRENT_DATE, -7)) * 100
         + EXTRACT(MONTH FROM ADD_MONTHS(CURRENT_DATE, -7))
 ORDER BY 1, 2;
 
 
--- =============================================================================
 -- ROLLUP (b): top 15 MNEs by total first-unsub volume — full window
--- =============================================================================
--- ONE decision this answers: which MNEs drive program unsubs — is Cards
--- share small? All-MNE, full window (since 2024-01-01), one row per MNE,
--- ranked by total first-ever unsubs, cut to TOP 15. Counts only.
--- v4 note: no month axis here (full-window totals only) -> the deployment-
--- month vs disposition-month booking mismatch fixed above in sent_raw/sent_a
--- does not apply to sent_b; left unchanged.
--- =============================================================================
 WITH first_unsub_b AS (
     SELECT
         m.CLNT_NO,
@@ -296,6 +229,7 @@ sent_b AS (
       AND e.disposition_dt_tm >= DATE '2024-01-01'
     GROUP BY 1
 )
+-- editable: MNE cut (top 15)
 SELECT TOP 15
     COALESCE(u.mne, s.mne)                                    AS mne,
     CAST(COALESCE(u.clients_first_unsub_total, 0) AS BIGINT)  AS clients_first_unsub_total,
