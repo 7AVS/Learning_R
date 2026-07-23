@@ -36,10 +36,15 @@
 --   contacts: 0 / 1 / 2 / 3-4 / 5-6 / 7-9 / 10-14 / 15+
 --   mnes:     0 / 1 / 2 / 3 / 4 / 5+
 --
--- CAUTION: data source is ONLY DTZV01 tables, plus one session-scoped
--- VOLATILE TABLE (vt_unsub_journey_pop, dropped at the end of this script)
--- used purely to break the spool plan — see the v3 note below. Converted
--- 2026-07-22 from a Trino draft that called APPROX_PERCENTILE — Teradata has
+-- CAUTION: data source is ONLY DTZV01 tables, plus FOUR session-scoped
+-- VOLATILE TABLEs (all dropped at the end of this script) that stage the
+-- build in small pieces on purpose — see the v4 note below for why one big
+-- population-spine statement was replaced with four small ones:
+--   vt_unsub_events      (VT1) — all disposition_cd=4 EVENT rows, tiny
+--   vt_unsub_resolved    (VT2) — VT1 resolved to CLNT_NO via MASTER, w/ rn
+--   vt_baseline_spine    (VT3) — sliced, deduped, never-unsubbed baseline candidates
+--   vt_unsub_journey_pop (VT4) — population spine: unsub cohort UNION ALL baseline
+-- Converted 2026-07-22 from a Trino draft that called APPROX_PERCENTILE — Teradata has
 -- no percentile-approx builtin (error 3706 "Data type lookback_contacts does
 -- not match a defined type name" in-env, Teradata's signature error for an
 -- unknown function). Banded exact counts replace the percentiles; no
@@ -47,19 +52,23 @@
 --
 -- SPOTLIGHT WINDOW (edit all literals below together; example = Q2 2026):
 --   start (inclusive) = DATE '2026-04-01'    end (exclusive) = DATE '2026-07-01'
--- The start/end pair now appears in THREE places after the v3 restructure
--- below (was two in v2) — unsub_cohort, pop_sends, and the 15-month sends
--- bound in the lookback statement. Keep all three pairs in sync when rolling
--- the spotlight window forward.
+-- The start/end pair now appears in FOUR places after the v4 restage (was two
+-- in v2, three in v3): VT3's EVENT send bound, VT3's MASTER load_tm margin
+-- (computed off the same two literals via ADD_MONTHS, not retyped), VT4's
+-- unsub-cohort filter, and the final lookback's 15-month send bound. Keep all
+-- four in sync when rolling the spotlight window forward.
 --
--- 2024-01-01 floor on unsub history (first_unsub_all / any_unsub_client only)
--- mirrors pack 13's convention — a baseline client whose TRUE first unsub
--- predates 2024-01-01 would be misread here as "never unsubbed." Accepted for
--- consistency with the rest of the repo; note it if precision below the
--- floor ever matters. This floor is UNCHANGED by the v3 spool fix — it
--- protects a different invariant (true full-history "never unsubbed"
--- exclusion) than the send scans do, and disposition_cd=4 rows were never
--- the spool problem (a small fraction of EVENT next to disposition_cd=1).
+-- The 2024-01-01 full-history floor that used to gate the unsub branch (v2/v3,
+-- mirroring pack 13's convention) is RETIRED in v4. VT1 now scans
+-- disposition_cd=4 truly unbounded — pack 18's retention probe confirmed
+-- disposition_cd=4 is a small fraction of EVENT even across the full ~7-year
+-- retention window, so the unbounded scan is cheap, and dropping the floor
+-- fixes the imprecision the old note flagged (a client whose TRUE first unsub
+-- predated 2024-01-01 was previously misread here as "never unsubbed" — that
+-- can no longer happen). This floor removal touches ONLY the unsub-resolution
+-- branch (VT1/VT2); it was never a spool driver (disposition_cd=4 rows are a
+-- small fraction of EVENT next to disposition_cd=1) and is unrelated to the
+-- baseline branch's spool fix below.
 -- ENGINE: Teradata-direct.
 --
 -- v3 2026-07-22: spool fix — bounded scans, pre-aggregation, baseline SAMPLE
@@ -94,44 +103,115 @@
 --      join on exact keys" rule. This loses NO day-level precision (unlike a
 --      calendar-month pre-aggregation would have) — it only trims the
 --      client set the date-range comparison runs against, not the date grain.
+--
+-- v4 2026-07-23: staged volatile pipeline — unsub set materialized first,
+-- MASTER never redistributed, client-slice sampling moved BEFORE the heavy
+-- join (statement-1 spool fix). Andre re-ran v3 Teradata-direct and
+-- STATEMENT 1 itself (the single CREATE VOLATILE TABLE vt_unsub_journey_pop)
+-- ran out of spool — everything downstream cascaded, unreached. Two root
+-- causes inside that one statement:
+--   (a) CLNT_NO resolution (first_unsub_all, pop_sends) joined EVENT-derived
+--       sets through an UNBOUNDED MASTER (~7 years, billions of rows) with no
+--       materialized/stats-collected small side for the optimizer to key off
+--       — same redistribute-the-big-side risk as the v2 baseline bug, just
+--       on the resolution join instead of the lookback join.
+--   (b) the baseline branch (pop_sends -> window_sends) scanned the full
+--       ~150M-row in-window send set and GROUPed it down to ~10M clients
+--       BEFORE baseline_sampled's SAMPLE 500000 ran — SAMPLE applies to a
+--       finished result set, not a pushable predicate, so it cannot be
+--       pushed ahead of a GROUP BY the way an ordinary WHERE filter can.
+--       Sampling last saved nothing upstream; the full join+aggregate cost
+--       was already paid.
+-- Fix: split the single statement into four smaller CREATE VOLATILE TABLE
+-- stages (vt_unsub_events -> vt_unsub_resolved -> vt_baseline_spine ->
+-- vt_unsub_journey_pop), each with its own COLLECT STATISTICS, so every join
+-- downstream has a real, stats-backed small side instead of an inferred one:
+--   1. vt_unsub_events materializes ONLY the disposition_cd=4 rows first —
+--      tiny and unbounded (see the retired-floor note above) — so it can be
+--      duplicated across AMPs when it later probes MASTER, instead of
+--      forcing MASTER to redistribute.
+--   2. vt_baseline_spine replaces the post-aggregation SAMPLE with a
+--      deterministic MOD(CLNT_NO, 10) = 0 client slice applied as a
+--      single-table WHERE predicate on MASTER — BEFORE the GROUP BY, not
+--      after — cutting the join+aggregation volume itself by ~10x instead of
+--      trimming only the final row count.
+-- Net effect: MASTER is still scanned three times across the file (VT2's
+-- resolution join, VT3's baseline join, STEP 5's lookback join) — that isn't
+-- new — but every one of those three scans now either probes against a tiny
+-- stats-collected table (VT1 in VT2's case, vt_unsub_journey_pop in STEP 5's
+-- case) or is itself pre-filtered by the client slice + a load_tm margin
+-- (VT3's case) before the expensive part of the plan runs.
 -- =============================================================================
 
--- Drop residual volatile table if rerunning in the same session:
+-- Drop residual volatile tables if rerunning in the same session (in this
+-- order — later stages depend on earlier ones, though Teradata does not
+-- enforce that at DROP time):
 --   DROP TABLE vt_unsub_journey_pop;
+--   DROP TABLE vt_baseline_spine;
+--   DROP TABLE vt_unsub_resolved;
+--   DROP TABLE vt_unsub_events;
 
 -- =============================================================================
--- STEP 1: population spine — unsub cohort (unsampled) + SAMPLED stayed baseline
--- Materialized as a volatile table so STEP 2's lookback join has a small,
--- stats-collected side to join against instead of redistributing the send
--- scan. PRIMARY INDEX on CLNT_NO = the join key STEP 2 uses.
+-- STEP 1 / VT1: vt_unsub_events — ALL disposition_cd=4 EVENT rows, unbounded
+-- Tiny and cheap (unsub rows are a small fraction of EVENT, per pack 18's
+-- retention probe) — materializing this FIRST, with stats, is what lets VT2
+-- duplicate it across AMPs against MASTER instead of redistributing MASTER.
+-- PRIMARY INDEX = the exact MASTER join key.
 -- =============================================================================
-CREATE VOLATILE TABLE vt_unsub_journey_pop AS (
-    WITH first_unsub_all AS (          -- mirrors 13_unsub_value_spine.sql S1 exactly
-        SELECT
-            m.CLNT_NO,
-            e.disposition_dt_tm,
-            ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO
-                               ORDER BY e.disposition_dt_tm ASC) AS rn
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-            ON  m.consumer_id_hashed = e.consumer_id_hashed
-            AND m.TREATMENT_ID       = e.TREATMENT_ID
-        WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= DATE '2024-01-01'   -- full-history floor, unchanged (see header)
-    ),
-    unsub_cohort AS (                  -- group A: first-ever unsub landed in the spotlight window
-        SELECT CLNT_NO, disposition_dt_tm AS index_dt
-        FROM first_unsub_all
-        WHERE rn = 1
-          AND disposition_dt_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
-          AND disposition_dt_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
-    ),
-    any_unsub_client AS (              -- any unsub ever (same floor) -> baseline exclusion set
-        SELECT DISTINCT CLNT_NO FROM first_unsub_all
-    ),
-    pop_sends AS (                     -- bounded to the spotlight window ONLY (3mo): all this step
-                                        -- needs is each candidate's own last send in-window. The
-                                        -- 12-month lookback scan lives in STEP 2, not here.
+CREATE VOLATILE TABLE vt_unsub_events AS (
+    SELECT
+        e.consumer_id_hashed,
+        e.TREATMENT_ID,
+        e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    WHERE e.disposition_cd = 4
+    -- no date floor here — see the header's "2024-01-01 floor... RETIRED in
+    -- v4" note; true first-ever-unsub semantics need the full history, and
+    -- this scan is cheap regardless of span (disposition_cd=4 is a small
+    -- slice of the ~80-128M rows/quarter pack 18 measured across all
+    -- disposition codes).
+) WITH DATA PRIMARY INDEX (consumer_id_hashed, TREATMENT_ID) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_unsub_events COLUMN (consumer_id_hashed, TREATMENT_ID);
+
+
+-- =============================================================================
+-- STEP 2 / VT2: vt_unsub_resolved — VT1 resolved to CLNT_NO via MASTER
+-- VT1 is tiny + stats-collected, so this join duplicates VT1 across AMPs and
+-- streams MASTER past it — MASTER itself is NOT redistributed. rn = 1 is the
+-- TRUE first-ever unsub per client (mirrors 13_unsub_value_spine.sql's S1).
+-- Every row (not just rn=1) feeds VT3's "ever unsubbed anywhere" exclusion.
+-- =============================================================================
+CREATE VOLATILE TABLE vt_unsub_resolved AS (
+    SELECT
+        m.CLNT_NO,
+        u.disposition_dt_tm AS first_unsub_tm,
+        ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO
+                           ORDER BY u.disposition_dt_tm ASC) AS rn
+    FROM vt_unsub_events u
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = u.consumer_id_hashed
+        AND m.TREATMENT_ID       = u.TREATMENT_ID
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_unsub_resolved COLUMN (CLNT_NO);
+
+
+-- =============================================================================
+-- STEP 3 / VT3: vt_baseline_spine — sliced, deduped, never-unsubbed baseline
+-- candidates. This is the branch that actually blew the spool (v2's ~10M
+-- candidates joined unsampled; v3's SAMPLE ran too late). Fix: a deterministic
+-- CLNT_NO slice applied as a single-table WHERE predicate on MASTER, BEFORE
+-- the GROUP BY — cuts the join+aggregation volume itself, not just the final
+-- row count. MASTER is ALSO bound here by a load_tm +/- 1mo margin around the
+-- spotlight window (MASTER has no send-date column —
+-- schemas/vendor_feedback_tables_schema.md "Hard facts"; load_tm is a
+-- load-time proxy, not a true send timestamp, per pack 18 — the 1mo margin is
+-- a buffer against load lag/lead, ASSUMED safe, not verified; revisit if
+-- VT3's row count looks off against expectations).
+-- =============================================================================
+CREATE VOLATILE TABLE vt_baseline_spine AS (
+    WITH baseline_sends AS (
         SELECT
             m.CLNT_NO,
             e.disposition_dt_tm
@@ -140,53 +220,79 @@ CREATE VOLATILE TABLE vt_unsub_journey_pop AS (
             ON  m.consumer_id_hashed = e.consumer_id_hashed
             AND m.TREATMENT_ID       = e.TREATMENT_ID
         WHERE e.disposition_cd = 1
-          AND e.disposition_dt_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
-          AND e.disposition_dt_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
+          AND e.disposition_dt_tm >= DATE '2026-04-01'                     -- SPOTLIGHT start (inclusive)
+          AND e.disposition_dt_tm <  DATE '2026-07-01'                     -- SPOTLIGHT end (exclusive)
+          AND m.load_tm           >= ADD_MONTHS(DATE '2026-04-01', -1)     -- SPOTLIGHT start - 1mo margin
+          AND m.load_tm           <  ADD_MONTHS(DATE '2026-07-01',  1)     -- SPOTLIGHT end + 1mo margin
+          -- EDITABLE: slice modulus. MOD(CLNT_NO, 10) = 0 keeps ~1-in-10 of
+          -- the baseline candidate pool (~10M -> ~1M clients) — raise the
+          -- modulus for a smaller/cheaper slice, lower it for finer
+          -- resolution. Single-table predicate on MASTER, applied BEFORE the
+          -- GROUP BY below — unlike v3's post-aggregation SAMPLE 500000
+          -- (which ran AFTER the full 150M-row scan/group and saved nothing
+          -- upstream), this narrows the join+aggregation volume itself, not
+          -- just the final row count.
+          -- Consequence: 'stayed' n_clients is no longer a true population
+          -- count once sliced — read every 'stayed' number downstream as a
+          -- SHARE/DISTRIBUTION within its own cohort_month at a ~1-in-10
+          -- slice fraction, never as a raw count compared directly against
+          -- 'unsub' (which IS a true, unsliced count). CLNT_NO is
+          -- uncorrelated with client behavior, so a systematic 1-in-10 slice
+          -- on the ID itself is statistically equivalent to random sampling
+          -- for distributional reads — and, unlike SAMPLE, it's an ordinary
+          -- WHERE predicate the optimizer can push ahead of the join/GROUP BY.
+          AND MOD(m.CLNT_NO, 10) = 0
     ),
     window_sends AS (
         SELECT CLNT_NO, MAX(disposition_dt_tm) AS last_send_dt
-        FROM pop_sends
+        FROM baseline_sends
         GROUP BY CLNT_NO
-    ),
-    baseline_cohort AS (               -- group B candidates: sent in window, never unsubbed anywhere
-        SELECT w.CLNT_NO, w.last_send_dt AS index_dt
-        FROM window_sends w
-        LEFT JOIN any_unsub_client au ON au.CLNT_NO = w.CLNT_NO
-        WHERE au.CLNT_NO IS NULL
-    ),
-    baseline_sampled AS (              -- SAMPLE the stayed baseline ONLY -- unsub_cohort is never sampled
-        -- EDITABLE: sample size. 500K is more than sufficient precision for
-        -- banded distribution contrasts against the unsub cohort -- raise or
-        -- lower if the downstream read needs finer/coarser resolution.
-        -- Consequence: once sampled, 'stayed' n_clients is no longer a true
-        -- population count. Read every 'stayed' number downstream as a
-        -- SHARE/DISTRIBUTION within its own cohort_month, never as a raw
-        -- count compared directly against 'unsub' (which IS a true,
-        -- unsampled count).
-        SELECT CLNT_NO, index_dt
-        FROM baseline_cohort
-        SAMPLE 500000
     )
+    SELECT w.CLNT_NO, w.last_send_dt AS index_dt
+    FROM window_sends w
+    WHERE NOT EXISTS (
+        SELECT 1 FROM vt_unsub_resolved au WHERE au.CLNT_NO = w.CLNT_NO
+    )
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_baseline_spine COLUMN (CLNT_NO);
+
+
+-- =============================================================================
+-- STEP 4 / VT4: vt_unsub_journey_pop — population spine: unsub cohort UNION
+-- ALL sliced baseline. Same role this table played pre-v4 (the final lookback
+-- statement's small, stats-collected join side) — only its construction
+-- (now staged, above) changed.
+-- =============================================================================
+CREATE VOLATILE TABLE vt_unsub_journey_pop AS (
     -- CAST on the first branch's literal: Teradata sizes a UNION ALL string
     -- column from the FIRST SELECT alone ('unsub' = 5 chars would otherwise
     -- truncate 'stayed' = 6 chars to 'staye' — CLAUDE.md hard rule #3).
-    SELECT CLNT_NO, index_dt, CAST('unsub'  AS VARCHAR(10)) AS cohort_group FROM unsub_cohort
+    SELECT CLNT_NO, first_unsub_tm AS index_dt, CAST('unsub' AS VARCHAR(10)) AS cohort_group
+    FROM vt_unsub_resolved
+    WHERE rn = 1
+      AND first_unsub_tm >= DATE '2026-04-01'   -- SPOTLIGHT start (inclusive)
+      AND first_unsub_tm <  DATE '2026-07-01'   -- SPOTLIGHT end (exclusive)
     UNION ALL
-    SELECT CLNT_NO, index_dt, CAST('stayed' AS VARCHAR(10)) AS cohort_group FROM baseline_sampled
+    SELECT CLNT_NO, index_dt, CAST('stayed' AS VARCHAR(10)) AS cohort_group
+    FROM vt_baseline_spine
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_unsub_journey_pop COLUMN (CLNT_NO);
 
 
 -- =============================================================================
--- STEP 2: 12-month lookback against the (small, sampled) population spine
--- sends is re-declared here (CTEs don't carry across statements — 13/16
--- precedent) bounded to the 15-month span the lookback actually needs
+-- STEP 5: 12-month lookback against the (small, stats-collected) population
+-- spine. sends is re-declared here (CTEs don't carry across statements —
+-- 13/16 precedent) bounded to the 15-month span the lookback actually needs
 -- (spotlight start - 12mo, through spotlight end), then narrowed to ONLY
 -- population clients (sends_pop) BEFORE the per-client date-range logic --
 -- narrow-to-small-key-set-first, per query_engine_guidelines.md's Federation
 -- Performance rule #2. No precision lost: this trims the CLIENT set the
--- date-range comparison runs against, not the date grain itself.
+-- date-range comparison runs against, not the date grain itself. MASTER here
+-- is unbounded again, same as VT2 — safe for the same reason: it's probed by
+-- the tiny, stats-collected vt_unsub_journey_pop (via sends_pop's narrowing
+-- inner join), not redistributed.
 -- =============================================================================
 WITH sends AS (
     SELECT
@@ -248,3 +354,6 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 
 DROP TABLE vt_unsub_journey_pop;
+DROP TABLE vt_baseline_spine;
+DROP TABLE vt_unsub_resolved;
+DROP TABLE vt_unsub_events;
