@@ -25,7 +25,16 @@ def edw_pd(sql, chunksize=1_000_000):
     parts = [c for c in pd.read_sql(sql, EDW, chunksize=chunksize)]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
-print("EDL (trino) + EDW (teradatasql, LDAP) ready.")
+# PROOF, not prints: round-trip both connections and show what the SERVER returned
+cur = EDW.cursor()
+cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
+print("EDW round-trip (teradatasql) returned:", cur.fetchall())
+cur.close()
+
+tcur = EDL.cursor()
+tcur.execute("SELECT 1")
+print("EDL round-trip (trino) returned:", tcur.fetchall())
+tcur.close()
 
 # %% [2] Reservoir helpers - land once to HDFS via spark, skip if already landed
 BASE = "hdfs:///user/427966379/unsub_cpc/"
@@ -44,7 +53,11 @@ def land(name, sql):
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
     spark.createDataFrame(pdf).write.mode("overwrite").parquet(BASE + name)
-    print(name, ": landed", len(pdf), "rows")
+    nback = spark.read.parquet(BASE + name).count()
+    assert nback == len(pdf), name + " HDFS readback mismatch: pulled " + str(len(pdf)) + " readback " + str(nback)
+    print(name, ": landed", len(pdf), "rows, HDFS readback confirms", nback)
+
+print("helpers defined: land()/landed() | reservoir BASE =", BASE)
 
 # %% [3] EXTRACT unsub_base chunk 1/4 (EVENT disp=4 Jul25-Jun26; MASTER load_tm 2025-06..2025-10)
 land("unsub_base/c1", """
