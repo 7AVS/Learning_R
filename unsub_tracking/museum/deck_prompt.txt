@@ -48,6 +48,16 @@ Suggested visual: a two-panel flow/funnel diagram.
 Place the three big stat numbers as callout tiles near their respective panel, not buried in body text.
 
 ===========================================================
+2A. METHODOLOGY (must appear as footnotes on slides)
+===========================================================
+Carry these four statements as small-type footnotes on the slides indicated. Do not fold them into body copy or headline text - they are methodology context, not findings.
+
+- Universe (Slide 1 and Slide 2): Universe is NBA campaign email (SFMC vendor feed) vs CPC switches 1002/1012/1014 (entity do-not-solicit, banking email, marketing sharing - the 3 email-relevant of ~40 preference codes).
+- E1 independence (Slide 1): The two series (vendor unsubscribes, CPC opt-outs) are two independent event streams over the same months. No linkage between an individual unsubscribe and an individual CPC opt-out is implied by this chart.
+- E2 any-time-generous + before/after split (Slide 2, Direction 1 panel): Consent standing = the latest answer recorded at any point in time, before or after the client's unsubscribe - the most generous read available for CPC. A before/after split (was the qualifying CPC opt-out recorded before or after the client's first unsubscribe) exists in the underlying query; see appendix 3.2 for the current shape and status.
+- E4 sequenced window (Slide 2, Direction 2 panel): Sequenced - opted-out standing before Apr 1, 2026 -> campaign email received Apr-Jun 2026 (3-month window). This is a fixed pre/post window, not a matched-pair test.
+
+===========================================================
 3. DATA APPENDIX — verbatim data for slide placement
 ===========================================================
 
@@ -60,10 +70,12 @@ cpc_optout (monthly count, summed across the three relevant switches):
 email_unsub (monthly count, vendor/SFMC):
 26,673, 30,920, 28,839, 29,320, 28,164, 27,271, 26,119, 27,970, 28,318, 24,951, 18,746, 22,471
 
---- 3.2 Direction 1 — unsub-to-CPC blind gate (E2), 3 rows ---
+--- 3.2 Direction 1 - unsub-to-CPC blind gate (E2), 5 rows (query extended to add a before/after split vs each client's first unsub) ---
 unsub_clients_total: 319,733
 with_explicit_cpc_optout: 1,387
 without_explicit_cpc_optout: 318,846
+optout_recorded_before_unsub: pending rerun - designer: leave placeholder or omit split until numbers provided
+optout_recorded_after_unsub: pending rerun - designer: leave placeholder or omit split until numbers provided
 
 --- 3.3 Direction 2 — gate leak by cohort (E4), 7 rows ---
 Format: pref_id (switch) | exclusivity | optout_clients | got_email_apr_jun
@@ -89,6 +101,8 @@ Bridged-with-prior-unsub note: of roughly 12,000 total CPC flips (opt-out events
 Use this exact footnote text (small print, bottom of slide) on Slide 1 and Slide 2:
 
 "Source: vendor feedback (SFMC) + CPC preference log, Jul 2025–Jun 2026; consent standing = full history. Queries: museum/cpc_evidence.sql (Cards pod)."
+
+This source line runs in addition to the methodology footnotes in section 2A above, not instead of them - both print on the slide, small type, source line and methodology line(s) stacked or adjacent.
 
 ===========================================================
 5. FORMAT

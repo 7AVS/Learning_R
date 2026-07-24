@@ -4,6 +4,15 @@
 
 Email consent lives in two systems that don't talk: 99.6% of unsubscribers remain "contactable" in CPC, and ~47% of clients who explicitly opted out of banking email received campaign email within a quarter.
 
+## Definitions & sequencing
+
+- Universe: NBA campaign email (SFMC vendor feed) vs the bank's CPC consent gate.
+- The 3 switches: 1002 (entity do-not-solicit), 1012 (banking email), 1014 (marketing sharing) - the email-relevant slice of ~40 preference codes.
+- E1: two independent volume streams over the same months; no client-level link implied.
+- E2: consent standing = latest answer at any point in time, before or after the unsub (most generous read for CPC). Now split before-unsub vs after-unsub, counting a multi-switch client once on their EARLIEST qualifying opt-out - output is 5 rows, the original 3 plus `optout_recorded_before_unsub` / `optout_recorded_after_unsub`.
+- E3: matches CPC flips against any prior unsub, no lookback cap.
+- E4: sequenced - opted-out standing before Apr 1, 2026 -> campaign email received Apr-Jun 2026.
+
 ## Evidence map
 
 | # | Claim it supports | Expected output shape | Key expected magnitude |

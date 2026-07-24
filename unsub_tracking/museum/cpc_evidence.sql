@@ -1,6 +1,7 @@
 -- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends persist per session; DROP all three at end
 -- rerun after failure: run all three DROPs first
 -- run ONE statement at a time
+-- Universe: NBA campaign email (SFMC vendor feed); CPC opt-out = explicit No on switches 1002 (entity DNS), 1012 (banking email), 1014 (marketing sharing) - the 3 email-relevant of ~40 codes.
 
 -- SETUP pass 1/2: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01)
 CREATE VOLATILE TABLE vt_unsub_base AS (
@@ -93,34 +94,53 @@ ORDER BY 1, 2;
 
 
 -- EVIDENCE 2: the blind gate (~99.6% of unsubscribers have no explicit CPC opt-out)
--- window: unsubs Jul 2025 - Jun 2026; consent standing: full history as of today
+-- unsubs: Jul 2025 - Jun 2026; consent standing: latest answer ever (any time, before or after the unsub - deliberately generous to CPC); before/after split vs each client's first unsub
 WITH cpc_latest AS (
     SELECT
         CLNT_NO,
         PREF_ID,
         CLNT_CONSENT_TYP,
+        CHG_TMSTMP,
         ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID IN (1002, 1012, 1014)
     -- consent standing = latest answer ever recorded (full history; small table - deliberate exception to the 2024 scan floor)
 ),
-cpc_optout AS (
-    SELECT DISTINCT CLNT_NO
+cpc_optout_detail AS (
+    SELECT CLNT_NO, PREF_ID, CHG_TMSTMP
     FROM cpc_latest
     WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002
+),
+cpc_optout AS (
+    SELECT DISTINCT CLNT_NO
+    FROM cpc_optout_detail
+),
+-- multi-switch clients: a client can hold a qualifying (latest-state) opt-out on more than one switch;
+-- count them ONCE using the EARLIEST qualifying CHG_TMSTMP for the before/after test below
+cpc_optout_earliest AS (
+    SELECT CLNT_NO, MIN(CHG_TMSTMP) AS optout_chg_tmstmp
+    FROM cpc_optout_detail
+    GROUP BY CLNT_NO
 ),
 flagged AS (
     SELECT
         u.CLNT_NO,
-        CASE WHEN co.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS has_cpc_optout
+        CASE WHEN co.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS has_cpc_optout,
+        CASE WHEN ce.optout_chg_tmstmp IS NOT NULL AND ce.optout_chg_tmstmp <  u.unsub_tm THEN 1 ELSE 0 END AS optout_before_unsub,
+        CASE WHEN ce.optout_chg_tmstmp IS NOT NULL AND ce.optout_chg_tmstmp >= u.unsub_tm THEN 1 ELSE 0 END AS optout_after_unsub
     FROM vt_unsub_first u
     LEFT JOIN cpc_optout co ON co.CLNT_NO = u.CLNT_NO
+    LEFT JOIN cpc_optout_earliest ce ON ce.CLNT_NO = u.CLNT_NO
 )
 SELECT CAST('unsub_clients_total' AS VARCHAR(30)) AS metric, CAST(COUNT(*) AS BIGINT) AS clients FROM flagged
 UNION ALL
 SELECT 'with_explicit_cpc_optout', CAST(SUM(has_cpc_optout) AS BIGINT) FROM flagged
 UNION ALL
 SELECT 'without_explicit_cpc_optout', CAST(SUM(1 - has_cpc_optout) AS BIGINT) FROM flagged
+UNION ALL
+SELECT 'optout_recorded_before_unsub', CAST(SUM(optout_before_unsub) AS BIGINT) FROM flagged
+UNION ALL
+SELECT 'optout_recorded_after_unsub', CAST(SUM(optout_after_unsub) AS BIGINT) FROM flagged
 ORDER BY 1;
 
 
