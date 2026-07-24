@@ -1,9 +1,10 @@
 -- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_send_detail + vt_q2_sends + vt_dns_1002 + vt_gate_cohorts + vt_postunsub_sends persist per session; DROP all seven at end
 -- rerun after failure: run all seven DROPs first
 -- run ONE statement at a time
+-- heavy builds (vt_unsub_base, vt_q2_send_detail) are chunked into monthly bites - if a statement dies, rerun ONLY that CREATE/INSERT, nothing else is lost; 35 statements total in this file (was 31)
 -- Universe: NBA campaign email (SFMC vendor feed); CPC opt-out = explicit No on switches 1002 (entity DNS), 1012 (banking email), 1014 (marketing sharing) - the 3 email-relevant of ~40 codes.
 
--- SETUP pass 1/2: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01); now also carries TREATMENT_ID for Evidence 8's unsub_mne
+-- SETUP pass 1/4: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2025-10-01); EVENT disposition window (2025-07-01 to 2026-07-01) held constant across all 4 passes; now also carries TREATMENT_ID for Evidence 8's unsub_mne
 CREATE VOLATILE TABLE vt_unsub_base AS (
     SELECT DISTINCT
         m.CLNT_NO,
@@ -17,10 +18,10 @@ CREATE VOLATILE TABLE vt_unsub_base AS (
       AND e.disposition_dt_tm >= DATE '2025-07-01'
       AND e.disposition_dt_tm <  DATE '2026-07-01'
       AND m.load_tm           >= DATE '2025-06-01'
-      AND m.load_tm           <  DATE '2026-01-01'
+      AND m.load_tm           <  DATE '2025-10-01'
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
--- SETUP pass 2/2: same table, MASTER load_tm chunk 2 (2026-01-01 to 2026-08-01)
+-- SETUP pass 2/4: same table, MASTER load_tm chunk 2 (2025-10-01 to 2026-02-01)
 INSERT INTO vt_unsub_base
     SELECT DISTINCT
         m.CLNT_NO,
@@ -33,7 +34,39 @@ INSERT INTO vt_unsub_base
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2025-07-01'
       AND e.disposition_dt_tm <  DATE '2026-07-01'
-      AND m.load_tm           >= DATE '2026-01-01'
+      AND m.load_tm           >= DATE '2025-10-01'
+      AND m.load_tm           <  DATE '2026-02-01';
+
+-- SETUP pass 3/4: same table, MASTER load_tm chunk 3 (2026-02-01 to 2026-05-01)
+INSERT INTO vt_unsub_base
+    SELECT DISTINCT
+        m.CLNT_NO,
+        e.disposition_dt_tm AS unsub_tm,
+        m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2025-07-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-02-01'
+      AND m.load_tm           <  DATE '2026-05-01';
+
+-- SETUP pass 4/4: same table, MASTER load_tm chunk 4 (2026-05-01 to 2026-08-01)
+INSERT INTO vt_unsub_base
+    SELECT DISTINCT
+        m.CLNT_NO,
+        e.disposition_dt_tm AS unsub_tm,
+        m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2025-07-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-05-01'
       AND m.load_tm           <  DATE '2026-08-01';
 
 COLLECT STATISTICS ON vt_unsub_base COLUMN (CLNT_NO);
@@ -57,7 +90,7 @@ CREATE VOLATILE TABLE vt_unsub_first AS (
 COLLECT STATISTICS ON vt_unsub_first COLUMN (CLNT_NO);
 
 
--- SETUP 3/4: the single heavy send scan - everything downstream derives from it (EVENT disp IN (1,5) Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026; not cohort-restricted, serves all consumers)
+-- SETUP 3 pass 1/3: heavy send scan, April (EVENT 2026-04-01 to 2026-05-01, MASTER load_tm 2026-03-01 to 2026-06-01, +/-1mo margin around the send month); everything downstream derives from this table (EVENT disp IN (1,5); not cohort-restricted, serves all consumers)
 CREATE VOLATILE TABLE vt_q2_send_detail AS (
     SELECT
         m.CLNT_NO,
@@ -70,10 +103,44 @@ CREATE VOLATILE TABLE vt_q2_send_detail AS (
         AND m.TREATMENT_ID       = e.TREATMENT_ID
     WHERE e.disposition_cd IN (1, 5)
       AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND e.disposition_dt_tm <  DATE '2026-05-01'
       AND m.load_tm           >= DATE '2026-03-01'
-      AND m.load_tm           <  DATE '2026-08-01'
+      AND m.load_tm           <  DATE '2026-06-01'
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+-- SETUP 3 pass 2/3: same table, May (EVENT 2026-05-01 to 2026-06-01, MASTER load_tm 2026-04-01 to 2026-07-01); EVENT windows are disjoint per pass (Apr/May/Jun each fall in exactly one pass), so no (EVENT,MASTER) match can be produced twice even though MASTER windows overlap between passes
+INSERT INTO vt_q2_send_detail
+    SELECT
+        m.CLNT_NO,
+        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+        e.disposition_cd,
+        e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd IN (1, 5)
+      AND e.disposition_dt_tm >= DATE '2026-05-01'
+      AND e.disposition_dt_tm <  DATE '2026-06-01'
+      AND m.load_tm           >= DATE '2026-04-01'
+      AND m.load_tm           <  DATE '2026-07-01';
+
+-- SETUP 3 pass 3/3: same table, June (EVENT 2026-06-01 to 2026-07-01, MASTER load_tm 2026-05-01 to 2026-08-01)
+INSERT INTO vt_q2_send_detail
+    SELECT
+        m.CLNT_NO,
+        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+        e.disposition_cd,
+        e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd IN (1, 5)
+      AND e.disposition_dt_tm >= DATE '2026-06-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-05-01'
+      AND m.load_tm           <  DATE '2026-08-01';
 
 COLLECT STATISTICS ON vt_q2_send_detail COLUMN (CLNT_NO);
 
@@ -278,7 +345,7 @@ CREATE VOLATILE TABLE vt_dns_1002 AS (
 
 COLLECT STATISTICS ON vt_dns_1002 COLUMN (CLNT_NO);
 
--- sends: from vt_q2_send_detail (disp=1 filter), restricted to the 1002 cohort - reuses the one heavy pass built above, no fresh EVENT/MASTER scan
+-- sends: from vt_q2_send_detail (disp=1 filter), restricted to the 1002 cohort - reuses the heavy send-detail build above (3 monthly passes), no fresh EVENT/MASTER scan
 -- window: campaign email Apr-Jun 2026, by mne = SUBSTR(TREATMENT_ID, 8, 3)
 SELECT TOP 20
     s.mne,
