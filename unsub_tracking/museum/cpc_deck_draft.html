@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CPC Consent Findings - Draft</title>
+<style>
+  :root{
+    --navy:#14223d; --slate:#33445c; --mut:#6b7a90; --line:#dfe4ec; --bg:#ffffff;
+    --accent:#1f4e79; --gold:#8a6a17; --neg:#a8261c; --pos:#1e6b3a; --frame:#161e2e;
+    --grid:#e3e7ee; --track:#eef1f5;
+    --t-title:clamp(24px,3.2vw,38px); --t-body:clamp(15px,1.55vw,19px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Segoe UI",-apple-system,Roboto,Helvetica,Arial,sans-serif;background:var(--frame);color:var(--navy);
+       -webkit-font-smoothing:antialiased;}
+  .deck{position:relative;height:100vh;width:100vw;overflow:hidden;}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;padding:0;background:var(--bg);}
+  .slide.on{display:flex;animation:fade .28s ease;}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+
+  /* running header / footer */
+  .hdr{display:flex;justify-content:space-between;align-items:center;padding:22px 6vw 0;font-size:11px;
+       letter-spacing:.6px;color:var(--mut);text-transform:uppercase;}
+  .hdr .r{color:#9aa6b6;}
+  .rule{height:1px;background:var(--line);margin:10px 6vw 0;}
+  .body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:1.6vh 6vw;min-height:0;}
+  .ftr{display:flex;justify-content:space-between;align-items:flex-end;padding:0 6vw 18px;font-size:10.5px;color:var(--mut);}
+  .ftr .src{font-style:italic;max-width:82%;line-height:1.4;}
+  .ftr .pg{font-variant-numeric:tabular-nums;letter-spacing:.5px;}
+  .ftr-rule{height:1px;background:var(--line);margin:0 6vw 8px;}
+
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--accent);margin-bottom:10px;}
+
+  h1{font-size:var(--t-title);line-height:1.16;color:var(--navy);font-weight:650;letter-spacing:-.2px;max-width:44ch;}
+  .sub{font-size:var(--t-body);color:var(--slate);line-height:1.5;max-width:80ch;margin-top:10px;font-weight:400;}
+  .sub b{color:var(--navy);font-weight:650;}
+
+  /* hero stat row (slide 1) */
+  .hero-row{display:flex;align-items:flex-end;gap:34px;margin-top:16px;border-top:2px solid var(--navy);padding-top:14px;}
+  .hero-num{font-size:clamp(54px,7.2vw,88px);font-weight:700;color:var(--accent);line-height:.9;letter-spacing:-1px;}
+  .hero-lbl{font-size:13px;color:var(--mut);max-width:20ch;line-height:1.35;padding-bottom:6px;}
+  .mini{display:flex;gap:28px;margin-left:auto;}
+  .mini .cell{border-left:1px solid var(--line);padding:0 0 4px 22px;}
+  .mini .v{font-size:clamp(20px,2.2vw,26px);font-weight:680;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1;}
+  .mini .l{font-size:11.5px;color:var(--mut);margin-top:6px;max-width:17ch;line-height:1.3;}
+
+  /* chart panels */
+  .charts{display:flex;gap:34px;margin-top:20px;}
+  .panel{flex:1;min-width:0;}
+  .panel-title{font-size:12.5px;font-weight:650;color:var(--slate);margin-bottom:2px;}
+  .panel-title i{font-style:normal;color:var(--mut);font-weight:400;}
+  .panel svg{width:100%;height:auto;display:block;}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:1px;}
+
+  .foot-line{font-size:13.5px;color:var(--slate);line-height:1.5;margin-top:16px;max-width:82ch;}
+
+  /* slide 2 : dual flow panels */
+  .flow-grid{display:flex;gap:44px;margin-top:14px;}
+  .flow-panel{flex:1;min-width:0;}
+  .flow-title{font-size:14px;font-weight:680;color:var(--navy);margin-bottom:10px;}
+  .flow-panel svg{width:100%;height:auto;display:block;}
+  .callout{margin-top:10px;display:flex;align-items:baseline;gap:12px;}
+  .callout .cv{font-size:clamp(30px,3.6vw,42px);font-weight:700;color:var(--neg);line-height:1;letter-spacing:-.5px;}
+  .callout .cl{font-size:12px;color:var(--slate);line-height:1.35;max-width:26ch;}
+  .sub2{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);}
+  .sub2 .cv{font-size:clamp(22px,2.6vw,28px);color:var(--neg);}
+  .sub2 .cl{max-width:30ch;}
+
+  .strip{margin-top:20px;padding:10px 16px;background:#f7f8fa;border-left:3px solid var(--accent);}
+  .strip .k{font-size:10.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);margin-right:8px;}
+  .strip span.t{font-size:12.5px;color:var(--slate);line-height:1.4;}
+
+  .nav{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;z-index:20;
+       background:rgba(22,30,46,.9);padding:7px 14px;border-radius:4px;}
+  .nav button{background:none;border:none;color:#aeb8c6;font-size:15px;cursor:pointer;padding:2px 9px;font-family:inherit;}
+  .nav button:hover{color:#fff;}
+  .dots{display:flex;gap:5px;}
+  .dots i{width:7px;height:7px;background:#48536a;cursor:pointer;display:block;}
+  .dots i.on{background:#fff;width:16px;}
+  .count{color:#8b95a6;font-size:11px;min-width:40px;text-align:center;font-variant-numeric:tabular-nums;}
+
+  @media print{
+    .nav{display:none;}
+    .deck{height:auto;overflow:visible;}
+    .slide{position:relative;display:flex !important;page-break-after:always;height:100vh;animation:none;}
+  }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+  <!-- 0 SLIDE 1 -->
+  <section class="slide on">
+    <div class="hdr"><span>CPC Consent Findings - Draft</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Findings - consent &amp; preference - Jul 2025 - Jun 2026</div>
+      <h1>Email unsubscribes outrun CPC opt-outs by 35x, every month.</h1>
+
+      <div class="hero-row">
+        <div class="hero-num">35x</div>
+        <div class="hero-lbl">email unsubscribes vs CPC opt-outs, monthly average</div>
+        <div class="mini">
+          <div class="cell"><div class="v">26,647</div><div class="l">avg email unsubscribes / mo</div></div>
+          <div class="cell"><div class="v">754</div><div class="l">avg CPC opt-outs / mo</div></div>
+        </div>
+      </div>
+
+      <div class="charts">
+        <div class="panel">
+          <div class="panel-title"><span class="swatch" style="background:var(--accent)"></span>Email unsubscribes <i>(SFMC vendor feedback, monthly)</i></div>
+          <svg id="chartEmail" viewBox="0 0 580 220"></svg>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><span class="swatch" style="background:var(--gold)"></span>CPC opt-outs <i>(preference log, monthly)</i></div>
+          <svg id="chartCpc" viewBox="0 0 580 220"></svg>
+        </div>
+      </div>
+
+      <p class="foot-line">CPC opt-outs arrive via assisted channels (branch, contact centre). The email vendor's automated pipe writes ~15 clients/year (switch 1012 only).</p>
+    </div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: SFMC vendor feedback + CPC preference log, Jul 2025-Jun 2026. museum/cpc_evidence.sql (Evidence 1, 3).</span><span class="pg">1</span></div>
+  </section>
+
+  <!-- 1 SLIDE 2 -->
+  <section class="slide">
+    <div class="hdr"><span>CPC Consent Findings - Draft</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Findings - consent &amp; preference</div>
+      <h1>Consent fails in both directions.</h1>
+
+      <div class="flow-grid">
+
+        <!-- PANEL A -->
+        <div class="flow-panel">
+          <div class="flow-title">A. Unsubscribes never reach the consent record</div>
+          <svg viewBox="0 0 520 150">
+            <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+            <text x="98" y="70" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">319,733</text>
+            <text x="98" y="90" text-anchor="middle" font-size="10.5" fill="#33445c">clients unsubscribed</text>
+            <text x="98" y="103" text-anchor="middle" font-size="10.5" fill="#33445c">(Jul 2025-Jun 2026)</text>
+
+            <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
+            <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+            <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
+            <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+            <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
+            <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">0.4% carries through</text>
+
+            <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+            <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">1,387</text>
+            <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">hold an explicit CPC</text>
+            <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">opt-out (0.4%)</text>
+          </svg>
+          <div class="callout"><div class="cv">99.6%</div><div class="cl">of unsubscribed clients are invisible to the consent record</div></div>
+        </div>
+
+        <!-- PANEL B -->
+        <div class="flow-panel">
+          <div class="flow-title">B. The consent record doesn't stop campaign email</div>
+          <svg viewBox="0 0 520 150">
+            <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+            <text x="98" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">96,317</text>
+            <text x="98" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">clients standing opted-out</text>
+            <text x="98" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">before Apr 1, 2026</text>
+
+            <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
+            <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+            <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
+            <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+            <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
+            <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">29.4% still gets email</text>
+
+            <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+            <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">28,342</text>
+            <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">received campaign email</text>
+            <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">Apr-Jun 2026 (29.4%)</text>
+          </svg>
+          <div class="sub2 callout"><div class="cv">47%</div><div class="cl">for clients whose only opt-out is banking email (13,214 clients)</div></div>
+        </div>
+
+      </div>
+
+      <div class="strip"><span class="k">Coverage</span><span class="t">MarTech MTEC-12644 ("Real-time CPC Unsubscribe", blueprint Jun 2026) addresses direction 1. Direction 2 is not covered by any current initiative.</span></div>
+    </div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 2, 4); consent standing = full history.</span><span class="pg">2</span></div>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button id="prev">&lt;</button>
+  <div class="dots" id="dots"></div>
+  <span class="count" id="count"></span>
+  <button id="next">&gt;</button>
+</div>
+
+<script>
+  // ---- slide nav (mirrors house deck idiom) ----
+  const slides=[...document.querySelectorAll('.slide')];
+  const dots=document.getElementById('dots'), count=document.getElementById('count');
+  let i=0;
+  slides.forEach((_,k)=>{const d=document.createElement('i');d.onclick=()=>go(k);dots.appendChild(d);});
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('on',k===i));
+    [...dots.children].forEach((d,k)=>d.classList.toggle('on',k===i));
+    count.textContent=(i+1)+' / '+slides.length;
+  }
+  document.getElementById('next').onclick=()=>go(i+1);
+  document.getElementById('prev').onclick=()=>go(i-1);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' ')go(i+1);
+    if(e.key==='ArrowLeft')go(i-1);
+  });
+  go(0);
+
+  // ---- small-multiple bar chart renderer (vanilla SVG, no libraries) ----
+  const NS='http://www.w3.org/2000/svg';
+  function el(name,attrs){
+    const n=document.createElementNS(NS,name);
+    for(const k in attrs) n.setAttribute(k,attrs[k]);
+    return n;
+  }
+  function renderBars(svg,{months,values,color,domainMax,ticks}){
+    const W=580,H=220,mL=54,mR=12,mT=26,mB=32;
+    const plotW=W-mL-mR, plotH=H-mT-mB, baseline=mT+plotH;
+    const slot=plotW/values.length, barW=22;
+    const y=v=>baseline-(v/domainMax)*plotH;
+
+    ticks.forEach(t=>{
+      const ty=y(t);
+      svg.appendChild(el('line',{x1:mL,y1:ty,x2:mL+plotW,y2:ty,stroke:'#e3e7ee','stroke-width':1}));
+      const lbl=el('text',{x:mL-8,y:ty+4,'text-anchor':'end','font-size':10,fill:'#6b7a90'});
+      lbl.textContent=t.toLocaleString();
+      svg.appendChild(lbl);
+    });
+    svg.appendChild(el('line',{x1:mL,y1:baseline,x2:mL+plotW,y2:baseline,stroke:'#c7cedb','stroke-width':1}));
+
+    values.forEach((v,idx)=>{
+      const x=mL+idx*slot+(slot-barW)/2;
+      const by=y(v), h=baseline-by;
+      svg.appendChild(el('rect',{x:x,y:by,width:barW,height:h,rx:3,ry:3,fill:color}));
+      const val=el('text',{x:x+barW/2,y:by-6,'text-anchor':'middle','font-size':9.5,fill:'#33445c','font-weight':600});
+      val.textContent=v.toLocaleString();
+      svg.appendChild(val);
+      const mo=el('text',{x:x+barW/2,y:baseline+16,'text-anchor':'middle','font-size':10,fill:'#6b7a90'});
+      mo.textContent=months[idx];
+      svg.appendChild(mo);
+    });
+  }
+
+  const months=['Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun'];
+  const emailUnsub=[26673,30920,28839,29320,28164,27271,26119,27970,28318,24951,18746,22471];
+  const cpcOptout=[838,823,716,780,636,700,723,656,963,894,758,565];
+
+  renderBars(document.getElementById('chartEmail'),{
+    months, values:emailUnsub, color:'#1f4e79',
+    domainMax:32000, ticks:[0,10000,20000,30000]
+  });
+  renderBars(document.getElementById('chartCpc'),{
+    months, values:cpcOptout, color:'#8a6a17',
+    domainMax:1050, ticks:[0,250,500,750,1000]
+  });
+</script>
+</body>
+</html>

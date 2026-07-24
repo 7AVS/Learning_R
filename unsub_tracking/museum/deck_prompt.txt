@@ -1,0 +1,101 @@
+PROMPT FOR CLAUDE DESIGN — BUILD A POWERPOINT DECK
+
+Build a PowerPoint deck from the content below. This prompt is fully self-contained — narrative, data, slide specs, and style rules are all included. Do not invent numbers, categories, or claims beyond what is given here.
+
+===========================================================
+1. CONTEXT
+===========================================================
+This is for the Cards pod measurement team (marketing analytics, a bank NBA/campaign team) at the quarterly "Power Pack" venue. Audience: marketing executives — non-statistical, time-constrained. This is a findings spotlight on email-consent infrastructure: a data quality/compliance-adjacent discovery about how the bank tracks (or fails to track) client email opt-outs, surfaced as a byproduct of unrelated measurement work.
+
+Hard tone rules — follow exactly:
+- Findings, not recommendations. State what the data shows. Do not tell the audience what to do about it, do not propose a fix, do not editorialize on urgency.
+- No hedge language. No "may," "could potentially," "it seems," "roughly speaking" as filler. State numbers and facts plainly. (Ranges/percentages that are genuinely approximate should still be stated as approximate — e.g. "~35x" — but do not wrap the whole claim in hedging.)
+- No marketing fluff. No adjectives like "exciting," "powerful," "game-changing." This is a plain factual finding for executives.
+- Every number on every slide must be traceable to a source shown in the appendix/footnote below. Do not round in a way that changes meaning; do not fabricate any figure not given here.
+- Internal mnemonics and system codes (CPC, SFMC, MNE codes, switch numbers, TACTIC codes) are fine to show. No client-identifying data of any kind — every number here is an aggregate client count, keep it that way.
+
+===========================================================
+2. THE STORY — two content slides
+===========================================================
+
+--- SLIDE 1: "Two consent worlds" (zoom-out) ---
+
+Narrative: The bank records email consent in two disconnected places. The email vendor world (SFMC — Salesforce Marketing Cloud) logs unsubscribes at a much higher volume than the bank's own consent gate (CPC — the bank's client preference/consent system) logs opt-outs. Across the three CPC switches relevant to this comparison, CPC logs roughly 750 opt-outs/month against roughly 26,000 vendor unsubscribes/month — a gap of about 35x.
+
+Secondary fact (include as supporting text, smaller than the headline): CPC opt-outs are overwhelmingly written by assisted human channels — branch platform (system code 7001) and contact centre (system code 7003). The email vendor's own pipe into CPC writes only about 15 clients per year, and only through one switch (1012).
+
+Headline stat callout: "~35x" — vendor unsubscribes outnumber CPC opt-outs by roughly 35 times, per month, across the three relevant switches.
+
+Suggested visual: a monthly dual-series chart (Jul 2025–Jun 2026) — either two lines on a dual y-axis (CPC opt-outs is two orders of magnitude smaller than email unsubs, so a single shared axis will flatten the CPC line) or two small-multiple bar charts stacked vertically, one per series, sharing a month axis. Place the "~35x" stat callout as a standalone large-number tile beside or below the chart, not embedded inside it. Do not attempt to force both series onto one linear axis without a dual scale — the CPC series would be invisible.
+
+Data for this chart (see appendix section 3.1 for the verbatim monthly series).
+
+--- SLIDE 2: "Consent fails in both directions" (zoom-in) ---
+
+Narrative: Two separate, independent breakdowns exist between the vendor's unsubscribe log and the bank's CPC consent gate.
+
+Direction 1 — unsubscribes never reach the gate: Of 319,733 clients who unsubscribed from the vendor between Jul 2025 and Jun 2026, only 1,387 (0.4%) hold an explicit CPC opt-out. 99.6% of vendor-side unsubscribers are invisible to the bank's own consent record — CPC has no idea they opted out.
+
+Direction 2 — the gate doesn't stop email: Of 96,317 clients who stood opted-out in CPC (across the same three switches) as of before Apr 1, 2026, 28,342 (29.4%) received a campaign email in the following quarter (Apr–Jun 2026). The cleanest single cohort — clients whose ONLY opt-out flag is the banking/email-specific switch (1012), with no other opt-out flags bundled in — is 13,214 clients, of whom 47% still received campaign email. Entity-level "do not solicit" clients (switch 1002, the broadest opt-out) show a 19–32% receive rate depending on cut.
+
+Closing beat: A MarTech initiative, project MTEC-12644 ("Real-time CPC Unsubscribe," blueprint last updated June 2026), is building a real-time bridge that addresses Direction 1 (getting vendor unsubscribes into CPC). Direction 2 (CPC opt-outs not suppressing vendor sends) is not addressed by that project and has no other current owner.
+
+Headline stat callouts (three large numbers, this is the slide's visual anchor): "99.6%" (Direction 1 blind rate) / "29.4%" (Direction 2 leak rate, all-switch cohort) / "47%" (Direction 2 leak rate, cleanest single-switch cohort).
+
+Suggested visual: a two-panel flow/funnel diagram.
+  Panel A (Direction 1): box "Vendor world: 319,733 unsubscribed" → arrow with an X or break-in-the-line marker → box "CPC gate: 1,387 recorded (0.4%)". Annotate the broken arrow "99.6% never arrives."
+  Panel B (Direction 2): box "CPC gate: 96,317 opted out" → arrow with an X or break-in-the-line marker → box "Campaign email: 28,342 delivered anyway (29.4%)". Annotate with the 47% cleanest-cohort figure as a secondary callout near this panel.
+Place the three big stat numbers as callout tiles near their respective panel, not buried in body text.
+
+===========================================================
+3. DATA APPENDIX — verbatim data for slide placement
+===========================================================
+
+--- 3.1 Monthly series (Slide 1), Jul 2025 – Jun 2026, 12 months ---
+Month order: Jul, Aug, Sep, Oct, Nov, Dec, Jan, Feb, Mar, Apr, May, Jun
+
+cpc_optout (monthly count, summed across the three relevant switches):
+838, 823, 716, 780, 636, 700, 723, 656, 963, 894, 758, 565
+
+email_unsub (monthly count, vendor/SFMC):
+26,673, 30,920, 28,839, 29,320, 28,164, 27,271, 26,119, 27,970, 28,318, 24,951, 18,746, 22,471
+
+--- 3.2 Direction 1 — unsub-to-CPC blind gate (E2), 3 rows ---
+unsub_clients_total: 319,733
+with_explicit_cpc_optout: 1,387
+without_explicit_cpc_optout: 318,846
+
+--- 3.3 Direction 2 — gate leak by cohort (E4), 7 rows ---
+Format: pref_id (switch) | exclusivity | optout_clients | got_email_apr_jun
+
+1002 | multi_flag (bundled with other opt-outs) | 47,111 | 8,750
+1002 | only_this_flag (exclusive) | 2,333 | 746
+1012 | multi_flag | 19,889 | 3,779
+1012 | only_this_flag | 13,214 | 6,224
+1014 | multi_flag | 45,988 | 8,231
+1014 | only_this_flag | 33,342 | 12,540
+ALL_SWITCHES (all three combined) | — | 96,317 | 28,342
+
+--- 3.4 Writer attribution summary (who writes CPC opt-outs, by switch and system code) ---
+Switch 1002: branch (7001) 1,160; contact-centre (7003) 644
+Switch 1012: branch (7001) 689; contact-centre (7003) 578; SFMC/vendor (7020) 201
+Switch 1014: branch (7001) 5,756; consent-flow system 2,128; contact-centre (7003) 539
+
+Bridged-with-prior-unsub note: of roughly 12,000 total CPC flips (opt-out events) across the three switches, only about 140 can be tied back to a prior vendor unsubscribe at all (a "bridge"). Of those ~140 bridged flips, only 15 (all on switch 1012) were written by the vendor's own automated system (SFMC/7020) — the rest of the bridged flips were written by a human in a branch or contact-centre channel, not an automated sync.
+
+===========================================================
+4. SOURCE FOOTNOTES — print on both content slides
+===========================================================
+Use this exact footnote text (small print, bottom of slide) on Slide 1 and Slide 2:
+
+"Source: vendor feedback (SFMC) + CPC preference log, Jul 2025–Jun 2026; consent standing = full history. Queries: museum/cpc_evidence.sql (Cards pod)."
+
+===========================================================
+5. FORMAT
+===========================================================
+- 16:9 widescreen.
+- Structure: optional title slide, then the two content slides above (Slide 1 "Two consent worlds," Slide 2 "Consent fails in both directions"). Do not add extra content slides beyond these two.
+- Executive-clean layout: generous white space, minimal on-slide text, one clear takeaway per slide expressed visually first, text second.
+- Prefer charts/diagrams over tables wherever the data supports it — the data appendix above is for you to visualize, not to reproduce as literal tables on the slide (a small reference table is fine only if a chart genuinely can't carry a number, e.g. the 7-row cohort breakdown in 3.3 may work better as a small labeled bar chart than prose).
+- The three headline numbers — ~35x (Slide 1), 99.6% and 47% (Slide 2) — must appear as large, prominent stat callouts (big numeral, short label underneath), not just inline in sentences.
+- Visual identity: match official RBC investor-deck styling as the design benchmark (see internal reference: RBC Q2 2026 Investor Presentation slide styling) — a clean corporate navy/blue-and-white palette with a single restrained accent color, sans-serif type hierarchy (large bold numerals for stat callouts, clean body sans-serif for supporting text), minimal chart chrome (no heavy gridlines, no 3D effects, no default-software chart styling), generous margins, consistent slide numbering. If exact RBC brand hex values are not available to you, default to a professional navy/dark-blue + white + single neutral-accent palette rather than generic bright presentation-software colors — do not invent an RBC brand color and label it as official.

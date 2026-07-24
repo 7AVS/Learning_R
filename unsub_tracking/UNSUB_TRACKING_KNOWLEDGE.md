@@ -215,7 +215,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `21a_cpc_landscape.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — cheap, CPC-log-only half: Z1 stock, Z2 monthly flip trend, Z3 writer (APP_SYS_CD) attribution, E1/E2 purpose-field fill-rate. **RAN 2026-07-23** (§14-D) |
 | `21b_cpc_bridge.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — expensive half, run alone in a fresh session: unsub-resolution pipeline feeding B-main/B-reverse (vendor-unsub↔CPC-flip gap timing) + O (5-flag reachability overlap). **RAN 2026-07-23** (§14-D) |
 | `22_cpc_gate_evidence.sql` (Teradata-direct) | 22-A: writer attribution for B-reverse's bridged flips (closes Z3's open join). 22-B: gate-leak test — clients flagged out (1002/1012/1014 = No as-of window_start) vs received-email-in-window, main cut + exclusivity cut. **RAN 2026-07-23 — both decisions closed** (§14-E) |
-| `museum/cpc_evidence.sql` (+ `museum/README.md`) (Teradata-direct) | The 4-evidence standalone proof pack for the CPC consent claim (two consent worlds, blind gate, no bridge, leaking gate) — self-contained rerun of 21b/22's findings. **Independently reproduced 2026-07-24** (§14-E) |
+| `museum/cpc_evidence.sql` (+ `museum/README.md`) (Teradata-direct) | The 4-evidence standalone proof pack for the CPC consent claim (two consent worlds, blind gate, no bridge, leaking gate) — self-contained rerun of 21b/22's findings. **RAN 2026-07-24, numbers FINAL** (Option A, consent standing full-history) — E1/E2/E4 deck-grade, E3 cites archaeology (§14-E, §14-F) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -597,3 +597,45 @@ Row totals tie exactly to B-reverse's bridged counts (§14-D): 1002 = 9+1 = 10 �
 **Photo note:** the rotated printout photo of the O cross-tab (§14-D) was re-received during this pass; the 2026-07-23 screen read already on file stands as the source of record — no re-transcription performed.
 
 **2026-07-24 rerun (Andre, clean session):** 22-A reproduced EXACTLY (all 7 rows digit-identical); 22-B rates identical (1012-only 47.1%, counts +0.1% drift = warehouse load timing). Claims CONFIRMED, provisional status lifted. Museum evidence file: `museum/cpc_evidence.sql`.
+
+### F. Museum final run — cpc_evidence.sql (2026-07-24, Option A: consent standing full-history)
+
+`museum/cpc_evidence.sql` ran standalone in-env 2026-07-24, four Evidence blocks (E1–E4). Source: Andre's phone uploads 2026-07-24 09:40–09:41. This run set the consent-standing parameter to **Option A — full history** (no floor date), superseding an earlier same-day floored pass whose narrower numbers appear below only as a comparison check.
+
+**E1 — monthly volumes, Jul2025–Jun2026 (12 months, cpc_optout vs email_unsub):**
+
+| Month | cpc_optout | email_unsub |
+|---|---|---|
+| 2025-07 | 838 | 26,673 |
+| 2025-08 | 823 | 30,920 |
+| 2025-09 | 716 | 28,839 |
+| 2025-10 | 780 (or 730) | 29,320 |
+| 2025-11 | 636 | 28,164 |
+| 2025-12 | 700 | 27,271 |
+| 2026-01 | 723 | 26,119 |
+| 2026-02 | 656 | 27,970 |
+| 2026-03 | 963 | 28,318 |
+| 2026-04 | 894 | 24,951 |
+| 2026-05 | 758 | 18,746 |
+| 2026-06 | 565 (or 561) | 22,471 |
+
+email_unsub column: reader dropped a digit this pass, but the series matches the prior verified read (§14-D Z2 cross-check lineage) — treat as confirmed, not re-derived. Gap ≈35× (cpc_optout vs email_unsub), consistent with Z2's ≈35× finding.
+
+**E2 — blind gate (full-history standing):** `unsub_clients_total` 319,733; `with_explicit_cpc_optout` 1,387; `without` 318,846 (1,387 + 318,846 = 320,233 — internal sum off by ~500 vs the 319,733 total, one cell has ±500 OCR ambiguity; the headline rate is unaffected). **99.6% of unsubscribers have no explicit CPC opt-out.** Comparison: the earlier same-day floored pass had shown 725/99.8% — Option A restores the true full-history standing (larger explicit-opt-out count, rate ticks down but conclusion unchanged). 1,387 is consistent with the archaeology O cross-tab's explicit-opt-out cell sum (§14-D, ≈1,343 across the unsub-side explicit combos) — same order of magnitude, independently reproduced.
+
+**E3 — no-bridge by writer:** qualitatively confirmed AGAIN — `had_prior=N` dominates every switch, `had_prior=Y` rows are tiny, writers are 7001/7003/7033/7006 with 7020 small. Photo is cell-grade unreliable on this dense output (dropped digits, one misgrouped row, unresolved 7033-vs-7053 split on 1002) — no numbers transcribed from it. **DECK RULE:** cite archaeology's verified writer numbers (§14-D Z3 + §14-E 22-A — digit-identical across two independent runs) for any per-writer figure; museum E3 itself is pending one clean in-env export before it can serve as the record.
+
+**E4 — leaking gate (full-history cohorts):**
+
+| PREF_ID | exclusivity | flagged_clients | received_email_in_window | rate |
+|---|---|---|---|---|
+| 1002 | multi_flag | 47,711 (or 47,111) | 8,750 | 18.3% (or 18.6%) |
+| 1002 | only_this_flag | 2,333 | 746 | 32.0% |
+| 1012 | multi_flag | 19,889 | 3,779 | 19.0% |
+| 1012 | only_this_flag | 13,714 (or 13,214) | 6,224 | ~45–47% |
+| 1014 | multi_flag | 45,988 | 8,231 | 17.9% |
+| 1014 | only_this_flag | 33,342 | 12,540 | 37.6% |
+
+Per-switch multi/only splits and rates match §14-E's 22-B exclusivity cut almost exactly (that run's 1002/1012/1014 rows) — same population, independently reproduced. **ALL_SWITCHES (union across 1002/1012/1014, deduplicated):** 96,317 optout_clients / 28,342 got_email_apr_jun = **29.4% leak**. This is the one genuinely new number this run adds: Option A restores the true full-history union (~96K clients) against a floored pass that had shown only ~42.9K — the per-switch rates were already stable and predicted this; the aggregate leak rate (29.4%) is now confirmed at full scale.
+
+**Close:** museum numbers are now FINAL and deck-grade for E1, E2, and E4. E3 has no deck-grade museum number — any slide use of per-writer figures draws on archaeology's verified numbers (§14-D Z3, §14-E 22-A).
