@@ -115,6 +115,14 @@ WHERE e.disposition_cd = 4
   AND m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
 """)
 
+# %% [7a] SIZE FIRST - measure before pulling (4 rows back in seconds; decides transfer expectations on data, not estimates)
+print(edw_pd("""
+SELECT PREF_ID, COUNT(*) AS hist_rows, COUNT(DISTINCT CLNT_NO) AS clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID IN (1002, 1012, 1014, 1006)
+GROUP BY 1 ORDER BY 1
+"""))
+
 # %% [7] EXTRACT cpc preference slice (FULL history per switch - one bite per switch, each restartable; 1007 dropped, unused by any evidence)
 for _pref in [1002, 1012, 1014, 1006]:
     land("cpc_pref/p" + str(_pref), """
