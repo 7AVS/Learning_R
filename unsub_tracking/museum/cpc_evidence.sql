@@ -2,7 +2,7 @@
 -- rerun after failure: run all three DROPs first
 -- run ONE statement at a time
 
--- SETUP pass 1/2: unsub base — trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01)
+-- SETUP pass 1/2: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01)
 CREATE VOLATILE TABLE vt_unsub_base AS (
     SELECT DISTINCT
         m.CLNT_NO,
@@ -36,7 +36,7 @@ INSERT INTO vt_unsub_base
 COLLECT STATISTICS ON vt_unsub_base COLUMN (CLNT_NO);
 
 
--- SETUP dedup: first unsub per client — runs AFTER both passes are loaded, derived from vt_unsub_base (no further MASTER access)
+-- SETUP dedup: first unsub per client - runs AFTER both passes are loaded, derived from vt_unsub_base (no further MASTER access)
 CREATE VOLATILE TABLE vt_unsub_first AS (
     WITH ranked AS (
         SELECT
@@ -53,7 +53,7 @@ CREATE VOLATILE TABLE vt_unsub_first AS (
 COLLECT STATISTICS ON vt_unsub_first COLUMN (CLNT_NO);
 
 
--- SETUP 3/3: Q2 send resolution — EVENT disp=1 Apr-Jun 2026 joined to MASTER load_tm Mar-Aug 2026, built once so Evidence 4 doesn't re-evaluate the join per reference
+-- SETUP 3/3: Q2 send resolution - EVENT disp=1 Apr-Jun 2026 joined to MASTER load_tm Mar-Aug 2026, built once so Evidence 4 doesn't re-evaluate the join per reference
 CREATE VOLATILE TABLE vt_q2_sends AS (
     SELECT DISTINCT m.CLNT_NO
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
