@@ -1,4 +1,4 @@
--- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends + vt_dns_1002 + vt_gate_cohorts + vt_q2_sends_mne + vt_postunsub_sends persist per session; DROP all seven at end
+-- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_send_detail + vt_q2_sends + vt_dns_1002 + vt_gate_cohorts + vt_postunsub_sends persist per session; DROP all seven at end
 -- rerun after failure: run all seven DROPs first
 -- run ONE statement at a time
 -- Universe: NBA campaign email (SFMC vendor feed); CPC opt-out = explicit No on switches 1002 (entity DNS), 1012 (banking email), 1014 (marketing sharing) - the 3 email-relevant of ~40 codes.
@@ -57,18 +57,31 @@ CREATE VOLATILE TABLE vt_unsub_first AS (
 COLLECT STATISTICS ON vt_unsub_first COLUMN (CLNT_NO);
 
 
--- SETUP 3/3: Q2 send resolution - EVENT disp=1 Apr-Jun 2026 joined to MASTER load_tm Mar-Aug 2026, built once so Evidence 4 doesn't re-evaluate the join per reference
-CREATE VOLATILE TABLE vt_q2_sends AS (
-    SELECT DISTINCT m.CLNT_NO
+-- SETUP 3/4: the single heavy send scan - everything downstream derives from it (EVENT disp IN (1,5) Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026; not cohort-restricted, serves all consumers)
+CREATE VOLATILE TABLE vt_q2_send_detail AS (
+    SELECT
+        m.CLNT_NO,
+        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+        e.disposition_cd,
+        e.disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = e.consumer_id_hashed
         AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 1
+    WHERE e.disposition_cd IN (1, 5)
       AND e.disposition_dt_tm >= DATE '2026-04-01'
       AND e.disposition_dt_tm <  DATE '2026-07-01'
       AND m.load_tm           >= DATE '2026-03-01'
       AND m.load_tm           <  DATE '2026-08-01'
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_q2_send_detail COLUMN (CLNT_NO);
+
+-- SETUP 4/4: vt_q2_sends derived from vt_q2_send_detail (disp=1 clients only) - volatile-to-volatile, no EVENT/MASTER access; same name+stats so Evidence 4/5/SUMMARY are untouched
+CREATE VOLATILE TABLE vt_q2_sends AS (
+    SELECT DISTINCT CLNT_NO
+    FROM vt_q2_send_detail
+    WHERE disposition_cd = 1
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_q2_sends COLUMN (CLNT_NO);
@@ -265,22 +278,15 @@ CREATE VOLATILE TABLE vt_dns_1002 AS (
 
 COLLECT STATISTICS ON vt_dns_1002 COLUMN (CLNT_NO);
 
--- sends: EVENT disp=1 Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026 (same bounds as vt_q2_sends), restricted to the 1002 cohort
+-- sends: from vt_q2_send_detail (disp=1 filter), restricted to the 1002 cohort - reuses the one heavy pass built above, no fresh EVENT/MASTER scan
 -- window: campaign email Apr-Jun 2026, by mne = SUBSTR(TREATMENT_ID, 8, 3)
 SELECT TOP 20
-    SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
-    CAST(COUNT(DISTINCT m.CLNT_NO) AS BIGINT) AS clients,
+    s.mne,
+    CAST(COUNT(DISTINCT s.CLNT_NO) AS BIGINT) AS clients,
     CAST(COUNT(*) AS BIGINT) AS send_rows
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-    ON  m.consumer_id_hashed = e.consumer_id_hashed
-    AND m.TREATMENT_ID       = e.TREATMENT_ID
-INNER JOIN vt_dns_1002 d ON d.CLNT_NO = m.CLNT_NO
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-04-01'
-  AND e.disposition_dt_tm <  DATE '2026-07-01'
-  AND m.load_tm           >= DATE '2026-03-01'
-  AND m.load_tm           <  DATE '2026-08-01'
+FROM vt_q2_send_detail s
+INNER JOIN vt_dns_1002 d ON d.CLNT_NO = s.CLNT_NO
+WHERE s.disposition_cd = 1
 GROUP BY 1
 ORDER BY 2 DESC;
 
@@ -305,54 +311,29 @@ CREATE VOLATILE TABLE vt_gate_cohorts AS (
 
 COLLECT STATISTICS ON vt_gate_cohorts COLUMN (CLNT_NO);
 
--- send detail with mne: EVENT disp=1 Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026 (same bounds as vt_q2_sends), materialized once so E7 doesn't repeat the join per pref_id
-CREATE VOLATILE TABLE vt_q2_sends_mne AS (
-    SELECT DISTINCT
-        m.CLNT_NO,
-        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = e.consumer_id_hashed
-        AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND e.disposition_dt_tm <  DATE '2026-07-01'
-      AND m.load_tm           >= DATE '2026-03-01'
-      AND m.load_tm           <  DATE '2026-08-01'
-) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_q2_sends_mne COLUMN (CLNT_NO);
-
 -- note: 1006 = product-content preference (blank/no-record = implicit YES; only an explicit No counts here) - the topic-gate test
+-- send detail with mne: reads vt_q2_send_detail directly (disp=1 filter folded into the join) - no separate build, no fresh EVENT/MASTER scan
 SELECT
     CAST(g.PREF_ID AS VARCHAR(30)) AS pref_id,
     CAST(s.mne AS VARCHAR(30)) AS mne,
     CAST(COUNT(DISTINCT g.CLNT_NO) AS BIGINT) AS clients
 FROM vt_gate_cohorts g
-INNER JOIN vt_q2_sends_mne s ON s.CLNT_NO = g.CLNT_NO
+INNER JOIN vt_q2_send_detail s ON s.CLNT_NO = g.CLNT_NO AND s.disposition_cd = 1
 GROUP BY 1, 2
 QUALIFY ROW_NUMBER() OVER (PARTITION BY g.PREF_ID ORDER BY COUNT(DISTINCT g.CLNT_NO) DESC) <= 12
 ORDER BY 1, 3 DESC;
 
 
--- post-unsub send detail: EVENT disposition_cd IN (1,5) Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026, restricted to the pre-Apr unsub cohort, carries mne + disposition for Evidence 8's waterfall
+-- post-unsub send detail: derived from vt_q2_send_detail, restricted to the pre-Apr unsub cohort - no fresh EVENT/MASTER scan, carries mne + disposition for Evidence 8's waterfall
 CREATE VOLATILE TABLE vt_postunsub_sends AS (
     SELECT DISTINCT
-        m.CLNT_NO,
-        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
-        e.disposition_cd,
-        e.disposition_dt_tm
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = e.consumer_id_hashed
-        AND m.TREATMENT_ID       = e.TREATMENT_ID
+        p.CLNT_NO,
+        p.mne,
+        p.disposition_cd,
+        p.disposition_dt_tm
+    FROM vt_q2_send_detail p
     INNER JOIN (SELECT CLNT_NO FROM vt_unsub_first WHERE unsub_tm < DATE '2026-04-01') c
-        ON c.CLNT_NO = m.CLNT_NO
-    WHERE e.disposition_cd IN (1, 5)
-      AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND e.disposition_dt_tm <  DATE '2026-07-01'
-      AND m.load_tm           >= DATE '2026-03-01'
-      AND m.load_tm           <  DATE '2026-08-01'
+        ON c.CLNT_NO = p.CLNT_NO
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_postunsub_sends COLUMN (CLNT_NO);
@@ -703,9 +684,9 @@ END;
 
 
 DROP TABLE vt_postunsub_sends;
-DROP TABLE vt_q2_sends_mne;
 DROP TABLE vt_gate_cohorts;
 DROP TABLE vt_dns_1002;
 DROP TABLE vt_q2_sends;
+DROP TABLE vt_q2_send_detail;
 DROP TABLE vt_unsub_first;
 DROP TABLE vt_unsub_base;
