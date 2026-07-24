@@ -29,8 +29,12 @@ EDL = connect(host=TRINO_HOST, port=8443, catalog="edl0_im", user=username,
 EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
 
 def edw_pd(sql, chunksize=1_000_000):
-    # cursor -> pandas in chunks; safe for multi-million-row pulls
-    parts = [c for c in pd.read_sql(sql, EDW, chunksize=chunksize)]
+    # cursor -> pandas in chunks with live progress, so streaming never looks stuck
+    import time
+    parts, n, t0 = [], 0, time.time()
+    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
+        parts.append(c); n += len(c)
+        print("  ...", n, "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 # PROOF, not prints: round-trip both connections and show what the SERVER returned
@@ -111,12 +115,12 @@ WHERE e.disposition_cd = 4
   AND m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
 """)
 
-# %% [7] EXTRACT cpc preference slice (5 switches, FULL history - consent standing needs latest answer ever; small table)
-land("cpc_pref", """
+# %% [7] EXTRACT cpc preference slice (FULL history per switch - one bite per switch, each restartable; 1007 dropped, unused by any evidence)
+for _pref in [1002, 1012, 1014, 1006]:
+    land("cpc_pref/p" + str(_pref), """
 SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
 FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID IN (1002, 1012, 1014, 1006, 1007)
-""")
+WHERE PREF_ID = """ + str(_pref))
 
 # %% [8] EXTRACT q2 recipients (DISTINCT clients with a send, per month - pandas-sized; feeds E4/E5)
 land("q2_recipients/m04", """
@@ -202,7 +206,7 @@ spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 ub  = spark.read.parquet(BASE + "unsub_base/*")
 rec = spark.read.parquet(BASE + "q2_recipients/*").distinct()
-cpc = spark.read.parquet(BASE + "cpc_pref")
+cpc = spark.read.parquet(BASE + "cpc_pref/*")
 ps  = spark.read.parquet(BASE + "postunsub_sends")
 gm  = spark.read.parquet(BASE + "gate_mne_agg")
 
