@@ -1,3 +1,6 @@
+# RESERVOIR EXTRACT - Teradata -> HDFS landing ONLY. No evidence here: run once, then work in cpc_evidence_hdfs.py.
+# Every land() is idempotent (skip-if-landed) and restartable per bite.
+
 # %% [0] Bootstrap - install teradatasql from RBC artifactory (your existing pip idiom); run ONCE per kernel
 # If this install fails, the platform ask is: "need teradatasql package or Teradata JDBC jar in Spark session"
 get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
@@ -16,7 +19,7 @@ from trino.auth import BasicAuthentication
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
 
-TRINO_HOST = "strplvaexh0001.fg.rbc.com"     # letter l confirmed by DNS (diagnosis cell 5); digit-1 spelling does not resolve
+TRINO_HOST = "strplvaexh0001.fg.rbc.com"     # letter l confirmed by DNS; digit-1 spelling does not resolve
 TD_HOST    = "Teradata-dns-sysa.fg.rbc.com"  # from your PROD profile; resolves to 10.174.185.83
 
 # verify=False is the platform norm (your working cell; verified TLS tested once 2026-07-24 - corp cert not in trust store)
@@ -208,113 +211,19 @@ WHERE e.disposition_cd = 1
 GROUP BY 1, 2
 """)
 
-# %% [13] Load reservoir + derive (pure Spark/pandas from here - Teradata is done)
-from pyspark.sql import functions as F, Window as W
-spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+# %% [13] EXTRACT blank-MNE identification sample (red-team #3's last hole: WHAT are the treatments with blank pos 8-10?)
+# Tiny pull: top 500 blank-mne treatments by send volume, Apr-Jun era, with subject line + channel/category fields.
+# Subject lines settle marketing-vs-service; feeds R1 in cpc_evidence_hdfs.py.
+land("blank_mne_sample", """
+SELECT TOP 500
+       m.TREATMENT_ID, m.email_subj_line, m.channel_type_cd, m.cntct_mthd_typ,
+       m.category_cd, m.sub_category_cd, m.product_code,
+       COUNT(*) AS send_rows
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+WHERE m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-08-01'
+  AND TRIM(COALESCE(SUBSTR(m.TREATMENT_ID, 8, 3), '')) = ''
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+ORDER BY send_rows DESC
+""")
 
-ub  = spark.read.parquet(BASE + "unsub_base/*")
-rec = spark.read.parquet(BASE + "q2_recipients/*").distinct()
-cpc = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "cpc_pref")
-ps  = spark.read.parquet(BASE + "postunsub_sends")
-gm  = spark.read.parquet(BASE + "gate_mne_agg")
-
-w = W.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").asc(), F.col("TREATMENT_ID").asc())
-uf = (ub.withColumn("rn", F.row_number().over(w)).filter("rn = 1")
-        .select("CLNT_NO", "unsub_tm", F.expr("substring(TREATMENT_ID, 8, 3)").alias("unsub_mne")))
-uf.cache(); print("unsub_first clients:", uf.count())
-
-def cpc_standing(as_of_expr):
-    ww = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").desc())
-    base = cpc.filter("CHG_TMSTMP < " + as_of_expr) if as_of_expr else cpc
-    return base.withColumn("rn", F.row_number().over(ww)).filter("rn = 1")
-
-uf.createOrReplaceTempView("uf"); cpc.createOrReplaceTempView("cpc")
-
-# %% [14] EVIDENCE 1 - two consent worlds, monthly volumes (35x claim)
-spark.sql("""
-SELECT 'email_unsub' AS consent_world, date_format(unsub_tm, 'yyyyMM') AS month_yyyymm, COUNT(*) AS clients
-FROM uf GROUP BY 2
-UNION ALL
-SELECT 'cpc_optout', date_format(CHG_TMSTMP, 'yyyyMM'), COUNT(DISTINCT CLNT_NO)
-FROM cpc
-WHERE CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)
-  AND CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'
-GROUP BY 2
-ORDER BY 1, 2
-""").show(30, False)
-
-# %% [15] EVIDENCE 2 - the blind gate + before/after split (99.6% claim)
-st = cpc_standing(None).filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)")
-earliest = st.groupBy("CLNT_NO").agg(F.min("CHG_TMSTMP").alias("first_optout_tm"))
-j = uf.join(earliest, "CLNT_NO", "left")
-total   = j.count()
-with_ex = j.filter("first_optout_tm IS NOT NULL").count()
-before  = j.filter("first_optout_tm <  unsub_tm").count()
-after   = j.filter("first_optout_tm >= unsub_tm").count()
-print("unsub_clients_total          ", total)
-print("with_explicit_cpc_optout     ", with_ex)
-print("without_explicit_cpc_optout  ", total - with_ex)
-print("optout_recorded_before_unsub ", before)
-print("optout_recorded_after_unsub  ", after)
-assert before + after == with_ex
-
-# %% [16] EVIDENCE 3 - no bridge: flips by writer x had-prior-unsub
-spark.sql("""
-WITH flips AS (
-  SELECT CLNT_NO, PREF_ID, APP_SYS_CD, CHG_TMSTMP FROM cpc
-  WHERE CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)
-    AND CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01')
-SELECT f.PREF_ID, f.APP_SYS_CD,
-       CASE WHEN u.CLNT_NO IS NOT NULL AND u.unsub_tm < f.CHG_TMSTMP THEN 'Y' ELSE 'N' END AS had_prior_unsub,
-       COUNT(*) AS flips
-FROM flips f LEFT JOIN uf u ON u.CLNT_NO = f.CLNT_NO
-GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC
-""").show(40, False)
-
-# %% [17] EVIDENCE 4 - the leaking gate, per switch x exclusivity (19.2% / 47% claims)
-gates = cpc_standing("DATE '2026-04-01'").filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)") \
-        .select("CLNT_NO", "PREF_ID")
-nflags = gates.groupBy("CLNT_NO").agg(F.count("*").alias("n"))
-gates = gates.join(nflags, "CLNT_NO").withColumn("exclusivity", F.when(F.col("n") == 1, "only_this_flag").otherwise("multi_flag"))
-got = rec.withColumn("got", F.lit(1))
-(gates.join(got, "CLNT_NO", "left")
-      .groupBy("PREF_ID", "exclusivity")
-      .agg(F.countDistinct("CLNT_NO").alias("optout_clients"), F.sum("got").alias("got_email_apr_jun"))
-      .orderBy("PREF_ID", "exclusivity")).show(10, False)
-allsw = gates.select("CLNT_NO").distinct().join(got, "CLNT_NO", "left")
-print("ALL_SWITCHES:", allsw.count(), "optout clients,", allsw.filter("got = 1").count(), "got email Apr-Jun")
-
-# %% [18] EVIDENCE 5 - does the channel honor unsubs? (10.4% claim)
-pre = uf.filter("unsub_tm < DATE '2026-04-01'"); pre.cache()
-pre_n = pre.count()
-print("unsub_before_apr_clients ", pre_n)
-print("got_email_apr_jun        ", pre.join(got, "CLNT_NO", "inner").count())
-
-# %% [19] EVIDENCE 6+7 - which campaigns reach opted-out clients, per switch (from server-side aggregate)
-we7 = W.partitionBy("PREF_ID").orderBy(F.col("clients").desc())
-gm.withColumn("rk", F.row_number().over(we7)).filter("rk <= 12").orderBy("PREF_ID", "rk").show(48, False)
-
-# %% [20] EVIDENCE 8 - the post-unsub waterfall (exclusion order fixed; labels match SQL version)
-print("0 unsubscribed before Apr 2026 (cohort)                 ", pre_n)
-r1 = ps.filter("disposition_cd = 1")
-print("1 gross: received any send Apr-Jun                      ", r1.select("CLNT_NO").distinct().count())
-r2 = r1.filter("disposition_dt_tm >= unsub_tm + INTERVAL 14 DAYS")
-print("2 excl. sends within 14 days of unsub (CASL proxy)      ", r2.select("CLNT_NO").distinct().count())
-bounced = ps.filter("disposition_cd = 5").select("CLNT_NO", "mne").distinct().withColumn("b", F.lit(1))
-r3 = r2.join(bounced, ["CLNT_NO", "mne"], "left").filter("b IS NULL")
-print("3 excl. clients whose every send hardbounced (mne proxy)", r3.select("CLNT_NO").distinct().count())
-rec5001 = (cpc.filter("CLNT_CONSENT_TYP = 5001 AND PREF_ID IN (1002, 1012)")
-              .select("CLNT_NO", "CHG_TMSTMP")
-              .join(pre.select("CLNT_NO", "unsub_tm"), "CLNT_NO")
-              .filter("CHG_TMSTMP > unsub_tm AND CHG_TMSTMP < DATE '2026-07-01'")
-              .select("CLNT_NO").distinct().withColumn("rc", F.lit(1)))
-r4 = r3.join(rec5001, "CLNT_NO", "left").filter("rc IS NULL")
-print("4 excl. CPC-side re-consents after unsub                ", r4.select("CLNT_NO").distinct().count())
-same = r4.filter("mne = unsub_mne").select("CLNT_NO").distinct()
-cross = r4.select("CLNT_NO").distinct().subtract(same)
-print("5 residual: cross-campaign only (different mne)         ", cross.count())
-print("6 residual: same campaign as unsubbed (in-program leak) ", same.count())
-
-# %% [21] SUMMARY pointer - each number above IS the summary; windows stated per cell
-print("email unsubs, 12-mo total (Jul25-Jun26):", total)
-print("story: E1 volumes 35x | E2 blind gate + split | E3 writers | E4 gate leak | E5 channel honor | E6/E7 gate x campaign | E8 waterfall")
+print("reservoir complete - switch to cpc_evidence_hdfs.py (no Teradata needed from here)")
