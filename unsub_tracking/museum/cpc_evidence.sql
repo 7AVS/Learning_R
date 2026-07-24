@@ -282,6 +282,150 @@ GROUP BY 1
 ORDER BY 2 DESC;
 
 
+-- SUMMARY: the story in one table - each row's proof lives in Evidence 1-6
+-- E2's full-history standing logic (cpc_latest/cpc_optout_detail/cpc_optout/cpc_optout_earliest/flagged) is copied verbatim from Evidence 2 above - do not re-derive it, keep in sync if E2 changes
+-- E5's pre-Apr unsub cohort CTE is copied verbatim from Evidence 5 above
+-- reuses all four volatiles (vt_unsub_first, vt_q2_sends, vt_dns_1002); the only fresh scans are the two small bounded CPC_RB_PREF_LOG reads E2 and E1's cpc branch already do - no new EVENT/MASTER scans
+WITH cpc_latest AS (
+    SELECT
+        CLNT_NO,
+        PREF_ID,
+        CLNT_CONSENT_TYP,
+        CHG_TMSTMP,
+        ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID IN (1002, 1012, 1014)
+    -- consent standing = latest answer ever recorded (full history; small table - deliberate exception to the 2024 scan floor)
+),
+cpc_optout_detail AS (
+    SELECT CLNT_NO, PREF_ID, CHG_TMSTMP
+    FROM cpc_latest
+    WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002
+),
+cpc_optout AS (
+    SELECT DISTINCT CLNT_NO
+    FROM cpc_optout_detail
+),
+cpc_optout_earliest AS (
+    SELECT CLNT_NO, MIN(CHG_TMSTMP) AS optout_chg_tmstmp
+    FROM cpc_optout_detail
+    GROUP BY CLNT_NO
+),
+flagged AS (
+    SELECT
+        u.CLNT_NO,
+        CASE WHEN co.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS has_cpc_optout,
+        CASE WHEN ce.optout_chg_tmstmp IS NOT NULL AND ce.optout_chg_tmstmp <  u.unsub_tm THEN 1 ELSE 0 END AS optout_before_unsub,
+        CASE WHEN ce.optout_chg_tmstmp IS NOT NULL AND ce.optout_chg_tmstmp >= u.unsub_tm THEN 1 ELSE 0 END AS optout_after_unsub
+    FROM vt_unsub_first u
+    LEFT JOIN cpc_optout co ON co.CLNT_NO = u.CLNT_NO
+    LEFT JOIN cpc_optout_earliest ce ON ce.CLNT_NO = u.CLNT_NO
+),
+cohort AS (
+    -- pre-Apr unsub cohort, copied from Evidence 5
+    SELECT CLNT_NO
+    FROM vt_unsub_first
+    WHERE unsub_tm < DATE '2026-04-01'
+)
+-- row 1: one side of Evidence 1's two-consent-worlds comparison, 12-mo total (no monthly division - reader divides by 12)
+SELECT
+    CAST('email unsubs, 12-mo total' AS VARCHAR(40)) AS what,
+    CAST('Jul 2025 - Jun 2026' AS VARCHAR(30)) AS time_window,
+    CAST(COUNT(*) AS BIGINT) AS clients,
+    CAST(NULL AS BIGINT) AS of_population
+FROM vt_unsub_first
+UNION ALL
+-- row 2: other side of the same comparison, bounded CPC scan mirrors Evidence 1's cpc branch
+SELECT
+    'cpc opt-out flips, 12-mo total',
+    'Jul 2025 - Jun 2026',
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT),
+    NULL
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID IN (1002, 1012, 1014)
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-07-01'
+  AND CHG_TMSTMP <  DATE '2026-07-01'
+UNION ALL
+-- row 3: population anchor for the blind-gate rows below (Evidence 2)
+SELECT
+    'unsubscribers, total',
+    'Jul 2025 - Jun 2026',
+    CAST(COUNT(*) AS BIGINT),
+    NULL
+FROM vt_unsub_first
+UNION ALL
+-- row 4: Evidence 2's with_explicit_cpc_optout
+SELECT
+    'w/ explicit CPC opt-out',
+    'any time',
+    CAST(SUM(has_cpc_optout) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM vt_unsub_first)
+FROM flagged
+UNION ALL
+-- row 5: Evidence 2's before/after split, before
+SELECT
+    'opt-out recorded before unsub',
+    'any time',
+    CAST(SUM(optout_before_unsub) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM vt_unsub_first)
+FROM flagged
+UNION ALL
+-- row 6: Evidence 2's before/after split, after
+SELECT
+    'opt-out recorded after unsub',
+    'any time',
+    CAST(SUM(optout_after_unsub) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM vt_unsub_first)
+FROM flagged
+UNION ALL
+-- row 7: Evidence 6's cohort population, standing before Apr 1 2026
+SELECT
+    'do-not-solicit 1002, standing',
+    'before Apr 1 2026',
+    CAST(COUNT(*) AS BIGINT),
+    NULL
+FROM vt_dns_1002
+UNION ALL
+-- row 8: Evidence 6's cohort restricted to clients who received a campaign email (all-MNE version of the E6 breakout)
+SELECT
+    '1002 standing, got campaign email',
+    'Apr - Jun 2026',
+    CAST(COUNT(*) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM vt_dns_1002)
+FROM vt_dns_1002 d
+INNER JOIN vt_q2_sends s ON s.CLNT_NO = d.CLNT_NO
+UNION ALL
+-- row 9: Evidence 5's cohort population
+SELECT
+    'unsubscribed before Apr 2026',
+    'Jul 2025 - Mar 2026',
+    CAST(COUNT(*) AS BIGINT),
+    NULL
+FROM cohort
+UNION ALL
+-- row 10: Evidence 5's got_email_apr_jun
+SELECT
+    'unsub pre-Apr, got campaign email',
+    'Apr - Jun 2026',
+    CAST(COUNT(*) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM cohort)
+FROM cohort c
+INNER JOIN vt_q2_sends s ON s.CLNT_NO = c.CLNT_NO
+ORDER BY CASE what
+    WHEN 'email unsubs, 12-mo total'         THEN 1
+    WHEN 'cpc opt-out flips, 12-mo total'    THEN 2
+    WHEN 'unsubscribers, total'              THEN 3
+    WHEN 'w/ explicit CPC opt-out'           THEN 4
+    WHEN 'opt-out recorded before unsub'     THEN 5
+    WHEN 'opt-out recorded after unsub'      THEN 6
+    WHEN 'do-not-solicit 1002, standing'     THEN 7
+    WHEN '1002 standing, got campaign email' THEN 8
+    WHEN 'unsubscribed before Apr 2026'      THEN 9
+    WHEN 'unsub pre-Apr, got campaign email' THEN 10
+END;
+
+
 DROP TABLE vt_dns_1002;
 DROP TABLE vt_q2_sends;
 DROP TABLE vt_unsub_first;
