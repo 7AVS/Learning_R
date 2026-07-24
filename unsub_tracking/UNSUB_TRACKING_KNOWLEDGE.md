@@ -3,6 +3,8 @@
 Everything learned building the bank-wide (NBA-wide) email unsubscription deep-dive.
 Written 2026-07-14 for migration to a new environment. Repo folder: `unsub_tracking/`.
 
+Folder layout (2026-07-24): archaeology/ = exploratory packs 01-22 (results catalogued below); museum/ = presentation-grade evidence queries.
+
 ---
 
 ## 0. REQUIRED OUTCOMES (locked 2026-07-15, team-confirmed)

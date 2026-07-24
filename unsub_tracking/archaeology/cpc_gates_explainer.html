@@ -1,0 +1,735 @@
+<title>CPC Consent Gates — how a client becomes unreachable</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg: #eef1f4;
+    --panel: #ffffff;
+    --panel-2: #f6f7f9;
+    --ink: #1b2430;
+    --ink-muted: #5b6472;
+    --line: #c7ccd1;
+    --line-strong: #9aa2ad;
+    --accent: #33546f;
+    --open-bg: #e3f3e8;
+    --open-ink: #1f6d3d;
+    --open-line: #2f7d4f;
+    --closed-bg: #fbe8e6;
+    --closed-ink: #a3271b;
+    --closed-line: #c0392b;
+    --blank-bg: #eceef0;
+    --blank-ink: #5b6472;
+    --blank-line: #9aa2ad;
+    --assumed-bg: #fbf1da;
+    --assumed-ink: #8a5a06;
+    --assumed-line: #b8860b;
+    --vendor-bg: #f3e6f7;
+    --vendor-ink: #6a2f7a;
+    --vendor-line: #8e44ad;
+    --block-glow: rgba(192, 57, 43, 0.35);
+    --shadow: 0 1px 2px rgba(20,26,34,0.06), 0 1px 1px rgba(20,26,34,0.04);
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg: #12151a;
+      --panel: #1b2027;
+      --panel-2: #20262e;
+      --ink: #e7e9ec;
+      --ink-muted: #9aa2ad;
+      --line: #333b46;
+      --line-strong: #4a5361;
+      --accent: #8fb4d1;
+      --open-bg: #163425;
+      --open-ink: #4fd68e;
+      --open-line: #2f7d4f;
+      --closed-bg: #3a1c1a;
+      --closed-ink: #ff8a7a;
+      --closed-line: #c0392b;
+      --blank-bg: #262b32;
+      --blank-ink: #9aa2ad;
+      --blank-line: #4a5361;
+      --assumed-bg: #362c14;
+      --assumed-ink: #e0b45a;
+      --assumed-line: #b8860b;
+      --vendor-bg: #2e2035;
+      --vendor-ink: #d9a6f0;
+      --vendor-line: #8e44ad;
+      --block-glow: rgba(255, 107, 107, 0.28);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 1px 1px rgba(0,0,0,0.3);
+    }
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.45;
+    padding: 2rem 2rem 4rem;
+  }
+  .wrap{ max-width: 1400px; margin: 0 auto; }
+
+  h1,h2,h3{ font-family: var(--font-body); font-weight: 700; margin: 0; }
+  code, .mono{ font-family: var(--font-mono); }
+
+  .section-label{
+    font-variant-caps: all-small-caps;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--ink-muted);
+    font-size: 0.95rem;
+    margin: 0 0 0.6rem;
+  }
+
+  /* ---------- header ---------- */
+  header.page-header{ margin-bottom: 1.5rem; }
+  header.page-header h1{ font-size: 1.6rem; letter-spacing: -0.01em; }
+  header.page-header .subtitle{
+    color: var(--ink-muted);
+    margin: 0.35rem 0 1rem;
+    font-size: 0.98rem;
+    max-width: 70ch;
+  }
+  .legend-bar{
+    display:flex; flex-wrap: wrap; gap: 0.6rem 1.4rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .legend-group{ display:flex; align-items:center; gap:0.5rem; flex-wrap: wrap; }
+  .legend-group .glabel{ color: var(--ink-muted); font-size: 0.82rem; margin-right: 0.15rem; }
+  .swatch{ display:inline-flex; align-items:center; gap:0.35rem; font-size:0.82rem; padding: 0.15rem 0.5rem; border-radius: 5px; }
+  .swatch-line{ width:18px; height:0; border-top: 2px solid var(--ink-muted); display:inline-block; }
+  .swatch-line.dashed{ border-top-style: dashed; }
+  .codes-legend{ color: var(--ink-muted); font-size: 0.82rem; font-family: var(--font-mono); }
+
+  /* ---------- status chip ---------- */
+  .chip{
+    display:inline-flex; align-items:center; gap:0.3rem;
+    padding: 0.1rem 0.5rem; border-radius: 999px;
+    font-size: 0.78rem; font-weight: 600; white-space: nowrap;
+  }
+  .chip.st-open{ background: var(--open-bg); color: var(--open-ink); }
+  .chip.st-closed{ background: var(--closed-bg); color: var(--closed-ink); }
+  .chip.st-blank{ background: var(--blank-bg); color: var(--blank-ink); }
+  .chip.assumed{ background: var(--assumed-bg); color: var(--assumed-ink); font-weight:700; }
+  .chip a{ color: inherit; text-decoration: underline; text-decoration-style: dotted; }
+
+  .stat-line{ font-size: 0.78rem; color: var(--ink-muted); margin-top:0.15rem; }
+  .stat-line strong{ color: var(--ink); font-weight: 700; }
+
+  /* ---------- layout ---------- */
+  .layout{ display:flex; gap: 1.75rem; flex-wrap: wrap; align-items: flex-start; }
+
+  /* ---------- control panel ---------- */
+  .control-panel{
+    flex: 0 0 280px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.1rem 1.1rem 1.3rem;
+    position: sticky;
+    top: 1rem;
+    box-shadow: var(--shadow);
+  }
+  .control{ margin-bottom: 1.15rem; }
+  .control label.ctrl-label{ display:block; font-weight:700; font-size: 0.86rem; margin-bottom: 0.15rem; }
+  .control .ctrl-note{ display:block; font-size: 0.76rem; color: var(--ink-muted); margin-bottom: 0.4rem; }
+  .triswitch{ display:flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .triswitch button{
+    flex:1; padding: 0.35rem 0.2rem; border:none; background: var(--panel-2);
+    color: var(--ink-muted); font-family: var(--font-body); font-size: 0.8rem; font-weight:600;
+    cursor:pointer; border-right: 1px solid var(--line);
+  }
+  .triswitch button:last-child{ border-right:none; }
+  .triswitch button.active.v-yes{ background: var(--open-bg); color: var(--open-ink); }
+  .triswitch button.active.v-blank{ background: var(--blank-bg); color: var(--blank-ink); }
+  .triswitch button.active.v-no{ background: var(--closed-bg); color: var(--closed-ink); }
+  .triswitch button:hover:not(.active){ color: var(--ink); }
+
+  .lockbtn{
+    width:100%; padding: 0.45rem; border-radius: 7px; cursor:pointer;
+    font-family: var(--font-body); font-weight:700; font-size: 0.82rem;
+    border: 1px solid var(--vendor-line); background: var(--vendor-bg); color: var(--vendor-ink);
+  }
+  .lockbtn.unlocked{ background: var(--open-bg); color: var(--open-ink); border-color: var(--open-line); }
+
+  #resetBtn{
+    width:100%; margin-top: 0.4rem; padding: 0.5rem; border-radius: 7px; cursor:pointer;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    font-family: var(--font-body); font-size: 0.82rem; font-weight: 600;
+  }
+  #resetBtn:hover{ border-color: var(--line-strong); }
+
+  /* ---------- stage ---------- */
+  .stage{ flex: 1 1 760px; min-width: 320px; display:flex; flex-direction:column; gap: 1.5rem; }
+
+  /* ---------- lamps ---------- */
+  .lamps{ display:flex; gap: 1rem; flex-wrap: wrap; }
+  .lamp{
+    flex: 1 1 320px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow);
+    transition: box-shadow 0.15s ease;
+  }
+  .lamp .lamp-top{ display:flex; align-items:center; gap:0.6rem; }
+  .lamp .dot{ width: 14px; height:14px; border-radius:50%; flex:none; background: var(--blank-line); box-shadow: inset 0 0 0 2px rgba(0,0,0,0.08); }
+  .lamp.green .dot{ background: var(--open-line); box-shadow: 0 0 0 4px var(--open-bg); }
+  .lamp.red .dot{ background: var(--closed-line); box-shadow: 0 0 0 4px var(--closed-bg); }
+  .lamp .lamp-title{ font-weight:700; font-size: 0.95rem; }
+  .lamp .lamp-verdict{ margin-top: 0.5rem; font-size: 0.92rem; font-weight: 700; }
+  .lamp.green .lamp-verdict{ color: var(--open-ink); }
+  .lamp.red .lamp-verdict{ color: var(--closed-ink); }
+  .lamp .lamp-detail{ margin-top: 0.3rem; font-size: 0.82rem; color: var(--ink-muted); }
+  .lamp .lamp-formula{ margin-top: 0.55rem; font-size: 0.74rem; font-family: var(--font-mono); color: var(--ink-muted); background: var(--panel-2); padding: 0.4rem 0.55rem; border-radius: 6px; }
+
+  /* ---------- building cards ---------- */
+  .building{
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .building-header{
+    height: 7px;
+    background-image: repeating-linear-gradient(90deg, var(--line-strong) 0 2px, transparent 2px 16px);
+    opacity: 0.6;
+  }
+  .building-title{
+    display:flex; align-items:baseline; justify-content: space-between; flex-wrap:wrap; gap:0.4rem;
+    padding: 0.9rem 1.2rem 0.4rem;
+  }
+  .building-title h2{ font-variant-caps: all-small-caps; letter-spacing:0.04em; font-size: 1.05rem; }
+  .building-title .building-tag{ font-size: 0.76rem; color: var(--ink-muted); }
+  .building.di{ max-width: 640px; }
+
+  /* gate banner (1002 / 1001) */
+  .gate{
+    margin: 0.6rem 1.2rem 1rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 0.85rem 1rem;
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .gate.blocked{ border-color: var(--closed-line); box-shadow: 0 0 0 3px var(--block-glow); }
+  .gate.dimmed{ opacity: 0.4; filter: grayscale(0.4); }
+  .gate.fixed{ border-style: dashed; }
+  .gate-row{ display:flex; align-items:center; gap:0.6rem; flex-wrap: wrap; justify-content: space-between; }
+  .gate-name{ font-weight: 700; font-size: 0.95rem; }
+  .gate-name .pref-id{ font-family: var(--font-mono); color: var(--accent); margin-right:0.3rem; }
+  .gate-stats{ display:flex; flex-wrap:wrap; gap: 0.3rem 0.9rem; margin-top: 0.5rem; }
+
+  /* interior: doors + topics, parallel columns */
+  .interior{
+    display:flex; align-items: stretch; gap: 0; flex-wrap: wrap;
+    margin: 0 1.2rem 1.2rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .interior.dimmed{ opacity: 0.4; filter: grayscale(0.4); }
+  .col{ flex: 1 1 260px; padding: 0.9rem 1rem; }
+  .col.doors-col{ background: var(--panel); border-right: 1px solid var(--line); }
+  .col.topics-col{ background: var(--panel-2); }
+  .col .row-label{ font-variant-caps: all-small-caps; letter-spacing:0.05em; font-size: 0.82rem; color: var(--ink-muted); font-weight:700; margin-bottom: 0.55rem; display:flex; align-items:center; gap: 0.4rem; flex-wrap: wrap; }
+
+  .and-connector{
+    flex: 0 0 auto; align-self:center; margin: 0 -0.1px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .and-connector span{
+    font-size: 0.68rem; font-weight:800; letter-spacing: 0.08em;
+    color: var(--ink-muted); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.15rem 0.5rem;
+  }
+
+  .box{
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    padding: 0.55rem 0.7rem;
+    margin-bottom: 0.5rem;
+    background: var(--panel);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  }
+  .box:last-child{ margin-bottom: 0; }
+  .box.dashed{ border-style: dashed; }
+  .box.blocked{ border-color: var(--closed-line); box-shadow: 0 0 0 3px var(--block-glow); }
+  .box.dimmed{ opacity: 0.4; filter: grayscale(0.4); }
+  .box .box-top{ display:flex; align-items:center; justify-content: space-between; gap:0.5rem; flex-wrap: wrap; }
+  .box .box-name{ font-size: 0.86rem; font-weight:600; }
+  .box .box-name .pref-id{ font-family: var(--font-mono); color: var(--accent); margin-right:0.3rem; }
+  .box .box-status{ margin-top: 0.35rem; }
+  .box .box-note{ margin-top: 0.3rem; font-size: 0.74rem; color: var(--ink-muted); }
+
+  /* vendor padlock badge — outside CPC frame */
+  .vendor-badge{
+    margin: 0.6rem 1rem 1.2rem;
+    border: 2px solid var(--vendor-line);
+    border-radius: 8px;
+    background: var(--vendor-bg);
+    padding: 0.65rem 0.8rem;
+    display:flex; align-items:flex-start; gap:0.6rem;
+    transition: box-shadow 0.15s ease, opacity 0.15s ease;
+  }
+  .vendor-badge.blocked{ box-shadow: 0 0 0 3px var(--block-glow); border-color: var(--closed-line); }
+  .vendor-badge.dimmed{ opacity: 0.4; filter: grayscale(0.4); }
+  .vendor-badge .lock-glyph{ font-size: 1.1rem; line-height:1; }
+  .vendor-badge .vb-title{ font-weight:700; font-size: 0.84rem; color: var(--vendor-ink); }
+  .vendor-badge .vb-text{ font-size: 0.78rem; color: var(--ink-muted); margin-top:0.15rem; }
+  .vendor-badge-wrap{ display:flex; justify-content:flex-end; }
+  .vendor-badge-wrap .arrow-note{ align-self:center; font-size: 0.72rem; color: var(--ink-muted); margin-right: -0.2rem; }
+
+  /* bridges */
+  .bridges{
+    border: 1px dashed var(--assumed-line);
+    background: linear-gradient(180deg, var(--assumed-bg), transparent 65%);
+    border-radius: 10px;
+    padding: 0.9rem 1.2rem 1.1rem;
+  }
+  .bridges .bridge-label{ font-size: 0.86rem; font-weight:700; color: var(--assumed-ink); margin-bottom: 0.7rem; display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; }
+  .bridges .bridge-label .plain{ font-weight:400; color: var(--ink-muted); font-size:0.8rem; }
+  .bridge-row{ display:flex; gap: 0.9rem; flex-wrap: wrap; }
+  .bridge-box{ flex: 1 1 220px; }
+  .bridges .scope-tag{ margin-top:0.35rem; }
+
+  /* open questions */
+  .open-questions{
+    margin-top: 2.2rem;
+    background: var(--panel);
+    border: 1px dashed var(--assumed-line);
+    border-radius: 10px;
+    padding: 1.1rem 1.3rem 1.3rem;
+  }
+  .open-questions ol{ margin: 0.6rem 0 0; padding-left: 1.3rem; }
+  .open-questions li{ margin-bottom: 0.85rem; font-size: 0.88rem; }
+  .open-questions li:last-child{ margin-bottom: 0; }
+  .open-questions .q-test{ display:block; margin-top: 0.2rem; color: var(--ink-muted); font-size: 0.82rem; }
+  .open-questions .q-test code{ background: var(--panel-2); padding: 0.05rem 0.35rem; border-radius: 4px; }
+
+  .page-footer{ margin-top: 1.6rem; font-size: 0.76rem; color: var(--ink-muted); }
+
+  @media (max-width: 900px){
+    .control-panel{ position: static; flex-basis: 100%; }
+    body{ padding: 1.2rem 1rem 3rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="page-header">
+    <h1>CPC Consent Gates — how a client becomes unreachable</h1>
+    <p class="subtitle">Two independent exits: the formal consent system (trickle) and the vendor unsub (flood, invisible to CPC).</p>
+    <div class="legend-bar">
+      <div class="legend-group">
+        <span class="glabel">status</span>
+        <span class="chip st-open">✓ open</span>
+        <span class="chip st-closed">✕ closed</span>
+        <span class="chip st-blank">— never set</span>
+      </div>
+      <div class="legend-group">
+        <span class="glabel">border</span>
+        <span class="swatch"><span class="swatch-line"></span> verified (dictionary / data)</span>
+        <span class="swatch"><span class="swatch-line dashed"></span> assumed enforcement</span>
+      </div>
+      <div class="legend-group codes-legend">
+        5001 Yes · 5002 No · 5003 blank · 5004 qualified yes (1016 only)
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- ============ CONTROL PANEL ============ -->
+    <aside class="control-panel">
+      <div class="section-label">controls</div>
+
+      <div class="control">
+        <label class="ctrl-label">1002 — RBC Royal Bank (entity)</label>
+        <span class="ctrl-note">outermost gate, absorbing</span>
+        <div class="triswitch" data-group="pref1002">
+          <button data-val="yes">✓ Yes</button>
+          <button data-val="blank">— blank</button>
+          <button data-val="no">✕ No</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <label class="ctrl-label">Email channel door (1012)</label>
+        <span class="ctrl-note">Mobile or E-Mail ⚠ source conflict</span>
+        <div class="triswitch" data-group="emailDoor">
+          <button data-val="yes">✓ Yes</button>
+          <button data-val="blank">— blank</button>
+          <button data-val="no">✕ No</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <label class="ctrl-label">1006 — Credit Cards (topic)</label>
+        <span class="ctrl-note">assumed enforcement, see Q2</span>
+        <div class="triswitch" data-group="topic1006">
+          <button data-val="yes">✓ Yes</button>
+          <button data-val="blank">— blank</button>
+          <button data-val="no">✕ No</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <label class="ctrl-label">1014 — Share for Marketing (bridge)</label>
+        <span class="ctrl-note">inverted default: blank behaves as No</span>
+        <div class="triswitch" data-group="bridge1014">
+          <button data-val="yes">✓ Yes</button>
+          <button data-val="blank">— blank</button>
+          <button data-val="no">✕ No</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <label class="ctrl-label">Vendor unsub padlock</label>
+        <span class="ctrl-note">outside CPC entirely, binary</span>
+        <button class="lockbtn" id="vendorBtn" data-group="vendor">🔒 locked</button>
+      </div>
+
+      <button id="resetBtn">Reset to defaults</button>
+    </aside>
+
+    <!-- ============ STAGE ============ -->
+    <section class="stage">
+
+      <!-- lamps -->
+      <div class="lamps">
+        <div class="lamp" id="lampA">
+          <div class="lamp-top"><span class="dot"></span><span class="lamp-title">Lamp A — Banking Cards EMAIL campaign reach?</span></div>
+          <div class="lamp-verdict" id="lampAVerdict">—</div>
+          <div class="lamp-detail" id="lampADetail"></div>
+          <div class="lamp-formula">1002 ≠ No AND email door ≠ No AND vendor unlocked AND 1006 ≠ No</div>
+        </div>
+        <div class="lamp" id="lampB">
+          <div class="lamp-top"><span class="dot"></span><span class="lamp-title">Lamp B — DI market to client using Banking data?</span></div>
+          <div class="lamp-verdict" id="lampBVerdict">—</div>
+          <div class="lamp-detail" id="lampBDetail"></div>
+          <div class="lamp-formula">1014 == explicit Yes (blank fails) — DI's own gate 1001 also applies, fixed open here</div>
+        </div>
+      </div>
+
+      <!-- BANKING BUILDING -->
+      <div class="building banking" id="bankingBuilding">
+        <div class="building-header"></div>
+        <div class="building-title">
+          <h2>Banking (RBC Royal Bank entity)</h2>
+          <span class="building-tag">headquarters — outermost gate + interior doors/topics</span>
+        </div>
+
+        <div class="gate" id="gate1002">
+          <div class="gate-row">
+            <div class="gate-name"><span class="pref-id">1002</span>May Banking market to me at all?</div>
+            <div class="box-status" id="gate1002Status"></div>
+          </div>
+          <div class="gate-stats">
+            <span class="stat-line"><strong>50,738</strong> opted out now</span>
+            <span class="stat-line"><strong>1,179,248</strong> explicit yes</span>
+            <span class="stat-line">~150–350 new opt-outs/mo (declining)</span>
+            <span class="stat-line">* Mar-2024 spike ~20.5K (both 1002 &amp; 1014) — HSBC acquisition migration, one-time</span>
+          </div>
+        </div>
+
+        <div class="interior" id="bankingInterior">
+          <div class="col doors-col">
+            <div class="row-label">channel doors — any one open</div>
+            <div class="box"><div class="box-top"><div class="box-name"><span class="pref-id">1007</span>Direct Mail</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box"><div class="box-top"><div class="box-name"><span class="pref-id">1008</span>Telephone</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box"><div class="box-top"><div class="box-name"><span class="pref-id">1009</span>RBC Online</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box dashed" id="door1012">
+              <div class="box-top">
+                <div class="box-name"><span class="pref-id">1012</span>Mobile or E-Mail</div>
+                <span class="chip assumed"><a href="#q3">assumed → Q3</a></span>
+              </div>
+              <div class="box-status" id="door1012Status"></div>
+              <div class="box-note">⚠ source conflict — dictionary pages disagree whether 1012 means Mobile or E-Mail (see Q3)</div>
+            </div>
+            <div class="box"><div class="box-top"><div class="box-name"><span class="pref-id">1013</span>Face-to-Face</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box"><div class="box-top"><div class="box-name"><span class="pref-id">1048</span>ATM</div></div><div class="box-status" data-static="blank"></div></div>
+          </div>
+
+          <div class="and-connector"><span>AND</span></div>
+
+          <div class="col topics-col" id="topicsCol">
+            <div class="row-label">product topics — parallel filter <span class="chip assumed"><a href="#q2">assumed → Q2</a></span></div>
+            <div class="box dashed" id="topic1006">
+              <div class="box-top"><div class="box-name"><span class="pref-id">1006</span>Credit Cards</div></div>
+              <div class="box-status" id="topic1006Status"></div>
+            </div>
+            <div class="box dashed"><div class="box-top"><div class="box-name"><span class="pref-id">1004</span>Accounts &amp; Packages</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box dashed"><div class="box-top"><div class="box-name"><span class="pref-id">1025</span>Loans / LOC</div></div><div class="box-status" data-static="blank"></div></div>
+            <div class="box dashed"><div class="box-top"><div class="box-name"><span class="pref-id">1026</span>Mortgages</div></div><div class="box-status" data-static="blank"></div></div>
+          </div>
+        </div>
+
+        <div class="vendor-badge-wrap">
+          <div class="vendor-badge" id="vendorBadge" style="flex:1 1 auto; margin-left:1.2rem; margin-right:1.2rem;">
+            <span class="lock-glyph">🔒</span>
+            <div>
+              <div class="vb-title">Vendor unsub — attached to the email door, outside the CPC frame</div>
+              <div class="vb-text"><strong>649,885</strong> clients locked here since Jan 2024 (~35K/mo). CPC cannot see this lock — linkage tested: <strong>0.06% @7d</strong>, <strong>0.33% @90d</strong>.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BRIDGES -->
+      <div class="bridges" id="bridgesRow">
+        <div class="bridge-label">
+          bridges leaving Banking — blank = <span class="chip st-closed">✕ NO</span>
+          <span class="plain">(inverted default — every other switch defaults open on blank)</span>
+        </div>
+        <div class="bridge-row">
+          <div class="bridge-box box" id="bridge1014">
+            <div class="box-top">
+              <div class="box-name"><span class="pref-id">1014</span>Share for Marketing</div>
+            </div>
+            <div class="box-status" id="bridge1014Status"></div>
+            <div class="stat-line" style="margin-top:0.4rem;"><strong>82,911</strong> explicit No · <strong>555,115</strong> explicit Yes</div>
+            <div class="box-note">the ONLY shareable-for-marketing base (blank/absent = No)</div>
+            <div class="scope-tag chip assumed"><a href="#q4">scope assumed → Q4</a></div>
+          </div>
+          <div class="bridge-box box">
+            <div class="box-top"><div class="box-name"><span class="pref-id">1015</span>Share for Service</div></div>
+            <div class="box-status" data-static="bridge-blank"></div>
+            <div class="box-note">blank = No, same rule as 1014 (verified, no volume stats available)</div>
+          </div>
+          <div class="bridge-box box">
+            <div class="box-top"><div class="box-name"><span class="pref-id">1036</span>Share for Online Personalization</div></div>
+            <div class="box-status" data-static="yes"></div>
+            <div class="box-note">auto-Yes at OLB enrolment, un-enrol → No. OLB table is monthly vs CPC daily — sync drift possible</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DIRECT INVESTING BUILDING -->
+      <div class="building di" id="diBuilding">
+        <div class="building-header"></div>
+        <div class="building-title">
+          <h2>Direct Investing</h2>
+          <span class="building-tag">satellite entity — own gate + own doors</span>
+        </div>
+        <div class="gate fixed" id="gate1001">
+          <div class="gate-row">
+            <div class="gate-name"><span class="pref-id">1001</span>May DI market to me at all?</div>
+            <span class="chip st-blank">fixed open — not interactive in this demo</span>
+          </div>
+        </div>
+        <div class="interior" style="margin-bottom:1.1rem;">
+          <div class="col doors-col" style="border-right:none;">
+            <div class="row-label">DI channel doors (reference only, not modeled)</div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <span class="chip st-blank"><span class="pref-id mono">1037</span>&nbsp;DM</span>
+              <span class="chip st-blank"><span class="pref-id mono">1038</span>&nbsp;Telephone</span>
+              <span class="chip st-blank"><span class="pref-id mono">1039</span>&nbsp;Online</span>
+              <span class="chip st-open"><span class="pref-id mono">1040</span>&nbsp;E-Mail</span>
+              <span class="chip st-blank"><span class="pref-id mono">1041</span>&nbsp;F2F</span>
+            </div>
+            <div class="box-note" style="margin-top:0.6rem;">DI has its own channel + product preference stack — out of scope for this demo; only the 1014 bridge and fixed-open 1001 are modeled.</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- OPEN QUESTIONS -->
+  <div class="open-questions" id="openQuestions">
+    <div class="section-label">open questions — answerable from data</div>
+    <ol>
+      <li id="q1"><strong>1002 absorbing</strong> — is entity opt-out enforced by suppression engines?
+        <span class="q-test">Test: count clients with latest 1002=5002 (No) who still appear in email decisioning (<code>TACTIC_EVNT_IP_AR</code>) 2024+. Expect ~0 if enforced.</span>
+      </li>
+      <li id="q2"><strong>Product preferences honored by NBA campaigns</strong> — is 1006 actually applied when selecting who gets a card-offer email?
+        <span class="q-test">Test: clients with 1006=No decisioned for card-offer emails. Expect ~0 if honored.</span>
+      </li>
+      <li id="q3"><strong>1012 label</strong> — Mobile or E-Mail? Two dictionary sources disagree.
+        <span class="q-test">Test: pull the current data-dictionary page for 1012; or compare 1012=No clients against actual email sends to infer which channel it gates.</span>
+      </li>
+      <li id="q4"><strong>1014 scope</strong> — dictionary says cross-entity SHARING only; team lore says "out of all marketing."
+        <span class="q-test">Test: 1014=No clients appearing in Banking-own email decisioning. ~0 would mean engines apply 1014 harshly (as a full marketing opt-out, not just cross-entity sharing).</span>
+      </li>
+    </ol>
+  </div>
+
+  <div class="page-footer">
+    Source: <code>schemas/cpc_rb_pref_log_schema.md</code> — DDWV01.CPC_RB_PREF_LOG, 91,415,764 rows, loaded daily (snapshot 2026-07-15). All figures above are as transcribed there; dashed elements are enforcement assumptions, not confirmed behavior.
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var state = {
+    pref1002: 'blank',
+    emailDoor: 'blank',
+    topic1006: 'blank',
+    bridge1014: 'blank',
+    vendor: 'unlocked'
+  };
+
+  function statusInfo(value, invertedBlank){
+    if(value === 'yes') return { cls:'st-open', icon:'✓', text:'open — explicit Yes' };
+    if(value === 'no') return { cls:'st-closed', icon:'✕', text:'closed — explicit No' };
+    if(invertedBlank) return { cls:'st-closed', icon:'✕', text:'closed — blank = NO (inverted default)' };
+    return { cls:'st-blank', icon:'—', text:'never set (blank = Yes by default)' };
+  }
+
+  function renderChip(el, info){
+    if(!el) return;
+    el.innerHTML = '<span class="chip ' + info.cls + '">' + info.icon + ' ' + info.text + '</span>';
+  }
+
+  // static reference boxes that never change
+  document.querySelectorAll('[data-static]').forEach(function(el){
+    var kind = el.getAttribute('data-static');
+    var info;
+    if(kind === 'blank') info = statusInfo('blank', false);
+    else if(kind === 'bridge-blank') info = statusInfo('blank', true);
+    else if(kind === 'yes') info = statusInfo('yes', false);
+    renderChip(el, info);
+  });
+
+  function clearFx(el){ if(el){ el.classList.remove('blocked','dimmed','passed'); } }
+
+  function render(){
+    // reflect state onto interactive boxes
+    var g1002 = statusInfo(state.pref1002, false);
+    var d1012 = statusInfo(state.emailDoor, false);
+    var t1006 = statusInfo(state.topic1006, false);
+    var b1014 = statusInfo(state.bridge1014, true);
+    renderChip(document.getElementById('gate1002Status'), g1002);
+    renderChip(document.getElementById('door1012Status'), d1012);
+    renderChip(document.getElementById('topic1006Status'), t1006);
+    renderChip(document.getElementById('bridge1014Status'), b1014);
+
+    // vendor lock button label
+    var vendorBtn = document.getElementById('vendorBtn');
+    if(state.vendor === 'locked'){ vendorBtn.textContent = '🔒 locked'; vendorBtn.classList.remove('unlocked'); }
+    else { vendorBtn.textContent = '🔓 unlocked'; vendorBtn.classList.add('unlocked'); }
+
+    // sync tri-state button active states
+    document.querySelectorAll('.triswitch').forEach(function(group){
+      var key = group.getAttribute('data-group');
+      group.querySelectorAll('button').forEach(function(btn){
+        var isActive = btn.getAttribute('data-val') === state[key];
+        btn.classList.toggle('active', isActive);
+        btn.classList.toggle('v-yes', btn.getAttribute('data-val') === 'yes');
+        btn.classList.toggle('v-blank', btn.getAttribute('data-val') === 'blank');
+        btn.classList.toggle('v-no', btn.getAttribute('data-val') === 'no');
+      });
+    });
+
+    // ---- Lamp A precedence chain: 1002 -> email door -> vendor padlock -> 1006 topic
+    var gateEl = document.getElementById('gate1002');
+    var doorEl = document.getElementById('door1012');
+    var vendorBadgeEl = document.getElementById('vendorBadge');
+    var topicColEl = document.getElementById('topicsCol');
+    var topicBoxEl = document.getElementById('topic1006');
+    var interiorEl = document.getElementById('bankingInterior');
+
+    [gateEl, doorEl, vendorBadgeEl, topicColEl, topicBoxEl, interiorEl].forEach(clearFx);
+
+    var lampA = document.getElementById('lampA');
+    var lampAVerdict = document.getElementById('lampAVerdict');
+    var lampADetail = document.getElementById('lampADetail');
+
+    var blockedAt = null;
+    if(state.pref1002 === 'no'){
+      blockedAt = 'gate1002';
+    } else if(state.emailDoor === 'no'){
+      blockedAt = 'door1012';
+    } else if(state.vendor === 'locked'){
+      blockedAt = 'vendorBadge';
+    } else if(state.topic1006 === 'no'){
+      blockedAt = 'topic1006';
+    }
+
+    if(blockedAt){
+      lampA.classList.remove('green'); lampA.classList.add('red');
+      lampAVerdict.textContent = 'Blocked — not reachable';
+      var order = ['gate1002','door1012','vendorBadge','topic1006'];
+      var idx = order.indexOf(blockedAt);
+      var els = { gate1002: gateEl, door1012: doorEl, vendorBadge: vendorBadgeEl, topic1006: topicBoxEl };
+      els[blockedAt].classList.add('blocked');
+      for(var i = idx + 1; i < order.length; i++){ els[order[i]].classList.add('dimmed'); }
+      if(idx === 1 || idx === 2){ /* door or vendor block dims topics col visually too */ topicColEl.classList.add('dimmed'); }
+      if(blockedAt === 'gate1002'){
+        interiorEl.classList.add('dimmed');
+        lampADetail.textContent = 'Blocked at 1002 — client has opted out of Banking marketing entirely (absorbing gate). Interior doors/topics never evaluated.';
+      } else if(blockedAt === 'door1012'){
+        lampADetail.textContent = 'Blocked at 1012 (email channel) — explicit No.';
+      } else if(blockedAt === 'vendorBadge'){
+        lampADetail.textContent = 'Blocked at the vendor unsub padlock — locked outside CPC, invisible to the consent system entirely.';
+      } else if(blockedAt === 'topic1006'){
+        lampADetail.textContent = 'Blocked at 1006 (Credit Cards topic) — assumed enforcement, see Open Question 2.';
+      }
+    } else {
+      lampA.classList.remove('red'); lampA.classList.add('green');
+      lampAVerdict.textContent = 'Reachable';
+      lampADetail.textContent = '1002, email door and 1006 all pass (Yes or blank), and the vendor padlock is unlocked.';
+      [gateEl, doorEl, vendorBadgeEl, topicBoxEl].forEach(function(el){ el.classList.add('passed'); });
+    }
+
+    // ---- Lamp B: 1014 only, 1001 fixed open (annotated, not interactive)
+    var bridgeEl = document.getElementById('bridge1014');
+    clearFx(bridgeEl);
+    var lampB = document.getElementById('lampB');
+    var lampBVerdict = document.getElementById('lampBVerdict');
+    var lampBDetail = document.getElementById('lampBDetail');
+
+    if(state.bridge1014 !== 'yes'){
+      lampB.classList.remove('green'); lampB.classList.add('red');
+      lampBVerdict.textContent = 'Blocked — DI cannot use this client\'s Banking data';
+      bridgeEl.classList.add('blocked');
+      if(state.bridge1014 === 'blank'){
+        lampBDetail.textContent = 'Blocked at 1014 — blank counts as No (inverted default). DI\'s own gate 1001 is fixed open here but never reached: 1014 fails first.';
+      } else {
+        lampBDetail.textContent = 'Blocked at 1014 — explicit No. DI\'s own gate 1001 is fixed open here but never reached.';
+      }
+    } else {
+      lampB.classList.remove('red'); lampB.classList.add('green');
+      lampBVerdict.textContent = 'Reachable via shared data';
+      lampBDetail.textContent = '1014 is explicit Yes. DI\'s own gate 1001 also applies — fixed open in this demo.';
+      bridgeEl.classList.add('passed');
+    }
+  }
+
+  document.querySelectorAll('.triswitch button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var group = btn.closest('.triswitch').getAttribute('data-group');
+      state[group] = btn.getAttribute('data-val');
+      render();
+    });
+  });
+
+  document.getElementById('vendorBtn').addEventListener('click', function(){
+    state.vendor = state.vendor === 'locked' ? 'unlocked' : 'locked';
+    render();
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    state.pref1002 = 'blank';
+    state.emailDoor = 'blank';
+    state.topic1006 = 'blank';
+    state.bridge1014 = 'blank';
+    state.vendor = 'unlocked';
+    render();
+  });
+
+  render();
+})();
+</script>

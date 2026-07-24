@@ -1,0 +1,266 @@
+<title>CPC consent switches — hierarchy and populations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#ffffff;
+    --panel:#ffffff;
+    --panel-2:#f6f7f9;
+    --ink:#1b2430;
+    --ink-muted:#5b6472;
+    --line:#c7ccd1;
+    --line-strong:#9aa2ad;
+
+    --open-bg:#e3f3e8;   --open-ink:#1f6d3d;   --open-line:#2f7d4f;
+    --closed-bg:#fbe8e6; --closed-ink:#a3271b; --closed-line:#c0392b;
+    --amber-bg:#fbf1da;  --amber-ink:#8a5a06;  --amber-line:#b8860b;
+    --vendor-bg:#f3e6f7; --vendor-ink:#6a2f7a; --vendor-line:#8e44ad;
+    --gate-bg:#e7edf2;   --gate-ink:#33546f;   --gate-line:#33546f;
+
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; background:var(--bg); }
+  body{
+    color:var(--ink);
+    font-family:var(--font);
+    font-size:13px;
+    line-height:1.35;
+  }
+  .poster{
+    width:1160px;
+    margin:0 auto;
+    padding:18px 20px 20px;
+    background:var(--panel);
+  }
+
+  .section-label{
+    font-variant-caps: all-small-caps;
+    letter-spacing:0.07em;
+    font-weight:800;
+    color:var(--ink-muted);
+    font-size:11px;
+    margin:0 0 6px;
+  }
+
+  /* ---------------- header ---------------- */
+  h1{ margin:0; font-size:21px; font-weight:800; letter-spacing:-0.01em; }
+  .subline{ margin:3px 0 8px; color:var(--ink-muted); font-size:12px; max-width:90ch; }
+
+  .legend-row{
+    display:flex; flex-wrap:wrap; align-items:center; gap:5px 16px;
+    padding:6px 10px; margin-bottom:10px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+  }
+  .legend-row .glabel{ font-size:10.5px; font-weight:800; color:var(--ink-muted); text-transform:uppercase; letter-spacing:0.05em; }
+  .lg-item{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--ink); }
+  .lg-sw{ width:11px; height:11px; border-radius:3px; flex:none; border:1px solid rgba(0,0,0,0.15); }
+  .lg-sw.open{ background:var(--open-line); }
+  .lg-sw.closed{ background:var(--closed-line); }
+  .lg-sw.amber{ background:var(--amber-line); }
+  .lg-sw.vendor{ background:var(--vendor-line); }
+
+  hr.div{ border:none; border-top:1px solid var(--line); margin:0 0 12px; }
+
+  /* ---------------- top half ---------------- */
+  .top-half{ display:flex; flex-direction:column; gap:10px; margin-bottom:10px; }
+
+  .main-row{ display:flex; align-items:center; gap:14px; }
+
+  .lead-in{ flex:0 0 108px; }
+  .lead-in .lead-text{ font-weight:800; font-size:12px; line-height:1.25; }
+  .arrow-shaft{ position:relative; height:2px; background:var(--ink-muted); margin-top:14px; }
+  .arrow-shaft::after{
+    content:''; position:absolute; right:-1px; top:-5px;
+    border:6px solid transparent; border-left-color:var(--ink-muted);
+  }
+
+  /* gate 1 box */
+  .gate1-box{
+    flex:0 0 640px;
+    position:relative;
+    border:2px solid var(--line-strong);
+    border-radius:10px;
+    background:var(--panel);
+    padding:11px 14px 30px;
+  }
+  .gate1-title{ font-weight:800; font-size:13px; }
+  .gate1-title .pid{ font-family:ui-monospace, Consolas, monospace; color:var(--gate-ink); margin-right:5px; }
+  .gate1-annot{ margin-top:4px; font-size:10.8px; color:var(--ink-muted); }
+  .gate1-annot b{ color:var(--ink); }
+
+  .gate1-columns{ display:flex; align-items:stretch; margin-top:9px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .doors-col, .topics-col{ flex:1 1 50%; padding:8px 10px; }
+  .doors-col{ background:var(--panel); }
+  .topics-col{ background:var(--panel-2); }
+  .col-title{ font-variant-caps: all-small-caps; letter-spacing:0.05em; font-weight:800; font-size:10.5px; color:var(--ink-muted); margin-bottom:6px; }
+
+  .and-col{ flex:0 0 42px; position:relative; display:flex; align-items:center; justify-content:center; }
+  .and-col::before{ content:''; position:absolute; top:8px; bottom:8px; left:50%; width:1px; background:var(--line); }
+  .and-pill{ position:relative; z-index:1; background:var(--panel); border:1px solid var(--line-strong); border-radius:999px; padding:2px 9px; font-size:9.5px; font-weight:800; letter-spacing:0.06em; color:var(--ink-muted); }
+
+  .chip-grid{ display:grid; grid-template-columns:1fr 1fr; gap:4px 6px; }
+  .chip{ border:1px solid var(--line-strong); border-radius:5px; padding:3px 6px; font-size:10.6px; background:var(--panel-2); }
+  .doors-col .chip{ background:var(--panel); }
+  .chip b{ font-family:ui-monospace, Consolas, monospace; font-weight:700; margin-right:3px; }
+  .chip.warn{ border-left:3px solid var(--vendor-line); }
+  .chip.warn .lockmark{ color:var(--vendor-ink); }
+
+  /* breakout badge - visually breaks the bottom border of gate1-box */
+  .breakout-badge{
+    position:absolute; left:22px; right:22px; bottom:-20px;
+    display:flex; align-items:center; gap:6px;
+    border:2px solid var(--vendor-line); background:var(--vendor-bg);
+    border-radius:7px; padding:4px 10px;
+    font-size:10.6px; color:var(--vendor-ink); font-weight:600;
+  }
+  .breakout-badge .lg{ font-size:13px; line-height:1; }
+
+  .client-icon{ flex:0 0 96px; display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .client-icon .circle{ width:32px; height:32px; border-radius:50%; background:var(--panel-2); border:1px solid var(--line-strong); display:flex; align-items:center; justify-content:center; font-size:15px; }
+  .client-icon .cl-label{ font-size:10.6px; font-weight:800; text-align:center; }
+
+  /* bridge row: DI branch, NOT part of the main funnel */
+  .bridge-row{ display:flex; align-items:center; gap:10px; }
+  .bridge-spacer{ flex:0 0 420px; }
+  .bridge-arrow{ flex:1 1 170px; min-width:150px; padding-top:2px; }
+  .bridge-line{ position:relative; height:2px; border-top:2px dashed var(--amber-line); margin-top:9px; }
+  .bridge-line::after{
+    content:''; position:absolute; right:-2px; top:-5px;
+    border:6px solid transparent; border-left-color:var(--amber-line);
+  }
+  .bridge-label{ margin-top:6px; font-size:10.3px; color:var(--amber-ink); font-weight:700; line-height:1.3; }
+
+  .di-box{ flex:0 0 290px; border:2px dashed var(--amber-line); border-radius:9px; background:var(--panel); padding:8px 12px; }
+  .di-box .di-title{ font-weight:800; font-size:12px; }
+  .di-box .di-sub{ margin-top:2px; font-size:10.4px; color:var(--ink-muted); }
+  .di-box .di-doors{ margin-top:6px; font-size:10.2px; color:var(--ink-muted); }
+  .di-box .di-doors b{ font-family:ui-monospace, Consolas, monospace; color:var(--ink); font-weight:700; }
+
+  .footnote{ font-size:10.8px; color:var(--ink-muted); border-top:1px solid var(--line); padding-top:7px; margin-bottom:14px; }
+  .footnote b{ color:var(--ink); }
+
+  /* ---------------- bottom half ---------------- */
+  .bottom-half{ text-align:center; }
+  .venn-wrap{ display:flex; justify-content:center; }
+  svg{ display:block; }
+  .venn-caption{ margin-top:2px; font-size:11px; color:var(--ink-muted); font-style:italic; }
+  .venn-caption b{ font-style:normal; color:var(--ink); }
+</style>
+
+<div class="poster">
+
+  <header>
+    <h1>CPC consent switches — hierarchy and populations</h1>
+    <div class="subline">Enforcement is hierarchical; storage is independent; the biggest exit (unsub) is invisible to CPC.</div>
+    <div class="legend-row">
+      <span class="glabel">key</span>
+      <span class="lg-item"><span class="lg-sw open"></span>open / default-open</span>
+      <span class="lg-item"><span class="lg-sw closed"></span>closed</span>
+      <span class="lg-item"><span class="lg-sw amber"></span>amber = inverted-default bridge (1014)</span>
+      <span class="lg-item"><span class="lg-sw vendor"></span>purple = vendor padlock (outside CPC)</span>
+    </div>
+  </header>
+  <hr class="div" />
+
+  <!-- ===================== TOP HALF — HIERARCHY ===================== -->
+  <div class="section-label">Hierarchy — one campaign's path to a client</div>
+  <div class="top-half">
+
+    <div class="main-row">
+      <div class="lead-in">
+        <div class="lead-text">one Cards email campaign</div>
+        <div class="arrow-shaft"></div>
+      </div>
+
+      <div class="gate1-box">
+        <div class="gate1-title"><span class="pid">1002</span>May RBC Banking market to me at all?</div>
+        <div class="gate1-annot"><b>absorbing gate:</b> No here = nothing else evaluated · <b>50,738</b> clients out today · blank = allowed (default)</div>
+
+        <div class="gate1-columns">
+          <div class="doors-col">
+            <div class="col-title">Channel doors — any one open</div>
+            <div class="chip-grid">
+              <div class="chip"><b>1007</b>Mail</div>
+              <div class="chip"><b>1008</b>Phone</div>
+              <div class="chip"><b>1009</b>Online</div>
+              <div class="chip warn"><b>1012</b>⚠ Mobile/E-Mail <span class="lockmark">🔒</span></div>
+              <div class="chip"><b>1013</b>Face-to-face</div>
+              <div class="chip"><b>1048</b>ATM</div>
+            </div>
+          </div>
+
+          <div class="and-col"><span class="and-pill">AND</span></div>
+
+          <div class="topics-col">
+            <div class="col-title">Topic filters — all must pass</div>
+            <div class="chip-grid">
+              <div class="chip"><b>1006</b>Cards</div>
+              <div class="chip"><b>1004</b>Accounts</div>
+              <div class="chip"><b>1025</b>Loans</div>
+              <div class="chip"><b>1026</b>Mortgages</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="breakout-badge">
+          <span class="lg">🔒</span>
+          <span>1012 door — vendor unsub: <b style="color:inherit">649,885</b> clients since 2024 · lives OUTSIDE CPC (0.06% linkage)</span>
+        </div>
+      </div>
+
+      <div class="client-icon">
+        <div class="circle">👤</div>
+        <div class="cl-label">client reached</div>
+      </div>
+    </div>
+
+    <div class="bridge-row">
+      <div class="bridge-spacer"></div>
+      <div class="bridge-arrow">
+        <div class="bridge-line"></div>
+        <div class="bridge-label">1014 Share-for-Marketing — DEFAULT CLOSED (blank = NO) · only 555,115 explicit Yes</div>
+      </div>
+      <div class="di-box">
+        <div class="di-title">Direct Investing</div>
+        <div class="di-sub">own gate 1001, own doors incl. 1040 E-Mail</div>
+        <div class="di-doors"><b>1037</b> DM · <b>1038</b> Phone · <b>1039</b> Online · <b>1040</b> E-Mail · <b>1041</b> F2F</div>
+      </div>
+    </div>
+
+    <div class="footnote">Switches are stored independently (<b>3,996</b> clients sit at 1002=No with explicit Yes underneath) — the hierarchy exists only in enforcement.</div>
+  </div>
+
+  <!-- ===================== BOTTOM HALF — POPULATIONS ===================== -->
+  <div class="section-label" style="text-align:left;">Populations — three ways a client exits reach</div>
+  <div class="bottom-half">
+    <div class="venn-wrap">
+      <svg width="900" height="330" viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg">
+        <!-- unsub: large, purple -->
+        <circle cx="420" cy="175" r="170" fill="#8e44ad" fill-opacity="0.16" stroke="#8e44ad" stroke-width="2"/>
+        <!-- 1002: small, gate blue -->
+        <circle cx="240" cy="255" r="46" fill="#33546f" fill-opacity="0.20" stroke="#33546f" stroke-width="2"/>
+        <!-- 1014: small, amber -->
+        <circle cx="610" cy="250" r="58" fill="#b8860b" fill-opacity="0.20" stroke="#b8860b" stroke-width="2"/>
+
+        <!-- overlap query markers -->
+        <text x="325" y="222" text-anchor="middle" font-size="13" fill="#5b6472" font-family="ui-monospace, Consolas, monospace">?</text>
+        <text x="510" y="218" text-anchor="middle" font-size="13" fill="#5b6472" font-family="ui-monospace, Consolas, monospace">?</text>
+
+        <!-- unsub label (inside big circle) -->
+        <text x="430" y="150" text-anchor="middle" font-size="15" font-weight="700" fill="#4a2354" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">Email unsub (vendor)</text>
+        <text x="430" y="171" text-anchor="middle" font-size="13" fill="#4a2354" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">649,885 since 2024</text>
+
+        <!-- 1002 label (left of its circle) -->
+        <text x="180" y="240" text-anchor="end" font-size="12" font-weight="700" fill="#33546f" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">1002 entity opt-out</text>
+        <text x="180" y="256" text-anchor="end" font-size="11.5" fill="#33546f" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">50,738 (all-time stock)</text>
+
+        <!-- 1014 label (right of its circle) -->
+        <text x="678" y="235" text-anchor="start" font-size="12" font-weight="700" fill="#8a5a06" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">1014 explicit No</text>
+        <text x="678" y="251" text-anchor="start" font-size="11.5" fill="#8a5a06" font-family="-apple-system, Segoe UI, Roboto, Arial, sans-serif">82,911</text>
+      </svg>
+    </div>
+    <div class="venn-caption">Different doors out of the building — <b>union, not sum</b>. Known: unsub&harr;CPC overlap is ~0 (tested).</div>
+  </div>
+
+</div>
