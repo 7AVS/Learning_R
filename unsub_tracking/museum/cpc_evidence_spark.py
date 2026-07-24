@@ -214,7 +214,7 @@ spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 ub  = spark.read.parquet(BASE + "unsub_base/*")
 rec = spark.read.parquet(BASE + "q2_recipients/*").distinct()
-cpc = spark.read.parquet(BASE + "cpc_pref/*")
+cpc = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "cpc_pref")
 ps  = spark.read.parquet(BASE + "postunsub_sends")
 gm  = spark.read.parquet(BASE + "gate_mne_agg")
 
