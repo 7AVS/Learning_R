@@ -606,7 +606,7 @@
 
 <div class="shows"><span class="label">What this shows</span>Clients who explicitly opted out on 1002, 1012, or 1014 as of 2026-04-01 nonetheless received campaign email in the following quarter at rates (19–30% in the main cut, up to 47% in the 1012-only exclusivity cut) not far below the unflagged baseline (57.9%). The gap does not close when the bundle confound is removed — for 1012 it widens.</div>
 <div class="notshows"><span class="label">What this does NOT show</span>A confirmed root cause. This is a state-vs-outcome cross-tab, not a controlled experiment, so it cannot distinguish "targeting logic never checks CPC at send time" from "CPC→SFMC suppression sync is partial/broken" — both are consistent with the same numbers. It is also an upper-bound read in one respect: the purpose fields that would let "marketing send" be verified row-by-row are known to be unusable (<a href="#item3">Section 3</a>), so the finding rests on the construction argument (campaign TREATMENT_IDs = marketing by definition) rather than a direct per-row purpose check.</div>
-<div class="trust"><span class="label">Trust level</span>Single-read, phone photos (uploaded 2026-07-23 16:28). The rates independently reproduce the recovered pack-12 E1 numbers from a differently-windowed run, which raises confidence in the top-line numbers specifically, even though no in-env export exists yet for either run.</div>
+<div class="trust"><span class="label">Trust level</span>Reproduced by independent rerun 2026-07-24 (22-B rates identical, counts +0.1% load drift). The rates also independently reproduce the recovered pack-12 E1 numbers from a differently-windowed run. No longer resting on the phone-photo read alone.</div>
 </div>
 
 <!-- ============================================================ -->
@@ -644,7 +644,7 @@
 
 <div class="shows"><span class="label">What this shows</span>Exactly one genuine automated crossing exists between the email-unsub world and CPC: SFMC/7020 writing 1012 flips at ~15/year, with same-day-to-week timing consistent with a real (if tiny) system pipe. Every other bridged flip, on any switch, is assisted-channel and long-gapped — i.e. coincidence, not a pipe.</div>
 <div class="notshows"><span class="label">What this does NOT show</span>Volume context: 15/year sits against ≈1,541 total 1012 CPC flips over the 13-month Z2 window (<a href="#item1">Section 1</a>) — the SFMC pipe accounts for roughly 1% of 1012 flips, not a meaningful share of overall CPC activity. This table also does not revisit whether 1012 itself gates email (that is <a href="#item8">Section 8</a>'s question) — it only settles who wrote the bridged flips.</div>
-<div class="trust"><span class="label">Trust level</span>Single read (phone photo, uploaded 2026-07-23 16:28). Internal arithmetic ties out exactly against B-reverse's independently-recorded bridged totals (Section 4) — a real cross-check at the row-count level, even though the underlying photo itself was read once.</div>
+<div class="trust"><span class="label">Trust level</span>Reproduced by independent rerun 2026-07-24 (22-A digit-identical, all 7 rows). Internal arithmetic also ties out exactly against B-reverse's independently-recorded bridged totals (Section 4). No longer resting on the phone-photo read alone.</div>
 </div>
 
 <hr>
@@ -683,13 +683,13 @@
 <tr>
   <td>Gate leak: clients marked "No" / unsubscribed continue to actually receive email</td>
   <td class="status-proven">PROVEN</td>
-  <td><a href="#item8">§8 22-B</a> (cross-checked by <a href="#item6">§6 pack-12 E1</a>)</td>
+  <td><a href="#item8">§8 22-B</a> (cross-checked by <a href="#item6">§6 pack-12 E1</a>) — reproduced by independent rerun 2026-07-24 (22-B rates identical, counts +0.1% load drift)</td>
   <td>19–30% of explicitly-flagged clients received campaign email in-window (main cut); up to 47% for 1012 once the bundle confound is stripped out via the exclusivity cut. Independently reproduces pack-12 E1's rates. Upper-bound / construction nuance: this is a state-vs-outcome cross-tab with no purpose-field verification and no root-cause attribution — it proves the leak exists and is not explained by service mail (feed = campaign TREATMENT_IDs by construction), not why it happens (targeting-side vs. sync-side is not distinguished).</td>
 </tr>
 <tr>
   <td>Bridged flips (a CPC flip preceded by a vendor unsub) are evidence of an automated sync pipe</td>
   <td class="status-proven">PROVEN</td>
-  <td><a href="#item9">§9 22-A</a> (built on <a href="#item4">§4 B-reverse</a>)</td>
+  <td><a href="#item9">§9 22-A</a> (built on <a href="#item4">§4 B-reverse</a>) — reproduced by independent rerun 2026-07-24 (22-A digit-identical)</td>
   <td>One real pipe found: SFMC/7020 writes ~15/yr of 1012's bridged flips, clustered same-day-to-week. Every other bridged flip (all of 1002, all of 1014, non-7020 rows on 1012) is assisted-channel at long gaps — coincidence, not a sync. Sharpens, and is consistent with, the "no hidden batch sync" verdict in row 1.</td>
 </tr>
 </tbody>

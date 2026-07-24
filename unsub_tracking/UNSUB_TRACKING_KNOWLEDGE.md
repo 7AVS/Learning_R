@@ -215,6 +215,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `21a_cpc_landscape.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — cheap, CPC-log-only half: Z1 stock, Z2 monthly flip trend, Z3 writer (APP_SYS_CD) attribution, E1/E2 purpose-field fill-rate. **RAN 2026-07-23** (§14-D) |
 | `21b_cpc_bridge.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — expensive half, run alone in a fresh session: unsub-resolution pipeline feeding B-main/B-reverse (vendor-unsub↔CPC-flip gap timing) + O (5-flag reachability overlap). **RAN 2026-07-23** (§14-D) |
 | `22_cpc_gate_evidence.sql` (Teradata-direct) | 22-A: writer attribution for B-reverse's bridged flips (closes Z3's open join). 22-B: gate-leak test — clients flagged out (1002/1012/1014 = No as-of window_start) vs received-email-in-window, main cut + exclusivity cut. **RAN 2026-07-23 — both decisions closed** (§14-E) |
+| `museum/cpc_evidence.sql` (+ `museum/README.md`) (Teradata-direct) | The 4-evidence standalone proof pack for the CPC consent claim (two consent worlds, blind gate, no bridge, leaking gate) — self-contained rerun of 21b/22's findings. **Independently reproduced 2026-07-24** (§14-E) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -594,3 +595,5 @@ Row totals tie exactly to B-reverse's bridged counts (§14-D): 1002 = 9+1 = 10 �
 **Engine note:** one statement in this run hit TDWM error 3149 ("F-uncnstrn PJ rowtest" filter violation) — `CROSS JOIN vt_params` without collected statistics on that volatile table means the optimizer can't prove it's a 1-row join, so it gets treated as an unconstrained product join. Fix: `COLLECT STATISTICS` on `vt_params` — being applied to 21a/21b/22 (none of the three currently collect stats on it in the checked-in SQL).
 
 **Photo note:** the rotated printout photo of the O cross-tab (§14-D) was re-received during this pass; the 2026-07-23 screen read already on file stands as the source of record — no re-transcription performed.
+
+**2026-07-24 rerun (Andre, clean session):** 22-A reproduced EXACTLY (all 7 rows digit-identical); 22-B rates identical (1012-only 47.1%, counts +0.1% drift = warehouse load timing). Claims CONFIRMED, provisional status lifted. Museum evidence file: `museum/cpc_evidence.sql`.
