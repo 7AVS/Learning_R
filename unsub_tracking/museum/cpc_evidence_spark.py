@@ -19,8 +19,20 @@ password = getpass.getpass("Enter your password: ")
 TRINO_HOST = "strplvaexh0001.fg.rbc.com"     # letter l confirmed by DNS (diagnosis cell 5); digit-1 spelling does not resolve
 TD_HOST    = "Teradata-dns-sysa.fg.rbc.com"  # from your PROD profile; resolves to 10.174.185.83
 
-EDL = connect(host=TRINO_HOST, port=8443, catalog="edl0_im", user=username,
-              auth=BasicAuthentication(username, password), http_scheme="https", verify=False)
+# try verified TLS first (kills the InsecureRequestWarning properly); fall back to your platform's verify=False norm
+def trino_connect(verify):
+    return connect(host=TRINO_HOST, port=8443, catalog="edl0_im", user=username,
+                   auth=BasicAuthentication(username, password), http_scheme="https", verify=verify)
+try:
+    EDL = trino_connect(True)
+    c = EDL.cursor(); c.execute("SELECT 1"); c.fetchall(); c.close()
+    print("trino TLS: verified (proper certificates - no warnings)")
+except Exception:
+    import urllib3, warnings
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
+    EDL = trino_connect(False)
+    print("trino TLS: unverified (platform norm) - warnings for THIS known case silenced, real errors still visible")
 
 EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
 
