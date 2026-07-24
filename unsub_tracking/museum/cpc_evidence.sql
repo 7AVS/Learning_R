@@ -71,6 +71,7 @@ COLLECT STATISTICS ON vt_q2_sends COLUMN (CLNT_NO);
 
 
 -- EVIDENCE 1: two consent worlds, monthly volumes (email unsubs outnumber CPC opt-outs ~35x)
+-- window: Jul 2025 - Jun 2026 for both series
 SELECT
     CAST('email_unsub' AS VARCHAR(30)) AS consent_world,
     EXTRACT(YEAR FROM unsub_tm) * 100 + EXTRACT(MONTH FROM unsub_tm) AS month_yyyymm,
@@ -92,6 +93,7 @@ ORDER BY 1, 2;
 
 
 -- EVIDENCE 2: the blind gate (~99.6% of unsubscribers have no explicit CPC opt-out)
+-- window: unsubs Jul 2025 - Jun 2026; consent standing: full history as of today
 WITH cpc_latest AS (
     SELECT
         CLNT_NO,
@@ -100,7 +102,7 @@ WITH cpc_latest AS (
         ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID IN (1002, 1012, 1014)
-      AND CHG_TMSTMP >= DATE '2024-01-01' -- state as-of, 2024+ only: opt-outs set before 2024 and untouched since read as no-flag (accepted, see README)
+    -- consent standing = latest answer ever recorded (full history; small table - deliberate exception to the 2024 scan floor)
 ),
 cpc_optout AS (
     SELECT DISTINCT CLNT_NO
@@ -123,6 +125,7 @@ ORDER BY 1;
 
 
 -- EVIDENCE 3: no bridge (CPC opt-outs are not triggered by email unsubs; only trace = SFMC on 1012, ~15/yr)
+-- window: CPC flips since Jul 2025, matched against any prior unsub (no cap on how far back the unsub can be)
 WITH cpc_flips AS (
     SELECT
         CLNT_NO,
@@ -157,6 +160,7 @@ ORDER BY 1, 4 DESC;
 
 
 -- EVIDENCE 4: the leaking gate (clients with explicit email opt-outs still receive campaign email)
+-- window: opted out before Apr 1 2026 -> did they get campaign email Apr-Jun 2026?
 WITH cpc_gate AS (
     SELECT
         CLNT_NO,
@@ -165,8 +169,8 @@ WITH cpc_gate AS (
         ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID IN (1002, 1012, 1014)
-      AND CHG_TMSTMP >= DATE '2024-01-01' -- state as-of, 2024+ only: opt-outs set before 2024 and untouched since read as no-flag (accepted, see README)
       AND CHG_TMSTMP < DATE '2026-04-01'
+    -- standing as of Apr 1, 2026 = latest answer ever recorded before that date
 ),
 gate_flags AS (
     SELECT
@@ -188,8 +192,8 @@ gate_long AS (
 SELECT
     CAST(PREF_ID AS VARCHAR(30)) AS pref_id,
     CASE WHEN flag_count = 1 THEN 'only_this_flag' ELSE 'multi_flag' END AS exclusivity,
-    CAST(COUNT(*) AS BIGINT) AS flagged_clients,
-    CAST(SUM(CASE WHEN s.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT) AS received_campaign_email
+    CAST(COUNT(*) AS BIGINT) AS optout_clients,
+    CAST(SUM(CASE WHEN s.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT) AS got_email_apr_jun
 FROM gate_long g
 LEFT JOIN vt_q2_sends s ON s.CLNT_NO = g.CLNT_NO
 GROUP BY 1, 2
