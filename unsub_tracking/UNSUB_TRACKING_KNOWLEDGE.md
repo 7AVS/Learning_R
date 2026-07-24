@@ -639,3 +639,39 @@ email_unsub column: reader dropped a digit this pass, but the series matches the
 Per-switch multi/only splits and rates match §14-E's 22-B exclusivity cut almost exactly (that run's 1002/1012/1014 rows) — same population, independently reproduced. **ALL_SWITCHES (union across 1002/1012/1014, deduplicated):** 96,317 optout_clients / 28,342 got_email_apr_jun = **29.4% leak**. This is the one genuinely new number this run adds: Option A restores the true full-history union (~96K clients) against a floored pass that had shown only ~42.9K — the per-switch rates were already stable and predicted this; the aggregate leak rate (29.4%) is now confirmed at full scale.
 
 **Close:** museum numbers are now FINAL and deck-grade for E1, E2, and E4. E3 has no deck-grade museum number — any slide use of per-writer figures draws on archaeology's verified numbers (§14-D Z3, §14-E 22-A).
+
+## 15. Red-team review and response (2026-07-24)
+
+### A. Method
+
+An Opus agent role-played a senior campaign orchestrator (deployment/suppression owner) and was given ONLY the 2-slide deck draft cold — no analysis context, no access to §0–§14 — and asked to scrutinize it as an adversarial reviewer would before wider circulation.
+
+### B. Objections raised (numbered, compressed) and disposition
+
+| # | Objection | Disposition |
+|---|---|---|
+| 1 | 35× is a friction artifact — comparing a one-click vendor unsub against a deliberate multi-step preference-centre trip, not like-for-like consent strength | Fair. Slide 1 reframed to scope contrast (friction, not enforcement) instead of a bare ratio. |
+| 2 | Switch fusion: 1014 = sharing consent per dictionary, 1012 possibly servicing-related; only 1002 (entity do-not-solicit) is unambiguous | ACCEPTED. Deck re-led with 1002 alone (19.2%, ~9.5K clients/quarter); 1012/1014 demoted to "pending switch-mapping confirmation." |
+| 3 | Transactional-mail contamination — "received email" side may include service mail, not marketing | Countered: feed built from NBA campaign TREATMENT_IDs, marketing by construction (§14-E pt.3). Per-MNE verification promoted to REQUIRED → new **Evidence 6** (MNE mix reaching 1002-flagged clients). |
+| 4 | Which suppression list does send-time decisioning actually read — CPC directly, or an SFMC-side list synced from CPC? | Unanswered — added to outreach questions (§C). New **Evidence 5** (unsub-before-Apr × received-after; expected LOW if vendor suppression works). |
+| 5 | Panel A uses any-time logic (state ever true), not before/after | Already addressed — E2's before/after split covers this; rerun pending under the new full-history parameter (§14-F). |
+| 6 | Re-consent / program-level express-consent could legitimately override a general opt-out — the "leak" may be correct behavior, not a bug | Open. Domain answer needed (Andre or outreach), not a data answer. |
+| 7 | Opt-out recency distribution — "flagged" is treated as one bucket regardless of how long ago the opt-out happened | Open — cheap future cut, not blocking this deck. |
+| 8 | "Says who CPC gates campaign email?" — deck was implicitly presupposing the design intent it was trying to test | Wording rule adopted: never presuppose design intent. Reframed to "consent does not translate into delivery." |
+| 9 | Political: reads as a compliance finding; risky to circulate widely without a compliance pre-brief | Adopted — compliance pre-brief before wide circulation. |
+
+### C. Outreach questions (consolidated, now 5)
+
+a. Where do SFMC unsub batch files land — CPC-CC or CPC-PC?
+b. Name of the existing daily batch job (the one MTEC-12644, §14-A, says is preserved unchanged)?
+c. What does send-time suppression actually read — SFMC subscriber status, or CPC switches?
+d. Which switch is the lawful campaign-email suppression key, and is there a documented SLA for how fast it's honored?
+e. Does program-level express consent override a general opt-out?
+
+### D. Resulting artifact changes
+
+- Deck re-cut: slide 1 = scope contrast, not a bare 35× ratio (obj. 1); slide 2 re-led with 1002, 1012/1014 demoted to pending (obj. 2).
+- `museum/cpc_evidence.sql` gains two new blocks: **Evidence 5** (which suppression list send-time reads — obj. 4) and **Evidence 6** (MNE mix reaching 1002-flagged clients — obj. 3).
+- E2 5-row rerun pending (before/after split under the full-history parameter — obj. 5, ties to §14-F).
+- Deck carries placeholders pending E5/E6 — not final until those land.
+- Objections 6/7 logged open, not yet built against; objections 8/9 are wording/process rules, already in effect.

@@ -1,5 +1,5 @@
--- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends persist per session; DROP all three at end
--- rerun after failure: run all three DROPs first
+-- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends + vt_dns_1002 persist per session; DROP all four at end
+-- rerun after failure: run all four DROPs first
 -- run ONE statement at a time
 -- Universe: NBA campaign email (SFMC vendor feed); CPC opt-out = explicit No on switches 1002 (entity DNS), 1012 (banking email), 1014 (marketing sharing) - the 3 email-relevant of ~40 codes.
 
@@ -228,6 +228,61 @@ LEFT JOIN vt_q2_sends s ON s.CLNT_NO = g.CLNT_NO
 ORDER BY 1, 2;
 
 
+-- EVIDENCE 5: does the email channel itself honor unsubscribes? (claim: unsub IS enforced at the vendor - the disconnect is the bank's record, not the send)
+-- window: unsubscribed Jul 2025 - Mar 2026 -> any campaign email Apr-Jun 2026?
+WITH cohort AS (
+    SELECT CLNT_NO
+    FROM vt_unsub_first
+    WHERE unsub_tm < DATE '2026-04-01'
+)
+SELECT CAST('unsub_before_apr_clients' AS VARCHAR(30)) AS metric, CAST(COUNT(*) AS BIGINT) AS clients FROM cohort
+UNION ALL
+SELECT 'got_email_apr_jun', CAST(COUNT(*) AS BIGINT)
+FROM cohort c
+INNER JOIN vt_q2_sends s ON s.CLNT_NO = c.CLNT_NO
+ORDER BY 1;
+
+
+-- EVIDENCE 6: which campaigns' mail reaches 1002 (entity do-not-solicit) clients? (rules out 'it's just transactional' - every row is a campaign deployment)
+-- cohort: latest 1002 standing before Apr 1, 2026 = 5002 (mirrors E4's cpc_gate, 1002 only; full-history standing, Option-A exception - small table)
+CREATE VOLATILE TABLE vt_dns_1002 AS (
+    WITH cpc_gate_1002 AS (
+        SELECT
+            CLNT_NO,
+            CLNT_CONSENT_TYP,
+            ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) AS rn
+        FROM DDWV01.CPC_RB_PREF_LOG
+        WHERE PREF_ID = 1002
+          AND CHG_TMSTMP < DATE '2026-04-01'
+    )
+    SELECT CLNT_NO
+    FROM cpc_gate_1002
+    WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_dns_1002 COLUMN (CLNT_NO);
+
+-- sends: EVENT disp=1 Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026 (same bounds as vt_q2_sends), restricted to the 1002 cohort
+-- window: campaign email Apr-Jun 2026, by mne = SUBSTR(TREATMENT_ID, 8, 3)
+SELECT TOP 20
+    SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+    CAST(COUNT(DISTINCT m.CLNT_NO) AS BIGINT) AS clients,
+    CAST(COUNT(*) AS BIGINT) AS send_rows
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON  m.consumer_id_hashed = e.consumer_id_hashed
+    AND m.TREATMENT_ID       = e.TREATMENT_ID
+INNER JOIN vt_dns_1002 d ON d.CLNT_NO = m.CLNT_NO
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-04-01'
+  AND e.disposition_dt_tm <  DATE '2026-07-01'
+  AND m.load_tm           >= DATE '2026-03-01'
+  AND m.load_tm           <  DATE '2026-08-01'
+GROUP BY 1
+ORDER BY 2 DESC;
+
+
+DROP TABLE vt_dns_1002;
 DROP TABLE vt_q2_sends;
 DROP TABLE vt_unsub_first;
 DROP TABLE vt_unsub_base;

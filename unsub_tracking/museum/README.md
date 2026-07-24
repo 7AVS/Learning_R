@@ -12,6 +12,8 @@ Email consent lives in two systems that don't talk: 99.6% of unsubscribers remai
 - E2: consent standing = latest answer at any point in time, before or after the unsub (most generous read for CPC). Now split before-unsub vs after-unsub, counting a multi-switch client once on their EARLIEST qualifying opt-out - output is 5 rows, the original 3 plus `optout_recorded_before_unsub` / `optout_recorded_after_unsub`.
 - E3: matches CPC flips against any prior unsub, no lookback cap.
 - E4: sequenced - opted-out standing before Apr 1, 2026 -> campaign email received Apr-Jun 2026.
+- E5: sequenced - unsubscribed before Apr 1, 2026 (cohort = `vt_unsub_first`) -> any campaign email Apr-Jun 2026 (reuses `vt_q2_sends` as-is, no new send scan).
+- E6: cohort = latest 1002 (entity do-not-solicit) standing before Apr 1, 2026, mirroring E4's `cpc_gate` narrowed to 1002 only; sends = campaign email Apr-Jun 2026 broken out by mne = `SUBSTR(TREATMENT_ID, 8, 3)`.
 
 ## Evidence map
 
@@ -21,10 +23,12 @@ Email consent lives in two systems that don't talk: 99.6% of unsubscribers remai
 | E2 | The blind gate - CPC mostly doesn't know a client unsubscribed | 3 rows (unsub_clients_total / with_explicit_cpc_optout / without_explicit_cpc_optout) x clients | ~99.6% of unsubscribers have no explicit CPC opt-out (blind) |
 | E3 | No automated bridge from email unsub to CPC | rows: PREF_ID x APP_SYS_CD x had_prior_unsub(Y/N); cols: + flips | no-prior dominates every row; only real pipe is SFMC on 1012, ~15/yr against 7020/1012 flips total |
 | E4 | The leaking gate - flagged-out clients still receive campaign email | rows: pref_id x exclusivity(only_this_flag/multi_flag) + ALL_SWITCHES; cols: optout_clients, got_email_apr_jun | ~47% leak on 1012-only exclusivity cut; ~19% on entity-DNS (1002) main cut |
+| E5 | The SFMC suppression test - does the vendor itself honor unsubscribes, independent of CPC | 2 rows (unsub_before_apr_clients / got_email_apr_jun); cols: metric, clients | Expected LOW if SFMC suppression works - stating either result is informative |
+| E6 | What mail reaches do-not-solicit clients - rules out "it's just transactional" | rows: mne x clients x send_rows, TOP 20 by clients desc | Expected mostly recognizable campaign MNEs - the transactional-escape test |
 
 Note: counts drift slightly day to day (warehouse load timing); rates are stable across reruns.
 
-Consent-standing scans (E2's blind-gate flag, E4's leaking-gate flag) read full history, no 2024 floor. Deliberate exception: CPC_RB_PREF_LOG is a small table, full-history scans are CPU-safe on it (proven in archaeology/21a). All send-table scans (VENDOR_FEEDBACK_EVENT/MASTER, and E1/E3's CPC volume/flip windows) remain floored at 2024 or later.
+Consent-standing scans (E2's blind-gate flag, E4's leaking-gate flag, E6's 1002-only cohort) read full history, no 2024 floor. Deliberate exception: CPC_RB_PREF_LOG is a small table, full-history scans are CPU-safe on it (proven in archaeology/21a). All send-table scans (VENDOR_FEEDBACK_EVENT/MASTER, and E1/E3's CPC volume/flip windows, and E5/E6's Apr-Jun 2026 send lookups) remain floored at 2024 or later.
 
 Expected magnitudes, full-history basis:
 - E2: ~99.6% of unsubscribers still have no explicit CPC opt-out (~1.3K flagged of ~312K total unsubscribers).
@@ -34,8 +38,8 @@ Expected magnitudes, full-history basis:
 
 - Engine: Teradata-direct.
 - Run top to bottom, one session, one statement at a time.
-- Three volatile tables (`vt_unsub_base`, `vt_unsub_first`, `vt_q2_sends`) are dropped at the end.
-- Rerun after a failure: run the three DROPs first, then rerun from the top.
+- Four volatile tables (`vt_unsub_base`, `vt_unsub_first`, `vt_q2_sends`, `vt_dns_1002`) are dropped at the end.
+- Rerun after a failure: run the four DROPs first, then rerun from the top.
 
 ## Provenance
 
