@@ -6,6 +6,10 @@ get_ipython().system("./environment/bin/python -m pip install teradatasql -i htt
 import getpass
 import pandas as pd
 import teradatasql
+
+# pandas>=2.0 removed DataFrame.iteritems but Spark 3.3's createDataFrame still calls it - restore the alias
+if not hasattr(pd.DataFrame, "iteritems"):
+    pd.DataFrame.iteritems = pd.DataFrame.items
 from trino.dbapi import connect
 from trino.auth import BasicAuthentication
 
