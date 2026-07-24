@@ -20,6 +20,8 @@ TRINO_HOST = "strplvaexh0001.fg.rbc.com"     # letter l confirmed by DNS (diagno
 TD_HOST    = "Teradata-dns-sysa.fg.rbc.com"  # from your PROD profile; resolves to 10.174.185.83
 
 # try verified TLS first (kills the InsecureRequestWarning properly); fall back to your platform's verify=False norm
+import logging
+logging.getLogger("trino").setLevel(logging.ERROR)  # the deliberate verify=True probe retries noisily at INFO level - silence the narration, keep real errors
 def trino_connect(verify):
     return connect(host=TRINO_HOST, port=8443, catalog="edl0_im", user=username,
                    auth=BasicAuthentication(username, password), http_scheme="https", verify=verify)
