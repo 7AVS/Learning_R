@@ -1,13 +1,14 @@
--- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends + vt_dns_1002 persist per session; DROP all four at end
--- rerun after failure: run all four DROPs first
+-- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends + vt_dns_1002 + vt_gate_cohorts + vt_q2_sends_mne + vt_postunsub_sends persist per session; DROP all seven at end
+-- rerun after failure: run all seven DROPs first
 -- run ONE statement at a time
 -- Universe: NBA campaign email (SFMC vendor feed); CPC opt-out = explicit No on switches 1002 (entity DNS), 1012 (banking email), 1014 (marketing sharing) - the 3 email-relevant of ~40 codes.
 
--- SETUP pass 1/2: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01)
+-- SETUP pass 1/2: unsub base - trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01); now also carries TREATMENT_ID for Evidence 8's unsub_mne
 CREATE VOLATILE TABLE vt_unsub_base AS (
     SELECT DISTINCT
         m.CLNT_NO,
-        e.disposition_dt_tm AS unsub_tm
+        e.disposition_dt_tm AS unsub_tm,
+        m.TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = e.consumer_id_hashed
@@ -23,7 +24,8 @@ CREATE VOLATILE TABLE vt_unsub_base AS (
 INSERT INTO vt_unsub_base
     SELECT DISTINCT
         m.CLNT_NO,
-        e.disposition_dt_tm AS unsub_tm
+        e.disposition_dt_tm AS unsub_tm,
+        m.TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = e.consumer_id_hashed
@@ -37,16 +39,17 @@ INSERT INTO vt_unsub_base
 COLLECT STATISTICS ON vt_unsub_base COLUMN (CLNT_NO);
 
 
--- SETUP dedup: first unsub per client - runs AFTER both passes are loaded, derived from vt_unsub_base (no further MASTER access)
+-- SETUP dedup: first unsub per client - runs AFTER both passes are loaded, derived from vt_unsub_base (no further MASTER access); now also derives unsub_mne = SUBSTR(TREATMENT_ID,8,3) from the winning row for Evidence 8
 CREATE VOLATILE TABLE vt_unsub_first AS (
     WITH ranked AS (
         SELECT
             CLNT_NO,
             unsub_tm,
-            ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY unsub_tm ASC) AS rn
+            TREATMENT_ID,
+            ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY unsub_tm ASC, TREATMENT_ID ASC) AS rn
         FROM vt_unsub_base
     )
-    SELECT CLNT_NO, unsub_tm
+    SELECT CLNT_NO, unsub_tm, SUBSTR(TREATMENT_ID, 8, 3) AS unsub_mne
     FROM ranked
     WHERE rn = 1
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
@@ -282,10 +285,189 @@ GROUP BY 1
 ORDER BY 2 DESC;
 
 
--- SUMMARY: the story in one table - each row's proof lives in Evidence 1-6
+-- EVIDENCE 7: which campaigns' mail reaches clients standing opted-out, per switch (1002 entity / 1012 email / 1014 sharing / 1006 credit-card content)
+-- cohort: latest answer ever recorded before Apr 1, 2026 = 5002, one row per (CLNT_NO, PREF_ID) - same Option-A idiom as E4/E6
+CREATE VOLATILE TABLE vt_gate_cohorts AS (
+    WITH cpc_gate_all AS (
+        SELECT
+            CLNT_NO,
+            PREF_ID,
+            CLNT_CONSENT_TYP,
+            ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
+        FROM DDWV01.CPC_RB_PREF_LOG
+        WHERE PREF_ID IN (1002, 1012, 1014, 1006)
+          AND CHG_TMSTMP < DATE '2026-04-01'
+    )
+    SELECT CLNT_NO, PREF_ID
+    FROM cpc_gate_all
+    WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_gate_cohorts COLUMN (CLNT_NO);
+
+-- send detail with mne: EVENT disp=1 Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026 (same bounds as vt_q2_sends), materialized once so E7 doesn't repeat the join per pref_id
+CREATE VOLATILE TABLE vt_q2_sends_mne AS (
+    SELECT DISTINCT
+        m.CLNT_NO,
+        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+      AND m.load_tm           <  DATE '2026-08-01'
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_q2_sends_mne COLUMN (CLNT_NO);
+
+-- note: 1006 = product-content preference (blank/no-record = implicit YES; only an explicit No counts here) - the topic-gate test
+SELECT
+    CAST(g.PREF_ID AS VARCHAR(30)) AS pref_id,
+    CAST(s.mne AS VARCHAR(30)) AS mne,
+    CAST(COUNT(DISTINCT g.CLNT_NO) AS BIGINT) AS clients
+FROM vt_gate_cohorts g
+INNER JOIN vt_q2_sends_mne s ON s.CLNT_NO = g.CLNT_NO
+GROUP BY 1, 2
+QUALIFY ROW_NUMBER() OVER (PARTITION BY g.PREF_ID ORDER BY COUNT(DISTINCT g.CLNT_NO) DESC) <= 12
+ORDER BY 1, 3 DESC;
+
+
+-- post-unsub send detail: EVENT disposition_cd IN (1,5) Apr-Jun 2026 joined MASTER load_tm Mar-Aug 2026, restricted to the pre-Apr unsub cohort, carries mne + disposition for Evidence 8's waterfall
+CREATE VOLATILE TABLE vt_postunsub_sends AS (
+    SELECT DISTINCT
+        m.CLNT_NO,
+        SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+        e.disposition_cd,
+        e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN (SELECT CLNT_NO FROM vt_unsub_first WHERE unsub_tm < DATE '2026-04-01') c
+        ON c.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd IN (1, 5)
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+      AND m.load_tm           <  DATE '2026-08-01'
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_postunsub_sends COLUMN (CLNT_NO);
+
+-- EVIDENCE 8: decompose the 25,721 post-unsub receivers - how much survives the benign explanations (red-team round 2)
+-- method: exclusions applied cumulatively in the order below (CASL-window lag -> hardbounce -> CPC re-consent -> same/cross-campaign residual); hardbounce match is at the mne grain (proxy for same TREATMENT_ID); 14 calendar days = 10-business-day CASL proxy
+WITH cohort AS (
+    -- pre-Apr unsub cohort with its triggering mne, copied from Evidence 5 / vt_unsub_first
+    SELECT CLNT_NO, unsub_tm, unsub_mne
+    FROM vt_unsub_first
+    WHERE unsub_tm < DATE '2026-04-01'
+),
+sent AS (
+    -- this cohort's disp=1 sends, joined to the client's own unsub_tm/unsub_mne
+    SELECT
+        p.CLNT_NO,
+        p.mne,
+        p.disposition_dt_tm,
+        c.unsub_tm,
+        c.unsub_mne
+    FROM vt_postunsub_sends p
+    INNER JOIN cohort c ON c.CLNT_NO = p.CLNT_NO
+    WHERE p.disposition_cd = 1
+),
+bounced AS (
+    -- (client, mne) pairs with a disp=5 in the same feed - the hardbounce proxy, mne grain not literal TREATMENT_ID
+    SELECT DISTINCT CLNT_NO, mne
+    FROM vt_postunsub_sends
+    WHERE disposition_cd = 5
+),
+sent_flagged AS (
+    SELECT
+        s.CLNT_NO,
+        s.mne,
+        s.unsub_mne,
+        CASE WHEN s.disposition_dt_tm <= s.unsub_tm + INTERVAL '14' DAY THEN 1 ELSE 0 END AS in_casl_window,
+        CASE WHEN b.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS mne_bounced
+    FROM sent s
+    LEFT JOIN bounced b ON b.CLNT_NO = s.CLNT_NO AND b.mne = s.mne
+),
+client_rollup AS (
+    SELECT
+        CLNT_NO,
+        MIN(in_casl_window) AS all_in_casl_window,
+        MIN(mne_bounced)    AS all_bounced
+    FROM sent_flagged
+    GROUP BY CLNT_NO
+),
+step2 AS (
+    -- survives excl #1: at least one send outside the 14-day CASL window
+    SELECT CLNT_NO
+    FROM client_rollup
+    WHERE all_in_casl_window = 0
+),
+step3 AS (
+    -- survives excl #2: not every send hardbounced (client_rollup's all_bounced uses the client's FULL send history, not just the step2 survivors)
+    SELECT s2.CLNT_NO
+    FROM step2 s2
+    INNER JOIN client_rollup cr ON cr.CLNT_NO = s2.CLNT_NO
+    WHERE cr.all_bounced = 0
+),
+reconsent AS (
+    -- caveat: catches CPC-side re-consent only; SFMC-side resubscribes are not visible in this feed
+    SELECT DISTINCT p.CLNT_NO
+    FROM DDWV01.CPC_RB_PREF_LOG p
+    INNER JOIN cohort c ON c.CLNT_NO = p.CLNT_NO
+    WHERE p.PREF_ID IN (1002, 1012)
+      AND p.CLNT_CONSENT_TYP = 5001
+      AND p.CHG_TMSTMP >  c.unsub_tm
+      AND p.CHG_TMSTMP >= DATE '2025-07-01'
+      AND p.CHG_TMSTMP <  DATE '2026-07-01'
+),
+step4 AS (
+    -- survives excl #3: no CPC-side re-consent after unsub
+    SELECT s3.CLNT_NO
+    FROM step3 s3
+    LEFT JOIN reconsent r ON r.CLNT_NO = s3.CLNT_NO
+    WHERE r.CLNT_NO IS NULL
+),
+same_campaign_residual AS (
+    -- residual split uses only sends that survived excl #1-2 (outside CASL window, not bounced) - the sends that actually count as real receipt
+    SELECT DISTINCT sf.CLNT_NO
+    FROM sent_flagged sf
+    INNER JOIN step4 s4 ON s4.CLNT_NO = sf.CLNT_NO
+    WHERE sf.in_casl_window = 0
+      AND sf.mne_bounced = 0
+      AND sf.mne = sf.unsub_mne
+),
+cross_campaign_residual AS (
+    SELECT s4.CLNT_NO
+    FROM step4 s4
+    LEFT JOIN same_campaign_residual scr ON scr.CLNT_NO = s4.CLNT_NO
+    WHERE scr.CLNT_NO IS NULL
+)
+SELECT CAST('0 unsubscribed before Apr 2026 (cohort)' AS VARCHAR(60)) AS step, CAST(COUNT(*) AS BIGINT) AS clients FROM cohort
+UNION ALL
+SELECT '1 gross: received any send Apr-Jun', CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) FROM sent
+UNION ALL
+SELECT '2 excl. sends within 14 days of unsub (CASL proxy)', CAST(COUNT(*) AS BIGINT) FROM step2
+UNION ALL
+SELECT '3 excl. clients whose every send hardbounced (mne proxy)', CAST(COUNT(*) AS BIGINT) FROM step3
+UNION ALL
+SELECT '4 excl. CPC-side re-consents after unsub', CAST(COUNT(*) AS BIGINT) FROM step4
+UNION ALL
+SELECT '5 residual: cross-campaign only (different mne)', CAST(COUNT(*) AS BIGINT) FROM cross_campaign_residual
+UNION ALL
+SELECT '6 residual: same campaign as unsubbed (in-program leak)', CAST(COUNT(*) AS BIGINT) FROM same_campaign_residual
+ORDER BY 1;
+
+
+-- SUMMARY: the story in one table - each row's proof lives in Evidence 1-8
 -- E2's full-history standing logic (cpc_latest/cpc_optout_detail/cpc_optout/cpc_optout_earliest/flagged) is copied verbatim from Evidence 2 above - do not re-derive it, keep in sync if E2 changes
--- E5's pre-Apr unsub cohort CTE is copied verbatim from Evidence 5 above
--- reuses all four volatiles (vt_unsub_first, vt_q2_sends, vt_dns_1002); the only fresh scans are the two small bounded CPC_RB_PREF_LOG reads E2 and E1's cpc branch already do - no new EVENT/MASTER scans
+-- E5's pre-Apr unsub cohort CTE is copied verbatim from Evidence 5 above (widened to 3 cols so it also backs E8's rows below - same population, no behavior change for rows 9-10)
+-- E8's waterfall chain (sent/bounced/sent_flagged/client_rollup/step2/step3/reconsent/step4/same_campaign_residual/cross_campaign_residual) is copied verbatim from Evidence 8 above - keep in sync if E8 changes
+-- reuses vt_unsub_first, vt_q2_sends, vt_dns_1002, vt_postunsub_sends; the only fresh scans are the small bounded CPC_RB_PREF_LOG reads E1/E2/E8 already do - no new EVENT/MASTER scans
 WITH cpc_latest AS (
     SELECT
         CLNT_NO,
@@ -322,10 +504,86 @@ flagged AS (
     LEFT JOIN cpc_optout_earliest ce ON ce.CLNT_NO = u.CLNT_NO
 ),
 cohort AS (
-    -- pre-Apr unsub cohort, copied from Evidence 5
-    SELECT CLNT_NO
+    -- pre-Apr unsub cohort, copied from Evidence 5; widened to unsub_tm + unsub_mne so it also backs Evidence 8's chain below
+    SELECT CLNT_NO, unsub_tm, unsub_mne
     FROM vt_unsub_first
     WHERE unsub_tm < DATE '2026-04-01'
+),
+sent AS (
+    -- copied verbatim from Evidence 8
+    SELECT
+        p.CLNT_NO,
+        p.mne,
+        p.disposition_dt_tm,
+        c.unsub_tm,
+        c.unsub_mne
+    FROM vt_postunsub_sends p
+    INNER JOIN cohort c ON c.CLNT_NO = p.CLNT_NO
+    WHERE p.disposition_cd = 1
+),
+bounced AS (
+    SELECT DISTINCT CLNT_NO, mne
+    FROM vt_postunsub_sends
+    WHERE disposition_cd = 5
+),
+sent_flagged AS (
+    SELECT
+        s.CLNT_NO,
+        s.mne,
+        s.unsub_mne,
+        CASE WHEN s.disposition_dt_tm <= s.unsub_tm + INTERVAL '14' DAY THEN 1 ELSE 0 END AS in_casl_window,
+        CASE WHEN b.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS mne_bounced
+    FROM sent s
+    LEFT JOIN bounced b ON b.CLNT_NO = s.CLNT_NO AND b.mne = s.mne
+),
+client_rollup AS (
+    SELECT
+        CLNT_NO,
+        MIN(in_casl_window) AS all_in_casl_window,
+        MIN(mne_bounced)    AS all_bounced
+    FROM sent_flagged
+    GROUP BY CLNT_NO
+),
+step2 AS (
+    SELECT CLNT_NO
+    FROM client_rollup
+    WHERE all_in_casl_window = 0
+),
+step3 AS (
+    SELECT s2.CLNT_NO
+    FROM step2 s2
+    INNER JOIN client_rollup cr ON cr.CLNT_NO = s2.CLNT_NO
+    WHERE cr.all_bounced = 0
+),
+reconsent AS (
+    SELECT DISTINCT p.CLNT_NO
+    FROM DDWV01.CPC_RB_PREF_LOG p
+    INNER JOIN cohort c ON c.CLNT_NO = p.CLNT_NO
+    WHERE p.PREF_ID IN (1002, 1012)
+      AND p.CLNT_CONSENT_TYP = 5001
+      AND p.CHG_TMSTMP >  c.unsub_tm
+      AND p.CHG_TMSTMP >= DATE '2025-07-01'
+      AND p.CHG_TMSTMP <  DATE '2026-07-01'
+),
+step4 AS (
+    SELECT s3.CLNT_NO
+    FROM step3 s3
+    LEFT JOIN reconsent r ON r.CLNT_NO = s3.CLNT_NO
+    WHERE r.CLNT_NO IS NULL
+),
+same_campaign_residual AS (
+    SELECT DISTINCT sf.CLNT_NO
+    FROM sent_flagged sf
+    INNER JOIN step4 s4 ON s4.CLNT_NO = sf.CLNT_NO
+    WHERE sf.in_casl_window = 0
+      AND sf.mne_bounced = 0
+      AND sf.mne = sf.unsub_mne
+),
+cross_campaign_residual AS (
+    SELECT s4.CLNT_NO
+    FROM step4 s4
+    LEFT JOIN same_campaign_residual scr ON scr.CLNT_NO = s4.CLNT_NO
+    WHERE scr.CLNT_NO IS NULL
 )
 -- row 1: one side of Evidence 1's two-consent-worlds comparison, 12-mo total (no monthly division - reader divides by 12)
 SELECT
@@ -412,20 +670,41 @@ SELECT
     (SELECT CAST(COUNT(*) AS BIGINT) FROM cohort)
 FROM cohort c
 INNER JOIN vt_q2_sends s ON s.CLNT_NO = c.CLNT_NO
+UNION ALL
+-- row 11: Evidence 8's row 1 (gross post-unsub receivers)
+SELECT
+    'post-unsub receivers, gross',
+    'Apr - Jun 2026',
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM cohort)
+FROM sent
+UNION ALL
+-- row 12: Evidence 8's row 6 (residual that survives all four exclusions AND matches the unsub mne)
+SELECT
+    'post-unsub receivers, in-program leak',
+    'Apr - Jun 2026',
+    CAST(COUNT(*) AS BIGINT),
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM cohort)
+FROM same_campaign_residual
 ORDER BY CASE what
-    WHEN 'email unsubs, 12-mo total'         THEN 1
-    WHEN 'cpc opt-out flips, 12-mo total'    THEN 2
-    WHEN 'unsubscribers, total'              THEN 3
-    WHEN 'w/ explicit CPC opt-out'           THEN 4
-    WHEN 'opt-out recorded before unsub'     THEN 5
-    WHEN 'opt-out recorded after unsub'      THEN 6
-    WHEN 'do-not-solicit 1002, standing'     THEN 7
-    WHEN '1002 standing, got campaign email' THEN 8
-    WHEN 'unsubscribed before Apr 2026'      THEN 9
-    WHEN 'unsub pre-Apr, got campaign email' THEN 10
+    WHEN 'email unsubs, 12-mo total'           THEN 1
+    WHEN 'cpc opt-out flips, 12-mo total'      THEN 2
+    WHEN 'unsubscribers, total'                THEN 3
+    WHEN 'w/ explicit CPC opt-out'             THEN 4
+    WHEN 'opt-out recorded before unsub'       THEN 5
+    WHEN 'opt-out recorded after unsub'        THEN 6
+    WHEN 'do-not-solicit 1002, standing'       THEN 7
+    WHEN '1002 standing, got campaign email'   THEN 8
+    WHEN 'unsubscribed before Apr 2026'        THEN 9
+    WHEN 'unsub pre-Apr, got campaign email'   THEN 10
+    WHEN 'post-unsub receivers, gross'         THEN 11
+    WHEN 'post-unsub receivers, in-program leak' THEN 12
 END;
 
 
+DROP TABLE vt_postunsub_sends;
+DROP TABLE vt_q2_sends_mne;
+DROP TABLE vt_gate_cohorts;
 DROP TABLE vt_dns_1002;
 DROP TABLE vt_q2_sends;
 DROP TABLE vt_unsub_first;
