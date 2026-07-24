@@ -1,5 +1,6 @@
--- volatile tables vt_unsub_base + vt_unsub_first persist per session; DROP both at end
--- rerun after failure: run both DROPs first
+-- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_sends persist per session; DROP all three at end
+-- rerun after failure: run all three DROPs first
+-- run ONE statement at a time
 
 -- SETUP pass 1/2: unsub base — trailing-12-month resolved unsub events, MASTER load_tm chunk 1 (2025-06-01 to 2026-01-01)
 CREATE VOLATILE TABLE vt_unsub_base AS (
@@ -52,6 +53,23 @@ CREATE VOLATILE TABLE vt_unsub_first AS (
 COLLECT STATISTICS ON vt_unsub_first COLUMN (CLNT_NO);
 
 
+-- SETUP 3/3: Q2 send resolution — EVENT disp=1 Apr-Jun 2026 joined to MASTER load_tm Mar-Aug 2026, built once so Evidence 4 doesn't re-evaluate the join per reference
+CREATE VOLATILE TABLE vt_q2_sends AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        ON  m.consumer_id_hashed = e.consumer_id_hashed
+        AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+      AND m.load_tm           <  DATE '2026-08-01'
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_q2_sends COLUMN (CLNT_NO);
+
+
 -- EVIDENCE 1: two consent worlds, monthly volumes (email unsubs outnumber CPC opt-outs ~35x)
 SELECT
     CAST('email_unsub' AS VARCHAR(30)) AS consent_world,
@@ -82,6 +100,7 @@ WITH cpc_latest AS (
         ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID IN (1002, 1012, 1014)
+      AND CHG_TMSTMP >= DATE '2024-01-01' -- state as-of, 2024+ only: opt-outs set before 2024 and untouched since read as no-flag (accepted, see README)
 ),
 cpc_optout AS (
     SELECT DISTINCT CLNT_NO
@@ -146,6 +165,7 @@ WITH cpc_gate AS (
         ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID ORDER BY CHG_TMSTMP DESC) AS rn
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID IN (1002, 1012, 1014)
+      AND CHG_TMSTMP >= DATE '2024-01-01' -- state as-of, 2024+ only: opt-outs set before 2024 and untouched since read as no-flag (accepted, see README)
       AND CHG_TMSTMP < DATE '2026-04-01'
 ),
 gate_flags AS (
@@ -164,24 +184,6 @@ gate_long AS (
     SELECT CLNT_NO, 1012 AS PREF_ID, (out_1002 + out_1012 + out_1014) AS flag_count FROM gate_flags WHERE out_1012 = 1
     UNION ALL
     SELECT CLNT_NO, 1014 AS PREF_ID, (out_1002 + out_1012 + out_1014) AS flag_count FROM gate_flags WHERE out_1014 = 1
-),
-send_evt AS (
-    SELECT
-        e.consumer_id_hashed,
-        e.TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND e.disposition_dt_tm <  DATE '2026-07-01'
-),
-sent AS (
-    SELECT DISTINCT m.CLNT_NO
-    FROM send_evt e
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = e.consumer_id_hashed
-        AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE m.load_tm >= DATE '2026-03-01'
-      AND m.load_tm <  DATE '2026-08-01'
 )
 SELECT
     CAST(PREF_ID AS VARCHAR(30)) AS pref_id,
@@ -189,7 +191,7 @@ SELECT
     CAST(COUNT(*) AS BIGINT) AS flagged_clients,
     CAST(SUM(CASE WHEN s.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT) AS received_campaign_email
 FROM gate_long g
-LEFT JOIN sent s ON s.CLNT_NO = g.CLNT_NO
+LEFT JOIN vt_q2_sends s ON s.CLNT_NO = g.CLNT_NO
 GROUP BY 1, 2
 UNION ALL
 SELECT
@@ -198,9 +200,10 @@ SELECT
     CAST(COUNT(*) AS BIGINT),
     CAST(SUM(CASE WHEN s.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)
 FROM (SELECT DISTINCT CLNT_NO FROM gate_long) g
-LEFT JOIN sent s ON s.CLNT_NO = g.CLNT_NO
+LEFT JOIN vt_q2_sends s ON s.CLNT_NO = g.CLNT_NO
 ORDER BY 1, 2;
 
 
+DROP TABLE vt_q2_sends;
 DROP TABLE vt_unsub_first;
 DROP TABLE vt_unsub_base;

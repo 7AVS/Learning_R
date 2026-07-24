@@ -15,12 +15,14 @@ Email consent lives in two systems that don't talk: 99.6% of unsubscribers remai
 
 Note: counts drift slightly day to day (warehouse load timing); rates are stable across reruns.
 
+State scans (E2's blind-gate flag, E4's leaking-gate flag) are floored at 2024-01-01: pre-2024 opt-outs never re-touched read as no-flag — marginally overstates blindness, marginally shrinks flagged cohorts (accepted trade for runability).
+
 ## Run notes
 
 - Engine: Teradata-direct.
-- Run top to bottom, one session.
-- Two volatile tables (`vt_unsub_base`, `vt_unsub_first`) are dropped at the end.
-- Rerun after a failure: run the two DROPs first, then rerun from the top.
+- Run top to bottom, one session, one statement at a time.
+- Three volatile tables (`vt_unsub_base`, `vt_unsub_first`, `vt_q2_sends`) are dropped at the end.
+- Rerun after a failure: run the three DROPs first, then rerun from the top.
 
 ## Provenance
 
