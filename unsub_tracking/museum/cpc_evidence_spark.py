@@ -8,8 +8,8 @@ from trino.auth import BasicAuthentication
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
 
-TRINO_HOST = "<YOUR_TRINO_HOST>"            # from your working Trino cell
-TD_HOST    = "<YOUR_TERADATA_HOST>"         # from your PROD profile (Teradata-dns-...)
+TRINO_HOST = "strp1vaexh0001.fg.rbc.com"    # from your working Trino cell; verify 4th char: digit 1 vs letter l (photo ambiguous)
+TD_HOST    = "Teradata-dns-sysa.fg.rbc.com" # from your PROD profile
 
 EDL = connect(host=TRINO_HOST, port=8443, catalog="edl0_im", user=username,
               auth=BasicAuthentication(username, password), http_scheme="https", verify=False)
