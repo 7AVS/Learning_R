@@ -285,14 +285,15 @@ INNER JOIN (
     AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2026-07-01'
     AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2026-08-01'
 ) u ON c.CLNT_NO = u.CLNT_NO
-WHERE c.CHG_TMSTMP >= DATE '2025-07-01'
+WHERE c.CHG_TMSTMP >= DATE '2025-01-01'
   AND (c.CLNT_CONSENT_TYP IN (5002, 5003) OR c.CLNT_CONSENT_TYP IS NULL)
 """
+# floor widened 2025-07-01 -> 2025-01-01 so we have a pre-unsub 90d window for the PLACEBO baseline (RT3 Obj 1).
 # size probe first (measure before pulling - 3 numbers back fast)
 print("size probe (rows/clients/switches to land):")
 print(edw_pd("SELECT COUNT(*) AS landing_rows, COUNT(DISTINCT CLNT_NO) AS clients, COUNT(DISTINCT PREF_ID) AS switches FROM ("
              + _landing_sql + ") x"))
-land("cpc_landing_allsw", _landing_sql)
+land("cpc_landing_allsw", _landing_sql, replace=True)   # re-pull once: date floor changed (wider) for the placebo baseline
 # FALLBACK if TDWM kills the single pull: land per CHG_TMSTMP quarter, then 23 reads cpc_landing_allsw/* (recursiveFileLookup):
 # for _a,_b in [("2025-07-01","2025-10-01"),("2025-10-01","2026-01-01"),("2026-01-01","2026-04-01"),("2026-04-01","2026-07-01"),("2026-07-01","2026-10-01")]:
 #     land("cpc_landing_allsw/"+_a[:7], _landing_sql + " AND c.CHG_TMSTMP >= DATE '%s' AND c.CHG_TMSTMP < DATE '%s'" % (_a,_b))
@@ -317,4 +318,12 @@ WHERE m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2026-08-01'
 GROUP BY m.CLNT_NO
 """)
 
-print("reservoir complete (incl. cpc_landing_allsw + no1002_email_card) - evidence: cpc_evidence_hdfs.py | landscape: archaeology/23_cpc_landscape.py")
+# %% [17] MATCH DIAGNOSTIC (RT3 Obj 5) - distinct unsub email-ids vs clients: is the email->client join ~1:1? (tiny, EVENT-only)
+land("unsub_match_diag", """
+SELECT COUNT(DISTINCT consumer_id_hashed) AS unsub_email_ids, COUNT(*) AS unsub_events
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd = 4
+  AND disposition_dt_tm >= DATE '2025-07-01' AND disposition_dt_tm < DATE '2026-07-01'
+""")
+
+print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + unsub_match_diag) - then run museum/cpc_rt3_audit.py")
