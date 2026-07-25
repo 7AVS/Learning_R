@@ -187,3 +187,20 @@ print("E8 recut  same-mne, blank-blank pairs excluded:", r4.filter("mne = unsub_
 # Category rollup lands here once Andre's mnemonic->category map arrives; until then raw mne = the split.
 u_mne = uf.withColumn("mne", F.when(F.trim(F.col("unsub_mne")) == "", F.lit("(DEFAULT/untagged)")).otherwise(F.col("unsub_mne")))
 u_mne.groupBy("mne").agg(F.count("*").alias("unsub_clients")).orderBy(F.col("unsub_clients").desc()).show(30, False)
+
+# %% [15] E11 - blank-write bridge test (Andre 2026-07-25): could a pipe record unsubs as BLANK rows instead of 5002?
+# Rule: blank counts as No on 1014/1015 - so a blank-writing pipe would satisfy the unsub legally while our explicit-only
+# bridge tests (E2, B-main/B-reverse) stay blind to it. Pipe signature = 0-7d lag spike + one batch writer; coincidence = smear.
+bl_ev = cpc.filter("CLNT_CONSENT_TYP = 5003").select("CLNT_NO", "PREF_ID", "APP_SYS_CD", "CHG_TMSTMP")
+jb = (uf.join(bl_ev, "CLNT_NO").filter("CHG_TMSTMP >= unsub_tm")
+        .withColumn("days", F.datediff("CHG_TMSTMP", "unsub_tm")))
+first_bl = jb.groupBy("CLNT_NO", "PREF_ID").agg(F.min("days").alias("days"))
+print("unsub clients with a LATER blank event, per switch (any lag):")
+first_bl.groupBy("PREF_ID").count().orderBy("PREF_ID").show(10, False)
+lagb = first_bl.withColumn("lag_bucket",
+       F.when(F.col("days") <= 7, "a_0-7d").when(F.col("days") <= 30, "b_8-30d")
+        .when(F.col("days") <= 90, "c_31-90d").otherwise("d_90d+"))
+print("lag from unsub to FIRST blank event (a pipe spikes a_0-7d; background smears):")
+lagb.groupBy("PREF_ID", "lag_bucket").count().orderBy("PREF_ID", "lag_bucket").show(20, False)
+print("writer of blank events within 30d of an unsub:")
+jb.filter("days <= 30").groupBy("PREF_ID", "APP_SYS_CD").count().orderBy(F.col("count").desc()).show(10, False)
