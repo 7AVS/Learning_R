@@ -51,8 +51,13 @@ tcur.execute("SELECT 1")
 print("EDL round-trip (trino) returned:", tcur.fetchall())
 tcur.close()
 
-# %% [2] Reservoir helpers - land once to HDFS via spark, skip if already landed
+# %% [2] Reservoir helpers - land once to HDFS, skip ONLY if the same query already landed (SQL manifest guards staleness)
+import hashlib, re
+from pyspark.sql import functions as F
 BASE = "hdfs:///user/427966379/unsub_cpc/"
+
+def _sqlkey(sql):
+    return hashlib.md5(re.sub(r"\s+", " ", sql).strip().upper().encode()).hexdigest()
 
 def landed(name):
     try:
@@ -61,18 +66,41 @@ def landed(name):
     except Exception:
         return False
 
-def land(name, sql):
-    if landed(name):
-        print(name, ": already landed,", spark.read.parquet(BASE + name).count(), "rows - SKIP")
-        return
+def _to_spark(pdf, name):
+    # all-NULL columns break Spark type inference - attach them as typed nulls and SAY which they were
+    allnull = [c for c in pdf.columns if pdf[c].isna().all()]
+    if not allnull:
+        return spark.createDataFrame(pdf)
+    print(name, ": columns 100% NULL in this pull ->", allnull, "(landed as string nulls)")
+    sdf = spark.createDataFrame(pdf[[c for c in pdf.columns if c not in allnull]])
+    for c in allnull:
+        sdf = sdf.withColumn(c, F.lit(None).cast("string"))
+    return sdf.select(*[c for c in pdf.columns])
+
+def land(name, sql, replace=False):
+    meta = BASE + "_meta/" + name.replace("/", "_")
+    key = _sqlkey(sql)
+    if landed(name) and not replace:
+        try:
+            old = spark.read.parquet(meta).collect()[0]
+            if old["sql_md5"] == key:
+                print(name, ": already landed with SAME query,", old["rows"], "rows (", old["landed_at"], ") - SKIP")
+                return
+            print(name, ": !! QUERY CHANGED since it landed", old["landed_at"], "- OLD data kept. Rerun land(name, sql, replace=True) to re-pull.")
+            return
+        except Exception:
+            print(name, ": landed pre-manifest (no stored SQL). If you changed the query since, rerun with replace=True.")
+            return
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
-    spark.createDataFrame(pdf).write.mode("overwrite").parquet(BASE + name)
+    _to_spark(pdf, name).write.mode("overwrite").parquet(BASE + name)
     nback = spark.read.parquet(BASE + name).count()
     assert nback == len(pdf), name + " HDFS readback mismatch: pulled " + str(len(pdf)) + " readback " + str(nback)
-    print(name, ": landed", len(pdf), "rows, HDFS readback confirms", nback)
+    spark.createDataFrame([(name, key, sql, __import__("datetime").datetime.now().isoformat(), len(pdf))],
+                          ["name", "sql_md5", "sql_text", "landed_at", "rows"]).write.mode("overwrite").parquet(meta)
+    print(name, ": landed", len(pdf), "rows, HDFS readback confirms", nback, "| manifest written")
 
-print("helpers defined: land()/landed() | reservoir BASE =", BASE)
+print("helpers defined: land()/landed() with SQL manifest | reservoir BASE =", BASE)
 
 # %% [3] EXTRACT unsub_base chunk 1/4 (EVENT disp=4 Jul25-Jun26; MASTER load_tm 2025-06..2025-10)
 land("unsub_base/c1", """
