@@ -1,5 +1,17 @@
 # EVIDENCE - runs 100% off the HDFS reservoir (parquet landed by cpc_reservoir_extract.py). NO Teradata connection needed.
-# E1-E8 = the deck evidence (validated vs SQL pack 2026-07-24). R1-R3 = red-team closers (objections #3, #12, #6).
+# E1-E11 = deck evidence. R1-R4 = red-team closers. Every output is LABELED with the rule it uses.
+#
+# ============================ THE BLANK RULE (EDW dictionary, read 2026-07-25) ============================
+# CLNT_CONSENT_TYP: 5001 Yes / 5002 No / 5003 blank / 5004. Blank = "client never explicitly indicated yes or no".
+# OFFICIAL RULE: blank is treated as YES for all preferences EXCEPT Share-for-Services (1015) and
+# Share-for-Marketing (1014) across RBC, where blank MUST be treated as NO.
+# PREF_ID taxonomy (dictionary): 1002 = RBC Royal Bank entity DO-NOT-SOLICIT (email-relevant, blank=Yes);
+# 1012 = banking email channel consent (email-relevant, blank=Yes); 1014 = CROSS-ENTITY sharing gate
+# (NOT a same-entity email gate; blank=No); 1006 = group unconfirmed (verify on dictionary page).
+# LABELS: [causation] = did the unsub CAUSE a CPC record (explicit events only - blanks are feed defaults, not
+# client responses). [protection] = what the client's standing state means UNDER THE RULE. [explicit-No] = counts
+# of clients/events with CLNT_CONSENT_TYP = 5002 only - exact legal boundary on blank=Yes switches, floor on 1014/1015.
+# ==========================================================================================================
 
 # %% [0] Load reservoir + derive (pure Spark from here)
 from pyspark.sql import functions as F, Window as W
@@ -24,7 +36,8 @@ def cpc_standing(as_of_expr):
 
 uf.createOrReplaceTempView("uf"); cpc.createOrReplaceTempView("cpc")
 
-# %% [1] EVIDENCE 1 - two consent worlds, monthly volumes (35x claim; run confirmed 35.3x: 319,733 vs 9,052)
+# %% [1] E1 - two consent worlds, monthly volumes
+print("[E1 | explicit-No CLIENT DECISIONS per month - 5003 blank feed events are NOT decisions and are excluded]")
 spark.sql("""
 SELECT 'email_unsub' AS consent_world, date_format(unsub_tm, 'yyyyMM') AS month_yyyymm, COUNT(*) AS clients
 FROM uf GROUP BY 2
@@ -37,7 +50,9 @@ GROUP BY 2
 ORDER BY 1, 2
 """).show(30, False)
 
-# %% [2] EVIDENCE 2 - the blind gate + before/after split (run confirmed: 1,387 = 1,252 + 135; 99.57% blind)
+# %% [2] E2 - the blind gate + before/after split
+print("[E2 | causation, EXPLICIT RECORDS ONLY - answers 'did an explicit CPC opt-out ever follow the unsub'.")
+print("      Slide language must say 'no EXPLICIT record', never 'no protection' - protection is E2b.]")
 st = cpc_standing(None).filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)")
 earliest = st.groupBy("CLNT_NO").agg(F.min("CHG_TMSTMP").alias("first_optout_tm"))
 j = uf.join(earliest, "CLNT_NO", "left")
@@ -52,9 +67,9 @@ print("optout_recorded_before_unsub ", before)
 print("optout_recorded_after_unsub  ", after)
 assert before + after == with_ex
 
-# %% [2b] E2b - RULE-BASED standing of the 319,733 unsubscribers, per switch (dictionary rule: blank = NO on 1014/1015, = YES elsewhere)
-# E2 above = CAUSATION (did an explicit opt-out follow the unsub: the 135). THIS = PROTECTION STATUS under the official
-# blank rule (Andre 2026-07-25): on 1014/1015 a standing blank already means do-not-share, unsub or not. Both go on the slide.
+# %% [3] E2b - rule-based standing of the unsubscribers, per switch
+print("[E2b | protection UNDER THE DICTIONARY RULE - blank=NO on 1014/1015, blank=YES elsewhere.")
+print("       Pairs with E2 on the slide: E2 = no pipe exists; E2b = what the rule makes of their standing state.]")
 for _p in [1002, 1006, 1012, 1014]:
     stp = cpc_standing(None).filter("PREF_ID = " + str(_p)).select("CLNT_NO", "CLNT_CONSENT_TYP")
     jj = uf.join(stp, "CLNT_NO", "left")
@@ -68,9 +83,10 @@ for _p in [1002, 1006, 1012, 1014]:
     if _p in (1014, 1015):
         print("      -> RULE-PROTECTED on %d (explicit_no + blank): %d" % (_p, n_no + n_blank))
     else:
-        print("      -> rule reads blank + no_row as contactable: %d" % (n_blank + n_norow + n_yes))
+        print("      -> rule reads as CONTACTABLE (yes + blank + no_row): %d" % (n_yes + n_blank + n_norow))
 
-# %% [3] EVIDENCE 3 - no bridge: flips by writer x had-prior-unsub
+# %% [4] E3 - no bridge: flips by writer x had-prior-unsub
+print("[E3 | explicit-No EVENTS by writer system - blanks are 7999 feed writes, not client flips (see diagnosis D1)]")
 spark.sql("""
 WITH flips AS (
   SELECT CLNT_NO, PREF_ID, APP_SYS_CD, CHG_TMSTMP FROM cpc
@@ -83,7 +99,9 @@ FROM flips f LEFT JOIN uf u ON u.CLNT_NO = f.CLNT_NO
 GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC
 """).show(40, False)
 
-# %% [4] EVIDENCE 4 - the leaking gate, per switch x exclusivity (run confirmed: 1012-only 47.1%; 1002 total 19.2%)
+# %% [5] E4 - the leaking gate, per switch x exclusivity
+print("[E4 | standing explicit-No as of 2026-04-01. 1002/1012 = email-relevant and EXACT under blank=Yes rule.")
+print("      1014 rows = CONTEXT ONLY - dictionary says 1014 gates cross-entity sharing, NOT same-entity email.]")
 gates = cpc_standing("DATE '2026-04-01'").filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)") \
         .select("CLNT_NO", "PREF_ID")
 nflags = gates.groupBy("CLNT_NO").agg(F.count("*").alias("n"))
@@ -94,19 +112,24 @@ got = rec.withColumn("got", F.lit(1))
       .agg(F.countDistinct("CLNT_NO").alias("optout_clients"), F.sum("got").alias("got_email_apr_jun"))
       .orderBy("PREF_ID", "exclusivity")).show(10, False)
 allsw = gates.select("CLNT_NO").distinct().join(got, "CLNT_NO", "left")
-print("ALL_SWITCHES:", allsw.count(), "optout clients,", allsw.filter("got = 1").count(), "got email Apr-Jun")
+print("ALL_SWITCHES (mixed-meaning union, context only):", allsw.count(), "optout clients,",
+      allsw.filter("got = 1").count(), "got email Apr-Jun")
 
-# %% [5] EVIDENCE 5 - does the channel honor unsubs? (run measured 50.5% got ANY email - E8 splits it: 46% cross-program by design, 3.9% in-program)
+# %% [6] E5 - does the channel honor unsubs?
+print("[E5 | vendor-side cohort, no CPC rule involved. Gross = ANY send incl. DEFAULT stream - E9 is the named-only recut]")
 pre = uf.filter("unsub_tm < DATE '2026-04-01'"); pre.cache()
 pre_n = pre.count()
 print("unsub_before_apr_clients ", pre_n)
 print("got_email_apr_jun        ", pre.join(got, "CLNT_NO", "inner").count())
 
-# %% [6] EVIDENCE 6+7 - which campaigns reach opted-out clients, per switch (from server-side aggregate)
+# %% [7] E6+E7 - which campaigns reach opted-out clients, per switch
+print("[E6/E7 | standing explicit-No gates x named campaign sends. Blank mne row = DEFAULT stream (see R1).")
+print("        1002 = do-not-solicit breach candidates; 1014 = sharing-gate context only.]")
 we7 = W.partitionBy("PREF_ID").orderBy(F.col("clients").desc())
 gm.withColumn("rk", F.row_number().over(we7)).filter("rk <= 12").orderBy("PREF_ID", "rk").show(48, False)
 
-# %% [7] EVIDENCE 8 - the post-unsub waterfall (exclusion order fixed; labels match SQL version)
+# %% [8] E8 - the post-unsub waterfall
+print("[E8 | vendor-side, mne-based. Same-mne line includes blank-blank pairs - E9 prints the cleaned version]")
 print("0 unsubscribed before Apr 2026 (cohort)                 ", pre_n)
 r1 = ps.filter("disposition_cd = 1")
 print("1 gross: received any send Apr-Jun                      ", r1.select("CLNT_NO").distinct().count())
@@ -127,8 +150,9 @@ cross = r4.select("CLNT_NO").distinct().subtract(same)
 print("5 residual: cross-campaign only (different mne)         ", cross.count())
 print("6 residual: same campaign as unsubbed (in-program leak) ", same.count())
 
-# %% [8] RED-TEAM R1 - the blank-MNE bucket (objection #3's last hole: is it marketing or service mail?)
-# Size it from the cohort sends, then identify it from the landed sample (subject lines settle it).
+# %% [9] R1 - the blank-MNE bucket (red-team #3)
+print("[R1 | DEFAULT-stream identification. Verdict 2026-07-25: TREATMENT_ID='DEFAULT' = service + broken-template +")
+print("      UNTAGGED MARKETING - outside campaign taxonomy, invisible to MNE-based suppression. Headline claims -> E9.]")
 blank = ps.filter(F.trim(F.col("mne")) == "")
 print("blank-mne rows (cohort sends Apr-Jun):", blank.count(), "| clients:", blank.select("CLNT_NO").distinct().count())
 blank.groupBy("disposition_cd").count().orderBy("disposition_cd").show()
@@ -140,7 +164,8 @@ try:
 except Exception:
     print("blank_mne_sample NOT landed - run extract [13] in cpc_reservoir_extract.py first")
 
-# %% [9] RED-TEAM R2 - opt-out recency distribution (objection #12: live breach vs stale-state noise)
+# %% [10] R2 - opt-out recency distribution (red-team #12)
+print("[R2 | standing explicit-No as of 2026-04-01, age of the standing answer. Explicit cohort = exact on 1002/1006/1012]")
 g2 = cpc_standing("DATE '2026-04-01'").filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014, 1006)")
 g2 = g2.withColumn("age_mo", F.months_between(F.to_date(F.lit("2026-04-01")), F.col("CHG_TMSTMP")))
 g2 = g2.withColumn("age_bucket",
@@ -148,7 +173,9 @@ g2 = g2.withColumn("age_bucket",
       .when(F.col("age_mo") < 24, "c_1-2yr").when(F.col("age_mo") < 60, "d_2-5yr").otherwise("e_5yr+"))
 g2.groupBy("PREF_ID").pivot("age_bucket").agg(F.count("*")).orderBy("PREF_ID").show(10, False)
 
-# %% [10] RED-TEAM R3 - the post-unsub opt-outs: pipe or coincidence? (objection #6) A pipe clusters 0-7d; coincidence smears
+# %% [11] R3 - the post-unsub explicit opt-outs: pipe or coincidence? (red-team #6)
+print("[R3 | causation follow-up on E2's 135 EXPLICIT flips. A pipe clusters 0-7d; coincidence smears.")
+print("      Blank-write variant of the same question = E11.]")
 lag = (j.filter("first_optout_tm >= unsub_tm")
         .withColumn("days", F.datediff("first_optout_tm", "unsub_tm"))
         .withColumn("lag_bucket",
@@ -156,7 +183,7 @@ lag = (j.filter("first_optout_tm >= unsub_tm")
              .when(F.col("days") <= 30, "c_8-30d").when(F.col("days") <= 90, "d_31-90d").otherwise("e_90d+")))
 lag.groupBy("lag_bucket").agg(F.count("*").alias("clients")).orderBy("lag_bucket").show(10, False)
 
-# %% [11] ONE-SCREEN SUMMARY - every headline number in one compact block. Zoom the font, photograph THIS cell only, straight-on.
+# %% [12] ONE-SCREEN SUMMARY - zoom the font, photograph THIS cell only, straight-on
 opt12 = (cpc.filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)")
             .filter("CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'")
             .select("CLNT_NO").distinct().count())
@@ -167,19 +194,22 @@ gross = r1.select("CLNT_NO").distinct().count()
 neat  = r4.select("CLNT_NO").distinct().count()
 print("=" * 62)
 print("CPC CONSENT - ONE SCREEN (windows: unsubs Jul25-Jun26; sends Apr-Jun26)")
-print("E1  unsubs 12mo %d  | cpc optouts 12mo %d" % (total, opt12))
-print("E2  crossover %d = before %d + after %d  | blind %d" % (with_ex, before, after, total - with_ex))
+print("rules: counts = explicit-No unless labeled; blank=NO only on 1014/1015; blank=YES elsewhere")
+print("E1  unsubs 12mo %d  | cpc explicit optouts 12mo %d (distinct clients)" % (total, opt12))
+print("E2  explicit crossover %d = before %d + after %d  | no explicit record %d" % (with_ex, before, after, total - with_ex))
 print("E4  optout std %d got mail %d  | 1002: %d of %d" % (g_all, g_got, y1002, n1002))
-print("E5  cohort %d  gross recipients %d" % (pre_n, gross))
-print("E8  after exclusions %d = cross %d + same-mne %d" % (neat, cross.count(), same.count()))
-print("R1  blank-mne rows %d clients %d (identity: see sample above)" % (blank.count(), blank.select("CLNT_NO").distinct().count()))
-print("R3  flip lag 0-1/2-7/8-30/31-90/90+ d: see cell [10] - smear = no pipe")
+print("E5  cohort %d  gross recipients %d (any send incl DEFAULT stream)" % (pre_n, gross))
+print("E8  after exclusions %d = cross %d + same-mne %d (raw; cleaned in E9)" % (neat, cross.count(), same.count()))
+print("R1  blank-mne rows %d clients %d (DEFAULT stream - see sample)" % (blank.count(), blank.select("CLNT_NO").distinct().count()))
+print("R3  flip lag: see cell [11] - smear = no pipe | E2b rule-based standing: see cell [3]")
 print("=" * 62)
 
-# %% [12] R4 - full-history flip map: which switch moves most, which direction, which writer, when (pure Spark, no extract)
+# %% [13] R4 - full-history flip map: which switch moves most, which direction, which writer, when
+print("[R4 | ALL events full history. direction: No=5002, Yes=5001, blank=5003, other=5004 - blanks shown as what they are]")
 r4h = (cpc.withColumn("yr", F.year("CHG_TMSTMP"))
           .withColumn("direction", F.when(F.col("CLNT_CONSENT_TYP") == 5002, "No")
-                                    .when(F.col("CLNT_CONSENT_TYP") == 5001, "Yes").otherwise("other"))
+                                    .when(F.col("CLNT_CONSENT_TYP") == 5001, "Yes")
+                                    .when(F.col("CLNT_CONSENT_TYP") == 5003, "blank").otherwise("other_5004"))
           .groupBy("PREF_ID", "APP_SYS_CD", "direction", "yr")
           .agg(F.count("*").alias("flips")))
 print("top 25 switch x writer x direction x year by volume:")
@@ -189,8 +219,9 @@ r4h.groupBy("PREF_ID", "direction").agg(F.sum("flips").alias("flips")).orderBy("
 print("per writer totals (full history, all switches):")
 r4h.groupBy("APP_SYS_CD").agg(F.sum("flips").alias("flips")).orderBy(F.col("flips").desc()).show(20, False)
 
-# %% [13] E9 - NAMED-campaign-only recut (red-team #3 carve-out: TREATMENT_ID='DEFAULT' stream excluded from headline claims)
-# Requires q2_recipients_named landed by extract [14]. Blank-MNE verdict 2026-07-25: DEFAULT = service + broken-template + untagged marketing.
+# %% [14] E9 - NAMED-campaign-only recut (red-team #3 carve-out)
+print("[E9 | headline claims recut on NAMED campaign mail only - DEFAULT/service stream excluded server-side.")
+print("      Requires q2_recipients_named landed by extract [14]. THESE are the deck's citable leak numbers.]")
 recn = spark.read.parquet(BASE + "q2_recipients_named/*").distinct().withColumn("gotn", F.lit(1))
 alln = gates.select("CLNT_NO").distinct().join(recn, "CLNT_NO", "left")
 print("E4 recut  ALL_SWITCHES:", alln.count(), "optout clients,", alln.filter("gotn = 1").count(), "got NAMED-campaign mail Apr-Jun")
@@ -201,14 +232,14 @@ psn = ps.filter("disposition_cd = 1 AND trim(mne) != ''")
 print("E8 recut  gross named-only:", psn.select("CLNT_NO").distinct().count())
 print("E8 recut  same-mne, blank-blank pairs excluded:", r4.filter("mne = unsub_mne AND trim(mne) != ''").select("CLNT_NO").distinct().count())
 
-# %% [14] E10 - where the 319,733 unsubs come from: volume by source campaign mnemonic (12mo Jul25-Jun26)
-# Category rollup lands here once Andre's mnemonic->category map arrives; until then raw mne = the split.
+# %% [15] E10 - where the unsubs come from: volume by source campaign mnemonic
+print("[E10 | vendor-side, 12mo Jul25-Jun26. Category rollup lands here once Andre's mnemonic->category map arrives]")
 u_mne = uf.withColumn("mne", F.when(F.trim(F.col("unsub_mne")) == "", F.lit("(DEFAULT/untagged)")).otherwise(F.col("unsub_mne")))
 u_mne.groupBy("mne").agg(F.count("*").alias("unsub_clients")).orderBy(F.col("unsub_clients").desc()).show(30, False)
 
-# %% [15] E11 - blank-write bridge test (Andre 2026-07-25): could a pipe record unsubs as BLANK rows instead of 5002?
-# Rule: blank counts as No on 1014/1015 - so a blank-writing pipe would satisfy the unsub legally while our explicit-only
-# bridge tests (E2, B-main/B-reverse) stay blind to it. Pipe signature = 0-7d lag spike + one batch writer; coincidence = smear.
+# %% [16] E11 - blank-write bridge test (Andre 2026-07-25)
+print("[E11 | causation, BLANK variant: could a pipe record unsubs as 5003 rows? Only meaningful as honoring-the-no")
+print("       on 1014/1015 (blank=No there). Pipe = 0-7d spike + one batch writer; background = smear.]")
 bl_ev = cpc.filter("CLNT_CONSENT_TYP = 5003").select("CLNT_NO", "PREF_ID", "APP_SYS_CD", "CHG_TMSTMP")
 jb = (uf.join(bl_ev, "CLNT_NO").filter("CHG_TMSTMP >= unsub_tm")
         .withColumn("days", F.datediff("CHG_TMSTMP", "unsub_tm")))
@@ -218,7 +249,7 @@ first_bl.groupBy("PREF_ID").count().orderBy("PREF_ID").show(10, False)
 lagb = first_bl.withColumn("lag_bucket",
        F.when(F.col("days") <= 7, "a_0-7d").when(F.col("days") <= 30, "b_8-30d")
         .when(F.col("days") <= 90, "c_31-90d").otherwise("d_90d+"))
-print("lag from unsub to FIRST blank event (a pipe spikes a_0-7d; background smears):")
+print("lag from unsub to FIRST blank event (a pipe spikes a_0-7d):")
 lagb.groupBy("PREF_ID", "lag_bucket").count().orderBy("PREF_ID", "lag_bucket").show(20, False)
 print("writer of blank events within 30d of an unsub:")
 jb.filter("days <= 30").groupBy("PREF_ID", "APP_SYS_CD").count().orderBy(F.col("count").desc()).show(10, False)
