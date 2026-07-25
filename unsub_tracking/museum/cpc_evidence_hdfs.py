@@ -52,6 +52,24 @@ print("optout_recorded_before_unsub ", before)
 print("optout_recorded_after_unsub  ", after)
 assert before + after == with_ex
 
+# %% [2b] E2b - RULE-BASED standing of the 319,733 unsubscribers, per switch (dictionary rule: blank = NO on 1014/1015, = YES elsewhere)
+# E2 above = CAUSATION (did an explicit opt-out follow the unsub: the 135). THIS = PROTECTION STATUS under the official
+# blank rule (Andre 2026-07-25): on 1014/1015 a standing blank already means do-not-share, unsub or not. Both go on the slide.
+for _p in [1002, 1006, 1012, 1014]:
+    stp = cpc_standing(None).filter("PREF_ID = " + str(_p)).select("CLNT_NO", "CLNT_CONSENT_TYP")
+    jj = uf.join(stp, "CLNT_NO", "left")
+    n_no    = jj.filter("CLNT_CONSENT_TYP = 5002").count()
+    n_yes   = jj.filter("CLNT_CONSENT_TYP = 5001").count()
+    n_blank = jj.filter("CLNT_CONSENT_TYP IS NOT NULL AND CLNT_CONSENT_TYP NOT IN (5001, 5002)").count()
+    n_norow = jj.filter("CLNT_CONSENT_TYP IS NULL").count()
+    rule = "blank=NO (share switch)" if _p in (1014, 1015) else "blank=YES"
+    print("%d [%s]  of %d unsubscribers: explicit_no %d | blank %d | explicit_yes %d | no_row %d"
+          % (_p, rule, total, n_no, n_blank, n_yes, n_norow))
+    if _p in (1014, 1015):
+        print("      -> RULE-PROTECTED on %d (explicit_no + blank): %d" % (_p, n_no + n_blank))
+    else:
+        print("      -> rule reads blank + no_row as contactable: %d" % (n_blank + n_norow + n_yes))
+
 # %% [3] EVIDENCE 3 - no bridge: flips by writer x had-prior-unsub
 spark.sql("""
 WITH flips AS (
