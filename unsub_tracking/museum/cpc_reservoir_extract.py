@@ -254,4 +254,20 @@ GROUP BY 1, 2, 3, 4, 5, 6, 7
 ORDER BY send_rows DESC
 """)
 
+# %% [14] EXTRACT q2 recipients NAMED-campaign only (DEFAULT/blank-MNE stream excluded server-side; feeds E9 recut)
+# Blank-MNE verdict 2026-07-25: TREATMENT_ID='DEFAULT' = mail outside campaign taxonomy (service + broken-template + untagged marketing).
+for _m, _w in {"m04": ("2026-04-01", "2026-05-01", "2026-03-01", "2026-06-01"),
+               "m05": ("2026-05-01", "2026-06-01", "2026-04-01", "2026-07-01"),
+               "m06": ("2026-06-01", "2026-07-01", "2026-05-01", "2026-08-01")}.items():
+    land("q2_recipients_named/" + _m, """
+SELECT DISTINCT m.CLNT_NO
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '%s' AND e.disposition_dt_tm < DATE '%s'
+  AND m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+  AND TRIM(COALESCE(SUBSTR(m.TREATMENT_ID, 8, 3), '')) <> ''
+""" % _w)
+
 print("reservoir complete - switch to cpc_evidence_hdfs.py (no Teradata needed from here)")
