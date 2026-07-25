@@ -326,4 +326,4 @@ WHERE disposition_cd = 4
   AND disposition_dt_tm >= DATE '2025-07-01' AND disposition_dt_tm < DATE '2026-07-01'
 """)
 
-print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + unsub_match_diag) - then run museum/cpc_rt3_audit.py")
+print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + unsub_match_diag) - then run archaeology/24_cpc_rt3_audit.py")
