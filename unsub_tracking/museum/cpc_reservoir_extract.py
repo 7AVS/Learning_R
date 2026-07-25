@@ -297,4 +297,24 @@ land("cpc_landing_allsw", _landing_sql)
 # for _a,_b in [("2025-07-01","2025-10-01"),("2025-10-01","2026-01-01"),("2026-01-01","2026-04-01"),("2026-04-01","2026-07-01"),("2026-07-01","2026-10-01")]:
 #     land("cpc_landing_allsw/"+_a[:7], _landing_sql + " AND c.CHG_TMSTMP >= DATE '%s' AND c.CHG_TMSTMP < DATE '%s'" % (_a,_b))
 
-print("reservoir complete (incl. cpc_landing_allsw) - evidence: cpc_evidence_hdfs.py | landscape: archaeology/23_cpc_landscape.py")
+# %% [16] EXTRACT email-address count per 1002=No client (GRANULARITY GUARD for the T3 19% leak)
+# Andre's catch: vendor grain = email address (consumer_id_hashed), CPC/joins = CLNT_NO. If a 1002=No client holds
+# several emails, "got email" may be a NEW address, not the do-not-solicit gate failing. Small cohort (~49K), built like [12].
+land("no1002_email_card", """
+WITH latest AS (
+  SELECT CLNT_NO, CLNT_CONSENT_TYP,
+         ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) AS rn
+  FROM DDWV01.CPC_RB_PREF_LOG
+  WHERE PREF_ID = 1002 AND CHG_TMSTMP < DATE '2026-04-01'
+),
+no1002 AS (SELECT CLNT_NO FROM latest WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002)
+SELECT m.CLNT_NO,
+       COUNT(DISTINCT m.consumer_id_hashed) AS n_emails,
+       COUNT(*) AS master_rows
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+INNER JOIN no1002 g ON g.CLNT_NO = m.CLNT_NO
+WHERE m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2026-08-01'
+GROUP BY m.CLNT_NO
+""")
+
+print("reservoir complete (incl. cpc_landing_allsw + no1002_email_card) - evidence: cpc_evidence_hdfs.py | landscape: archaeology/23_cpc_landscape.py")

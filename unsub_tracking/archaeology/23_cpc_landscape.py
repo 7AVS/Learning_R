@@ -124,6 +124,28 @@ receipt_by(1002)
 print("[T3] read: if 1014=No suppresses email its got_email ~ 0; if 1014 is sharing-only, No clients still receive ~ like Yes")
 print("[T3] 1002=No is the email-gate benchmark - the contrast decides whether the 1014-umbrella logic is valid")
 
+# %% [T4] GRANULARITY GUARD - are the 1002=No "leakers" clients with a NEW email, or same-address gate leaks?
+# Andre's catch: vendor grain = email address (consumer_id_hashed); CPC/joins = CLNT_NO. Needs cell [16] landed.
+try:
+    card = spark.read.parquet(BASE + "no1002_email_card")
+    tot = card.count()
+    dist = (card.withColumn("emails_per_client",
+                F.when(F.col("n_emails") <= 1, "1").when(F.col("n_emails") == 2, "2")
+                 .when(F.col("n_emails") <= 5, "3-5").otherwise("6+"))
+               .groupBy("emails_per_client").agg(F.countDistinct("CLNT_NO").alias("clients"))
+               .withColumn("pct_of_1002No", F.round(100.0 * F.col("clients") / tot, 1)))
+    print("[T4] emails (consumer_id_hashed) per 1002=No client, n =", tot, "- mostly '1' => the 19% is NOT a new-email artifact:")
+    dist.orderBy("emails_per_client").show()
+    got = rec.select("CLNT_NO").distinct().withColumn("got_email", F.lit(1))
+    x = (card.join(got, "CLNT_NO", "left").fillna({"got_email": 0})
+             .withColumn("email_ids", F.when(F.col("n_emails") > 1, "multi_email").otherwise("single_email")))
+    print("[T4] 1002=No got-email split by single vs multiple address (leak concentrating in multi => new-address, not gate failure):")
+    (x.groupBy("email_ids").agg(F.count("*").alias("clients"), F.sum("got_email").alias("got_email"))
+       .withColumn("got_email_pct", F.round(100.0 * F.col("got_email") / F.col("clients"), 1))
+       .orderBy("email_ids").show())
+except Exception as ex:
+    print("[T4] no1002_email_card not found -> run cpc_reservoir_extract.py cell [16] first. (", ex, ")")
+
 # %% [SUMMARY] one screen
 print("=" * 72)
 print("CPC LANDSCAPE (archaeology) | reservoir switches 1002/1006/1012/1014 | 1015 not landed")
