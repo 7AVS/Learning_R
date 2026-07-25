@@ -270,4 +270,31 @@ WHERE e.disposition_cd = 1
   AND TRIM(COALESCE(SUBSTR(m.TREATMENT_ID, 8, 3), '')) <> ''
 """ % _w)
 
-print("reservoir complete - switch to cpc_evidence_hdfs.py (no Teradata needed from here)")
+# %% [15] EXTRACT all-switch CPC landing for the unsub cohort (T1 blind-spot: do unsubs write to a switch we DON'T watch?)
+# Cohort-restricted (unsubscribers only) + CHG_TMSTMP >= 2025-07-01 + No/blank writes only -> bounded; same join shape as [11]/[12].
+# NO PREF_ID filter here (that is the whole point). Feeds archaeology/23_cpc_landscape.py T1a/T1b.
+_landing_sql = """
+SELECT c.CLNT_NO, c.PREF_ID, c.CLNT_CONSENT_TYP, c.CHG_TMSTMP, c.APP_SYS_CD
+FROM DDWV01.CPC_RB_PREF_LOG c
+INNER JOIN (
+  SELECT DISTINCT m.CLNT_NO
+  FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+  INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+  WHERE e.disposition_cd = 4
+    AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2026-07-01'
+    AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2026-08-01'
+) u ON c.CLNT_NO = u.CLNT_NO
+WHERE c.CHG_TMSTMP >= DATE '2025-07-01'
+  AND (c.CLNT_CONSENT_TYP IN (5002, 5003) OR c.CLNT_CONSENT_TYP IS NULL)
+"""
+# size probe first (measure before pulling - 3 numbers back fast)
+print("size probe (rows/clients/switches to land):")
+print(edw_pd("SELECT COUNT(*) AS landing_rows, COUNT(DISTINCT CLNT_NO) AS clients, COUNT(DISTINCT PREF_ID) AS switches FROM ("
+             + _landing_sql + ") x"))
+land("cpc_landing_allsw", _landing_sql)
+# FALLBACK if TDWM kills the single pull: land per CHG_TMSTMP quarter, then 23 reads cpc_landing_allsw/* (recursiveFileLookup):
+# for _a,_b in [("2025-07-01","2025-10-01"),("2025-10-01","2026-01-01"),("2026-01-01","2026-04-01"),("2026-04-01","2026-07-01"),("2026-07-01","2026-10-01")]:
+#     land("cpc_landing_allsw/"+_a[:7], _landing_sql + " AND c.CHG_TMSTMP >= DATE '%s' AND c.CHG_TMSTMP < DATE '%s'" % (_a,_b))
+
+print("reservoir complete (incl. cpc_landing_allsw) - evidence: cpc_evidence_hdfs.py | landscape: archaeology/23_cpc_landscape.py")
