@@ -7,6 +7,10 @@
 # %% [load] reservoir + helpers (shared by all cells below)
 from pyspark.sql import functions as F, Window as W
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+spark.sparkContext.setLogLevel("ERROR")          # silence Spark WARN noise (the red/pink stderr) - cosmetic only, not the T3 break
+import logging, warnings
+logging.getLogger("py4j").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore")
 BASE = "hdfs:///user/427966379/unsub_cpc/"
 
 ub  = spark.read.parquet(BASE + "unsub_base/*")
