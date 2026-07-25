@@ -182,3 +182,8 @@ print("E5 recut  cohort", pre_n, "got NAMED-campaign mail:", pre.join(recn.selec
 psn = ps.filter("disposition_cd = 1 AND trim(mne) != ''")
 print("E8 recut  gross named-only:", psn.select("CLNT_NO").distinct().count())
 print("E8 recut  same-mne, blank-blank pairs excluded:", r4.filter("mne = unsub_mne AND trim(mne) != ''").select("CLNT_NO").distinct().count())
+
+# %% [14] E10 - where the 319,733 unsubs come from: volume by source campaign mnemonic (12mo Jul25-Jun26)
+# Category rollup lands here once Andre's mnemonic->category map arrives; until then raw mne = the split.
+u_mne = uf.withColumn("mne", F.when(F.trim(F.col("unsub_mne")) == "", F.lit("(DEFAULT/untagged)")).otherwise(F.col("unsub_mne")))
+u_mne.groupBy("mne").agg(F.count("*").alias("unsub_clients")).orderBy(F.col("unsub_clients").desc()).show(30, False)
