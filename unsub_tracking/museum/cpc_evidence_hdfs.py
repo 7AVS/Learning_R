@@ -53,26 +53,30 @@ IS_NO = (F.when(F.col("PREF_ID").isin(1014, 1015),
                 F.col("CLNT_CONSENT_TYP").isin(5002, 5003) | F.col("CLNT_CONSENT_TYP").isNull())
           .otherwise(F.col("CLNT_CONSENT_TYP") == 5002))
 
-_unsub = (uf.groupBy(F.date_format("unsub_tm", "yyyyMM").alias("month_yyyymm"))
-            .agg(F.countDistinct("CLNT_NO").alias("no_rule"))
-            .withColumn("series", F.lit("email_unsub")).withColumn("pref_id", F.lit(None).cast("int"))
-            .withColumn("no_explicit", F.col("no_rule")).withColumn("blank_rule", F.lit("n/a")))
+WIN = "CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'"
 
-_cpc = (cpc.filter("CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'")
-           .filter(F.col("PREF_ID").isin(1002, 1012, 1014))
-           .withColumn("is_no", IS_NO)
-           .groupBy(F.date_format("CHG_TMSTMP", "yyyyMM").alias("month_yyyymm"),
-                    F.col("PREF_ID").alias("pref_id"))
-           .agg(F.countDistinct(F.when(F.col("is_no"), F.col("CLNT_NO"))).alias("no_rule"),
-                F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("no_explicit"))
-           .withColumn("series", F.lit("cpc_no"))
-           .withColumn("blank_rule", F.when(F.col("pref_id").isin(1014, 1015), F.lit("blank=No"))
-                                      .otherwise(F.lit("blank=Yes"))))
+_unsub_m = (uf.groupBy(F.date_format("unsub_tm", "yyyyMM").alias("month"))
+              .agg(F.countDistinct("CLNT_NO").alias("email_unsub")))
+_cpc_m = (cpc.filter(WIN).filter(F.col("PREF_ID").isin(1002, 1012, 1014)).filter(IS_NO)
+             .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
+             .groupBy("month").pivot("PREF_ID", [1002, 1012, 1014]).agg(F.countDistinct("CLNT_NO")))
 
-e1 = (_unsub.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit")
-        .unionByName(_cpc.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit"))
-        .orderBy("series", "pref_id", "month_yyyymm")).toPandas()
-e1 = T("E1 - monthly volumes, per switch under its own blank rule", e1)
+e1 = T("E1 - MONTHLY: email unsubscribes vs clients written to No per switch (1014 counts blank as No)",
+       _cpc_m.join(_unsub_m, "month", "full_outer")
+             .withColumnRenamed("1002", "cpc_1002_no").withColumnRenamed("1012", "cpc_1012_no")
+             .withColumnRenamed("1014", "cpc_1014_no_incl_blank")
+             .select("month", "email_unsub", "cpc_1002_no", "cpc_1012_no", "cpc_1014_no_incl_blank")
+             .orderBy("month"))
+
+# E1b - the same months with the correction visible: 1014 under the rule vs explicit-only, and the
+# pooled 3-switch explicit series that earlier charts plotted as "CPC opt-outs".
+e1b = T("E1b - MONTHLY 1014 under the rule vs explicit-only, against the pooled series used before",
+        cpc.filter(WIN).filter(F.col("PREF_ID").isin(1002, 1012, 1014))
+           .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM")).groupBy("month")
+           .agg(F.countDistinct(F.when((F.col("PREF_ID") == 1014) & IS_NO, F.col("CLNT_NO"))).alias("m1014_incl_blank"),
+                F.countDistinct(F.when((F.col("PREF_ID") == 1014) & (F.col("CLNT_CONSENT_TYP") == 5002), F.col("CLNT_NO"))).alias("m1014_explicit_only"),
+                F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("pooled_explicit_prior_chart"))
+           .orderBy("month"))
 
 # %% [2] E2 - the blind gate + before/after split
 print("[E2 | causation, EXPLICIT RECORDS ONLY - answers 'did an explicit CPC opt-out ever follow the unsub'.")
@@ -115,8 +119,8 @@ e2b = pd.DataFrame(_rows, columns=["pref_id", "blank_rule", "unsubscribers",
 e2b = T("E2b - standing position of the unsubscribers per switch, under the blank rule", e2b)
 
 # %% [4] E3 - no bridge: flips by writer x had-prior-unsub
-print("[E3 | explicit-No EVENTS by writer system - blanks are 7999 feed writes, not client flips (see diagnosis D1)]")
-spark.sql("""
+e3 = T("E3 - explicit-No write events by switch and writer system, and whether the client had unsubscribed first",
+       spark.sql("""
 WITH flips AS (
   SELECT CLNT_NO, PREF_ID, APP_SYS_CD, CHG_TMSTMP FROM cpc
   WHERE CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)
@@ -126,7 +130,7 @@ SELECT f.PREF_ID, f.APP_SYS_CD,
        COUNT(*) AS flips
 FROM flips f LEFT JOIN uf u ON u.CLNT_NO = f.CLNT_NO
 GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC
-""").show(40, False)
+"""))
 
 # %% [5] E4 - the leaking gate, per switch x exclusivity
 print("[E4 | standing explicit-No as of 2026-04-01. 1002/1012 = email-relevant and EXACT under blank=Yes rule.")
@@ -136,10 +140,11 @@ gates = cpc_standing("DATE '2026-04-01'").filter("CLNT_CONSENT_TYP = 5002 AND PR
 nflags = gates.groupBy("CLNT_NO").agg(F.count("*").alias("n"))
 gates = gates.join(nflags, "CLNT_NO").withColumn("exclusivity", F.when(F.col("n") == 1, "only_this_flag").otherwise("multi_flag"))
 got = rec.withColumn("got", F.lit(1))
-(gates.join(got, "CLNT_NO", "left")
-      .groupBy("PREF_ID", "exclusivity")
-      .agg(F.countDistinct("CLNT_NO").alias("optout_clients"), F.sum("got").alias("got_email_apr_jun"))
-      .orderBy("PREF_ID", "exclusivity")).show(10, False)
+e4 = T("E4 - clients standing explicit-No at 1 Apr 2026, and how many received any email Apr-Jun",
+       gates.join(got, "CLNT_NO", "left")
+            .groupBy("PREF_ID", "exclusivity")
+            .agg(F.countDistinct("CLNT_NO").alias("optout_clients"), F.sum("got").alias("got_email_apr_jun"))
+            .orderBy("PREF_ID", "exclusivity"))
 allsw = gates.select("CLNT_NO").distinct().join(got, "CLNT_NO", "left")
 print("ALL_SWITCHES (mixed-meaning union, context only):", allsw.count(), "optout clients,",
       allsw.filter("got = 1").count(), "got email Apr-Jun")
@@ -200,7 +205,8 @@ g2 = g2.withColumn("age_mo", F.months_between(F.to_date(F.lit("2026-04-01")), F.
 g2 = g2.withColumn("age_bucket",
      F.when(F.col("age_mo") < 6, "a_0-6mo").when(F.col("age_mo") < 12, "b_6-12mo")
       .when(F.col("age_mo") < 24, "c_1-2yr").when(F.col("age_mo") < 60, "d_2-5yr").otherwise("e_5yr+"))
-g2.groupBy("PREF_ID").pivot("age_bucket").agg(F.count("*")).orderBy("PREF_ID").show(10, False)
+r2 = T("R2 - age of the standing explicit-No answer at 1 Apr 2026, by switch",
+       g2.groupBy("PREF_ID").pivot("age_bucket").agg(F.count("*")).orderBy("PREF_ID"))
 
 # %% [11] R3 - the post-unsub explicit opt-outs: pipe or coincidence? (red-team #6)
 print("[R3 | causation follow-up on E2's 135 EXPLICIT flips. A pipe clusters 0-7d; coincidence smears.")
@@ -210,7 +216,8 @@ lag = (j.filter("first_optout_tm >= unsub_tm")
         .withColumn("lag_bucket",
             F.when(F.col("days") <= 1, "a_0-1d").when(F.col("days") <= 7, "b_2-7d")
              .when(F.col("days") <= 30, "c_8-30d").when(F.col("days") <= 90, "d_31-90d").otherwise("e_90d+")))
-lag.groupBy("lag_bucket").agg(F.count("*").alias("clients")).orderBy("lag_bucket").show(10, False)
+r3 = T("R3 - time from the unsubscribe to the explicit CPC opt-out that followed it",
+       lag.groupBy("lag_bucket").agg(F.count("*").alias("clients")).orderBy("lag_bucket"))
 
 # %% [12] ONE-SCREEN SUMMARY - zoom the font, photograph THIS cell only, straight-on
 opt12 = (cpc.filter("CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)")
@@ -253,18 +260,22 @@ print("[E9 | headline claims recut on NAMED campaign mail only - DEFAULT/service
 print("      Requires q2_recipients_named landed by extract [14]. THESE are the deck's citable leak numbers.]")
 recn = spark.read.parquet(BASE + "q2_recipients_named/*").distinct().withColumn("gotn", F.lit(1))
 alln = gates.select("CLNT_NO").distinct().join(recn, "CLNT_NO", "left")
-print("E4 recut  ALL_SWITCHES:", alln.count(), "optout clients,", alln.filter("gotn = 1").count(), "got NAMED-campaign mail Apr-Jun")
 g1002n = gates.filter("PREF_ID = 1002").select("CLNT_NO").distinct().join(recn, "CLNT_NO", "left")
-print("E4 recut  1002:", g1002n.filter("gotn = 1").count(), "of", g1002n.count())
-print("E5 recut  cohort", pre_n, "got NAMED-campaign mail:", pre.join(recn.select("CLNT_NO"), "CLNT_NO", "inner").count())
-psn = ps.filter("disposition_cd = 1 AND trim(mne) != ''")
-print("E8 recut  gross named-only:", psn.select("CLNT_NO").distinct().count())
-print("E8 recut  same-mne, blank-blank pairs excluded:", r4.filter("mne = unsub_mne AND trim(mne) != ''").select("CLNT_NO").distinct().count())
+e9 = T("E9 - NAMED-campaign mail only: cohort, and how many received it Apr-Jun 2026",
+       pd.DataFrame([("standing No, any of the three switches", alln.count(), alln.filter("gotn = 1").count()),
+                     ("standing No on 1002", g1002n.count(), g1002n.filter("gotn = 1").count()),
+                     ("unsubscribed before Apr 2026", pre_n,
+                      pre.join(recn.select("CLNT_NO"), "CLNT_NO", "inner").count()),
+                     ("of those, same campaign they unsubbed from", None,
+                      r4.filter("mne = unsub_mne AND trim(mne) != ''").select("CLNT_NO").distinct().count())],
+                    columns=["cohort", "clients_in_cohort", "received_named_campaign_email"]))
 
 # %% [15] E10 - where the unsubs come from: volume by source campaign mnemonic
 print("[E10 | vendor-side, 12mo Jul25-Jun26. Category rollup lands here once Andre's mnemonic->category map arrives]")
 u_mne = uf.withColumn("mne", F.when(F.trim(F.col("unsub_mne")) == "", F.lit("(DEFAULT/untagged)")).otherwise(F.col("unsub_mne")))
-u_mne.groupBy("mne").agg(F.count("*").alias("unsub_clients")).orderBy(F.col("unsub_clients").desc()).show(30, False)
+e10 = T("E10 - unsubscribes by source campaign, Jul 2025 - Jun 2026 (every campaign, not a top-N)",
+        u_mne.groupBy("mne").agg(F.countDistinct("CLNT_NO").alias("unsub_clients"))
+             .orderBy(F.col("unsub_clients").desc()))
 
 # %% [16] E11 - blank-write bridge test (Andre 2026-07-25)
 print("[E11 | causation, BLANK variant: could a pipe record unsubs as 5003 rows? Only meaningful as honoring-the-no")

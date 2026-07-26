@@ -7,9 +7,10 @@
 #
 # Standing = the LAST event per (client, switch). Earlier events are irrelevant in an event log.
 #
-# OUTPUT SHAPE IS DELIBERATE: every table is <= 10 rows and <= 5 columns so it stays legible in a photo
-# of the screen. The dominant writer per group is collapsed onto one row with its share; the long tail
-# is summarised, not listed. Full detail is available by re-running a cell without the top-1 filter.
+# OUTPUT SHAPE: tables are kept narrow so they stay legible in a photo of the screen. top_writer()
+# AGGREGATES, it does not truncate - clients_total sums every writer in the group, and n_writers says
+# how many are behind the top one. The only thing collapsed is the identity of the smaller writers;
+# drop the top_writer() wrapper to list them all. NO CELL CAPS ITS ROW COUNT.
 
 # %% [0] Load + reduce to the standing row per client and switch
 import pandas as pd
@@ -67,7 +68,7 @@ a1 = T("A1 - standing 1014 position: clients, and the system that wrote most of 
 _g = (standing.filter("PREF_ID = 1014 AND value = 'blank'").groupBy("yr", "APP_SYS_CD")
               .agg(F.countDistinct("CLNT_NO").alias("clients")))
 a2 = T("A2 - standing 1014 blank by year it was written, with the dominant writer that year",
-       top_writer(_g, ["yr"]).orderBy(F.col("clients_total").desc()).limit(10))
+       top_writer(_g, ["yr"]).orderBy("yr"))
 
 # %% [3] A3 - the same picture across the four monitored switches, No and blank only.  <= 8 rows
 _g = (standing.filter("PREF_ID IN (1002, 1006, 1012, 1014) AND value IN ('no','blank')")
