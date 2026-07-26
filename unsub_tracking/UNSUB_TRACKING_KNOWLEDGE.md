@@ -30,6 +30,15 @@ Do not re-litigate. Do not ask again.
    *"CONTEXT ONLY / NOT a same-entity email gate"* are the dictionary's framing, not this project's.
    They are what pushed four red-team rounds and the deck toward a 1002 lead. Do not inherit them.
 
+4a. **NO ROW ≠ BLANK (ruled by Andre 2026-07-25).** `CPC_RB_PREF_LOG` is a log of events. If a client has
+   **no row** on a switch, no consent record for them exists anywhere in the corporation — they are a
+   *true blank*, and they are **NOT an opt-out**. Exclude them from every "No" population.
+   A client who **has a row** whose value is blank (5003) or No (5002) **is** counted as an opt-out on
+   1014/1015. Why some systems write a blank row rather than leaving the client absent is not understood —
+   see the open archaeology question on blank writers.
+   → Therefore E2b's `standing_no_under_rule = explicit_no + blank` is **CORRECT**. 1014 among the
+   319,733 unsubscribers = **89,518** (912 explicit + 88,606 blank). The 223,373 no-row clients stay out.
+
 4. **Blank = No on 1014 and 1015 ONLY.** Blank = Yes on 1002/1006/1012 (§16 addendum line 767,
    §17-D line 814). `museum/cpc_evidence.sql` breaks this — `CLNT_CONSENT_TYP = 5002` in seven places,
    understating every 1014 figure. `cpc_evidence_hdfs.py` and `archaeology/23_cpc_landscape.py`
