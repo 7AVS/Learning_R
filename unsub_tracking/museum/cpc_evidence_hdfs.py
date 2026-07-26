@@ -7,8 +7,8 @@
 # ===================== RULES, SETTLED - DO NOT RE-DERIVE =====================
 # CLNT_CONSENT_TYP: 5001 Yes | 5002 No | 5003 blank | 5004 other.
 #
-# 1. "No" is defined per switch. On 1014 and 1015 an explicit No and a blank are ONE population and
-#    are counted together. On 1002, 1006 and 1012 a blank counts as Yes, so "No" means explicit 5002.
+# 1. "No" is defined per switch. On 1014 an explicit No and a blank are ONE population and are counted
+#    together. On 1002, 1006 and 1012 a blank counts as Yes, so "No" means explicit 5002.
 # 2. NO ROW IS NOT A BLANK. CPC_RB_PREF_LOG is an event log. A client with no row on a switch has no
 #    consent record anywhere in the corporation - they are excluded from every "No" population, not
 #    counted as one.
@@ -30,8 +30,15 @@ pd.set_option("display.width", 160)
 
 def T(label, df):
     """Render a titled table AND return it. A bare name renders only as a cell's last expression;
-    this always renders, and still hands back the object to export or plot."""
-    out = df.toPandas() if hasattr(df, "toPandas") else df
+    this always renders, and still hands back the object to export or plot.
+    Timestamp columns are stringified first - pandas 2.x rejects Spark's unit-less datetime64."""
+    if hasattr(df, "toPandas"):
+        for f in df.schema.fields:
+            if f.dataType.typeName() in ("timestamp", "date", "timestamp_ntz"):
+                df = df.withColumn(f.name, F.date_format(F.col(f.name), "yyyy-MM-dd HH:mm:ss"))
+        out = df.toPandas()
+    else:
+        out = df
     display(Markdown("**" + label + "**  ·  " + str(len(out)) + " rows"))
     display(out)
     return out
@@ -57,7 +64,7 @@ ub   = spark.read.parquet(BASE + "unsub_base/*")
 recn = spark.read.parquet(BASE + "q2_recipients_named/*").distinct().withColumn("got_named", F.lit(1))
 
 # No, defined per switch. Applied to rows that exist; a missing row is handled by the join, never here.
-IS_NO = (F.when(F.col("PREF_ID").isin(1014, 1015), F.col("CLNT_CONSENT_TYP").isin(5002, 5003))
+IS_NO = (F.when(F.col("PREF_ID") == 1014, F.col("CLNT_CONSENT_TYP").isin(5002, 5003))
           .otherwise(F.col("CLNT_CONSENT_TYP") == 5002))
 VALUE = (F.when(F.col("CLNT_CONSENT_TYP") == 5001, "yes")
           .when(F.col("CLNT_CONSENT_TYP") == 5002, "explicit_no")
@@ -99,15 +106,15 @@ u2 = T("U2 - unsubscribes by source campaign, Jul 2025 - Jun 2026 (every campaig
 m0 = T("M0 - switches present in the landed reservoir, with row counts",
        cpc.groupBy("PREF_ID").agg(F.count("*").alias("rows"),
                                   F.countDistinct("CLNT_NO").alias("clients"),
-                                  F.min("CHG_TMSTMP").alias("earliest"),
-                                  F.max("CHG_TMSTMP").alias("latest"))
+                                  F.date_format(F.min("CHG_TMSTMP"), "yyyy-MM-dd").alias("earliest"),
+                                  F.date_format(F.max("CHG_TMSTMP"), "yyyy-MM-dd").alias("latest"))
           .orderBy("PREF_ID"))
 
 # %% [4] M1 - MONTHLY OPT-OUTS per switch, each under its own rule.
-# 1014 and 1015: explicit No (5002) and blank (5003) counted TOGETHER - they are one population.
+# 1014: explicit No (5002) and blank (5003) counted TOGETHER - they are one population.
 # 1002, 1006, 1012: explicit No (5002) only - blank is a Yes on those switches.
 # Email unsubscribes carried alongside as the vendor-side series.
-MONTHLY_SWITCHES = [1002, 1006, 1012, 1014, 1015]
+MONTHLY_SWITCHES = [1002, 1006, 1012, 1014]
 
 _cpc_m = (cpc.filter("CHG_TMSTMP >= DATE '%s' AND CHG_TMSTMP < DATE '%s'" % (WIN_FROM, WIN_TO))
              .filter(F.col("PREF_ID").isin(MONTHLY_SWITCHES))
@@ -118,19 +125,19 @@ _cpc_m = (cpc.filter("CHG_TMSTMP >= DATE '%s' AND CHG_TMSTMP < DATE '%s'" % (WIN
 _unsub_m = (unsub.groupBy(F.date_format("unsub_tm", "yyyyMM").alias("month"))
                  .agg(F.countDistinct("CLNT_NO").alias("email_unsub")))
 
-m1 = T("M1 - MONTHLY clients written to No per switch (1014/1015 count blank as No), and email unsubscribes",
+m1 = T("M1 - MONTHLY clients written to No per switch (1014 counts blank as No), and email unsubscribes",
        _cpc_m.join(_unsub_m, "month", "full_outer")
              .withColumnRenamed("1002", "no_1002").withColumnRenamed("1006", "no_1006")
              .withColumnRenamed("1012", "no_1012")
-             .withColumnRenamed("1014", "no_1014_incl_blank").withColumnRenamed("1015", "no_1015_incl_blank")
+             .withColumnRenamed("1014", "no_1014_incl_blank")
              .orderBy("month"))
 
-# %% [5] M2 - the same months on 1014 and 1015, split so the blank share is visible, alongside the
+# %% [5] M2 - the same months on 1014, split so the blank share is visible, alongside the
 # explicit-only count. The explicit-only column is what a chart filtering CLNT_CONSENT_TYP = 5002
 # would have plotted.
-m2 = T("M2 - MONTHLY 1014 and 1015: explicit No and blank shown separately, and explicit-only for contrast",
+m2 = T("M2 - MONTHLY 1014: explicit No and blank shown separately, and explicit-only for contrast",
        cpc.filter("CHG_TMSTMP >= DATE '%s' AND CHG_TMSTMP < DATE '%s'" % (WIN_FROM, WIN_TO))
-          .filter(F.col("PREF_ID").isin([1014, 1015]))
+          .filter("PREF_ID = 1014")
           .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
           .groupBy("month", "PREF_ID")
           .agg(F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("explicit_no"),
@@ -175,7 +182,7 @@ for p in SWITCHES + [1006]:
     st = standing.filter("PREF_ID = " + str(p)).select("CLNT_NO", "value", "is_no")
     jj = unsub.select("CLNT_NO").join(st, "CLNT_NO", "left")
     _rows.append((p,
-                  "blank=No" if p in (1014, 1015) else "blank=Yes",
+                  "blank=No" if p == 1014 else "blank=Yes",
                   N_UNSUB,
                   jj.filter("value = 'explicit_no'").count(),
                   jj.filter("value = 'blank'").count(),
