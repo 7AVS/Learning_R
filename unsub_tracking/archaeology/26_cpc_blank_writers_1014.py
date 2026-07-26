@@ -1,13 +1,15 @@
-# Who writes the BLANK position on 1014? HDFS only, no Teradata.
+# Which system wrote the client's CURRENT blank position on 1014? HDFS only, no Teradata.
 #
 # Question (Andre, 2026-07-25): a client with no row on 1014 is a true blank and is NOT an opt-out.
-# A client WITH a row whose value is blank (5003) counts as an opt-out under the dictionary rule.
-# So some system is writing a blank row rather than leaving the client absent, and that write decides
-# whether 88,606 unsubscribers are counted or not. This pack asks which system, when, and how often.
+# A client whose LATEST 1014 event is blank (5003) IS counted as an opt-out under the dictionary rule.
+# So some system is writing a blank row rather than leaving the client absent, and that write is what
+# puts 88,606 unsubscribers into the counted population. Which system, and when.
 #
+# Standing = the LAST event per (client, switch). Earlier events are irrelevant - this is an event log
+# and only the latest position stands. Nothing here counts events; every cell counts clients at standing.
 # Every cell returns a named pandas table. Nothing is printed.
 
-# %% [0] Load
+# %% [0] Load + reduce to the standing row per client and switch
 import pandas as pd
 from pyspark.sql import functions as F, Window as W
 spark.sparkContext.setLogLevel("ERROR")
@@ -15,62 +17,51 @@ spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 BASE = "hdfs:///user/427966379/unsub_cpc/"
 cpc = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "cpc_pref")
-cpc.cache()
 
-VAL = F.when(F.col("CLNT_CONSENT_TYP") == 5001, "yes") \
-       .when(F.col("CLNT_CONSENT_TYP") == 5002, "no") \
-       .when(F.col("CLNT_CONSENT_TYP") == 5003, "blank") \
-       .otherwise(F.concat(F.lit("other_"), F.col("CLNT_CONSENT_TYP").cast("string")))
-cpc = cpc.withColumn("value", VAL).withColumn("year", F.year("CHG_TMSTMP"))
+w = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").desc())
+standing = (cpc.withColumn("rn", F.row_number().over(w)).filter("rn = 1")
+               .withColumn("value", F.when(F.col("CLNT_CONSENT_TYP") == 5001, "yes")
+                                     .when(F.col("CLNT_CONSENT_TYP") == 5002, "no")
+                                     .when(F.col("CLNT_CONSENT_TYP") == 5003, "blank")
+                                     .otherwise(F.concat(F.lit("other_"), F.col("CLNT_CONSENT_TYP").cast("string"))))
+               .withColumn("year_of_standing_write", F.year("CHG_TMSTMP")))
+standing.cache()
 
-# %% [1] A1 - who writes each value, per switch. Full history, events and clients.
-a1 = (cpc.groupBy("PREF_ID", "value", "APP_SYS_CD")
-         .agg(F.count("*").alias("events"), F.countDistinct("CLNT_NO").alias("clients"))
-         .orderBy("PREF_ID", "value", F.col("events").desc())).toPandas()
+# %% [1] A1 - who wrote the standing position on 1014, by value
+a1 = (standing.filter("PREF_ID = 1014")
+        .groupBy("value", "APP_SYS_CD")
+        .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
+        .orderBy("value", F.col("clients_standing").desc())).toPandas()
 a1
 
-# %% [2] A2 - blank writers on 1014 by year. Is it one historical batch or ongoing?
-a2 = (cpc.filter("PREF_ID = 1014 AND CLNT_CONSENT_TYP = 5003")
-         .groupBy("year", "APP_SYS_CD")
-         .agg(F.count("*").alias("events"), F.countDistinct("CLNT_NO").alias("clients"))
-         .orderBy("year", F.col("events").desc())).toPandas()
+# %% [2] A2 - when was the standing blank written, and by whom
+a2 = (standing.filter("PREF_ID = 1014 AND value = 'blank'")
+        .groupBy("year_of_standing_write", "APP_SYS_CD")
+        .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
+        .orderBy("year_of_standing_write", F.col("clients_standing").desc())).toPandas()
 a2
 
-# %% [3] A3 - is a blank the client's FIRST 1014 row, or does it overwrite an earlier answer?
-w = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").asc())
-seq = (cpc.filter("PREF_ID = 1014")
-          .withColumn("rn", F.row_number().over(w))
-          .withColumn("prev_value", F.lag("value").over(w))
-          .withColumn("prev_sys", F.lag("APP_SYS_CD").over(w)))
-
-a3 = (seq.filter("value = 'blank'")
-         .withColumn("position", F.when(F.col("rn") == 1, "first_row_for_client").otherwise("overwrites_prior"))
-         .groupBy("position", "prev_value", "APP_SYS_CD")
-         .agg(F.count("*").alias("events"), F.countDistinct("CLNT_NO").alias("clients"))
-         .orderBy(F.col("events").desc())).toPandas()
+# %% [3] A3 - same standing picture across all four monitored switches, for comparison
+a3 = (standing.filter("PREF_ID IN (1002, 1006, 1012, 1014)")
+        .groupBy("PREF_ID", "value", "APP_SYS_CD")
+        .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
+        .orderBy("PREF_ID", "value", F.col("clients_standing").desc())).toPandas()
 a3
 
-# %% [4] A4 - what is a client's 1014 standing after the blank write? latest row per client.
-wl = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").desc())
-a4 = (cpc.filter("PREF_ID = 1014")
-         .withColumn("rn", F.row_number().over(wl)).filter("rn = 1")
-         .groupBy("value", "APP_SYS_CD")
-         .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
-         .orderBy(F.col("clients_standing").desc())).toPandas()
+# %% [4] A4 - restricted to the unsubscriber cohort: who wrote THEIR standing 1014 blank
+uf = (spark.read.parquet(BASE + "unsub_base/*")
+        .groupBy("CLNT_NO").agg(F.min("unsub_tm").alias("unsub_tm")))
+a4 = (standing.filter("PREF_ID = 1014").join(uf, "CLNT_NO", "inner")
+        .groupBy("value", "APP_SYS_CD")
+        .agg(F.countDistinct("CLNT_NO").alias("unsubscribers_standing"))
+        .orderBy("value", F.col("unsubscribers_standing").desc())).toPandas()
 a4
 
-# %% [5] A5 - blank writes on 1014 by month across the study window. Ongoing, or dormant?
-a5 = (cpc.filter("PREF_ID = 1014 AND CLNT_CONSENT_TYP = 5003")
-         .filter("CHG_TMSTMP >= DATE'2024-01-01'")
-         .groupBy(F.date_format("CHG_TMSTMP", "yyyyMM").alias("month"), "APP_SYS_CD")
-         .agg(F.count("*").alias("events"), F.countDistinct("CLNT_NO").alias("clients"))
-         .orderBy("month", F.col("events").desc())).toPandas()
+# %% [5] A5 - was the standing blank written before or after the client's unsubscribe
+a5 = (standing.filter("PREF_ID = 1014 AND value = 'blank'").join(uf, "CLNT_NO", "inner")
+        .withColumn("vs_unsub", F.when(F.col("CHG_TMSTMP") < F.col("unsub_tm"), "written_before_unsub")
+                                 .otherwise("written_after_unsub"))
+        .groupBy("vs_unsub", "APP_SYS_CD")
+        .agg(F.countDistinct("CLNT_NO").alias("unsubscribers"))
+        .orderBy("vs_unsub", F.col("unsubscribers").desc())).toPandas()
 a5
-
-# %% [6] A6 - do the same writers behave differently across switches? blank share per writer.
-tot = cpc.groupBy("PREF_ID", "APP_SYS_CD").agg(F.count("*").alias("all_events"))
-blk = (cpc.filter("CLNT_CONSENT_TYP = 5003")
-          .groupBy("PREF_ID", "APP_SYS_CD").agg(F.count("*").alias("blank_events")))
-a6 = (tot.join(blk, ["PREF_ID", "APP_SYS_CD"], "left").fillna(0, ["blank_events"])
-         .orderBy("PREF_ID", F.col("all_events").desc())).toPandas()
-a6
