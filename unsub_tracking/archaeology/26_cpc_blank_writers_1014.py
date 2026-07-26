@@ -89,3 +89,40 @@ _g = (standing.filter("PREF_ID = 1014 AND value = 'blank'").join(uf, "CLNT_NO", 
               .groupBy("vs_unsub", "APP_SYS_CD").agg(F.countDistinct("CLNT_NO").alias("clients")))
 a5 = T("A5 - unsubscribers standing blank on 1014: was it written before or after they unsubscribed",
        top_writer(_g, ["vs_unsub"]).orderBy(F.col("clients_total").desc()))
+
+# %% [6] A6 - THE MONTHLY SERIES. One row per month, one column per switch, blank counted as No on
+# 1014. This is the table behind the first plot: email unsubscribes and CPC "No" as parallel curves.
+# 12 rows x 5 columns.
+IS_NO = (F.when(F.col("PREF_ID").isin(1014, 1015),
+                F.col("CLNT_CONSENT_TYP").isin(5002, 5003) | F.col("CLNT_CONSENT_TYP").isNull())
+          .otherwise(F.col("CLNT_CONSENT_TYP") == 5002))
+WIN = "CHG_TMSTMP >= DATE'2025-07-01' AND CHG_TMSTMP < DATE'2026-07-01'"
+
+_cpc_m = (cpc.filter(WIN).filter(F.col("PREF_ID").isin(1002, 1012, 1014))
+             .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
+             .filter(IS_NO)
+             .groupBy("month").pivot("PREF_ID", [1002, 1012, 1014])
+             .agg(F.countDistinct("CLNT_NO")))
+_unsub_m = (spark.read.parquet(BASE + "unsub_base/*")
+              .groupBy("CLNT_NO").agg(F.min("unsub_tm").alias("unsub_tm"))
+              .withColumn("month", F.date_format("unsub_tm", "yyyyMM"))
+              .groupBy("month").agg(F.countDistinct("CLNT_NO").alias("email_unsub")))
+
+a6 = T("A6 - MONTHLY: clients written to No per switch (1014 includes blank) vs email unsubscribes",
+       _cpc_m.join(_unsub_m, "month", "full_outer")
+             .withColumnRenamed("1002", "cpc_1002_no")
+             .withColumnRenamed("1012", "cpc_1012_no")
+             .withColumnRenamed("1014", "cpc_1014_no_incl_blank")
+             .select("month", "email_unsub", "cpc_1002_no", "cpc_1012_no", "cpc_1014_no_incl_blank")
+             .orderBy("month"))
+
+# %% [7] A7 - the same months, 1014 explicit-only alongside blank-inclusive, so the gap is visible.
+# This is what the old ~800/mo chart was plotting. 12 rows x 4 columns.
+a7 = T("A7 - MONTHLY 1014: blank-inclusive vs explicit-only, and the pooled 3-switch explicit series",
+       cpc.filter(WIN).filter(F.col("PREF_ID").isin(1002, 1012, 1014))
+          .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
+          .groupBy("month")
+          .agg(F.countDistinct(F.when((F.col("PREF_ID") == 1014) & IS_NO, F.col("CLNT_NO"))).alias("m1014_incl_blank"),
+               F.countDistinct(F.when((F.col("PREF_ID") == 1014) & (F.col("CLNT_CONSENT_TYP") == 5002), F.col("CLNT_NO"))).alias("m1014_explicit_only"),
+               F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("pooled_explicit_old_chart"))
+          .orderBy("month"))

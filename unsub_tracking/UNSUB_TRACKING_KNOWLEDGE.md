@@ -55,10 +55,12 @@ Do not re-litigate. Do not ask again.
    plotted. Not print statements, not formatted console text, not a wall of hard-coded strings. If the
    only way to get a number out is to read it off a screenshot, the code is not finished.
 
-6. **Never ask Andre to re-run something before grepping this file.** He runs everything in a closed
-   environment and results return only as screenshots, which do not survive a session. Any result he
-   shares gets transcribed here **in the same turn**. Scripts with no catalogued output are unfinished:
-   `24_cpc_rt3_audit.py` (A1-A9) and `cpc_evidence_hdfs.py` (E1-E11, R1-R4) currently have none.
+6. **Never ask Andre to re-run something before grepping this file AND `RESULTS_CATALOG.md`.** He runs
+   everything in a closed environment and results return only as photos of the screen, which do not
+   survive a session. Any result he shares gets transcribed **in the same turn** into
+   `unsub_tracking/RESULTS_CATALOG.md` — **ONE document, appended as a dated section. Never a new file
+   per batch.** Record the cross-checks that prove the read (a sum matching a figure already in canon).
+   Scripts with no catalogued output are unfinished.
 
 ---
 
