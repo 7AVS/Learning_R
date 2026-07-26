@@ -94,15 +94,59 @@ u2 = T("U2 - unsubscribes by source campaign, Jul 2025 - Jun 2026 (every campaig
             .groupBy("mne").agg(F.countDistinct("CLNT_NO").alias("clients_unsubscribed"))
             .orderBy(F.col("clients_unsubscribed").desc()))
 
+# %% [3] M0 - which switches are actually landed in the reservoir. Run this before reading M1:
+# a switch that was never extracted returns nothing, which is not the same as "no opt-outs".
+m0 = T("M0 - switches present in the landed reservoir, with row counts",
+       cpc.groupBy("PREF_ID").agg(F.count("*").alias("rows"),
+                                  F.countDistinct("CLNT_NO").alias("clients"),
+                                  F.min("CHG_TMSTMP").alias("earliest"),
+                                  F.max("CHG_TMSTMP").alias("latest"))
+          .orderBy("PREF_ID"))
+
+# %% [4] M1 - MONTHLY OPT-OUTS per switch, each under its own rule.
+# 1014 and 1015: explicit No (5002) and blank (5003) counted TOGETHER - they are one population.
+# 1002, 1006, 1012: explicit No (5002) only - blank is a Yes on those switches.
+# Email unsubscribes carried alongside as the vendor-side series.
+MONTHLY_SWITCHES = [1002, 1006, 1012, 1014, 1015]
+
+_cpc_m = (cpc.filter("CHG_TMSTMP >= DATE '%s' AND CHG_TMSTMP < DATE '%s'" % (WIN_FROM, WIN_TO))
+             .filter(F.col("PREF_ID").isin(MONTHLY_SWITCHES))
+             .withColumn("is_no", IS_NO).filter("is_no")
+             .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
+             .groupBy("month").pivot("PREF_ID", MONTHLY_SWITCHES)
+             .agg(F.countDistinct("CLNT_NO")))
+_unsub_m = (unsub.groupBy(F.date_format("unsub_tm", "yyyyMM").alias("month"))
+                 .agg(F.countDistinct("CLNT_NO").alias("email_unsub")))
+
+m1 = T("M1 - MONTHLY clients written to No per switch (1014/1015 count blank as No), and email unsubscribes",
+       _cpc_m.join(_unsub_m, "month", "full_outer")
+             .withColumnRenamed("1002", "no_1002").withColumnRenamed("1006", "no_1006")
+             .withColumnRenamed("1012", "no_1012")
+             .withColumnRenamed("1014", "no_1014_incl_blank").withColumnRenamed("1015", "no_1015_incl_blank")
+             .orderBy("month"))
+
+# %% [5] M2 - the same months on 1014 and 1015, split so the blank share is visible, alongside the
+# explicit-only count. The explicit-only column is what a chart filtering CLNT_CONSENT_TYP = 5002
+# would have plotted.
+m2 = T("M2 - MONTHLY 1014 and 1015: explicit No and blank shown separately, and explicit-only for contrast",
+       cpc.filter("CHG_TMSTMP >= DATE '%s' AND CHG_TMSTMP < DATE '%s'" % (WIN_FROM, WIN_TO))
+          .filter(F.col("PREF_ID").isin([1014, 1015]))
+          .withColumn("month", F.date_format("CHG_TMSTMP", "yyyyMM"))
+          .groupBy("month", "PREF_ID")
+          .agg(F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("explicit_no"),
+               F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5003, F.col("CLNT_NO"))).alias("blank"),
+               F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP").isin(5002, 5003), F.col("CLNT_NO"))).alias("no_under_rule"))
+          .orderBy("PREF_ID", "month"))
+
 # ========================== 2. THE CONSENT RECORD ===========================
 
-# %% [3] C1 - standing position of every client holding a record, per switch
+# %% [6] C1 - standing position of every client holding a record, per switch
 c1 = T("C1 - clients at each standing position, per switch (last event per client and switch)",
        standing.filter(F.col("PREF_ID").isin(SWITCHES + [1006]))
                .groupBy("PREF_ID").pivot("value", ["explicit_no", "blank", "yes", "other"])
                .agg(F.countDistinct("CLNT_NO")).orderBy("PREF_ID"))
 
-# %% [4] C2 - "No" under each switch's own rule, and how it splits
+# %% [7] C2 - "No" under each switch's own rule, and how it splits
 c2 = T("C2 - clients standing No under each switch's own rule, and how that No was recorded",
        standing.filter(F.col("PREF_ID").isin(SWITCHES + [1006])).filter("is_no")
                .groupBy("PREF_ID")
@@ -111,13 +155,13 @@ c2 = T("C2 - clients standing No under each switch's own rule, and how that No w
                     F.countDistinct(F.when(F.col("value") == "blank", F.col("CLNT_NO"))).alias("of_which_blank"))
                .orderBy("PREF_ID"))
 
-# %% [5] C3 - which system wrote each standing position
+# %% [8] C3 - which system wrote each standing position
 _g = (standing.filter(F.col("PREF_ID").isin(SWITCHES + [1006]))
               .groupBy("PREF_ID", "value", "APP_SYS_CD").agg(F.countDistinct("CLNT_NO").alias("clients")))
 c3 = T("C3 - who wrote the standing position, per switch and value",
        top_writer(_g, ["PREF_ID", "value"]).orderBy("PREF_ID", "value"))
 
-# %% [6] C4 - when the standing blank on 1014 was written
+# %% [9] C4 - when the standing blank on 1014 was written
 _g = (standing.filter("PREF_ID = 1014 AND value = 'blank'")
               .groupBy("yr", "APP_SYS_CD").agg(F.countDistinct("CLNT_NO").alias("clients")))
 c4 = T("C4 - year the standing blank on 1014 was written, and by which system",
@@ -125,7 +169,7 @@ c4 = T("C4 - year the standing blank on 1014 was written, and by which system",
 
 # ==================== 3. THE UNSUBSCRIBERS' CONSENT STATE ===================
 
-# %% [7] X1 - standing position of the 319,733 unsubscribers, per switch
+# %% [10] X1 - standing position of the 319,733 unsubscribers, per switch
 _rows = []
 for p in SWITCHES + [1006]:
     st = standing.filter("PREF_ID = " + str(p)).select("CLNT_NO", "value", "is_no")
@@ -142,7 +186,7 @@ x1 = T("X1 - standing position of the unsubscribers on each switch (no_row = no 
        pd.DataFrame(_rows, columns=["PREF_ID", "blank_rule", "unsubscribers", "explicit_no", "blank",
                                     "yes", "no_row", "standing_no_under_rule"]))
 
-# %% [8] X2 - was that standing position written before or after they unsubscribed
+# %% [11] X2 - was that standing position written before or after they unsubscribed
 x2 = T("X2 - unsubscribers standing No: was the position written before or after their unsubscribe",
        standing.filter(F.col("PREF_ID").isin(SWITCHES)).filter("is_no")
                .join(unsub.select("CLNT_NO", "unsub_tm"), "CLNT_NO", "inner")
@@ -173,18 +217,18 @@ _lag = (_grid.join(_after.select("CLNT_NO", "PREF_ID", "days"), ["CLNT_NO", "PRE
              .withColumn("lag_bucket", F.when(F.col("days").isNull(), F.lit("z_never"))
                                         .otherwise(BUCKET(F.col("days")))))
 
-# %% [9] B1 - the bridge test, all unsubscribers
+# %% [12] B1 - the bridge test, all unsubscribers
 b1 = T("B1 - days from the unsubscribe until a No appears on each switch (z_never = it never does)",
        _lag.groupBy("lag_bucket").pivot("PREF_ID", SWITCHES)
            .agg(F.countDistinct("CLNT_NO")).orderBy("lag_bucket"))
 
-# %% [10] B2 - the same test with a full 90 days of follow-up
+# %% [13] B2 - the same test with a full 90 days of follow-up
 b2 = T("B2 - same test, unsubscribes before 1 Apr 2026 only, so every client has >= 90 days of follow-up",
        _lag.filter("unsub_tm < DATE '2026-04-01'")
            .groupBy("lag_bucket").pivot("PREF_ID", SWITCHES)
            .agg(F.countDistinct("CLNT_NO")).orderBy("lag_bucket"))
 
-# %% [11] B3 - when a No did appear, what kind was it and who wrote it
+# %% [14] B3 - when a No did appear, what kind was it and who wrote it
 _wf = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").asc())
 _first = (cpc.filter(F.col("PREF_ID").isin(SWITCHES)).withColumn("is_no", IS_NO).filter("is_no")
              .join(unsub.select("CLNT_NO", "unsub_tm"), "CLNT_NO", "inner")
@@ -198,7 +242,7 @@ b3 = T("B3 - when a No did appear after the unsubscribe: explicit or blank, at w
 
 # ============================== 5. DELIVERY =================================
 
-# %% [12] D1 - named campaign email received Apr-Jun 2026, by standing position at 1 Apr
+# %% [15] D1 - named campaign email received Apr-Jun 2026, by standing position at 1 Apr
 _asof = (cpc.filter("CHG_TMSTMP < DATE '2026-04-01'").filter(F.col("PREF_ID").isin(SWITCHES))
             .withColumn("rn", F.row_number().over(_ws)).filter("rn = 1")
             .withColumn("value", VALUE).withColumn("is_no", IS_NO))
@@ -211,7 +255,7 @@ d1 = T("D1 - clients who received named campaign email Apr-Jun 2026, by standing
                  F.countDistinct(F.when((F.col("value") == "yes") & (F.col("got_named") == 1), F.col("CLNT_NO"))).alias("yes_got_email"))
             .orderBy("PREF_ID"))
 
-# %% [13] D2 - unsubscribers who received named campaign email in the following quarter
+# %% [16] D2 - unsubscribers who received named campaign email in the following quarter
 _pre = unsub.filter("unsub_tm < DATE '2026-04-01'")
 d2 = T("D2 - clients who unsubscribed before Apr 2026 and received named campaign email Apr-Jun",
        pd.DataFrame([("unsubscribed before Apr 2026", _pre.count()),
@@ -221,7 +265,7 @@ d2 = T("D2 - clients who unsubscribed before Apr 2026 and received named campaig
 
 # ============================ 6. THE DECK FEED ==============================
 
-# %% [14] DECK - every headline figure in one table. Photograph this cell.
+# %% [17] DECK - every headline figure in one table. Photograph this cell.
 _c2 = c2.set_index("PREF_ID"); _x1 = x1.set_index("PREF_ID")
 _b1 = b1.set_index("lag_bucket")
 _deck = [
