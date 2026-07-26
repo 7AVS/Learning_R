@@ -14,6 +14,8 @@
 # ==========================================================================================================
 
 # %% [0] Load reservoir + derive (pure Spark from here)
+# Every evidence cell returns a named pandas table (e1, e2, e2b, ...). Nothing is printed.
+import pandas as pd
 from pyspark.sql import functions as F, Window as W
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
@@ -36,19 +38,32 @@ def cpc_standing(as_of_expr):
 
 uf.createOrReplaceTempView("uf"); cpc.createOrReplaceTempView("cpc")
 
-# %% [1] E1 - two consent worlds, monthly volumes
-print("[E1 | explicit-No CLIENT DECISIONS per month - 5003 blank feed events are NOT decisions and are excluded]")
-spark.sql("""
-SELECT 'email_unsub' AS consent_world, date_format(unsub_tm, 'yyyyMM') AS month_yyyymm, COUNT(*) AS clients
-FROM uf GROUP BY 2
-UNION ALL
-SELECT 'cpc_optout', date_format(CHG_TMSTMP, 'yyyyMM'), COUNT(DISTINCT CLNT_NO)
-FROM cpc
-WHERE CLNT_CONSENT_TYP = 5002 AND PREF_ID IN (1002, 1012, 1014)
-  AND CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'
-GROUP BY 2
-ORDER BY 1, 2
-""").show(30, False)
+# %% [1] E1 - two consent worlds, monthly volumes. PER SWITCH, each under its own blank rule.
+# Returns e1 (pandas). Never pool switches that count differently into one series.
+IS_NO = (F.when(F.col("PREF_ID").isin(1014, 1015),
+                F.col("CLNT_CONSENT_TYP").isin(5002, 5003) | F.col("CLNT_CONSENT_TYP").isNull())
+          .otherwise(F.col("CLNT_CONSENT_TYP") == 5002))
+
+_unsub = (uf.groupBy(F.date_format("unsub_tm", "yyyyMM").alias("month_yyyymm"))
+            .agg(F.countDistinct("CLNT_NO").alias("no_rule"))
+            .withColumn("series", F.lit("email_unsub")).withColumn("pref_id", F.lit(None).cast("int"))
+            .withColumn("no_explicit", F.col("no_rule")).withColumn("blank_rule", F.lit("n/a")))
+
+_cpc = (cpc.filter("CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-07-01'")
+           .filter(F.col("PREF_ID").isin(1002, 1012, 1014))
+           .withColumn("is_no", IS_NO)
+           .groupBy(F.date_format("CHG_TMSTMP", "yyyyMM").alias("month_yyyymm"),
+                    F.col("PREF_ID").alias("pref_id"))
+           .agg(F.countDistinct(F.when(F.col("is_no"), F.col("CLNT_NO"))).alias("no_rule"),
+                F.countDistinct(F.when(F.col("CLNT_CONSENT_TYP") == 5002, F.col("CLNT_NO"))).alias("no_explicit"))
+           .withColumn("series", F.lit("cpc_no"))
+           .withColumn("blank_rule", F.when(F.col("pref_id").isin(1014, 1015), F.lit("blank=No"))
+                                      .otherwise(F.lit("blank=Yes"))))
+
+e1 = (_unsub.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit")
+        .unionByName(_cpc.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit"))
+        .orderBy("series", "pref_id", "month_yyyymm")).toPandas()
+e1
 
 # %% [2] E2 - the blind gate + before/after split
 print("[E2 | causation, EXPLICIT RECORDS ONLY - answers 'did an explicit CPC opt-out ever follow the unsub'.")
@@ -60,16 +75,18 @@ total   = j.count()
 with_ex = j.filter("first_optout_tm IS NOT NULL").count()
 before  = j.filter("first_optout_tm <  unsub_tm").count()
 after   = j.filter("first_optout_tm >= unsub_tm").count()
-print("unsub_clients_total          ", total)
-print("with_explicit_cpc_optout     ", with_ex)
-print("without_explicit_cpc_optout  ", total - with_ex)
-print("optout_recorded_before_unsub ", before)
-print("optout_recorded_after_unsub  ", after)
 assert before + after == with_ex
+e2 = pd.DataFrame([("unsub_clients_total", total),
+                   ("with_explicit_cpc_optout", with_ex),
+                   ("without_explicit_cpc_optout", total - with_ex),
+                   ("optout_recorded_before_unsub", before),
+                   ("optout_recorded_after_unsub", after)], columns=["measure", "clients"])
+e2
 
 # %% [3] E2b - rule-based standing of the unsubscribers, per switch
 print("[E2b | protection UNDER THE DICTIONARY RULE - blank=NO on 1014/1015, blank=YES elsewhere.")
 print("       Pairs with E2 on the slide: E2 = no pipe exists; E2b = what the rule makes of their standing state.]")
+_rows = []
 for _p in [1002, 1006, 1012, 1014]:
     stp = cpc_standing(None).filter("PREF_ID = " + str(_p)).select("CLNT_NO", "CLNT_CONSENT_TYP")
     jj = uf.join(stp, "CLNT_NO", "left")
@@ -77,13 +94,16 @@ for _p in [1002, 1006, 1012, 1014]:
     n_yes   = jj.filter("CLNT_CONSENT_TYP = 5001").count()
     n_blank = jj.filter("CLNT_CONSENT_TYP IS NOT NULL AND CLNT_CONSENT_TYP NOT IN (5001, 5002)").count()
     n_norow = jj.filter("CLNT_CONSENT_TYP IS NULL").count()
-    rule = "blank=NO (share switch)" if _p in (1014, 1015) else "blank=YES"
-    print("%d [%s]  of %d unsubscribers: explicit_no %d | blank %d | explicit_yes %d | no_row %d"
-          % (_p, rule, total, n_no, n_blank, n_yes, n_norow))
-    if _p in (1014, 1015):
-        print("      -> RULE-PROTECTED on %d (explicit_no + blank): %d" % (_p, n_no + n_blank))
-    else:
-        print("      -> rule reads as CONTACTABLE (yes + blank + no_row): %d" % (n_yes + n_blank + n_norow))
+    blank_is_no = _p in (1014, 1015)
+    _rows.append((_p, "blank=No" if blank_is_no else "blank=Yes", total,
+                  n_no, n_blank, n_yes, n_norow,
+                  n_no + n_blank if blank_is_no else n_no,
+                  n_yes + n_blank + n_norow if not blank_is_no else n_yes + n_norow))
+
+e2b = pd.DataFrame(_rows, columns=["pref_id", "blank_rule", "unsubscribers",
+                                   "explicit_no", "blank", "explicit_yes", "no_row",
+                                   "standing_no_under_rule", "standing_not_no_under_rule"])
+e2b
 
 # %% [4] E3 - no bridge: flips by writer x had-prior-unsub
 print("[E3 | explicit-No EVENTS by writer system - blanks are 7999 feed writes, not client flips (see diagnosis D1)]")

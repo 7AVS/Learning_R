@@ -7,6 +7,52 @@ Folder layout (2026-07-24): archaeology/ = exploratory packs 01-22 (results cata
 
 ---
 
+## LOCKED FACTS — read before asking anything (2026-07-25)
+
+Re-explained across at least five sessions because none of it was written down. It is written down now.
+Do not re-litigate. Do not ask again.
+
+1. **What this project is.** Learning how these systems work. **We are not claiming anything.** Not
+   hunting for a suppression gate, not proving who is or isn't reached, not building a compliance case.
+   The one established finding: **there is no bridge between the two systems** (vendor/SFMC unsubscribes
+   and the CPC preference log). That is the finding. Nothing further is asserted.
+
+2. **We track all three switches — 1002, 1012, 1014 — as a set.** Do not isolate one. Do not ask which
+   "should be the gate." The question is not which switch gates email.
+
+3. **1014 is the most important, and here is why:** it is the **parameter used in the client decisioning
+   tree in the design of every campaign** — campaign teams read 1014 to select clients for their
+   communications. This is operational fact from Andre, and it outranks the EDW dictionary's nominal
+   framing of 1014 as a cross-entity sharing consent. Consistent with §0.2 above: *"PREF_ID 1014 with
+   CPC='N' = out of ALL RBC marketing."*
+
+   → Therefore the comments in `museum/cpc_evidence_hdfs.py` lines 9-10 and 104 calling 1014
+   *"CONTEXT ONLY / NOT a same-entity email gate"* are the dictionary's framing, not this project's.
+   They are what pushed four red-team rounds and the deck toward a 1002 lead. Do not inherit them.
+
+4. **Blank = No on 1014 and 1015 ONLY.** Blank = Yes on 1002/1006/1012 (§16 addendum line 767,
+   §17-D line 814). `museum/cpc_evidence.sql` breaks this — `CLNT_CONSENT_TYP = 5002` in seven places,
+   understating every 1014 figure. `cpc_evidence_hdfs.py` and `archaeology/23_cpc_landscape.py`
+   (`is_no()`) implement it correctly.
+
+5. **Folder rule — museum is FINAL ONLY.** `museum/` holds the finished, consolidated version of what
+   goes into the deck: the evidence code, the deck, the README. It is a compilation of what the
+   archaeology already settled — only what matters, nothing exploratory. **Never write a new
+   investigative script into `museum/`.** Anything that explores, tests, checks, or answers a new
+   question goes in `archaeology/` as the next `NN_topic.py`. It graduates into museum only when it is
+   final, and only by replacing or extending the existing museum file — not by adding a sibling.
+
+   Museum output must be usable **by an analyst**: tables and DataFrames that can be read, exported and
+   plotted. Not print statements, not formatted console text, not a wall of hard-coded strings. If the
+   only way to get a number out is to read it off a screenshot, the code is not finished.
+
+6. **Never ask Andre to re-run something before grepping this file.** He runs everything in a closed
+   environment and results return only as screenshots, which do not survive a session. Any result he
+   shares gets transcribed here **in the same turn**. Scripts with no catalogued output are unfinished:
+   `24_cpc_rt3_audit.py` (A1-A9) and `cpc_evidence_hdfs.py` (E1-E11, R1-R4) currently have none.
+
+---
+
 ## 0. REQUIRED OUTCOMES (locked 2026-07-15, team-confirmed)
 
 1. **Value of an unsub** (exec ask): not all unsubs weigh the same. Segment unsubscribers by **TIBC × age** (TIBC = Transaction/Investment/Borrowing/Credit product-category counts, UCP), apply a per-segment LTV determined by us — "T-only at age 20 = decades of future NIBT lost." Deliverable: LTV given up, campaign by campaign; localization matrix showing where the problem is real vs where raw counts overstate it. UCP `Profitability` field to vet (risk: current-year contribution understates young clients). Enrichment runs Spark-side (UCP, merge clnt_no + MONTH_END_DATE).
@@ -215,7 +261,7 @@ Env reference files (Andre's environment, not this repo): `unsw_email_back.sql` 
 | `21a_cpc_landscape.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — cheap, CPC-log-only half: Z1 stock, Z2 monthly flip trend, Z3 writer (APP_SYS_CD) attribution, E1/E2 purpose-field fill-rate. **RAN 2026-07-23** (§14-D) |
 | `21b_cpc_bridge.sql` (Teradata-direct) | SPLIT off the planned `21_cpc_study_consolidated.sql` — expensive half, run alone in a fresh session: unsub-resolution pipeline feeding B-main/B-reverse (vendor-unsub↔CPC-flip gap timing) + O (5-flag reachability overlap). **RAN 2026-07-23** (§14-D) |
 | `22_cpc_gate_evidence.sql` (Teradata-direct) | 22-A: writer attribution for B-reverse's bridged flips (closes Z3's open join). 22-B: gate-leak test — clients flagged out (1002/1012/1014 = No as-of window_start) vs received-email-in-window, main cut + exclusivity cut. **RAN 2026-07-23 — both decisions closed** (§14-E) |
-| `museum/cpc_evidence.sql` (+ `museum/README.md`) (Teradata-direct) | The 4-evidence standalone proof pack for the CPC consent claim (two consent worlds, blind gate, no bridge, leaking gate) — self-contained rerun of 21b/22's findings. **RAN 2026-07-24, numbers FINAL** (Option A, consent standing full-history) — E1/E2/E4 deck-grade, E3 cites archaeology (§14-E, §14-F) |
+| `museum/cpc_evidence.sql` (+ `museum/README.md`) (Teradata-direct) | The 6-evidence standalone proof pack for the CPC consent claim (two consent worlds, blind gate w/ before-after split, no bridge, leaking gate, plus red-team-driven suppression-scope and MNE-mix checks) — self-contained rerun of 21b/22's findings. **COMPLETE RUN 2026-07-24 (second run)** — all 6 Evidence blocks + summary now populated, Option A (consent standing full-history), deck numbers FINAL (§14-F, §14-G) |
 | `cpc_gates_static.html` | one-screen static diagram: gate hierarchy + population Venn (shareable) |
 | `UNSUB_TRACKING_KNOWLEDGE.md` | this doc |
 
@@ -640,6 +686,66 @@ Per-switch multi/only splits and rates match §14-E's 22-B exclusivity cut almos
 
 **Close:** museum numbers are now FINAL and deck-grade for E1, E2, and E4. E3 has no deck-grade museum number — any slide use of per-writer figures draws on archaeology's verified numbers (§14-D Z3, §14-E 22-A).
 
+### G. Museum complete run -- all evidence + new findings (2026-07-24, second run)
+
+`museum/cpc_evidence.sql` ran again in-env 2026-07-24, this pass producing all six Evidence blocks (E1-E6) plus the summary block for the first time. Source: Andre's phone uploads 2026-07-24 11:39-11:40 (six photos).
+
+**E1 -- re-confirmed.** Same series as Section 14-F's E1 (monthly cpc_optout vs email_unsub). Reader dropped a digit again this pass; series validated against the prior verified reads (Section 14-F, Section 14-D Z2) -- treat as confirmed, not re-derived.
+
+**E2 -- blind gate, now with a before/after split (closes red-team objection #5, any-time logic, Section 15-B):**
+
+| Metric | Value |
+|---|---|
+| unsub_clients_total | 319,733 |
+| with_explicit_cpc_optout | 1,387 |
+| without_explicit_cpc_optout | 318,346 |
+| optout_recorded_before_unsub | 1,252 |
+| optout_recorded_after_unsub | 135 |
+
+Sums check exactly: 1,387 + 318,346 = 319,733; 1,252 + 135 = 1,387. This corrects Section 14-F's flagged ~500 OCR ambiguity on the "without" cell -- 318,846 there was a digit-flip; 318,346 is the number.
+
+READING: propagation ceiling = 135 clients/yr (0.04% of the unsub population) -- the largest number of vendor unsubs that could plausibly trace to a CPC opt-out recorded after the fact. The 1,252 before-cases are clients who were already opted out at CPC before they also unsubscribed at the vendor -- from the client's-eye view, they said no once, kept getting mail, then said no again at the vendor (the gate-leak population, seen from the consent side rather than the delivery side). Red-team objection #5 (any-time logic) is now answered with data, not just design intent.
+
+**E5 (NEW) -- vendor-side suppression is not channel-wide (closes red-team objection #4, Section 15-B):** 248,130 clients unsubscribed Jul 2025-Mar 2026; 25,721 of them (10.4%) received a campaign email Apr-Jun 2026. Cohort arithmetic checks out (~9 months x ~26.6K/mo unsub rate, consistent with Section 14-F E1's monthly series). Photo was dim on this block -- values assigned by magnitude, then arithmetic-validated against the monthly series, not read digit-by-digit. Candidate mechanisms (open, not claimed as the answer): program-level suppression scope (unsub kills one program, not all), multi-address clients, re-consent overriding a prior opt-out (ties to red-team objection #6, still open).
+
+**E6 (NEW) -- transactional escape closed, with campaign names (closes red-team objection #3, Section 15-B):** top campaigns reaching 1002 (entity do-not-solicit) clients Apr-Jun 2026, by distinct clients and send-rows:
+
+| MNE | Clients | Send rows |
+|---|---|---|
+| OCF | 5,081 | 6,327 |
+| VRE | 2,831 | 1,687(?) |
+| FWC | 2,355 | 2,434 |
+| API | 1,739 | 1,943 |
+| VRG | 1,573 | 1,609 |
+| VME | 1,395 | 1,974 |
+| PPQ | 1,378 | 1,785 |
+| RFT | 1,285 | 1,938 |
+| KFI | 1,174 | 2,122 |
+| TAO | 966 | 3,169 |
+| AUS | 777 | 777 |
+| GIS | 706 | 706 |
+| PCD | 697 | 697 |
+| PCL | 691 | 1,505 |
+| ESV | 665 | 1,480 |
+| PAL | 562 | 852 |
+| PCQ | 525 | 964 |
+| AUH | 518 | 1,152 |
+
+Plus one unreadable row and one row photo-read with MNE='1' -- an OCR artifact, not a real MNE code; verify both on export. Cards campaigns present: PCD, PCL, PCQ, AUH. VRE and VRG recur here -- the same unidentified campaign family seen in the multi-unsub pairs elsewhere in this doc; a dictionary lookup on VRE/VRG is still pending.
+
+**E3 -- legible this pass.** Writer story confirmed at the Y/N (had_prior) grain, matching Section 14-F's qualitative read. Bridged counts approx 12/26/~118 per switch (1002/1012/1014 order) -- consistent with 22-A's digit-confirmed 10/30/100 (Section 14-E) within OCR noise. The one automated (7020/SFMC) crossing on 1012 read as 16 rows this pass vs 22-A's confirmed 15 -- same order of magnitude, small-number noise. Section 14-F's deck rule stands: cite archaeology's Section 14-D Z3 / Section 14-E 22-A numbers as the record; museum E3 is now qualitatively confirmed but still not the digit-grade source.
+
+**E4 -- re-shot too pixelated to read.** No numbers taken from this pass; the prior triple-confirmed numbers (Section 14-E, Section 14-F) stand as the record.
+
+**Three-layer synthesis (deck spine), assembled from this run:**
+1. Unsub -> 10.4% of unsubscribers still get a campaign email the following quarter (E5).
+2. 1002 standing -> 19.2% of entity-do-not-solicit clients get mailed, now with named campaigns responsible (E1/Section 14-F, E6).
+3. The two systems (vendor suppression and CPC) share only ~0.4% overlap and a 0.04% propagation ceiling (E2) -- they do not talk to each other.
+
+One-liner: "No single system in the chain treats no as no, and the systems do not talk to each other."
+
+**VERDICT:** museum evidence pack is COMPLETE -- all 6 Evidence blocks plus the summary now populated in one run. Deck numbers are final pending only the E6 unreadable-row / MNE='1' cleanup on next export.
+
 ## 15. Red-team review and response (2026-07-24)
 
 ### A. Method
@@ -675,3 +781,97 @@ e. Does program-level express consent override a general opt-out?
 - E2 5-row rerun pending (before/after split under the full-history parameter — obj. 5, ties to §14-F).
 - Deck carries placeholders pending E5/E6 — not final until those land.
 - Objections 6/7 logged open, not yet built against; objections 8/9 are wording/process rules, already in effect.
+
+## 16. APP_SYS_CD official mapping — EDW Data Dictionary (2026-07-25)
+
+Source: EDW Data Dictionary page for CPC_RB_PREF_LOG.APP_SYS_CD (Andre screenshots, pics/PXL_20260725_app_sys_cd_dictionary_1of2.jpg + 2of2.jpg). Column = "which application/system was used to update the statement option / populate the value". INTEGER(10), Confidential. Also appears in ARNGMNT_OPTION_ACTVY / ARNGMNT_OPTION tables.
+
+**CPC-Consents valid values (the section that governs our consent rows):**
+| code | system | note |
+|---|---|---|
+| 7001 | Sales Platform | **branch or Service Delivery staff** — assisted-channel inference now CONFIRMED |
+| 7002 | Client Source | Direct Investing staff |
+| 7003 | Royal Direct | **Contact Centre staff** — call-centre inference CONFIRMED |
+| 7004 | OnLine Banking | self-serve digital |
+| 7006 | RBC Banking | **INTERNAL processing** — STaR UI (stand-alone URL), batch maintenance / purge. NOT a client action |
+| 7009 | Sapient/Bridgetrack | |
+| 7015 | RCT / LINX desktop | |
+| 7017 | D&H/AMIA/CMG | Telemarketer, NOV-2011 |
+| 7020 | Exact Target | = SFMC (already known) |
+| 7021 | TSYS | Total Systems, JUN-2012 |
+| 7024 / 7025 / 7026 | VOX / ZEDD / APAC | Telemarketing vendors, JAN-2015 |
+| 99999 | Batch update process | SRF, consolidation |
+
+**CPC-PC valid values (different meanings per source system!):** 7020 = Exact Target, 7025 = CASL Tool, 7030 = ADHOC Data Source, default NULL. Same code ≠ same meaning across CPC-Consents vs CPC-PC — never join meanings across source systems.
+
+**Gap:** codes **7033** (2,039 flips on 1014) and **7053** (217 on 1002, 45 on 1012) observed in our E3 output are NOT in this dictionary page (list ends 7030 → 7999). Either the page is stale (entries reference 2011-2015 era) or newer codes are undocumented. Residual ask if it matters for the deck; otherwise label "undocumented code" in the appendix.
+
+**Impact:** outreach question (f) CLOSED. Deck writer-appendix can use official names. E3 interpretation refined: 7001/7003 = staff-assisted CONFIRMED; **7006 flips are internal batch/maintenance writes, not client decisions** — exclude or footnote 7006 when talking about "client-initiated" opt-outs (1002: 144, 1012: 29, 1014: 216 of the 12-mo No-flips).
+
+### §16 addendum — CLNT_CONSENT_TYP blank rule, official dictionary text (Andre read-out 2026-07-25)
+
+EDW dictionary description (near-verbatim from Andre's reading; pic pending): field "indicates the client's consent preference to be contacted for this preference or not". **Blank** = "client has never explicitly indicated yes or no, or we are unable to confirm the client has signed the appropriate agreement with usage consent." Rule: **"A blank value is treated as a YES for all preferences EXCEPT Share for Services across RBC and Share for Marketing across RBC — for these consents a blank value must be treated as a NO."**
+
+Implications (2026-07-25):
+- DEFAULT IS PERMISSIVE: never-answered = operational YES on 1002/1006/1012 (and all non-share switches). The 318,346 unsubscribers with no explicit CPC opt-out are read by the consent system as CONTACTABLE — sharpens the zoom-in headline from "gate is blind" to "gate defaults the unheard no to yes".
+- Explicit-5002 cohorts are EXACT (not merely conservative) on 1002/1006/1012 — blank is affirmatively Yes there, so explicit No = the complete legal opt-out population. 1014 keeps the floor/iceberg framing (81,699 explicit vs ~3.64M rule-implied incl. 3,557,099 standing blanks).
+- The 7999 blank stream (started 2019, D1) writes a value with OPPOSITE legal meaning per switch: Yes-equivalent on 1002/1006/1012, No-equivalent on 1014/1015. Outreach-grade question.
+- E11 blank-bridge test reads per switch: only 1014/1015 post-unsub blank-writes could constitute honoring an unsub.
+
+### §16 addendum 2 — PREF_ID taxonomy, official dictionary text (Andre read-out 2026-07-25; pics pending)
+
+Four groups of consent/preferences: (1) Consent for Entity Marketing & Information Usage, (2) Consent for Communication Channels, (3) Product preferences, (4) Services preferences.
+
+Group 1 codes named: entity do-not-solicit per entity — 1001 RBC Direct Investing, **1002 RBC Royal Bank ("equivalent to Do Not Solicit for each entity")**, 1016 Bank and Credit Bureau (Andre read-out, verify). Information usage (sharing): **1014 Share for Marketing across RBC**, 1015 Share for Services across RBC, 1036 Share for Online Personalization across RBC, 1057 DI Share for Marketing. Regulatory line: "all processes which use client data must honor these indicators"; example given: bank clients No on 1014 must be excluded from a DIRECT INVESTING offer list.
+
+Group 2: per-entity contact-channel consents (two telephone consents = internal units). 1012 presumed here (verify on pic).
+
+IMPLICATIONS:
+- **1014 = CROSS-ENTITY sharing gate, not a same-entity email gate** → red-team objection #2 VINDICATED by dictionary text. 1014-flagged clients receiving RBC bank campaign email ≠ documented violation of 1014. Deck already re-led on 1002; purge any residual 1014-as-breach language. Open outreach nuance (don't claim): if NBA targeting consumes cross-entity data, 1014 may bind on data-USE side.
+- 1002 deck-lead framing now dictionary-backed ("do not solicit", regulatory-must-honor group).
+- OPEN: which group holds 1006 (our "credit-card content" gate)? If group 3/4 (product preference, not consent), E7 breadth framing adjusts.
+- Suppression-key hierarchy for deck appendix: 1002 entity DNS + 1012 channel consent stack; sharing switches are data-use gates.
+
+---
+
+## 17. CPC × Unsub archaeology — consolidated findings & interpretation guide (2026-07-25)
+
+Reservoir-based re-derivation (Spark off HDFS, governor-free) that supersedes the launch-era CPC numbers in §14 where they conflict. Pipeline: `museum/cpc_reservoir_extract.py` (Teradata→parquet) + `archaeology/23_cpc_landscape.py` (Spark T1–T4). Everything below traces to a run Andre executed 2026-07-25; screenshots transcribed same day.
+
+### A. The story in one line
+CPC (the consent centre) and the vendor send system are **two unsynced worlds with no closed enforcement loop between them.** A client's consent state — whether an unsub or a do-not-solicit flag — does not reliably reach what the send system does. This is bigger than the original "does an unsub write to CPC" question (answer: no, and that's not the interesting part).
+
+### B. The reservoir (what the findings run on)
+- `unsub_base` — 319,733 distinct unsub clients (EVENT disposition_cd=4, unsub Jul25–Jun26).
+- `cpc_pref` — 13,831,133 rows, **only 4 switches landed: 1002/1006/1012/1014**, full history (per-switch pull; 1015 NOT landed).
+- `q2_recipients` — 10,329,138 distinct Apr–Jun recipients (disposition_cd=1 = a dispatched send, not a decisioning row).
+- `cpc_landing_allsw` — 246,674 rows: all-switch No/blank CPC events for the unsub cohort, CHG_TMSTMP ≥ 2025-07-01 (the only unfiltered-switch pull; feeds T1).
+- `no1002_email_card` — distinct consumer_id_hashed per 1002=No client (feeds T4).
+- **Grain:** CPC = client × pref × time (CLNT_NO; **no email address exists in CPC**). Vendor = email-address (consumer_id_hashed) → CLNT_NO.
+
+### C. Findings by thread
+- **T1 — landing / blind-spot.** Only **889 clients (0.278%)** of 319,733 unsubscribers get ANY CPC No/blank event within 90d of unsubbing (refreshes old D1's 0.33%/90d) → no automated bridge. Of the 873 that land on switches we don't watch, **550 land on 1016 (a sharing switch) written by 7001 (branch staff)** + ~127 via 7033/7003 → a small HUMAN trickle to sharing prefs, not an email pipe. [T1b cluster-shape still unshot — confirmatory only.]
+- **T2 — multi-switch journeys / umbrella.** 1014=No = 3,452,289 clients; contains 94.5% of 1002=No but is 70× bigger; only 1.4% of 1014=No are also 1002=No. Crosstab: **3,384,693 (98% of all 1014=No) are 1002=Yes = fully marketable** → 1014=No is the onboarding-default majority. T2c: 93% of clients No on both set both the same day (bundled write, not sequential).
+- **T3 — semantics (the decider).** 1014=No got email **61.4%** (HIGHER than 1014=Yes 32.3%) → **1014 does NOT gate email.** 1002=No got email **19.2%** (vs 1002=Yes 58.9%) → **1002 IS the email gate** (the No≪Yes signature). Cross-check: 1002=No 19.2% and n=49,446 reproduce museum E4 exactly. → Email/opt-out logic anchors on **1002**; blank=No on 1014/1015 is a **sharing** standing fact only, never email suppression.
+- **T4 — granularity guard.** **100% of 1002=No clients have exactly 1 email address** (15,016/15,016 single) → the 19% is a genuine same-address leak, NOT a new-email artifact. **Denominator finding:** only **15,016 of the 49,446** do-not-solicit clients appear in the vendor send system at all; **34,430 (70%) have no vendor record** (never targeted). So 19% (over all 49,446) = a blend of 0% on the 34,430 not-in-system + **63% on the 15,016 in-system** (9,498). **Mechanism: do-not-solicit is an UPSTREAM filter (70% kept out of sends) with NO downstream recheck — 63% of the do-not-solicit clients who reach the vendor get emailed.**
+
+### D. Mechanics — how to interpret the data (rules)
+- **Consent codes:** 5001=Yes, 5002=No, 5003=blank, 5004=other. Current state = latest row per (CLNT_NO, PREF_ID) by CHG_TMSTMP.
+- **Blank rule:** blank=No ONLY on 1014/1015 (dictionary). On those two, "No/opted-out" = **5002 + blank as ONE population, never split**. Elsewhere (1002/1012) blank=Yes → "No" = 5002 only.
+- **Switch meanings (dictionary §16):** 1002 = RBC Royal Bank do-not-solicit = the marketing/email gate (regulatory-must-honor). 1012 = channel (email) consent. **1014 = Share-for-Marketing across RBC = CROSS-ENTITY sharing, NOT a same-entity email gate.** 1015 = Share-for-Services. 1016 = Bank & Credit Bureau (sharing-side). 1036 = Share-for-Online-Personalization. **1006 = group UNCONFIRMED (product-pref vs consent).**
+- **Writers (APP_SYS_CD):** 7999 = onboarding/default batch (writes the blank millions — NOT client decisions). 7001 = Sales Platform/branch. 7003 = Royal Direct/call centre. 7020 = SFMC. 7033/7053 = undocumented, at volume.
+- **Grain rule:** CPC is client-level; vendor is email-address-level but consumer_id_hashed is **~1:1 with CLNT_NO** (T4) → client-grain joins are valid.
+- **Number-reporting rule:** report the do-not-solicit leak as a **COUNT with explicit denominator** (~9,500 of 15,016 in-system), never a bare 19% (its denominator folds in 34,430 clients who were never in the send system).
+- **DEFAULT stream:** TREATMENT_ID='DEFAULT' = mail outside campaign taxonomy (service + broken-template + UNTAGGED MARKETING e.g. Mydoh/Edge) → invisible to MNE-based suppression. Governance finding.
+
+### E. Settled vs open
+- **Settled:** no automated unsub→CPC bridge on ANY switch; 1014 ≠ email gate; 1002 = email gate; no email multiplicity (1:1); DEFAULT stream exists and bypasses MNE suppression.
+- **Open:** T1b cluster time-shape of the 1016 trickle; 1006's group; CLNT_NO alignment CPC↔vendor (strong evidence OK — leaker counts matched T3, worth one confirm query); effective-dating of standing; red-team v2 process items (Legal consult, delivery-vs-decisioning definition).
+
+### F. Red-team v2 status after the archaeology (round-2 fable file; none previously dispositioned)
+- **#4 email-vs-client grain — RESOLVED** by T4 (consumer_id_hashed 1:1 with CLNT_NO; no multiplicity).
+- **#7 1002 email-applicability / unconfirmed 1012 — RESOLVED** by T3 (1002 empirically IS the email gate No≪Yes; 1014 isn't).
+- **#2 1014-as-breach / cross-program mail — RESOLVED** by dictionary §16 + T3 (1014 = sharing; purge 1014-breach language).
+- **#1 "received email" undefined — IMPROVED:** got_email now = disposition_cd=1 (dispatched send), not a decisioning row. **#3 re-consent / #11 CASL** — handled in E8 exclusions. **#10 pipe false-precision / #12 behavior-vs-failure** — dissolved by the "two worlds / no enforcement loop" framing (no "failure" claim). **#15 standing/selection** — T1 now scans ALL switches, standing validated, dictionary-backed.
+- **Deck-fixable:** #5 dedupe (use distinct-client counts), #6 send-volume normalization, #9 0.4%/0.04% diagram fix, #8 SUBSTR/named-campaign (DEFAULT-stream finding).
+- **NOT deck-fixable (Andre action):** #13 Legal/Compliance consult, #14 definitions meeting with system owners → defuse by framing the deck as an internal analytic read + questions for owners, not a compliance allegation.

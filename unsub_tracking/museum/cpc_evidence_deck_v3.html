@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unsubscribe × CPC — Evidence deck (v3)</title>
+<style>
+  :root{
+    --blue:#0051A4; --navy:#002887; --sky:#0091DA; --vibrant:#006AC3;
+    --slate:#9DB0CF; --steel:#6E8DB8; --gold:#FDDF00;
+    --ink:#111C1F; --muted:#4f5763; --faint:#8b93a0;
+    --grid:#e5e8ec; --axis:#c5cbd3; --rule:#d9dee5;
+    --paper:#ffffff; --card:#F1F0EF; --ice:#EDF4F6;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#dfe3e8;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{font-variant-numeric:tabular-nums}
+  .slide{
+    width:min(1220px,96vw);height:min(688px,91vh);margin:3vh auto;background:var(--paper);
+    border:1px solid #d3d7dd;box-shadow:0 12px 34px rgba(17,28,31,.10);
+    display:none;flex-direction:column;padding:30px 42px 14px;position:relative;
+  }
+  .slide.active{display:flex}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:7px}
+  h1{font-size:22px;line-height:1.22;font-weight:700;letter-spacing:-.01em;color:var(--blue);max-width:68ch}
+  .hrule{height:2px;background:var(--slate);opacity:.55;margin:13px 0 4px}
+  .body{display:grid;grid-template-columns:1.5fr 1fr;gap:32px;flex:1;align-items:center;min-height:0}
+  .body.wide{display:flex;flex-direction:column;justify-content:center;align-items:stretch}
+  figure{margin:0;width:100%}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin:0 0 2px 58px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+  .grid{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--axis);stroke-width:1.3}
+  .gl{font-size:11px;fill:var(--faint);text-anchor:end}
+  .val{font-size:13.5px;font-weight:700;fill:var(--ink);text-anchor:middle}
+  .valw{font-size:13px;font-weight:700;fill:#fff;text-anchor:middle}
+  .cat{font-size:11.5px;fill:var(--ink);text-anchor:middle;font-weight:600}
+  .sub{font-size:10px;fill:var(--faint);text-anchor:middle}
+  .pan{font-size:11.5px;fill:var(--muted);text-anchor:middle;font-weight:700}
+  .yt{font-size:11px;fill:var(--muted);text-anchor:middle}
+  .ct{font-size:14px;font-weight:700;fill:var(--ink)}
+  .cs{font-size:11.5px;fill:var(--muted)}
+  .anno{font-size:11px;fill:var(--steel);font-weight:600}
+  .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-weight:700}
+  .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:9px}
+  .read .k{font-weight:700;color:var(--navy)}
+  .read .note{font-size:11px;color:var(--muted);font-style:italic;margin-top:8px;line-height:1.38}
+  footer{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);margin-top:10px;padding-top:7px;
+    font-size:10.5px;color:var(--steel);font-style:italic}
+  .setup{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:15px;flex:1;align-content:stretch}
+  .card{background:var(--card);border:1px solid #e3e2e0;border-radius:6px;padding:14px 16px}
+  .card.ice{background:var(--ice);border-color:#d5e3e8}
+  .card h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--blue);margin-bottom:8px;font-weight:700}
+  .card p{font-size:12.5px;line-height:1.42;color:#23282f;margin-bottom:6px}
+  .card p:last-child{margin-bottom:0}
+  .card .kk{font-weight:700;color:var(--navy)}
+  .deft{width:100%;border-collapse:collapse;font-size:12px}
+  .deft td{padding:4px 0;vertical-align:top;border-bottom:1px solid #e0dfdc}
+  .deft tr:last-child td{border-bottom:0}
+  .deft .code{font-weight:700;color:var(--blue);white-space:nowrap;padding-right:9px}
+  .pend{font-size:10px;color:var(--steel);font-style:italic}
+  .fnote{font-size:10.5px;color:var(--muted);margin-top:7px;line-height:1.38}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .cols h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;font-weight:700}
+  .cols ul{list-style:none}
+  .cols li{font-size:12.8px;line-height:1.36;color:#23282f;padding:5px 0 5px 16px;position:relative}
+  .cols li::before{content:"▪";position:absolute;left:0;color:var(--blue)}
+  .nav{position:fixed;right:22px;bottom:16px;display:flex;align-items:center;gap:11px;
+    background:#fff;border:1px solid #d3d7dd;border-radius:22px;padding:5px 9px;box-shadow:0 4px 14px rgba(17,28,31,.14);z-index:10}
+  .nav button{border:0;background:var(--blue);color:#fff;width:27px;height:27px;border-radius:50%;font-size:14px;cursor:pointer;line-height:1}
+  .nav button:disabled{background:var(--slate);cursor:default}
+  .nav .count{font-size:12px;color:var(--muted);font-weight:600;min-width:44px;text-align:center}
+  .mark{position:absolute;top:12px;right:20px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);font-weight:600}
+
+  @media print{
+    html,body{height:auto;background:#fff}
+    .slide{display:flex !important;width:100%;height:auto;min-height:0;margin:0;border:0;box-shadow:none;
+      padding:14mm 14mm 8mm;page-break-after:always;break-after:page}
+    .slide:last-of-type{page-break-after:auto;break-after:auto}
+    .nav{display:none !important}
+    .card,.card.ice{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+  @page{size:A4 landscape;margin:0}
+</style>
+</head>
+<body>
+
+  <!-- SLIDE 1 — SETUP -->
+  <section class="slide active">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Exploratory analysis · what we studied</div>
+    <h1>The relationship between an email unsubscribe and the bank's consent record (CPC)</h1>
+    <div class="hrule"></div>
+    <div class="setup">
+      <div class="card">
+        <h3>The question</h3>
+        <p>When a client unsubscribes from a marketing email, what does their consent state in the Consent Preference Centre (CPC) look like, and does the unsubscribe relate to it?</p>
+        <p>An exploratory read. We describe what we monitored and what we observed.</p>
+      </div>
+      <div class="card">
+        <h3>The two data sources</h3>
+        <p><span class="kk">Vendor email feedback (SFMC):</span> every NBA marketing-campaign email unsubscribe, across roughly 30 active programs. Grain = email address.</p>
+        <p><span class="kk">CPC preference log:</span> each client's consent switches and every change to them. Grain = client × switch.</p>
+      </div>
+      <div class="card ice">
+        <h3>The switches we monitor</h3>
+        <table class="deft">
+          <tr><td class="code">1002</td><td><b>Do-not-solicit</b> (RBC Royal Bank). Blank counts as <b>Yes</b>.</td></tr>
+          <tr><td class="code">1012</td><td><b>Banking e-mail</b> — email channel consent. Blank counts as <b>Yes</b>.</td></tr>
+          <tr><td class="code">1014</td><td><b>Share-for-Marketing</b> across RBC — read by campaign decisioning to select clients. Blank counts as <b>No</b>.</td></tr>
+        </table>
+        <div class="fnote">Consent states: <b>5001</b> Yes · <b>5002</b> No · <b>5003</b> blank. On 1014 and 1015 an explicit No and a blank are one population and are counted together throughout this deck. On 1002 and 1012 a blank is a Yes, so No means an explicit No.</div>
+      </div>
+      <div class="card">
+        <h3>How we connect them</h3>
+        <p>We follow the <span class="kk">same clients</span>. Of <span class="kk">319,733</span> who unsubscribed between July 2025 and June 2026, we join each on client number into their CPC records — every change within 90 days, and their standing position.</p>
+        <p class="fnote" style="margin:0">Email-to-client join: 1.12 addresses per client. The reverse direction, one address mapping to several clients, is not yet quantified.</p>
+      </div>
+    </div>
+    <footer><span>Sources: vendor email feedback and the CPC preference log</span><span>July 2025 – June 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 2 — VENDOR SIDE -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">The vendor side · who unsubscribed and from what</div>
+    <h1>319,733 clients unsubscribed from marketing email over the twelve&nbsp;months</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg viewBox="0 0 1120 400" role="img" aria-label="Monthly email unsubscribes July 2025 to June 2026, and the ten campaigns generating the most unsubscribes">
+          <text x="0" y="14" class="ct">Email unsubscribes by month</text>
+          <text x="0" y="31" class="cs">Distinct clients · July 2025 – June 2026 · 319,733 total</text>
+          <line class="grid" x1="46" y1="60"  x2="530" y2="60"/>
+          <line class="grid" x1="46" y1="122" x2="530" y2="122"/>
+          <line class="grid" x1="46" y1="184" x2="530" y2="184"/>
+          <line class="axis" x1="46" y1="246" x2="530" y2="246"/>
+          <text class="gl" x="40" y="64">32k</text><text class="gl" x="40" y="126">24k</text>
+          <text class="gl" x="40" y="188">16k</text><text class="gl" x="40" y="250">0</text>
+
+          <rect x="53"  y="99"  width="30" height="147" rx="3" fill="var(--blue)"/>
+          <rect x="93"  y="76"  width="30" height="170" rx="3" fill="var(--blue)"/>
+          <rect x="133" y="92"  width="30" height="154" rx="3" fill="var(--blue)"/>
+          <rect x="173" y="88"  width="30" height="158" rx="3" fill="var(--blue)"/>
+          <rect x="213" y="97"  width="30" height="149" rx="3" fill="var(--blue)"/>
+          <rect x="253" y="104" width="30" height="142" rx="3" fill="var(--blue)"/>
+          <rect x="293" y="113" width="30" height="133" rx="3" fill="var(--blue)"/>
+          <rect x="333" y="99"  width="30" height="147" rx="3" fill="var(--blue)"/>
+          <rect x="373" y="97"  width="30" height="149" rx="3" fill="var(--blue)"/>
+          <rect x="413" y="119" width="30" height="127" rx="3" fill="var(--blue)"/>
+          <rect x="453" y="160" width="30" height="86"  rx="3" fill="var(--blue)"/>
+          <rect x="493" y="136" width="30" height="110" rx="3" fill="var(--blue)"/>
+          <text class="val" x="108" y="70">30,920</text>
+          <text class="val" x="468" y="154">18,746</text>
+
+          <text class="sub" x="68"  y="262">Jul</text><text class="sub" x="108" y="262">Aug</text>
+          <text class="sub" x="148" y="262">Sep</text><text class="sub" x="188" y="262">Oct</text>
+          <text class="sub" x="228" y="262">Nov</text><text class="sub" x="268" y="262">Dec</text>
+          <text class="sub" x="308" y="262">Jan</text><text class="sub" x="348" y="262">Feb</text>
+          <text class="sub" x="388" y="262">Mar</text><text class="sub" x="428" y="262">Apr</text>
+          <text class="sub" x="468" y="262">May</text><text class="sub" x="508" y="262">Jun</text>
+          <text class="sub" x="68"  y="276" style="fill:var(--faint)">2025</text>
+          <text class="sub" x="308" y="276" style="fill:var(--faint)">2026</text>
+
+          <text x="600" y="14" class="ct">Campaigns generating the most unsubscribes</text>
+          <text x="600" y="31" class="cs">Distinct clients · July 2025 – June 2026 · top ten of 30+ programs</text>
+          <g font-size="11.5" fill="var(--ink)">
+            <text x="600" y="62">VRE</text><rect x="640" y="52" width="340" height="14" rx="3" fill="var(--navy)"/><text x="990" y="63" font-weight="700">116,909</text>
+            <text x="600" y="84">VME</text><rect x="640" y="74" width="138" height="14" rx="3" fill="var(--blue)"/><text x="788" y="85" font-weight="700">47,511</text>
+            <text x="600" y="106">VRG</text><rect x="640" y="96" width="48" height="14" rx="3" fill="var(--blue)"/><text x="698" y="107" font-weight="700">16,372</text>
+            <text x="600" y="128">FWC</text><rect x="640" y="118" width="31" height="14" rx="3" fill="var(--sky)"/><text x="681" y="129" font-weight="700">10,647</text>
+            <text x="600" y="150">PAL</text><rect x="640" y="140" width="31" height="14" rx="3" fill="var(--sky)"/><text x="681" y="151" font-weight="700">10,609</text>
+            <text x="600" y="172">SBB</text><rect x="640" y="162" width="27" height="14" rx="3" fill="var(--sky)"/><text x="677" y="173" font-weight="700">9,391</text>
+            <text x="600" y="194">PCO</text><rect x="640" y="184" width="25" height="14" rx="3" fill="var(--sky)"/><text x="675" y="195" font-weight="700">8,576</text>
+            <text x="600" y="216">RFT</text><rect x="640" y="206" width="22" height="14" rx="3" fill="var(--sky)"/><text x="672" y="217" font-weight="700">7,568</text>
+            <text x="600" y="238">QCF</text><rect x="640" y="228" width="18" height="14" rx="3" fill="var(--sky)"/><text x="668" y="239" font-weight="700">6,135</text>
+            <text x="600" y="260">TAO</text><rect x="640" y="250" width="18" height="14" rx="3" fill="var(--sky)"/><text x="668" y="261" font-weight="700">6,073</text>
+          </g>
+        </svg>
+      </figure>
+    </div>
+    <footer><span>Source: vendor email feedback · clients counted once, at their first unsubscribe</span><span>July 2025 – June 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 3 — STANDING NO BY SWITCH -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">The consent side · how many clients stand "No" on each switch</div>
+    <h1>Counted under each switch's own rule, 1014 holds seventy times as many clients as&nbsp;1002</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg viewBox="0 0 1120 400" role="img" aria-label="Clients standing No at 1 April 2026: switch 1002 has 49,446, switch 1012 has 33,103, and switch 1014 has 3,452,289 of which 79,340 are explicit and the rest blank">
+          <text x="0" y="14" class="ct">Clients standing "No" on each switch</text>
+          <text x="0" y="31" class="cs">Standing position at 1 April 2026 · each switch counted under its own blank rule · shown on two scales</text>
+
+          <text x="46" y="62" class="pan" text-anchor="start">1002 and 1012 — blank counts as Yes, so "No" is an explicit No</text>
+          <line class="grid" x1="46" y1="90"  x2="500" y2="90"/>
+          <line class="axis" x1="46" y1="230" x2="500" y2="230"/>
+          <text class="gl" x="40" y="94">60,000</text><text class="gl" x="40" y="234">0</text>
+          <rect x="120" y="115" width="96" height="115" rx="3" fill="var(--navy)"/>
+          <rect x="320" y="153" width="96" height="77"  rx="3" fill="var(--blue)"/>
+          <text class="val" x="168" y="107">49,446</text>
+          <text class="val" x="368" y="145">33,103</text>
+          <text class="cat" x="168" y="248">1002</text><text class="sub" x="168" y="262">do-not-solicit</text>
+          <text class="cat" x="368" y="248">1012</text><text class="sub" x="368" y="262">banking e-mail</text>
+
+          <text x="600" y="62" class="pan" text-anchor="start">1014 — blank counts as No, so both are counted together</text>
+          <line class="grid" x1="600" y1="90"  x2="1080" y2="90"/>
+          <line class="axis" x1="600" y1="230" x2="1080" y2="230"/>
+          <text class="gl" x="594" y="94">4,000,000</text><text class="gl" x="594" y="234">0</text>
+          <rect x="760" y="109" width="150" height="118" rx="3" fill="var(--navy)"/>
+          <rect x="760" y="227" width="150" height="3"  fill="var(--gold)"/>
+          <text class="val" x="835" y="101">3,452,289</text>
+          <text class="cat" x="835" y="248">1014</text><text class="sub" x="835" y="262">share-for-marketing</text>
+          <text class="anno" x="925" y="231">79,340 recorded as an explicit No</text>
+          <text class="anno" x="925" y="245">3,372,949 recorded as blank</text>
+
+          <text x="46" y="300" class="cs">At a single shared scale the first two switches would not be visible, so they are drawn on their own axis.</text>
+        </svg>
+      </figure>
+    </div>
+    <footer><span>Source: CPC preference log · latest answer per client and switch before 1 April 2026</span><span>standing position, 1 April 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 4 — THE UNSUBSCRIBERS' STANDING POSITION -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">The two sides together · where the unsubscribers stand in CPC</div>
+    <h1>Of the 319,733 unsubscribers, 89,518 stand "No" on 1014 — 912 of them by an explicit&nbsp;answer</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--navy)"></i>Explicit No (5002)</span>
+          <span><i class="sw" style="background:var(--gold)"></i>Blank (5003)</span>
+          <span><i class="sw" style="background:var(--sky)"></i>Explicit Yes (5001)</span>
+          <span><i class="sw" style="background:var(--slate)"></i>No row on the switch</span>
+        </div>
+        <svg viewBox="0 0 1120 360" role="img" aria-label="Standing position of the 319,733 unsubscribers on each switch. On 1002: 384 explicit No, 76,528 blank, 19,051 explicit Yes, 223,770 no row. On 1012: 581 explicit No, 4 blank, 7,003 explicit Yes, 312,145 no row. On 1014: 912 explicit No, 88,606 blank, 6,842 explicit Yes, 223,373 no row.">
+          <text x="0" y="16" class="ct">Standing position of the 319,733 unsubscribers, on each switch</text>
+          <text x="0" y="33" class="cs">Clients who unsubscribed July 2025 – June 2026 · their latest CPC answer on each switch</text>
+
+          <text x="46" y="86" class="cat" text-anchor="start">1002</text>
+          <text x="46" y="100" class="sub" text-anchor="start">blank = Yes</text>
+          <rect x="140" y="70" width="1"   height="34" fill="var(--navy)"/>
+          <rect x="143" y="70" width="221" height="34" fill="var(--gold)"/>
+          <rect x="366" y="70" width="55"  height="34" fill="var(--sky)"/>
+          <rect x="423" y="70" width="647" height="34" fill="var(--slate)"/>
+          <text x="253" y="92" class="valw">76,528 blank</text>
+          <text x="746" y="92" class="valw">223,770 with no row on the switch</text>
+          <text class="anno" x="140" y="64">384 explicit No</text>
+          <text class="anno" x="393" y="64" text-anchor="middle">19,051 Yes</text>
+
+          <text x="46" y="176" class="cat" text-anchor="start">1012</text>
+          <text x="46" y="190" class="sub" text-anchor="start">blank = Yes</text>
+          <rect x="140" y="160" width="2"   height="34" fill="var(--navy)"/>
+          <rect x="143" y="160" width="1"   height="34" fill="var(--gold)"/>
+          <rect x="145" y="160" width="20"  height="34" fill="var(--sky)"/>
+          <rect x="167" y="160" width="903" height="34" fill="var(--slate)"/>
+          <text x="618" y="182" class="valw">312,145 with no row on the switch</text>
+          <text class="anno" x="140" y="154">581 explicit No · 4 blank · 7,003 Yes</text>
+
+          <text x="46" y="266" class="cat" text-anchor="start">1014</text>
+          <text x="46" y="280" class="sub" text-anchor="start">blank = No</text>
+          <rect x="140" y="250" width="3"   height="34" fill="var(--navy)"/>
+          <rect x="143" y="250" width="256" height="34" fill="var(--gold)"/>
+          <rect x="401" y="250" width="20"  height="34" fill="var(--sky)"/>
+          <rect x="423" y="250" width="647" height="34" fill="var(--slate)"/>
+          <text x="271" y="272" class="valw">88,606 blank</text>
+          <text x="746" y="272" class="valw">223,373 with no row on the switch</text>
+          <text class="anno" x="140" y="244">912 explicit No</text>
+          <text class="anno" x="411" y="244" text-anchor="middle">6,842 Yes</text>
+          <rect x="140" y="292" width="259" height="3" fill="var(--navy)"/>
+          <text class="anno" x="140" y="310" style="fill:var(--navy)">89,518 counted as "No" on 1014 — explicit and blank together — of 319,733 unsubscribers</text>
+
+          <line class="axis" x1="140" y1="330" x2="1070" y2="330"/>
+          <text class="sub" x="140" y="345" text-anchor="start">0</text>
+          <text class="sub" x="1070" y="345" text-anchor="end">319,733 clients</text>
+        </svg>
+      </figure>
+    </div>
+    <footer><span>Source: CPC preference log · latest answer per client and switch, full history</span><span>unsubscribes July 2025 – June 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 5 — TIMING -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Timing · when the CPC change was written relative to the unsubscribe</div>
+    <h1>Of the 135 opt-outs recorded after an unsubscribe, 58 were written more than ninety days&nbsp;later</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <svg viewBox="0 0 900 400" role="img" aria-label="Time from unsubscribe to the first subsequent explicit opt-out: 10 clients within one day, 11 within two to seven days, 24 within eight to thirty days, 32 within thirty-one to ninety days, 58 after more than ninety days">
+          <text x="0" y="16" class="ct">Time from the unsubscribe to the CPC opt-out</text>
+          <text x="0" y="33" class="cs">The 135 clients whose explicit opt-out was recorded after their unsubscribe · July 2025 – June 2026</text>
+          <line class="grid" x1="56" y1="80"  x2="880" y2="80"/>
+          <line class="grid" x1="56" y1="170" x2="880" y2="170"/>
+          <line class="grid" x1="56" y1="260" x2="880" y2="260"/>
+          <line class="axis" x1="56" y1="320" x2="880" y2="320"/>
+          <text class="gl" x="50" y="84">60</text><text class="gl" x="50" y="174">40</text>
+          <text class="gl" x="50" y="264">20</text><text class="gl" x="50" y="324">0</text>
+
+          <rect x="96"  y="275" width="120" height="45"  rx="3" fill="var(--slate)"/>
+          <rect x="256" y="271" width="120" height="49"  rx="3" fill="var(--slate)"/>
+          <rect x="416" y="212" width="120" height="108" rx="3" fill="var(--blue)"/>
+          <rect x="576" y="176" width="120" height="144" rx="3" fill="var(--blue)"/>
+          <rect x="736" y="59"  width="120" height="261" rx="3" fill="var(--navy)"/>
+          <text class="val" x="156" y="267">10</text>
+          <text class="val" x="316" y="263">11</text>
+          <text class="val" x="476" y="204">24</text>
+          <text class="val" x="636" y="168">32</text>
+          <text class="val" x="796" y="51">58</text>
+
+          <text class="cat" x="156" y="340">within 1 day</text>
+          <text class="cat" x="316" y="340">2–7 days</text>
+          <text class="cat" x="476" y="340">8–30 days</text>
+          <text class="cat" x="636" y="340">31–90 days</text>
+          <text class="cat" x="796" y="340">over 90 days</text>
+          <text class="sub" x="468" y="366">time between the client's unsubscribe and their opt-out being written in CPC</text>
+        </svg>
+      </figure>
+      <div class="read">
+        <h2>What we measured</h2>
+        <p>Of the 319,733 unsubscribers, <span class="k">1,387</span> hold an explicit opt-out on a monitored switch. <span class="k">1,252</span> of those were already recorded before the client unsubscribed; <span class="k">135</span> were recorded after.</p>
+        <p>The chart shows how long after the unsubscribe those 135 were written. <span class="k">21</span> fall within the first week; <span class="k">58</span> fall beyond ninety days.</p>
+        <p>The same test on blank writes returns <span class="k">two clients</span> on each switch, every one of them written by the onboarding batch.</p>
+        <p class="note">Explicit opt-out = a 5002 answer written on 1002, 1012 or 1014. Lag measured from the client's first unsubscribe.</p>
+      </div>
+    </div>
+    <footer><span>Source: CPC preference log joined to vendor email feedback on client number</span><span>unsubscribes July 2025 – June 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 6 — EMAIL RECEIVED + OPEN QUESTIONS -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Delivery · campaign email received by clients standing "No"</div>
+    <h1>8,941 of the 49,446 clients standing do-not-solicit received named campaign email in the&nbsp;quarter</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <svg viewBox="0 0 900 400" role="img" aria-label="Named campaign email received April to June 2026: 8,941 of 49,446 clients standing No on 1002; 27,030 of 96,317 clients standing No across the three switches; 111,651 of 253,721 clients who had unsubscribed before April">
+          <text x="0" y="16" class="ct">Clients who received named campaign email, April – June 2026</text>
+          <text x="0" y="33" class="cs">Service and untagged mail excluded · each bar is the share of its own cohort</text>
+
+          <text x="0" y="90" class="cat" text-anchor="start">Standing "No" on 1002</text>
+          <text x="0" y="105" class="sub" text-anchor="start">cohort 49,446</text>
+          <rect x="250" y="70" width="600" height="30" rx="3" fill="#eef1f4"/>
+          <rect x="250" y="70" width="109" height="30" rx="3" fill="var(--navy)"/>
+          <text x="372" y="90" font-size="13.5" font-weight="700" fill="var(--ink)">8,941 · 18%</text>
+
+          <text x="0" y="180" class="cat" text-anchor="start">Standing "No" on any of the three</text>
+          <text x="0" y="195" class="sub" text-anchor="start">cohort 96,317</text>
+          <rect x="250" y="160" width="600" height="30" rx="3" fill="#eef1f4"/>
+          <rect x="250" y="160" width="168" height="30" rx="3" fill="var(--blue)"/>
+          <text x="431" y="180" font-size="13.5" font-weight="700" fill="var(--ink)">27,030 · 28%</text>
+
+          <text x="0" y="270" class="cat" text-anchor="start">Unsubscribed before April 2026</text>
+          <text x="0" y="285" class="sub" text-anchor="start">cohort 253,721</text>
+          <rect x="250" y="250" width="600" height="30" rx="3" fill="#eef1f4"/>
+          <rect x="250" y="250" width="264" height="30" rx="3" fill="var(--sky)"/>
+          <text x="527" y="270" font-size="13.5" font-weight="700" fill="var(--ink)">111,651 · 44%</text>
+
+          <line class="axis" x1="250" y1="310" x2="850" y2="310"/>
+          <text class="sub" x="250" y="326" text-anchor="start">0%</text>
+          <text class="sub" x="850" y="326" text-anchor="end">100% of the cohort</text>
+          <text class="sub" x="550" y="356">Cohorts are defined at 1 April 2026; email measured across the following quarter.</text>
+        </svg>
+      </figure>
+      <div class="read">
+        <h2>Open with the channel and system owners</h2>
+        <div class="cols" style="grid-template-columns:1fr">
+          <ul>
+            <li>Which suppression list does send-time read from?</li>
+            <li>Which switch is the campaign-email key, and what is its update SLA?</li>
+            <li>Does program-level consent override a standing opt-out?</li>
+            <li>Is 1012 the channel key, and what writes it?</li>
+          </ul>
+        </div>
+        <p class="note" style="margin-top:12px">Counts are of named campaign deployments only. A separate untagged stream of 825,309 sends reaching 39,499 clients in the quarter sits outside the campaign taxonomy and is excluded from every figure above.</p>
+      </div>
+    </div>
+    <footer><span>Source: CPC standing position at 1 April 2026 against named campaign email recipients</span><span>April – June 2026</span></footer>
+  </section>
+
+  <div class="nav">
+    <button id="prev">‹</button><span class="count" id="count">1 / 6</span><button id="next">›</button>
+  </div>
+
+<script>
+(function(){
+  var slides=[].slice.call(document.querySelectorAll(".slide"));
+  var i=0, prev=document.getElementById("prev"), next=document.getElementById("next"), count=document.getElementById("count");
+  function show(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach(function(s,k){s.classList.toggle("active",k===i);});
+    count.textContent=(i+1)+" / "+slides.length;
+    prev.disabled=i===0; next.disabled=i===slides.length-1;}
+  prev.onclick=function(){show(i-1);}; next.onclick=function(){show(i+1);};
+  document.addEventListener("keydown",function(e){if(e.key==="ArrowRight"||e.key==="PageDown")show(i+1);if(e.key==="ArrowLeft"||e.key==="PageUp")show(i-1);});
+  show(0);
+})();
+</script>
+</body>
+</html>
