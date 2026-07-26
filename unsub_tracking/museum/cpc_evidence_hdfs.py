@@ -16,9 +16,17 @@
 # %% [0] Load reservoir + derive (pure Spark from here)
 # Every evidence cell returns a named pandas table (e1, e2, e2b, ...). Nothing is printed.
 import pandas as pd
-from IPython.display import display
+from IPython.display import display, Markdown
 from pyspark.sql import functions as F, Window as W
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+
+def T(label, df):
+    """Render a titled table AND return it. A bare `df` renders only as a cell's last expression;
+    this always renders, wherever it sits, and still hands back the object to export or plot."""
+    out = df.toPandas() if hasattr(df, "toPandas") else df
+    display(Markdown("**" + label + "**  ·  " + str(len(out)) + " rows"))
+    display(out)
+    return out
 
 BASE = "hdfs:///user/427966379/unsub_cpc/"
 ub  = spark.read.parquet(BASE + "unsub_base/*")
@@ -64,7 +72,7 @@ _cpc = (cpc.filter("CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-
 e1 = (_unsub.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit")
         .unionByName(_cpc.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit"))
         .orderBy("series", "pref_id", "month_yyyymm")).toPandas()
-display("e1"); display(e1)
+e1 = T("E1 - monthly volumes, per switch under its own blank rule", e1)
 
 # %% [2] E2 - the blind gate + before/after split
 print("[E2 | causation, EXPLICIT RECORDS ONLY - answers 'did an explicit CPC opt-out ever follow the unsub'.")
@@ -82,7 +90,7 @@ e2 = pd.DataFrame([("unsub_clients_total", total),
                    ("without_explicit_cpc_optout", total - with_ex),
                    ("optout_recorded_before_unsub", before),
                    ("optout_recorded_after_unsub", after)], columns=["measure", "clients"])
-display("e2"); display(e2)
+e2 = T("E2 - explicit CPC opt-out crossover, before vs after the unsubscribe", e2)
 
 # %% [3] E2b - rule-based standing of the unsubscribers, per switch
 print("[E2b | protection UNDER THE DICTIONARY RULE - blank=NO on 1014/1015, blank=YES elsewhere.")
@@ -104,7 +112,7 @@ for _p in [1002, 1006, 1012, 1014]:
 e2b = pd.DataFrame(_rows, columns=["pref_id", "blank_rule", "unsubscribers",
                                    "explicit_no", "blank", "explicit_yes", "no_row",
                                    "standing_no_under_rule", "standing_not_no_under_rule"])
-display("e2b"); display(e2b)
+e2b = T("E2b - standing position of the unsubscribers per switch, under the blank rule", e2b)
 
 # %% [4] E3 - no bridge: flips by writer x had-prior-unsub
 print("[E3 | explicit-No EVENTS by writer system - blanks are 7999 feed writes, not client flips (see diagnosis D1)]")
