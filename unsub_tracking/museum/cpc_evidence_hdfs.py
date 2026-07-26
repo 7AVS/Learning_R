@@ -16,6 +16,7 @@
 # %% [0] Load reservoir + derive (pure Spark from here)
 # Every evidence cell returns a named pandas table (e1, e2, e2b, ...). Nothing is printed.
 import pandas as pd
+from IPython.display import display
 from pyspark.sql import functions as F, Window as W
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
@@ -63,7 +64,7 @@ _cpc = (cpc.filter("CHG_TMSTMP >= DATE '2025-07-01' AND CHG_TMSTMP < DATE '2026-
 e1 = (_unsub.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit")
         .unionByName(_cpc.select("series", "pref_id", "blank_rule", "month_yyyymm", "no_rule", "no_explicit"))
         .orderBy("series", "pref_id", "month_yyyymm")).toPandas()
-e1
+display("e1"); display(e1)
 
 # %% [2] E2 - the blind gate + before/after split
 print("[E2 | causation, EXPLICIT RECORDS ONLY - answers 'did an explicit CPC opt-out ever follow the unsub'.")
@@ -81,7 +82,7 @@ e2 = pd.DataFrame([("unsub_clients_total", total),
                    ("without_explicit_cpc_optout", total - with_ex),
                    ("optout_recorded_before_unsub", before),
                    ("optout_recorded_after_unsub", after)], columns=["measure", "clients"])
-e2
+display("e2"); display(e2)
 
 # %% [3] E2b - rule-based standing of the unsubscribers, per switch
 print("[E2b | protection UNDER THE DICTIONARY RULE - blank=NO on 1014/1015, blank=YES elsewhere.")
@@ -103,7 +104,7 @@ for _p in [1002, 1006, 1012, 1014]:
 e2b = pd.DataFrame(_rows, columns=["pref_id", "blank_rule", "unsubscribers",
                                    "explicit_no", "blank", "explicit_yes", "no_row",
                                    "standing_no_under_rule", "standing_not_no_under_rule"])
-e2b
+display("e2b"); display(e2b)
 
 # %% [4] E3 - no bridge: flips by writer x had-prior-unsub
 print("[E3 | explicit-No EVENTS by writer system - blanks are 7999 feed writes, not client flips (see diagnosis D1)]")
