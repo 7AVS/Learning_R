@@ -293,3 +293,55 @@ print("lag from unsub to FIRST blank event (a pipe spikes a_0-7d):")
 lagb.groupBy("PREF_ID", "lag_bucket").count().orderBy("PREF_ID", "lag_bucket").show(20, False)
 print("writer of blank events within 30d of an unsub:")
 jb.filter("days <= 30").groupBy("PREF_ID", "APP_SYS_CD").count().orderBy(F.col("count").desc()).show(10, False)
+
+# %% [17] E12 - THE BRIDGE TEST. For every one of the 319,733 unsubscribers, how long after their
+# unsubscribe does a "No" appear on each switch - counting No the way each switch defines it
+# (1014: explicit 5002 OR blank 5003; 1002/1012: explicit 5002 only). The 'z_never' row is the
+# denominator: clients for whom it never appears at all in the window. A bridge clusters at a_0-1d.
+NO_EQ = (F.when(F.col("PREF_ID").isin(1014, 1015),
+                F.col("CLNT_CONSENT_TYP").isin(5002, 5003))
+          .otherwise(F.col("CLNT_CONSENT_TYP") == 5002))
+
+_after = (cpc.filter(F.col("PREF_ID").isin(1002, 1012, 1014)).filter(NO_EQ)
+             .join(uf.select("CLNT_NO", "unsub_tm"), "CLNT_NO", "inner")
+             .filter("CHG_TMSTMP > unsub_tm")
+             .groupBy("CLNT_NO", "PREF_ID")
+             .agg(F.min("CHG_TMSTMP").alias("first_no_tm"), F.min("unsub_tm").alias("unsub_tm"))
+             .withColumn("days", F.datediff("first_no_tm", "unsub_tm")))
+
+def _bucket(c):
+    return (F.when(c <= 1, "a_0-1d").when(c <= 7, "b_2-7d").when(c <= 30, "c_8-30d")
+             .when(c <= 90, "d_31-90d").when(c <= 180, "e_91-180d").otherwise("f_180d+"))
+
+_sw = spark.createDataFrame([(1002,), (1012,), (1014,)], ["PREF_ID"])
+_grid = uf.select("CLNT_NO").crossJoin(_sw)
+_all = (_grid.join(_after.select("CLNT_NO", "PREF_ID", "days"), ["CLNT_NO", "PREF_ID"], "left")
+             .withColumn("lag_bucket", F.when(F.col("days").isNull(), F.lit("z_never")).otherwise(_bucket(F.col("days")))))
+
+e12 = T("E12 - days from the unsubscribe until a No appears on each switch (z_never = it never does)",
+        _all.groupBy("lag_bucket").pivot("PREF_ID", [1002, 1012, 1014])
+            .agg(F.countDistinct("CLNT_NO")).orderBy("lag_bucket"))
+
+# %% [18] E12b - the same test on clients with a full 90 days of follow-up, so a June unsubscriber
+# with three days of runway cannot be mistaken for a client the bridge failed to reach.
+e12b = T("E12b - same test, unsubscribers before 1 Apr 2026 only (>= 90 days of follow-up)",
+         _all.join(uf.select("CLNT_NO", "unsub_tm"), "CLNT_NO")
+             .filter("unsub_tm < DATE '2026-04-01'")
+             .groupBy("lag_bucket").pivot("PREF_ID", [1002, 1012, 1014])
+             .agg(F.countDistinct("CLNT_NO")).orderBy("lag_bucket"))
+
+# %% [19] E12c - of the clients where a No DID appear, was it an explicit answer or a blank write,
+# and which system wrote it. Explicit at 0-7 days = a client action or a sync; a blank at 0-7 days
+# written by the default batch is something else entirely.
+_firstrow = (cpc.filter(F.col("PREF_ID").isin(1002, 1012, 1014)).filter(NO_EQ)
+                .join(uf.select("CLNT_NO", "unsub_tm"), "CLNT_NO", "inner")
+                .filter("CHG_TMSTMP > unsub_tm"))
+_w12 = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").asc())
+e12c = T("E12c - when a No did appear: explicit or blank, which system wrote it, at what lag",
+         _firstrow.withColumn("rk", F.row_number().over(_w12)).filter("rk = 1")
+                  .withColumn("days", F.datediff("CHG_TMSTMP", "unsub_tm"))
+                  .withColumn("lag_bucket", _bucket(F.col("days")))
+                  .withColumn("kind", F.when(F.col("CLNT_CONSENT_TYP") == 5002, "explicit_no").otherwise("blank"))
+                  .groupBy("PREF_ID", "kind", "lag_bucket")
+                  .agg(F.countDistinct("CLNT_NO").alias("clients"), F.first("APP_SYS_CD").alias("a_writer"))
+                  .orderBy("PREF_ID", "kind", "lag_bucket"))
