@@ -1,12 +1,15 @@
-# Which system wrote the client's CURRENT blank position on 1014? HDFS only, no Teradata.
+# Which system wrote the client's CURRENT position on 1014? HDFS only, no Teradata.
 #
 # Question (Andre, 2026-07-25): a client with no row on 1014 is a true blank and is NOT an opt-out.
 # A client whose LATEST 1014 event is blank (5003) IS counted as an opt-out under the dictionary rule.
-# So some system is writing a blank row rather than leaving the client absent, and that write is what
-# puts 88,606 unsubscribers into the counted population. Which system, and when.
+# So some system writes a blank row rather than leaving the client absent, and that write is what puts
+# 88,606 unsubscribers into the counted population. Which system, and when.
 #
-# Standing = the LAST event per (client, switch). Earlier events are irrelevant - this is an event log
-# and only the latest position stands. Nothing counts events; every cell counts clients at standing.
+# Standing = the LAST event per (client, switch). Earlier events are irrelevant in an event log.
+#
+# OUTPUT SHAPE IS DELIBERATE: every table is <= 10 rows and <= 5 columns so it stays legible in a photo
+# of the screen. The dominant writer per group is collapsed onto one row with its share; the long tail
+# is summarised, not listed. Full detail is available by re-running a cell without the top-1 filter.
 
 # %% [0] Load + reduce to the standing row per client and switch
 import pandas as pd
@@ -15,64 +18,74 @@ from pyspark.sql import functions as F, Window as W
 
 spark.sparkContext.setLogLevel("ERROR")
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
-pd.set_option("display.max_rows", 200)
+pd.set_option("display.max_rows", 40)
+pd.set_option("display.width", 140)
 
 def T(label, df):
     """Render a titled table AND return it. A bare `df` renders only as a cell's last expression;
-    this always renders, wherever it sits, and still hands back the object to export or plot."""
+    this always renders wherever it sits, and still hands back the object to export or plot."""
     out = df.toPandas() if hasattr(df, "toPandas") else df
     display(Markdown("**" + label + "**  ·  " + str(len(out)) + " rows"))
     display(out)
     return out
 
+def top_writer(df, group_cols):
+    """Collapse APP_SYS_CD to the dominant writer per group: its code, its clients, its share,
+    plus how many other writers exist. Keeps the table small enough to photograph."""
+    tot = df.groupBy(*group_cols).agg(F.sum("clients").alias("clients_total"),
+                                      F.countDistinct("APP_SYS_CD").alias("n_writers"))
+    w = W.partitionBy(*group_cols).orderBy(F.col("clients").desc())
+    top = (df.withColumn("rk", F.row_number().over(w)).filter("rk = 1")
+             .select(*group_cols, F.col("APP_SYS_CD").alias("top_writer"),
+                     F.col("clients").alias("top_writer_clients")))
+    return (tot.join(top, group_cols)
+               .withColumn("top_writer_share", F.round(F.col("top_writer_clients") / F.col("clients_total"), 3))
+               .select(*group_cols, "clients_total", "top_writer", "top_writer_share", "n_writers"))
+
 BASE = "hdfs:///user/427966379/unsub_cpc/"
 cpc = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "cpc_pref")
 
-w = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").desc())
-standing = (cpc.withColumn("rn", F.row_number().over(w)).filter("rn = 1")
+w0 = W.partitionBy("CLNT_NO", "PREF_ID").orderBy(F.col("CHG_TMSTMP").desc())
+standing = (cpc.withColumn("rn", F.row_number().over(w0)).filter("rn = 1")
                .withColumn("value", F.when(F.col("CLNT_CONSENT_TYP") == 5001, "yes")
                                      .when(F.col("CLNT_CONSENT_TYP") == 5002, "no")
                                      .when(F.col("CLNT_CONSENT_TYP") == 5003, "blank")
-                                     .otherwise(F.concat(F.lit("other_"), F.col("CLNT_CONSENT_TYP").cast("string"))))
-               .withColumn("year_of_standing_write", F.year("CHG_TMSTMP")))
+                                     .otherwise(F.lit("other")))
+               .withColumn("yr", F.year("CHG_TMSTMP")))
 standing.cache()
 
 uf = (spark.read.parquet(BASE + "unsub_base/*")
         .groupBy("CLNT_NO").agg(F.min("unsub_tm").alias("unsub_tm")))
 
-# %% [1] A1 - who wrote the standing 1014 position, by value
-a1 = T("A1 - who wrote the STANDING 1014 position, by value",
-       standing.filter("PREF_ID = 1014")
-               .groupBy("value", "APP_SYS_CD")
-               .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
-               .orderBy("value", F.col("clients_standing").desc()))
+# %% [1] A1 - who wrote the standing 1014 position, one row per value.  4 rows
+_g = (standing.filter("PREF_ID = 1014").groupBy("value", "APP_SYS_CD")
+              .agg(F.countDistinct("CLNT_NO").alias("clients")))
+a1 = T("A1 - standing 1014 position: clients, and the system that wrote most of them",
+       top_writer(_g, ["value"]).orderBy(F.col("clients_total").desc()))
 
-# %% [2] A2 - when was the standing blank written, and by whom
-a2 = T("A2 - year the standing 1014 blank was written, by writer system",
-       standing.filter("PREF_ID = 1014 AND value = 'blank'")
-               .groupBy("year_of_standing_write", "APP_SYS_CD")
-               .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
-               .orderBy("year_of_standing_write", F.col("clients_standing").desc()))
+# %% [2] A2 - when the standing blank was written.  <= 10 rows
+_g = (standing.filter("PREF_ID = 1014 AND value = 'blank'").groupBy("yr", "APP_SYS_CD")
+              .agg(F.countDistinct("CLNT_NO").alias("clients")))
+a2 = T("A2 - standing 1014 blank by year it was written, with the dominant writer that year",
+       top_writer(_g, ["yr"]).orderBy(F.col("clients_total").desc()).limit(10))
 
-# %% [3] A3 - the same standing picture across all four monitored switches
-a3 = T("A3 - standing position across 1002 / 1006 / 1012 / 1014, by value and writer",
-       standing.filter("PREF_ID IN (1002, 1006, 1012, 1014)")
-               .groupBy("PREF_ID", "value", "APP_SYS_CD")
-               .agg(F.countDistinct("CLNT_NO").alias("clients_standing"))
-               .orderBy("PREF_ID", "value", F.col("clients_standing").desc()))
+# %% [3] A3 - the same picture across the four monitored switches, No and blank only.  <= 8 rows
+_g = (standing.filter("PREF_ID IN (1002, 1006, 1012, 1014) AND value IN ('no','blank')")
+              .groupBy("PREF_ID", "value", "APP_SYS_CD")
+              .agg(F.countDistinct("CLNT_NO").alias("clients")))
+a3 = T("A3 - standing No and blank per switch, with the dominant writer",
+       top_writer(_g, ["PREF_ID", "value"]).orderBy("PREF_ID", "value"))
 
-# %% [4] A4 - unsubscribers only: who wrote THEIR standing 1014 position
-a4 = T("A4 - unsubscribers only: who wrote THEIR standing 1014 position",
-       standing.filter("PREF_ID = 1014").join(uf, "CLNT_NO", "inner")
-               .groupBy("value", "APP_SYS_CD")
-               .agg(F.countDistinct("CLNT_NO").alias("unsubscribers_standing"))
-               .orderBy("value", F.col("unsubscribers_standing").desc()))
+# %% [4] A4 - unsubscribers only: who wrote THEIR standing 1014 position.  4 rows
+_g = (standing.filter("PREF_ID = 1014").join(uf, "CLNT_NO", "inner")
+              .groupBy("value", "APP_SYS_CD").agg(F.countDistinct("CLNT_NO").alias("clients")))
+a4 = T("A4 - unsubscribers: standing 1014 position and the system that wrote most of them",
+       top_writer(_g, ["value"]).orderBy(F.col("clients_total").desc()))
 
-# %% [5] A5 - was that standing blank written before or after the client's unsubscribe
-a5 = T("A5 - unsubscribers standing blank on 1014: written before or after their unsubscribe",
-       standing.filter("PREF_ID = 1014 AND value = 'blank'").join(uf, "CLNT_NO", "inner")
-               .withColumn("vs_unsub", F.when(F.col("CHG_TMSTMP") < F.col("unsub_tm"), "written_before_unsub")
-                                        .otherwise("written_after_unsub"))
-               .groupBy("vs_unsub", "APP_SYS_CD")
-               .agg(F.countDistinct("CLNT_NO").alias("unsubscribers"))
-               .orderBy("vs_unsub", F.col("unsubscribers").desc()))
+# %% [5] A5 - was that standing blank written before or after the unsubscribe.  2 rows
+_g = (standing.filter("PREF_ID = 1014 AND value = 'blank'").join(uf, "CLNT_NO", "inner")
+              .withColumn("vs_unsub", F.when(F.col("CHG_TMSTMP") < F.col("unsub_tm"), "before_unsub")
+                                       .otherwise("after_unsub"))
+              .groupBy("vs_unsub", "APP_SYS_CD").agg(F.countDistinct("CLNT_NO").alias("clients")))
+a5 = T("A5 - unsubscribers standing blank on 1014: was it written before or after they unsubscribed",
+       top_writer(_g, ["vs_unsub"]).orderBy(F.col("clients_total").desc()))
