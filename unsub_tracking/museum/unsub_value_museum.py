@@ -215,13 +215,20 @@ except NameError:
                        "SparkSession.builder call here by design - do not run this file outside "
                        "that kernel.")
 
+# Existence is checked through Spark's own reader, NOT spark._jvm - raw JVM gateway access
+# (FileSystem/Path) throws "does not exist in the JVM" on this kernel (2026-07-27). A read that
+# fails with a path-not-found message means the namespace is simply absent (first run); any other
+# failure means the session itself is broken and must stop the run.
 try:
-    _hconf = spark._jsc.hadoopConfiguration()
-    _fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(_hconf)
-    _base_exists = _fs.exists(spark._jvm.org.apache.hadoop.fs.Path(BASE))
+    spark.read.parquet(BASE).limit(1).collect()
+    _base_exists = True
 except Exception as e:
-    raise RuntimeError("Cannot reach HDFS to check " + BASE + " - fix the spark/HDFS session "
-                       "before running any pull cell. Underlying error: " + str(e)[:300])
+    _msg = str(e)
+    if ("Path does not exist" in _msg) or ("PATH_NOT_FOUND" in _msg) or ("FileNotFound" in _msg):
+        _base_exists = False
+    else:
+        raise RuntimeError("Cannot reach HDFS to check " + BASE + " - fix the spark/HDFS session "
+                           "before running any pull cell. Underlying error: " + _msg[:300])
 
 if _base_exists:
     print("HDFS round-trip OK - own namespace", BASE, "already exists (not the first run).")
