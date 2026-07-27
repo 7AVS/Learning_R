@@ -29,6 +29,14 @@
 # COUNTS ONLY - rates are a pivot-time calculation, never baked into the file. Every printed
 # number is backed by a server round-trip or an assertion; no bare "done" prints (house hard rule).
 #
+# DURABLE vs SCRATCH (Andre, 2026-07-27): client_spine and cube (both saved to HDFS in cell [20];
+# cube is ALSO downloaded as unsub_value_cube.xlsx via the Jupyter file browser) plus the _meta/
+# manifests are the DURABLE artifacts - every table in this file re-derives from client_spine alone,
+# without touching EDW or UCP again. The four raw EDW landings (sends_mne/*, first_send,
+# unsubs_window/*, prior_unsubs) are SCRATCH - they exist only so a kernel death mid-pull doesn't
+# cost a re-pull from EDW, and are removable once the durable outputs are verified landed (see the
+# opt-in CLEANUP cell at the end of this file).
+#
 # Engine split: Teradata-direct (DTZV01.VENDOR_FEEDBACK_EVENT / _MASTER, EDW pulls in cells
 # [4]-[11]) feeds this file's OWN HDFS reservoir; everything from cell [12] onward is Spark/YARN
 # only, reading this file's landings plus UCP (/prod/sz/tsz/00172/data/ucp4/).
@@ -835,12 +843,29 @@ assert _n_cube_rows < 200_000, (
 
 table_c_pd = (table_c.orderBy("mne", "age_band", "tenure_band", "prod_band", "prof_quintile")
               .toPandas())
-print("TABLE C - writing", len(table_c_pd), "rows to unsub_value_cube.xlsx")
-table_c_pd.to_excel("unsub_value_cube.xlsx", index=False)
-print("TABLE C written: unsub_value_cube.xlsx (", len(table_c_pd), "rows,",
-      list(table_c_pd.columns), ")")
 
-# client-grain spine, saved so Andre can re-cut without re-pulling EDW or re-reading UCP.
+# DUAL SAVE - the notebook's working directory is NOT persistent storage (kernel restart, pod
+# recycle, or workspace reset wipes it silently); HDFS is. The xlsx stays because it's how Andre
+# actually gets the file out (Jupyter file browser download), but it must not be the ONLY copy - if
+# the download never happens, or the kernel dies before he clicks it, the cube would otherwise be
+# gone. The HDFS parquet copy is the artifact that survives regardless of what happens to the tab.
+print("TABLE C - writing", len(table_c_pd), "rows to unsub_value_cube.xlsx (download copy)")
+table_c_pd.to_excel("unsub_value_cube.xlsx", index=False)
+
+table_c.write.mode("overwrite").parquet(BASE + "cube")
+_n_cube_after = spark.read.parquet(BASE + "cube").count()
+assert _n_cube_after == _n_cube_rows, (
+    "cube HDFS readback mismatch: wrote " + str(_n_cube_rows) + " read back " + str(_n_cube_after))
+
+print("TABLE C written to BOTH destinations:")
+print("  1) local (download via Jupyter file browser): unsub_value_cube.xlsx (", len(table_c_pd),
+      "rows,", list(table_c_pd.columns), ")")
+print("  2) HDFS (durable - survives kernel death whether or not the xlsx was ever downloaded):",
+      BASE + "cube", "-", _n_cube_after, "rows, readback confirmed")
+
+# client-grain spine, saved so Andre can re-cut without re-pulling EDW or re-reading UCP. THIS IS
+# THE durable artifact of the whole file: every table above (A/B/C) is re-derivable from
+# client_spine alone, without touching EDW or UCP again.
 client_spine = client_banded.select(
     "CLNT_NO", "bucket", "unsub_mne", "unsub_tm", "anchor", "ucp_month_end", "ucp_matched",
     "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT", "PROF_TOT_ANNUAL",
@@ -954,3 +979,71 @@ with open(__file__ if "__file__" in dir() else "unsub_value_museum.py", "r", enc
     _source = _f.read()
 ast.parse(_source)
 print("ast.parse PASSED - script is syntactically valid.")
+
+# %% [24] CLEANUP - drop the raw pulls, keep the outputs. The four raw EDW landings
+# (sends_mne/*, first_send, unsubs_window/*, prior_unsubs) are SCRATCH: they exist only so a kernel
+# death mid-run doesn't cost a re-pull from EDW. Once client_spine and cube (cell [20]) are verified
+# landed, every downstream table (A/B/C, this whole file) re-derives from client_spine alone - the
+# raw pulls are then redundant weight sitting on HDFS. Manifests under _meta/ are KEPT regardless
+# (tiny, and they ARE the audit trail: exact SQL text, md5, row count, landed_at timestamp per pull).
+
+RUN_CLEANUP = False  # flip to True once you're done pulling for the day, then run this cell.
+                     # Andre runs this whole file top to bottom every time - if this defaulted to
+                     # True, cleanup would fire on every run and force a re-pull on the very next one.
+
+if not RUN_CLEANUP:
+    print("CLEANUP skipped (RUN_CLEANUP = False) - raw pulls retained for restartability")
+else:
+    # GUARD FIRST - refuse to delete anything unless BOTH durable outputs read back non-empty.
+    # landed() distinguishes "genuinely missing" (False) from "cannot verify HDFS state" (raises) -
+    # same semantics used everywhere else in this file, applied here before any destructive action.
+    _spine_landed = landed("client_spine")
+    _cube_landed = landed("cube")
+    _spine_ok = _spine_landed and spark.read.parquet(BASE + "client_spine").count() > 0
+    _cube_ok = _cube_landed and spark.read.parquet(BASE + "cube").count() > 0
+
+    if not (_spine_ok and _cube_ok):
+        print("REFUSAL - CLEANUP STOPPED. client_spine readable-and-nonempty:", _spine_ok,
+              "| cube readable-and-nonempty:", _cube_ok)
+        raise RuntimeError(
+            "Refusing to delete raw pulls: client_spine and/or cube did not read back non-empty "
+            "from HDFS. Re-run cell [20] and confirm BOTH readback prints succeed before running "
+            "CLEANUP again. NOTHING WAS DELETED.")
+
+    print("GUARD PASSED - client_spine and cube both read back non-empty. Proceeding with cleanup.")
+
+    # build the exact raw paths from the SAME constants the pull cells use, so this list can never
+    # drift out of sync with what was actually landed - no shell wildcards, every path listed.
+    _raw_paths = (
+        ["sends_mne/" + _m for _m in _P1_MONTHS]
+        + ["first_send"]
+        + ["unsubs_window/" + _q for (_q, *_rest) in _unsubs_window_chunks]
+        + ["prior_unsubs"]
+    )
+
+    print("Deleting", len(_raw_paths), "raw landing paths under", BASE, ":")
+    for _p in _raw_paths:
+        _full = BASE + _p
+        print("  rm -r -f", _full)
+        get_ipython().system("hdfs dfs -rm -r -f " + _full)
+
+    print("\n--- BASE listing after cleanup ---")
+    get_ipython().system("hdfs dfs -ls " + BASE)
+
+    # re-verify: the two durable outputs must STILL read back fine after the deletes above
+    _spine_after = spark.read.parquet(BASE + "client_spine").count()
+    _cube_after = spark.read.parquet(BASE + "cube").count()
+    assert _spine_after > 0, ("client_spine unreadable/empty AFTER cleanup - this should be "
+                               "impossible (cleanup only touches raw paths), investigate immediately")
+    assert _cube_after > 0, ("cube unreadable/empty AFTER cleanup - this should be impossible "
+                              "(cleanup only touches raw paths), investigate immediately")
+    print("POST-CLEANUP CHECK PASSED - client_spine (", _spine_after, "rows ) and cube (",
+          _cube_after, "rows ) both still read back fine.")
+
+    _cleanup_report = pd.DataFrame(
+        [{"dataset": _p, "status": "REMOVED"} for _p in _raw_paths]
+        + [{"dataset": "client_spine", "status": "KEPT (durable output)"},
+           {"dataset": "cube", "status": "KEPT (durable output)"},
+           {"dataset": "_meta/* manifests", "status": "KEPT (audit trail)"}]
+    )
+    T("CLEANUP REPORT - dataset -> KEPT / REMOVED", _cleanup_report)
