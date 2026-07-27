@@ -337,10 +337,14 @@ print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + 
 # DISTINCT (CLNT_NO, TREATMENT_ID) per month, disposition_cd=1, Jul2025-Jun2026, landed to
 # sends_12m/mYYYY_MM. Size-probe first - largest pull in the project. Added 2026-07-26.
 
-# %% [18] SIZE PROBE - MANDATORY BEFORE ANY PULL. Cheap COUNT(*) / COUNT(DISTINCT CLNT_NO) per month
-# (NOT COUNT(DISTINCT CLNT_NO||TREATMENT_ID) - that distinct-pair count is exactly what the land()
-# pulls would compute and is not cheap; event_rows is a safe UPPER BOUND on the distinct-pair grain
-# each month's land() will pull, since DISTINCT can only shrink a row count, never grow it).
+# %% [18] SIZE PROBE - MANDATORY BEFORE ANY PULL. Cheap COUNT(*) on the EVENT table alone, no join,
+# no DISTINCT. event_rows (raw disp_cd=1 event rows) is a safe UPPER BOUND on the distinct
+# (CLNT_NO, TREATMENT_ID) grain each month's land() will actually pull - dedup can only shrink a
+# row count, never grow it - so it's all the 50M stop-rule needs. The original probe joined
+# VENDOR_FEEDBACK_EVENT to VENDOR_FEEDBACK_MASTER and ran COUNT(DISTINCT m.CLNT_NO) on top - one
+# month of that died with Teradata error 2646 "No more spool space" on the first run (2026-07-26).
+# The join was the correct fix for the pulls below (cells [19]-[30]), but the probe itself never
+# needed it - event-only avoids the failure mode entirely.
 _MONTHS = [
     ("m2025_07", "2025-07-01", "2025-08-01", "2025-06-01", "2025-09-01"),
     ("m2025_08", "2025-08-01", "2025-09-01", "2025-07-01", "2025-10-01"),
@@ -359,18 +363,15 @@ _MONTHS = [
 _probe_rows = []
 for _name, _ds, _de, _ls, _le in _MONTHS:
     _pdf = edw_pd("""
-SELECT COUNT(*) AS event_rows, COUNT(DISTINCT m.CLNT_NO) AS distinct_clients
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '%s' AND e.disposition_dt_tm < DATE '%s'
-  AND m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
-""" % (_ds, _de, _ls, _le))
-    _probe_rows.append((_name, int(_pdf["event_rows"][0]), int(_pdf["distinct_clients"][0])))
+SELECT COUNT(*) AS event_rows
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd = 1
+  AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+""" % (_ds, _de))
+    _probe_rows.append((_name, int(_pdf["event_rows"][0])))
 
-_probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows", "distinct_clients"])
-print("SIZE PROBE - disp_cd=1 sends, per month (event_rows is an upper bound on the land() pull size):")
+_probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows"])
+print("SIZE PROBE - disp_cd=1 sends, per month (event_rows, event-only, is an upper bound on the land() pull size):")
 print(_probe.to_string(index=False))
 
 # Decision rule: land() pulls the whole month through pandas (edw_pd) before writing to HDFS - a
@@ -386,135 +387,185 @@ else:
     print("All 12 months are under the", _STOP_THRESHOLD, "event_rows threshold - safe to proceed with cells [19]-[30].")
 
 # %% [19] EXTRACT sends_12m 2025-07 (load_tm 2025-06..2025-09)
+# Dedupe BEFORE the join (derived table ek): VENDOR_FEEDBACK_EVENT is filtered to disp_cd=1 and
+# DISTINCT'd on (consumer_id_hashed, TREATMENT_ID) first, so the join against
+# VENDOR_FEEDBACK_MASTER runs on unique keys instead of every raw send-event row. This is the
+# spool fix for Teradata error 2646 (2026-07-26 run) - same technique applies to cells [20]-[30].
+#
+# FALLBACK if a month still spools: split the disposition window at the 16th and land to two
+# subpaths, e.g. sends_12m/m2025_07_a (disp_dt < 16th) and sends_12m/m2025_07_b (disp_dt >= 16th),
+# same SELECT otherwise. NOTE: pack 28 (archaeology/28_unsub_value_ucp.py) does NOT glob
+# sends_12m/* - it reads a hardcoded 12-item list, _SEND_MONTHS (lines 166-167), in
+# read_sends_12m() (line 171). Splitting a month into _a/_b subpaths requires editing that list
+# (and read_sends_12m's union) to include both halves in place of the single month - do that
+# before relying on a split month downstream.
+# land("sends_12m/m2025_07_a", """ ... AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-07-16' ... """)
+# land("sends_12m/m2025_07_b", """ ... AND e.disposition_dt_tm >= DATE '2025-07-16' AND e.disposition_dt_tm < DATE '2025-08-01' ... """)
 land("sends_12m/m2025_07", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-07-01' AND disposition_dt_tm < DATE '2025-08-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
-  AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
 """)
 
 # %% [20] EXTRACT sends_12m 2025-08 (load_tm 2025-07..2025-10)
 land("sends_12m/m2025_08", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-08-01' AND disposition_dt_tm < DATE '2025-09-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-08-01' AND e.disposition_dt_tm < DATE '2025-09-01'
-  AND m.load_tm >= DATE '2025-07-01' AND m.load_tm < DATE '2025-10-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-07-01' AND m.load_tm < DATE '2025-10-01'
 """)
 
 # %% [21] EXTRACT sends_12m 2025-09 (load_tm 2025-08..2025-11)
 land("sends_12m/m2025_09", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-09-01' AND disposition_dt_tm < DATE '2025-10-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-09-01' AND e.disposition_dt_tm < DATE '2025-10-01'
-  AND m.load_tm >= DATE '2025-08-01' AND m.load_tm < DATE '2025-11-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-08-01' AND m.load_tm < DATE '2025-11-01'
 """)
 
 # %% [22] EXTRACT sends_12m 2025-10 (load_tm 2025-09..2025-12)
 land("sends_12m/m2025_10", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-10-01' AND disposition_dt_tm < DATE '2025-11-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-10-01' AND e.disposition_dt_tm < DATE '2025-11-01'
-  AND m.load_tm >= DATE '2025-09-01' AND m.load_tm < DATE '2025-12-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-09-01' AND m.load_tm < DATE '2025-12-01'
 """)
 
 # %% [23] EXTRACT sends_12m 2025-11 (load_tm 2025-10..2026-01)
 land("sends_12m/m2025_11", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-11-01' AND disposition_dt_tm < DATE '2025-12-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-11-01' AND e.disposition_dt_tm < DATE '2025-12-01'
-  AND m.load_tm >= DATE '2025-10-01' AND m.load_tm < DATE '2026-01-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-10-01' AND m.load_tm < DATE '2026-01-01'
 """)
 
 # %% [24] EXTRACT sends_12m 2025-12 (load_tm 2025-11..2026-02)
 land("sends_12m/m2025_12", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-12-01' AND disposition_dt_tm < DATE '2026-01-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2025-12-01' AND e.disposition_dt_tm < DATE '2026-01-01'
-  AND m.load_tm >= DATE '2025-11-01' AND m.load_tm < DATE '2026-02-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-11-01' AND m.load_tm < DATE '2026-02-01'
 """)
 
 # %% [25] EXTRACT sends_12m 2026-01 (load_tm 2025-12..2026-03)
 land("sends_12m/m2026_01", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-01-01' AND disposition_dt_tm < DATE '2026-02-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-01-01' AND e.disposition_dt_tm < DATE '2026-02-01'
-  AND m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-03-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-03-01'
 """)
 
 # %% [26] EXTRACT sends_12m 2026-02 (load_tm 2026-01..2026-04)
 land("sends_12m/m2026_02", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-02-01' AND disposition_dt_tm < DATE '2026-03-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-02-01' AND e.disposition_dt_tm < DATE '2026-03-01'
-  AND m.load_tm >= DATE '2026-01-01' AND m.load_tm < DATE '2026-04-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2026-01-01' AND m.load_tm < DATE '2026-04-01'
 """)
 
 # %% [27] EXTRACT sends_12m 2026-03 (load_tm 2026-02..2026-05)
 land("sends_12m/m2026_03", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-03-01' AND disposition_dt_tm < DATE '2026-04-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-03-01' AND e.disposition_dt_tm < DATE '2026-04-01'
-  AND m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-05-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-05-01'
 """)
 
 # %% [28] EXTRACT sends_12m 2026-04 (load_tm 2026-03..2026-06)
 land("sends_12m/m2026_04", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-04-01' AND disposition_dt_tm < DATE '2026-05-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-04-01' AND e.disposition_dt_tm < DATE '2026-05-01'
-  AND m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-06-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-06-01'
 """)
 
 # %% [29] EXTRACT sends_12m 2026-05 (load_tm 2026-04..2026-07)
 land("sends_12m/m2026_05", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-05-01' AND disposition_dt_tm < DATE '2026-06-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-05-01' AND e.disposition_dt_tm < DATE '2026-06-01'
-  AND m.load_tm >= DATE '2026-04-01' AND m.load_tm < DATE '2026-07-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2026-04-01' AND m.load_tm < DATE '2026-07-01'
 """)
 
 # %% [30] EXTRACT sends_12m 2026-06 (load_tm 2026-05..2026-08)
 land("sends_12m/m2026_06", """
-SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2026-06-01' AND disposition_dt_tm < DATE '2026-07-01'
+) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd = 1
-  AND e.disposition_dt_tm >= DATE '2026-06-01' AND e.disposition_dt_tm < DATE '2026-07-01'
-  AND m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
 """)
 
 # %% [31] VERIFICATION - read back all 12 months, prove presence/non-emptiness/non-null TREATMENT_ID,
