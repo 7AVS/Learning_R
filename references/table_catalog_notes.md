@@ -48,7 +48,7 @@ Engine/syntax rules are NOT here — see `references/query_engine_guidelines.md`
 **HDFS paths** (use `/prod/...`, cluster prefix varies):
 GA4 ecommerce `/prod/sz/tsz/00198/data/ga4-ecommerce`; GA4 narrow `/prod/sz/tsz/00198/data/ga4-narrow`;
 tactic event hist `/prod/sz/tsz/00150/cc/DTZTA_T_TACTIC_EVNT_HIST/`; SCOT `/prod/sz/tsz/00222/data/CREDIT_APPLICATION_SNAPSHOT`;
-UCP `/prod/sz/tsz/00172/data/ucp4/`.
+UCP `/prod/sz/tsz/00172/data/ucp4/`. Full UCP field catalog, read pattern, gotchas, governance: `references/ucp/`.
 
 ---
 
