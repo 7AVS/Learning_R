@@ -218,7 +218,11 @@ WHERE e.disposition_cd IN (1, 5)
   AND m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-08-01'
 """)
 
-# %% [12] EXTRACT gate x campaign aggregate (server-side; tiny result; feeds E6/E7)
+# %% [12] EXTRACT standing-No x campaign aggregate (server-side; tiny result; read by archaeology/24 [A9])
+# "No" is PER SWITCH, matching cpc_evidence_hdfs.py IS_NO: on 1014 a blank (5003) is a No and is counted
+# with the explicit No; on 1002/1006/1012 a blank is a Yes so only 5002 counts. Until 2026-07-26 this cell
+# applied 5002-only to all four switches, which silently dropped the 1014 blank population.
+# OPEN: NULL CLNT_CONSENT_TYP is NOT counted here (matches the evidence file, differs from archaeology/23 and /26).
 land("gate_mne_agg", """
 WITH latest AS (
   SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP,
@@ -226,7 +230,8 @@ WITH latest AS (
   FROM DDWV01.CPC_RB_PREF_LOG
   WHERE PREF_ID IN (1002, 1012, 1014, 1006) AND CHG_TMSTMP < DATE '2026-04-01'
 ),
-gates AS (SELECT CLNT_NO, PREF_ID FROM latest WHERE rn = 1 AND CLNT_CONSENT_TYP = 5002)
+gates AS (SELECT CLNT_NO, PREF_ID FROM latest WHERE rn = 1
+          AND (CLNT_CONSENT_TYP = 5002 OR (PREF_ID = 1014 AND CLNT_CONSENT_TYP = 5003)))
 SELECT g.PREF_ID, SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
        COUNT(DISTINCT g.CLNT_NO) AS clients, COUNT(*) AS send_rows
 FROM gates g
@@ -237,7 +242,7 @@ WHERE e.disposition_cd = 1
   AND e.disposition_dt_tm >= DATE '2026-04-01' AND e.disposition_dt_tm < DATE '2026-07-01'
   AND m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-08-01'
 GROUP BY 1, 2
-""")
+""", replace=True)   # re-pull once: 1014 rule fixed (blank now counted as No). Drop replace= after it lands.
 
 # %% [13] EXTRACT blank-MNE identification sample (red-team #3's last hole: WHAT are the treatments with blank pos 8-10?)
 # Tiny pull: top 500 blank-mne treatments by send volume, Apr-Jun era, with subject line + channel/category fields.
@@ -327,3 +332,222 @@ WHERE disposition_cd = 4
 """)
 
 print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + unsub_match_diag) - then run archaeology/24_cpc_rt3_audit.py")
+
+# UNSUB VALUE (pack 28) - 12-month send base. Denominator for the value-of-an-unsub analysis.
+# DISTINCT (CLNT_NO, TREATMENT_ID) per month, disposition_cd=1, Jul2025-Jun2026, landed to
+# sends_12m/mYYYY_MM. Size-probe first - largest pull in the project. Added 2026-07-26.
+
+# %% [18] SIZE PROBE - MANDATORY BEFORE ANY PULL. Cheap COUNT(*) / COUNT(DISTINCT CLNT_NO) per month
+# (NOT COUNT(DISTINCT CLNT_NO||TREATMENT_ID) - that distinct-pair count is exactly what the land()
+# pulls would compute and is not cheap; event_rows is a safe UPPER BOUND on the distinct-pair grain
+# each month's land() will pull, since DISTINCT can only shrink a row count, never grow it).
+_MONTHS = [
+    ("m2025_07", "2025-07-01", "2025-08-01", "2025-06-01", "2025-09-01"),
+    ("m2025_08", "2025-08-01", "2025-09-01", "2025-07-01", "2025-10-01"),
+    ("m2025_09", "2025-09-01", "2025-10-01", "2025-08-01", "2025-11-01"),
+    ("m2025_10", "2025-10-01", "2025-11-01", "2025-09-01", "2025-12-01"),
+    ("m2025_11", "2025-11-01", "2025-12-01", "2025-10-01", "2026-01-01"),
+    ("m2025_12", "2025-12-01", "2026-01-01", "2025-11-01", "2026-02-01"),
+    ("m2026_01", "2026-01-01", "2026-02-01", "2025-12-01", "2026-03-01"),
+    ("m2026_02", "2026-02-01", "2026-03-01", "2026-01-01", "2026-04-01"),
+    ("m2026_03", "2026-03-01", "2026-04-01", "2026-02-01", "2026-05-01"),
+    ("m2026_04", "2026-04-01", "2026-05-01", "2026-03-01", "2026-06-01"),
+    ("m2026_05", "2026-05-01", "2026-06-01", "2026-04-01", "2026-07-01"),
+    ("m2026_06", "2026-06-01", "2026-07-01", "2026-05-01", "2026-08-01"),
+]
+
+_probe_rows = []
+for _name, _ds, _de, _ls, _le in _MONTHS:
+    _pdf = edw_pd("""
+SELECT COUNT(*) AS event_rows, COUNT(DISTINCT m.CLNT_NO) AS distinct_clients
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '%s' AND e.disposition_dt_tm < DATE '%s'
+  AND m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+""" % (_ds, _de, _ls, _le))
+    _probe_rows.append((_name, int(_pdf["event_rows"][0]), int(_pdf["distinct_clients"][0])))
+
+_probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows", "distinct_clients"])
+print("SIZE PROBE - disp_cd=1 sends, per month (event_rows is an upper bound on the land() pull size):")
+print(_probe.to_string(index=False))
+
+# Decision rule: land() pulls the whole month through pandas (edw_pd) before writing to HDFS - a
+# pandas round-trip on >~50M rows is the expensive/risky case for this environment. event_rows is an
+# upper bound on the DISTINCT (CLNT_NO, TREATMENT_ID) row count land() will actually pull, so gate on it.
+_STOP_THRESHOLD = 50_000_000
+_over = _probe[_probe["event_rows"] > _STOP_THRESHOLD]
+if len(_over) > 0:
+    print("STOP - the following month(s) have event_rows over the", _STOP_THRESHOLD, "threshold and may "
+          "exceed a safe pandas round-trip size. DO NOT run their land() cell below without checking in first:")
+    print(_over.to_string(index=False))
+else:
+    print("All 12 months are under the", _STOP_THRESHOLD, "event_rows threshold - safe to proceed with cells [19]-[30].")
+
+# %% [19] EXTRACT sends_12m 2025-07 (load_tm 2025-06..2025-09)
+land("sends_12m/m2025_07", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
+  AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
+""")
+
+# %% [20] EXTRACT sends_12m 2025-08 (load_tm 2025-07..2025-10)
+land("sends_12m/m2025_08", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-08-01' AND e.disposition_dt_tm < DATE '2025-09-01'
+  AND m.load_tm >= DATE '2025-07-01' AND m.load_tm < DATE '2025-10-01'
+""")
+
+# %% [21] EXTRACT sends_12m 2025-09 (load_tm 2025-08..2025-11)
+land("sends_12m/m2025_09", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-09-01' AND e.disposition_dt_tm < DATE '2025-10-01'
+  AND m.load_tm >= DATE '2025-08-01' AND m.load_tm < DATE '2025-11-01'
+""")
+
+# %% [22] EXTRACT sends_12m 2025-10 (load_tm 2025-09..2025-12)
+land("sends_12m/m2025_10", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-10-01' AND e.disposition_dt_tm < DATE '2025-11-01'
+  AND m.load_tm >= DATE '2025-09-01' AND m.load_tm < DATE '2025-12-01'
+""")
+
+# %% [23] EXTRACT sends_12m 2025-11 (load_tm 2025-10..2026-01)
+land("sends_12m/m2025_11", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-11-01' AND e.disposition_dt_tm < DATE '2025-12-01'
+  AND m.load_tm >= DATE '2025-10-01' AND m.load_tm < DATE '2026-01-01'
+""")
+
+# %% [24] EXTRACT sends_12m 2025-12 (load_tm 2025-11..2026-02)
+land("sends_12m/m2025_12", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2025-12-01' AND e.disposition_dt_tm < DATE '2026-01-01'
+  AND m.load_tm >= DATE '2025-11-01' AND m.load_tm < DATE '2026-02-01'
+""")
+
+# %% [25] EXTRACT sends_12m 2026-01 (load_tm 2025-12..2026-03)
+land("sends_12m/m2026_01", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-01-01' AND e.disposition_dt_tm < DATE '2026-02-01'
+  AND m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-03-01'
+""")
+
+# %% [26] EXTRACT sends_12m 2026-02 (load_tm 2026-01..2026-04)
+land("sends_12m/m2026_02", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-02-01' AND e.disposition_dt_tm < DATE '2026-03-01'
+  AND m.load_tm >= DATE '2026-01-01' AND m.load_tm < DATE '2026-04-01'
+""")
+
+# %% [27] EXTRACT sends_12m 2026-03 (load_tm 2026-02..2026-05)
+land("sends_12m/m2026_03", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-03-01' AND e.disposition_dt_tm < DATE '2026-04-01'
+  AND m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-05-01'
+""")
+
+# %% [28] EXTRACT sends_12m 2026-04 (load_tm 2026-03..2026-06)
+land("sends_12m/m2026_04", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-04-01' AND e.disposition_dt_tm < DATE '2026-05-01'
+  AND m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-06-01'
+""")
+
+# %% [29] EXTRACT sends_12m 2026-05 (load_tm 2026-04..2026-07)
+land("sends_12m/m2026_05", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-05-01' AND e.disposition_dt_tm < DATE '2026-06-01'
+  AND m.load_tm >= DATE '2026-04-01' AND m.load_tm < DATE '2026-07-01'
+""")
+
+# %% [30] EXTRACT sends_12m 2026-06 (load_tm 2026-05..2026-08)
+land("sends_12m/m2026_06", """
+SELECT DISTINCT m.CLNT_NO, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 1
+  AND e.disposition_dt_tm >= DATE '2026-06-01' AND e.disposition_dt_tm < DATE '2026-07-01'
+  AND m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
+""")
+
+# %% [31] VERIFICATION - read back all 12 months, prove presence/non-emptiness/non-null TREATMENT_ID,
+# cross-check total distinct clients against the known 319,733 unsub cohort size.
+_month_names = [m for m, *_ in _MONTHS]
+_verify_rows = []
+_month_dfs = []
+for _m in _month_names:
+    _path = BASE + "sends_12m/" + _m
+    assert landed("sends_12m/" + _m), _m + " is NOT landed - rerun its cell above before verifying"
+    _sdf = spark.read.parquet(_path)
+    _month_dfs.append(_sdf)
+    _rows = _sdf.count()
+    _dc = _sdf.select("CLNT_NO").distinct().count()
+    _dt = _sdf.select("TREATMENT_ID").distinct().count()
+    _null_treat = _sdf.filter(F.col("TREATMENT_ID").isNull()).count()
+    assert _rows > 0, _m + " landed but is EMPTY"
+    assert _null_treat == 0, _m + " has " + str(_null_treat) + " rows with NULL TREATMENT_ID"
+    _verify_rows.append((_m, _rows, _dc, _dt))
+
+_verify = pd.DataFrame(_verify_rows, columns=["month", "rows", "distinct_clnt_no", "distinct_treatment_id"])
+print("VERIFICATION - sends_12m readback, per month (all 12 present, non-empty, TREATMENT_ID non-null):")
+print(_verify.to_string(index=False))
+assert len(_verify) == 12, "expected 12 months landed, found " + str(len(_verify))
+
+_all_sends = _month_dfs[0]
+for _sdf in _month_dfs[1:]:
+    _all_sends = _all_sends.unionByName(_sdf)
+_total_distinct_clients = _all_sends.select("CLNT_NO").distinct().count()
+_KNOWN_UNSUB_COHORT = 319_733
+print("Total distinct CLNT_NO across all 12 send months:", _total_distinct_clients)
+print("Known unsub cohort size (pack 28 / museum decks, Jul 2025-Jun 2026):", _KNOWN_UNSUB_COHORT)
+print("Sanity check:", "PASS - senders vastly exceed unsubscribers, as expected" if _total_distinct_clients > _KNOWN_UNSUB_COHORT * 5
+      else "FLAG - sender base is not vastly larger than the unsub cohort, investigate before using as a denominator")
+
+print("sends_12m reservoir complete - feeds pack 28 v3 (archaeology/28_unsub_value_ucp.py)")
