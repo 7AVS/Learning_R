@@ -532,38 +532,76 @@ assert not _missing_critical_ucp, (
 
 print("\nUCP SCHEMA PROBE PASSED - UCP_COLS and HAS_CLNT_TYP are now fixed for the rest of this run.")
 
-# %% [11] UCP READ - per anchor month-end, semi-join to only the clients needing that anchor
-# (same pattern as the prior version of this file / archaeology/28). CLNT_TYP == 'Personal' is the
-# verified filter value, applied only when HAS_CLNT_TYP (schema probe, cell [10b]) says the column
-# exists on this UCP snapshot. UCP_COLS also comes from that probe - the intersection with the real
-# schema, not a hardcoded list.
+# %% [11] UCP READ - ONE multi-partition read + ONE join, not a per-anchor loop. A 12-month leaver
+# window fans out to ~30 distinct anchor months (row index 29 in the old per-anchor summary table).
+# The prior version looped per anchor (read partition, filter, norm, semi-join, append), then
+# unionByName'd ~30 frames and forced the whole 30-branch DAG with a single .cache()+.count() -
+# ~450M rows scanned across 30 branches in one action. That killed the YARN session on 2026-07-27
+# (Py4JJavaError / SparkException: Job 558 cancelled because SparkContext was shut down). CLNT_TYP
+# == 'Personal' is the verified filter value, applied only when HAS_CLNT_TYP (schema probe, cell
+# [10b]) says the column exists on this UCP snapshot. UCP_COLS also comes from that probe - the
+# intersection with the real schema, not a hardcoded list.
 
-def read_ucp_anchor(anchor_str, needed_clients):
-    raw = (spark.read.option("basePath", UCP_BASE).parquet(UCP_BASE + "MONTH_END_DATE=" + anchor_str)
-           .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
-    if HAS_CLNT_TYP:
-        raw = raw.filter(F.trim(F.col("CLNT_TYP")) == "Personal")
-    raw = raw.join(needed_clients, "CLNT_NO", "leftsemi")
-    return raw.select(*UCP_COLS).withColumn("ucp_month_end", F.lit(anchor_str))
+# REQUESTS - (CLNT_NO, ucp_anchor) needed pairs, built from leaver_anchored alone (no UCP touched
+# yet). This replaces the old per-anchor "_needed" query inside the loop.
+_requests = (leaver_anchored.filter(F.col("anchor").isNotNull())
+             .withColumn("ucp_anchor", F.date_format(F.col("anchor"), "yyyy-MM-dd"))
+             .select("CLNT_NO", "ucp_anchor")
+             .distinct())
 
-_ucp_frames, _ucp_read_summary = [], []
-for _a in _anchor_months:
-    _needed = (leaver_anchored.withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
-               .filter(F.col("anchor_str") == _a).select("CLNT_NO").distinct())
-    _n_needed = _needed.count()
-    _sel = read_ucp_anchor(_a, _needed)
-    _n_matched = _sel.count()
-    _ucp_read_summary.append({"anchor": _a, "needed_distinct_clients": _n_needed, "matched_rows": _n_matched})
-    _ucp_frames.append(_sel)
+# assert every anchor month this run needs is actually a UCP partition on disk (cell [8]'s
+# _ucp_avail) - fail loud with the exact missing months, rather than a bare Spark
+# AnalysisException out of the multi-path read below.
+_missing_anchor_parts = sorted(set(_anchor_months) - set(_ucp_avail))
+assert not _missing_anchor_parts, (
+    "anchor months not present as UCP partitions: " + str(_missing_anchor_parts) +
+    " - re-check the UCP_MIN/UCP_MAX clamp in cell [10] before proceeding.")
 
-ucp_spine = _ucp_frames[0]
-for _f in _ucp_frames[1:]:
-    ucp_spine = ucp_spine.unionByName(_f)
-T("UCP1 - per-anchor-month read summary (needed vs matched)", pd.DataFrame(_ucp_read_summary))
-ucp_spine.cache()
+# needed-client counts per anchor, computed from REQUESTS (cheap - no UCP read involved). Feeds
+# the UCP1 summary table below.
+_needed_by_anchor = (_requests.groupBy("ucp_anchor")
+                      .agg(F.countDistinct("CLNT_NO").alias("needed_distinct_clients")))
+
+# SINGLE read across every needed partition. basePath makes MONTH_END_DATE come back as a real
+# partition COLUMN instead of being consumed by the path.
+_ucp_paths = [UCP_BASE + "MONTH_END_DATE=" + _m for _m in _anchor_months]
+raw = spark.read.option("basePath", UCP_BASE).parquet(*_ucp_paths)
+assert "MONTH_END_DATE" in raw.columns, (
+    "MONTH_END_DATE missing from the multi-partition UCP read's columns - basePath partition "
+    "discovery did not work as expected. Columns seen: " + str(raw.columns))
+
+if HAS_CLNT_TYP:
+    raw = raw.filter(F.trim(F.col("CLNT_TYP")) == "Personal")
+raw = (raw.select(*UCP_COLS, "MONTH_END_DATE")
+          .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO")))
+          .withColumn("ucp_month_end", F.col("MONTH_END_DATE").cast("string"))
+          .drop("MONTH_END_DATE"))
+
+# alias the requests side so the join condition is unambiguous (both frames have a CLNT_NO-shaped
+# column) - leftsemi only ever returns raw's columns, but the join CONDITION still needs to
+# distinguish the two frames.
+_requests_join = _requests.withColumnRenamed("CLNT_NO", "_req_clnt_no").withColumnRenamed("ucp_anchor", "_req_anchor")
+
+ucp_spine_lineage = raw.join(
+    _requests_join,
+    (raw["CLNT_NO"] == _requests_join["_req_clnt_no"]) & (raw["ucp_month_end"] == _requests_join["_req_anchor"]),
+    "leftsemi")
+
+# WRITE-THEN-READ instead of .cache() - writing severs the 30-partition-read lineage so every
+# downstream action reads a flat parquet file instead of recomputing the scan. Worst case, a
+# session death costs re-running this one write, not the whole multi-branch DAG.
+_n_spine_written = ucp_spine_lineage.count()
+ucp_spine_lineage.write.mode("overwrite").parquet(BASE + "ucp_spine")
+ucp_spine = spark.read.parquet(BASE + "ucp_spine")
+_n_spine_read_back = ucp_spine.count()
+assert _n_spine_written == _n_spine_read_back, (
+    "ucp_spine HDFS readback mismatch: wrote " + str(_n_spine_written) + " read back " +
+    str(_n_spine_read_back))
+print("ucp_spine written to", BASE + "ucp_spine", "-", _n_spine_written, "rows written,",
+      _n_spine_read_back, "rows read back (match confirmed)")
 
 # fan-out guard: one row per (CLNT_NO, ucp_month_end) - a client must not appear twice at the same
-# anchor. Dedup fallback commented below if it ever trips.
+# anchor. Runs on the READ-BACK frame. Dedup fallback commented below if it ever trips.
 _n_spine = ucp_spine.count()
 _n_spine_distinct = ucp_spine.select("CLNT_NO", "ucp_month_end").distinct().count()
 assert _n_spine == _n_spine_distinct, (
@@ -573,6 +611,15 @@ assert _n_spine == _n_spine_distinct, (
 # _w = Window.partitionBy("CLNT_NO", "ucp_month_end").orderBy(F.lit(1))
 # ucp_spine = ucp_spine.withColumn("_rn", F.row_number().over(_w)).filter("_rn = 1").drop("_rn")
 print("UCP spine fan-out guard PASSED -", _n_spine, "rows, one per (CLNT_NO, ucp_month_end)")
+
+# UCP1 SUMMARY - one groupBy on the spine (one shuffle) instead of ~30 separate per-anchor counts.
+_matched_by_anchor = ucp_spine.groupBy("ucp_month_end").agg(F.count("*").alias("matched_rows"))
+_ucp_read_summary = (
+    _needed_by_anchor.withColumnRenamed("ucp_anchor", "ucp_anchor")
+    .join(_matched_by_anchor.withColumnRenamed("ucp_month_end", "ucp_anchor"), "ucp_anchor", "outer")
+    .fillna(0, subset=["needed_distinct_clients", "matched_rows"])
+    .orderBy("ucp_anchor"))
+T("UCP1 - per-anchor-month read summary (needed vs matched)", _ucp_read_summary)
 
 leaver_ucp = (leaver_anchored
               .withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
@@ -1053,6 +1100,7 @@ else:
         [{"dataset": _p, "status": "REMOVED"} for _p in _raw_paths]
         + [{"dataset": "leaver_spine", "status": "KEPT (durable output)"},
            {"dataset": "cube", "status": "KEPT (durable output)"},
+           {"dataset": "ucp_spine", "status": "KEPT (derived - regenerable, but cheap to keep and saves the 30-partition UCP scan)"},
            {"dataset": "_meta/* manifests", "status": "KEPT (audit trail)"}]
     )
     T("CLEANUP REPORT - dataset -> KEPT / REMOVED", _cleanup_report)
