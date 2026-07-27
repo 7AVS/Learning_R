@@ -61,11 +61,18 @@ def _sqlkey(sql):
     return hashlib.md5(re.sub(r"\s+", " ", sql).strip().upper().encode()).hexdigest()
 
 def landed(name):
+    # "absent" and "cannot check" are NOT the same thing. A dead/half-up spark session used to
+    # make everything look un-landed and (2026-07-26) triggered a full re-pull of the reservoir.
+    # Now: genuinely missing path -> False (pull it). ANY other failure -> STOP THE RUN.
     try:
         spark.read.parquet(BASE + name).limit(1).collect()
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        msg = str(e)
+        if ("Path does not exist" in msg) or ("PATH_NOT_FOUND" in msg) or ("FileNotFound" in msg):
+            return False
+        raise RuntimeError(name + ": cannot VERIFY HDFS state - refusing to pull anything. "
+                           "Fix the spark/HDFS session first. Underlying error: " + msg[:300])
 
 def _to_spark(pdf, name):
     # all-NULL columns break Spark type inference - attach them as typed nulls and SAY which they were
@@ -93,8 +100,13 @@ def land(name, sql, replace=False):
                 return
             print(name, ": QUERY CHANGED since it landed", old["landed_at"], "(", old["rows"],
                   "rows ) - re-pulling with the new query and OVERWRITING")
-        except Exception:
-            print(name, ": readable but NO manifest (partial/killed write) - re-pulling and OVERWRITING")
+        except Exception as e:
+            msg = str(e)
+            if ("Path does not exist" in msg) or ("PATH_NOT_FOUND" in msg) or ("FileNotFound" in msg):
+                print(name, ": readable but NO manifest (partial/killed write) - re-pulling and OVERWRITING")
+            else:
+                raise RuntimeError(name + ": data is readable but the manifest CANNOT BE VERIFIED - "
+                                   "refusing to re-pull on an unverifiable state. Underlying error: " + msg[:300])
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
     _to_spark(pdf, name).write.mode("overwrite").parquet(BASE + name)
@@ -105,6 +117,18 @@ def land(name, sql, replace=False):
     print(name, ": landed", len(pdf), "rows, HDFS readback confirms", nback, "| manifest written")
 
 print("helpers defined: land()/landed() with SQL manifest | reservoir BASE =", BASE)
+
+# FAIL-FAST GATE: prove spark+HDFS+manifests are actually readable BEFORE any land() cell can
+# misdiagnose the reservoir as empty. If this cell passes, SKIPs downstream are trustworthy;
+# if the session is broken, the run dies HERE in seconds instead of re-pulling for hours.
+try:
+    _probe_manifest = spark.read.parquet(BASE + "_meta/unsub_base_c1").collect()[0]
+    print("HDFS round-trip OK - manifest unsub_base_c1 readable:", _probe_manifest["rows"],
+          "rows, landed", _probe_manifest["landed_at"])
+except Exception as e:
+    raise RuntimeError("HDFS/spark session NOT ready (cannot read a known manifest) - do NOT run "
+                       "the extract cells until this passes. First-ever run on an empty reservoir: "
+                       "comment this gate out once, knowingly. Error: " + str(e)[:300])
 
 # %% [3] EXTRACT unsub_base chunk 1/4 (EVENT disp=4 Jul25-Jun26; MASTER load_tm 2025-06..2025-10)
 land("unsub_base/c1", """
