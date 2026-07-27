@@ -51,7 +51,8 @@ tcur.execute("SELECT 1")
 print("EDL round-trip (trino) returned:", tcur.fetchall())
 tcur.close()
 
-# %% [2] Reservoir helpers - land once to HDFS, skip ONLY if the same query already landed (SQL manifest guards staleness)
+# %% [2] Reservoir helpers - land once to HDFS. Same query landed -> SKIP. Changed query or
+# partial write -> automatic re-pull + overwrite (2026-07-26: no more silent "OLD data kept").
 import hashlib, re
 from pyspark.sql import functions as F
 BASE = "hdfs:///user/427966379/unsub_cpc/"
@@ -78,6 +79,10 @@ def _to_spark(pdf, name):
     return sdf.select(*[c for c in pdf.columns])
 
 def land(name, sql, replace=False):
+    # Skips ONLY when the exact same SQL already landed with a verified manifest.
+    # Changed SQL/parameters -> re-pulls and overwrites automatically (the SQL in this file is
+    # the source of truth; stale data silently surviving a parameter change is the failure mode).
+    # A readable path WITHOUT a manifest = partial/killed write -> treated as not landed, re-pulled.
     meta = BASE + "_meta/" + name.replace("/", "_")
     key = _sqlkey(sql)
     if landed(name) and not replace:
@@ -86,11 +91,10 @@ def land(name, sql, replace=False):
             if old["sql_md5"] == key:
                 print(name, ": already landed with SAME query,", old["rows"], "rows (", old["landed_at"], ") - SKIP")
                 return
-            print(name, ": !! QUERY CHANGED since it landed", old["landed_at"], "- OLD data kept. Rerun land(name, sql, replace=True) to re-pull.")
-            return
+            print(name, ": QUERY CHANGED since it landed", old["landed_at"], "(", old["rows"],
+                  "rows ) - re-pulling with the new query and OVERWRITING")
         except Exception:
-            print(name, ": landed pre-manifest (no stored SQL). If you changed the query since, rerun with replace=True.")
-            return
+            print(name, ": readable but NO manifest (partial/killed write) - re-pulling and OVERWRITING")
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
     _to_spark(pdf, name).write.mode("overwrite").parquet(BASE + name)
@@ -454,3 +458,53 @@ print(_mnes.to_string(index=False))
 assert len(_verify) == 3, "expected 3 months landed, found " + str(len(_verify))
 
 print("sends_cards_q2 reservoir complete - feeds pack 28 v4")
+
+# %% [23] HOUSEKEEPING - one-time cleanup of the retired sends_12m family (2026-07-26). The bank-wide
+# 12-month pull was killed by the system mid-run; months may exist complete, partial, or not at all -
+# there is no manifest for the interrupted months, so land()'s "landed pre-manifest" branch would
+# silently SKIP them on any rerun. That's the trap this removes. Nothing reads sends_12m anymore
+# (pack 28 v4 reads sends_cards_q2). Safe to run repeatedly.
+
+print("housekeeping - current reservoir contents:")
+get_ipython().system("hdfs dfs -ls /user/427966379/unsub_cpc/")
+get_ipython().system("hdfs dfs -ls /user/427966379/unsub_cpc/sends_12m/ 2>/dev/null || true")
+
+# delete the data path
+get_ipython().system("hdfs dfs -rm -r -f /user/427966379/unsub_cpc/sends_12m")
+
+# delete each possible manifest explicitly - no shell wildcards (HDFS glob behavior in rm is
+# shell-dependent; 12 explicit paths is unambiguous)
+_sends_12m_months = ["m2025_07", "m2025_08", "m2025_09", "m2025_10", "m2025_11", "m2025_12",
+                      "m2026_01", "m2026_02", "m2026_03", "m2026_04", "m2026_05", "m2026_06"]
+for _mo in _sends_12m_months:
+    get_ipython().system("hdfs dfs -rm -r -f /user/427966379/unsub_cpc/_meta/sends_12m_" + _mo)
+
+print("housekeeping - reservoir contents after cleanup:")
+get_ipython().system("hdfs dfs -ls /user/427966379/unsub_cpc/")
+
+# PROOF, not prints: cleanup removed sends_12m ...
+for _mo in ["m2025_07", "m2026_06"]:
+    assert not landed("sends_12m/" + _mo), "sends_12m/" + _mo + " still landed - cleanup failed"
+
+# ... and left every live dataset untouched. cpc_pref needs recursiveFileLookup (same pattern as
+# cpc_evidence_hdfs.py) so it is checked separately from landed().
+_live_datasets = ["unsub_base/c1", "cpc_pref", "q2_recipients/m04", "postunsub_sends", "gate_mne_agg",
+                   "blank_mne_sample", "cpc_landing_allsw", "no1002_email_card", "unsub_match_diag"]
+_live_status = []
+for _name in _live_datasets:
+    if _name == "cpc_pref":
+        try:
+            _ok = spark.read.option("recursiveFileLookup", "true").parquet(BASE + _name).limit(1).collect() != []
+        except Exception:
+            _ok = False
+    else:
+        _ok = landed(_name)
+    _live_status.append((_name, "STILL PRESENT" if _ok else "MISSING"))
+
+_live_df = pd.DataFrame(_live_status, columns=["name", "status"])
+print("live dataset check after sends_12m cleanup:")
+print(_live_df.to_string(index=False))
+assert all(s == "STILL PRESENT" for _, s in _live_status), \
+    "cleanup must not have touched live datasets - investigate immediately"
+
+print("housekeeping complete - sends_12m family removed, live reservoir intact")
