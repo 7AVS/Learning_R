@@ -97,7 +97,12 @@ def land_df(name, df):
 
 
 def norm_clnt(col):
-    return F.regexp_replace(F.trim(col.cast("string")), "^0+", "")
+    # Route through decimal(18,0) FIRST: reservoir CLNT_NO arrives as pandas float64 (Teradata via
+    # pandas), and float->string renders scientific notation ('1.56314759E8'), which never matches
+    # UCP's integer strings ('156314759'). Diagnosed 2026-07-27 (28b): overlap was 0 on every anchor
+    # month for exactly this reason. decimal cast is exact for 14-digit client numbers; a genuinely
+    # non-numeric CLNT_NO becomes null (visible in match-rate tables, not silently wrong).
+    return F.regexp_replace(F.trim(col.cast("decimal(18,0)").cast("string")), "^0+", "")
 
 
 def T(label, df):
