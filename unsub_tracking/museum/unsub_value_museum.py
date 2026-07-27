@@ -96,6 +96,17 @@ from pyspark.sql import functions as F, Window
 if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
 
+# Same class of clash on the numpy side: numpy>=1.24 removed the np.bool/np.object/np.int/np.float
+# aliases, but Spark 3.3's pandas->Spark conversion (pyspark/sql/pandas/conversion.py) still
+# references np.bool for BooleanType columns. Observed as
+# "AttributeError: module 'numpy' has no attribute 'bool'" on this kernel (2026-07-27).
+# Restoring the aliases is the minimal fix - it changes nothing for code that does not use them.
+import numpy as np
+for _alias, _builtin in (("bool", bool), ("object", object), ("int", int),
+                         ("float", float), ("str", str)):
+    if not hasattr(np, _alias):
+        setattr(np, _alias, _builtin)
+
 pd.set_option("display.max_columns", None)
 pd.set_option("display.width", 200)
 pd.set_option("display.max_rows", 60)

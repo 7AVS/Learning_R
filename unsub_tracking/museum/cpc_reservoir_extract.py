@@ -13,6 +13,15 @@ import teradatasql
 # pandas>=2.0 removed DataFrame.iteritems but Spark 3.3's createDataFrame still calls it - restore the alias
 if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
+
+# Same clash on the numpy side: numpy>=1.24 removed np.bool/np.object/np.int/np.float, but Spark
+# 3.3's pandas->Spark conversion still references np.bool for BooleanType columns - seen as
+# "AttributeError: module 'numpy' has no attribute 'bool'" on this kernel (2026-07-27).
+import numpy as np
+for _alias, _builtin in (("bool", bool), ("object", object), ("int", int),
+                         ("float", float), ("str", str)):
+    if not hasattr(np, _alias):
+        setattr(np, _alias, _builtin)
 from trino.dbapi import connect
 from trino.auth import BasicAuthentication
 
