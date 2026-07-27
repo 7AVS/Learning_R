@@ -333,272 +333,124 @@ WHERE disposition_cd = 4
 
 print("reservoir complete (incl. cpc_landing_allsw[wider] + no1002_email_card + unsub_match_diag) - then run archaeology/24_cpc_rt3_audit.py")
 
-# UNSUB VALUE (pack 28) - 12-month send base. Denominator for the value-of-an-unsub analysis.
-# DISTINCT (CLNT_NO, TREATMENT_ID) per month, disposition_cd=1, Jul2025-Jun2026, landed to
-# sends_12m/mYYYY_MM. Size-probe first - largest pull in the project. Added 2026-07-26.
+# UNSUB VALUE (pack 28 v4) - cards-only Q2 send base. Stayer denominator: distinct (CLNT_NO,
+# TREATMENT_ID), disposition_cd=1, Apr-Jun 2026, cards MNEs only (server-side filter - cuts the
+# transfer from every send in the bank to cards sends). Lands to sends_cards_q2/mYYYY_MM. The
+# 12-month bank-wide sends_12m design is retired as oversized (Andre 2026-07-26); it lives in git
+# history (commit 61c0519) if per-program rates are ever needed. Blank/DEFAULT-stream treatments
+# are excluded by construction - they cannot be attributed to cards.
+# NOTE: sends_12m never actually landed anything before being retired - the size probe ran, then
+# the run was interrupted mid-2025-months, so at most a few 2025-month sends_12m/* paths may exist
+# as orphans in HDFS. Harmless leftovers; this section and pack 28 v4 do not reference or read them.
 
-# %% [18] SIZE PROBE - MANDATORY BEFORE ANY PULL. Cheap COUNT(*) on the EVENT table alone, no join,
-# no DISTINCT. event_rows (raw disp_cd=1 event rows) is a safe UPPER BOUND on the distinct
-# (CLNT_NO, TREATMENT_ID) grain each month's land() will actually pull - dedup can only shrink a
-# row count, never grow it - so it's all the 50M stop-rule needs. The original probe joined
-# VENDOR_FEEDBACK_EVENT to VENDOR_FEEDBACK_MASTER and ran COUNT(DISTINCT m.CLNT_NO) on top - one
-# month of that died with Teradata error 2646 "No more spool space" on the first run (2026-07-26).
-# The join was the correct fix for the pulls below (cells [19]-[30]), but the probe itself never
-# needed it - event-only avoids the failure mode entirely.
-_MONTHS = [
-    ("m2025_07", "2025-07-01", "2025-08-01", "2025-06-01", "2025-09-01"),
-    ("m2025_08", "2025-08-01", "2025-09-01", "2025-07-01", "2025-10-01"),
-    ("m2025_09", "2025-09-01", "2025-10-01", "2025-08-01", "2025-11-01"),
-    ("m2025_10", "2025-10-01", "2025-11-01", "2025-09-01", "2025-12-01"),
-    ("m2025_11", "2025-11-01", "2025-12-01", "2025-10-01", "2026-01-01"),
-    ("m2025_12", "2025-12-01", "2026-01-01", "2025-11-01", "2026-02-01"),
-    ("m2026_01", "2026-01-01", "2026-02-01", "2025-12-01", "2026-03-01"),
-    ("m2026_02", "2026-02-01", "2026-03-01", "2026-01-01", "2026-04-01"),
-    ("m2026_03", "2026-03-01", "2026-04-01", "2026-02-01", "2026-05-01"),
+# %% [18] CARDS_MNES + SIZE PROBE. Same exact set as pack 28 (archaeology/28_unsub_value_ucp.py
+# cell [4]): CARDS_MNES = frozenset({"PCQ","PCL","PCD","AUH","CLI","MVP","CRV"}), sourced there
+# from UNSUB_TRACKING_KNOWLEDGE.md section 4 "MNE tracking scope" (the Cards rows) and
+# cross-checked against archaeology/email_active_mnes.md (volume-ranked, confirms PCQ/PCL/PCD).
+# CTU and O2P are deliberately EXCLUDED per Andre's 2026-07-26 ruling: they involve cards but are
+# reported inside async, out of the cards package. THIS LIST MUST STAY IN SYNC WITH PACK 28's
+# CARDS_MNES - if pack 28's set changes, update it here too.
+CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
+_CARDS_MNE_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(CARDS_MNES))
+
+_Q2_MONTHS = [
     ("m2026_04", "2026-04-01", "2026-05-01", "2026-03-01", "2026-06-01"),
     ("m2026_05", "2026-05-01", "2026-06-01", "2026-04-01", "2026-07-01"),
     ("m2026_06", "2026-06-01", "2026-07-01", "2026-05-01", "2026-08-01"),
 ]
 
 _probe_rows = []
-for _name, _ds, _de, _ls, _le in _MONTHS:
+for _name, _ds, _de, _ls, _le in _Q2_MONTHS:
     _pdf = edw_pd("""
 SELECT COUNT(*) AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
 WHERE disposition_cd = 1
   AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
-""" % (_ds, _de))
+  AND SUBSTR(TREATMENT_ID, 8, 3) IN (%s)
+""" % (_ds, _de, _CARDS_MNE_SQL_LIST))
     _probe_rows.append((_name, int(_pdf["event_rows"][0])))
 
 _probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows"])
-print("SIZE PROBE - disp_cd=1 sends, per month (event_rows, event-only, is an upper bound on the land() pull size):")
+print("SIZE PROBE - disp_cd=1 cards-MNE sends, per month (event-only, no join, no DISTINCT):")
 print(_probe.to_string(index=False))
 
-# Decision rule: land() pulls the whole month through pandas (edw_pd) before writing to HDFS - a
-# pandas round-trip on >~50M rows is the expensive/risky case for this environment. event_rows is an
-# upper bound on the DISTINCT (CLNT_NO, TREATMENT_ID) row count land() will actually pull, so gate on it.
-_STOP_THRESHOLD = 50_000_000
-_over = _probe[_probe["event_rows"] > _STOP_THRESHOLD]
-if len(_over) > 0:
-    print("STOP - the following month(s) have event_rows over the", _STOP_THRESHOLD, "threshold and may "
-          "exceed a safe pandas round-trip size. DO NOT run their land() cell below without checking in first:")
-    print(_over.to_string(index=False))
-else:
-    print("All 12 months are under the", _STOP_THRESHOLD, "event_rows threshold - safe to proceed with cells [19]-[30].")
-
-# %% [19] EXTRACT sends_12m 2025-07 (load_tm 2025-06..2025-09)
-# Dedupe BEFORE the join (derived table ek): VENDOR_FEEDBACK_EVENT is filtered to disp_cd=1 and
-# DISTINCT'd on (consumer_id_hashed, TREATMENT_ID) first, so the join against
-# VENDOR_FEEDBACK_MASTER runs on unique keys instead of every raw send-event row. This is the
-# spool fix for Teradata error 2646 (2026-07-26 run) - same technique applies to cells [20]-[30].
-#
-# FALLBACK if a month still spools: split the disposition window at the 16th and land to two
-# subpaths, e.g. sends_12m/m2025_07_a (disp_dt < 16th) and sends_12m/m2025_07_b (disp_dt >= 16th),
-# same SELECT otherwise. NOTE: pack 28 (archaeology/28_unsub_value_ucp.py) does NOT glob
-# sends_12m/* - it reads a hardcoded 12-item list, _SEND_MONTHS (lines 166-167), in
-# read_sends_12m() (line 171). Splitting a month into _a/_b subpaths requires editing that list
-# (and read_sends_12m's union) to include both halves in place of the single month - do that
-# before relying on a split month downstream.
-# land("sends_12m/m2025_07_a", """ ... AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-07-16' ... """)
-# land("sends_12m/m2025_07_b", """ ... AND e.disposition_dt_tm >= DATE '2025-07-16' AND e.disposition_dt_tm < DATE '2025-08-01' ... """)
-land("sends_12m/m2025_07", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-07-01' AND disposition_dt_tm < DATE '2025-08-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
-""")
-
-# %% [20] EXTRACT sends_12m 2025-08 (load_tm 2025-07..2025-10)
-land("sends_12m/m2025_08", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-08-01' AND disposition_dt_tm < DATE '2025-09-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-07-01' AND m.load_tm < DATE '2025-10-01'
-""")
-
-# %% [21] EXTRACT sends_12m 2025-09 (load_tm 2025-08..2025-11)
-land("sends_12m/m2025_09", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-09-01' AND disposition_dt_tm < DATE '2025-10-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-08-01' AND m.load_tm < DATE '2025-11-01'
-""")
-
-# %% [22] EXTRACT sends_12m 2025-10 (load_tm 2025-09..2025-12)
-land("sends_12m/m2025_10", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-10-01' AND disposition_dt_tm < DATE '2025-11-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-09-01' AND m.load_tm < DATE '2025-12-01'
-""")
-
-# %% [23] EXTRACT sends_12m 2025-11 (load_tm 2025-10..2026-01)
-land("sends_12m/m2025_11", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-11-01' AND disposition_dt_tm < DATE '2025-12-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-10-01' AND m.load_tm < DATE '2026-01-01'
-""")
-
-# %% [24] EXTRACT sends_12m 2025-12 (load_tm 2025-11..2026-02)
-land("sends_12m/m2025_12", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-12-01' AND disposition_dt_tm < DATE '2026-01-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-11-01' AND m.load_tm < DATE '2026-02-01'
-""")
-
-# %% [25] EXTRACT sends_12m 2026-01 (load_tm 2025-12..2026-03)
-land("sends_12m/m2026_01", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-01-01' AND disposition_dt_tm < DATE '2026-02-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-03-01'
-""")
-
-# %% [26] EXTRACT sends_12m 2026-02 (load_tm 2026-01..2026-04)
-land("sends_12m/m2026_02", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-02-01' AND disposition_dt_tm < DATE '2026-03-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-01-01' AND m.load_tm < DATE '2026-04-01'
-""")
-
-# %% [27] EXTRACT sends_12m 2026-03 (load_tm 2026-02..2026-05)
-land("sends_12m/m2026_03", """
-SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-03-01' AND disposition_dt_tm < DATE '2026-04-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-05-01'
-""")
-
-# %% [28] EXTRACT sends_12m 2026-04 (load_tm 2026-03..2026-06)
-land("sends_12m/m2026_04", """
+# %% [19] EXTRACT sends_cards_q2 2026-04 (load_tm 2026-03..2026-06)
+# Dedupe BEFORE the join (derived table ek): VENDOR_FEEDBACK_EVENT is filtered to disp_cd=1 +
+# cards MNE and DISTINCT'd on (consumer_id_hashed, TREATMENT_ID) first, so the join against
+# VENDOR_FEEDBACK_MASTER runs on unique keys instead of every raw send-event row - same spool-safe
+# shape as the retired sends_12m cells.
+land("sends_cards_q2/m2026_04", """
 SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
 FROM (
     SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 1
       AND disposition_dt_tm >= DATE '2026-04-01' AND disposition_dt_tm < DATE '2026-05-01'
+      AND SUBSTR(TREATMENT_ID, 8, 3) IN (%s)
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
 WHERE m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-06-01'
-""")
+""" % _CARDS_MNE_SQL_LIST)
 
-# %% [29] EXTRACT sends_12m 2026-05 (load_tm 2026-04..2026-07)
-land("sends_12m/m2026_05", """
+# %% [20] EXTRACT sends_cards_q2 2026-05 (load_tm 2026-04..2026-07)
+land("sends_cards_q2/m2026_05", """
 SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
 FROM (
     SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 1
       AND disposition_dt_tm >= DATE '2026-05-01' AND disposition_dt_tm < DATE '2026-06-01'
+      AND SUBSTR(TREATMENT_ID, 8, 3) IN (%s)
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
 WHERE m.load_tm >= DATE '2026-04-01' AND m.load_tm < DATE '2026-07-01'
-""")
+""" % _CARDS_MNE_SQL_LIST)
 
-# %% [30] EXTRACT sends_12m 2026-06 (load_tm 2026-05..2026-08)
-land("sends_12m/m2026_06", """
+# %% [21] EXTRACT sends_cards_q2 2026-06 (load_tm 2026-05..2026-08)
+land("sends_cards_q2/m2026_06", """
 SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID
 FROM (
     SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 1
       AND disposition_dt_tm >= DATE '2026-06-01' AND disposition_dt_tm < DATE '2026-07-01'
+      AND SUBSTR(TREATMENT_ID, 8, 3) IN (%s)
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
 WHERE m.load_tm >= DATE '2026-05-01' AND m.load_tm < DATE '2026-08-01'
-""")
+""" % _CARDS_MNE_SQL_LIST)
 
-# %% [31] VERIFICATION - read back all 12 months, prove presence/non-emptiness/non-null TREATMENT_ID,
-# cross-check total distinct clients against the known 319,733 unsub cohort size.
-_month_names = [m for m, *_ in _MONTHS]
+# %% [22] VERIFICATION - read back all 3 months, prove presence/non-emptiness/non-null TREATMENT_ID,
+# and decode the MNE actually present in each month to prove the server-side filter worked.
+_q2_month_names = [m for m, *_ in _Q2_MONTHS]
 _verify_rows = []
-_month_dfs = []
-for _m in _month_names:
-    _path = BASE + "sends_12m/" + _m
-    assert landed("sends_12m/" + _m), _m + " is NOT landed - rerun its cell above before verifying"
+_mne_rows = []
+for _m in _q2_month_names:
+    _path = BASE + "sends_cards_q2/" + _m
+    assert landed("sends_cards_q2/" + _m), _m + " is NOT landed - rerun its cell above before verifying"
     _sdf = spark.read.parquet(_path)
-    _month_dfs.append(_sdf)
+    _sdf = _sdf.withColumn("mne", F.trim(F.substring(F.col("TREATMENT_ID"), 8, 3)))
     _rows = _sdf.count()
     _dc = _sdf.select("CLNT_NO").distinct().count()
     _dt = _sdf.select("TREATMENT_ID").distinct().count()
     _null_treat = _sdf.filter(F.col("TREATMENT_ID").isNull()).count()
     assert _rows > 0, _m + " landed but is EMPTY"
     assert _null_treat == 0, _m + " has " + str(_null_treat) + " rows with NULL TREATMENT_ID"
+    _mnes_present = sorted(r["mne"] for r in _sdf.select("mne").distinct().collect())
+    _bad_mnes = [mn for mn in _mnes_present if mn not in CARDS_MNES]
+    assert not _bad_mnes, _m + " has non-cards MNE(s) leaking through the filter: " + str(_bad_mnes)
     _verify_rows.append((_m, _rows, _dc, _dt))
+    _mne_rows.append((_m, ", ".join(_mnes_present)))
 
 _verify = pd.DataFrame(_verify_rows, columns=["month", "rows", "distinct_clnt_no", "distinct_treatment_id"])
-print("VERIFICATION - sends_12m readback, per month (all 12 present, non-empty, TREATMENT_ID non-null):")
+_mnes = pd.DataFrame(_mne_rows, columns=["month", "mnes_present"])
+print("VERIFICATION - sends_cards_q2 readback, per month (all 3 present, non-empty, TREATMENT_ID non-null):")
 print(_verify.to_string(index=False))
-assert len(_verify) == 12, "expected 12 months landed, found " + str(len(_verify))
+print("MNEs actually present per month (proves the server-side cards filter worked):")
+print(_mnes.to_string(index=False))
+assert len(_verify) == 3, "expected 3 months landed, found " + str(len(_verify))
 
-_all_sends = _month_dfs[0]
-for _sdf in _month_dfs[1:]:
-    _all_sends = _all_sends.unionByName(_sdf)
-_total_distinct_clients = _all_sends.select("CLNT_NO").distinct().count()
-_KNOWN_UNSUB_COHORT = 319_733
-print("Total distinct CLNT_NO across all 12 send months:", _total_distinct_clients)
-print("Known unsub cohort size (pack 28 / museum decks, Jul 2025-Jun 2026):", _KNOWN_UNSUB_COHORT)
-print("Sanity check:", "PASS - senders vastly exceed unsubscribers, as expected" if _total_distinct_clients > _KNOWN_UNSUB_COHORT * 5
-      else "FLAG - sender base is not vastly larger than the unsub cohort, investigate before using as a denominator")
-
-print("sends_12m reservoir complete - feeds pack 28 v3 (archaeology/28_unsub_value_ucp.py)")
+print("sends_cards_q2 reservoir complete - feeds pack 28 v4")
