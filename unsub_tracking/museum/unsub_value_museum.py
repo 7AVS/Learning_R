@@ -43,10 +43,14 @@
 # clients had more than one qualifying event is printed before the collapse (cell [6]), not thrown
 # away silently.
 #
-# NO RATES ANYWHERE IN THIS FILE. Every output table below is volume and composition - counts,
-# medians, percentage-of-leavers shares - never a rate against a denominator, because there is no
-# denominator (no stayer pool) until Phase 2 exists. Every printed/saved table repeats this in its
-# own label; this header states it once for the whole file.
+# NO RATES ANYWHERE IN THIS FILE, WITH ONE NAMED EXCEPTION: L6 (added 2026-07-27). Every other
+# output table below is volume and composition - counts, medians, percentage-of-leavers shares -
+# never a rate against a denominator, because there is no denominator (no stayer pool) until Phase
+# 2 exists. L6 gets an MNE-grain SEND denominator (senders_by_mne, cell [7b]) and computes
+# unsub_per_1000 from it - this is NOT the Phase 2 stayer pool (no client-grain send rows, no
+# targeting-mix standardisation), so treat it as a first, coarse rate, not a substitute for Phase 2.
+# Every printed/saved table repeats its own scope in its own label; this header states the file-wide
+# default once, and calls out L6 as the exception to it.
 #
 # THE OUTPUT TABLES:
 #   M0 - COVERAGE & NULLS. Prints before any finding - proves or kills the "who's unmatched in UCP"
@@ -62,15 +66,21 @@
 #        Excel pivoting. Dual-saved (xlsx download + HDFS parquet).
 #   leaver_spine - THE durable artifact, client grain, one row each. Every table above re-derives
 #        from this alone, without touching EDW or UCP again.
+#   L6 - CAMPAIGN SUMMARY (added 2026-07-27): one row per MNE, senders_by_mne (cell [7b]) joined to
+#        leaver_banded - THE ONE RATE in this file (unsub_per_1000), plus leaver profile columns
+#        (matched only). Printed table is a narrow, L1-shaped top-25-by-senders view (medians only);
+#        campaign_summary/campaign_summary_csv (cell [19b]) carry the FULL width (mean+p25/p50/p75,
+#        every MNE) for Excel pivoting.
 #
 # OUTPUT CONTRACT: printed tables carry counts and medians, never a bare "done". Every printed
 # number is backed by a server round-trip or an assertion (house hard rule, unchanged).
 #
 # DURABLE vs SCRATCH: leaver_spine and cube (both saved in cell [19]; cube is ALSO downloaded as
-# unsub_value_cube.xlsx via the Jupyter file browser) are the DURABLE artifacts. The raw EDW
-# landing (unsubs_12m/q1..q4) is SCRATCH - it exists only so a kernel death mid-pull doesn't cost a
-# re-pull from EDW, and is removable once leaver_spine and cube are verified landed (opt-in
-# CLEANUP cell, updated for this file's actual pull paths).
+# unsub_value_cube.xlsx via the Jupyter file browser) plus campaign_summary and campaign_summary_csv
+# (saved in cell [19b]) are the DURABLE artifacts. The raw EDW landings - unsubs_12m/q1..q4 and
+# senders_by_mne - are SCRATCH: they exist only so a kernel death mid-pull doesn't cost a re-pull
+# from EDW, and are removable once the durable outputs are verified landed (opt-in CLEANUP cell,
+# updated for this file's actual pull paths).
 #
 # Engine split: Teradata-direct (DTZV01.VENDOR_FEEDBACK_EVENT / _MASTER, EDW pulls in cells
 # [3]-[4]) feeds this file's OWN HDFS reservoir; everything from cell [5] onward is Spark/YARN
@@ -395,6 +405,81 @@ leaver_mne = add_mne_program(leaver_last)
 leaver_mne.cache()
 T("PROGRAM MIX - leaver counts by program, straight off the attributed (last) TREATMENT_ID",
   leaver_mne.groupBy("program").agg(F.count("*").alias("leaver_clients")).orderBy(F.desc("leaver_clients")))
+
+# %% [7b] SENDERS PULL - CAMPAIGN DENOMINATOR (Andre, 2026-07-27). This is the SENDS side the
+# header (cell [0]) says is killed bank-wide/client-grain - it is NOT resurrected here. What this
+# cell pulls is an AGGREGATE (one row per mne, a sender count), never a client row: the bank-wide
+# client-level send pull was killed 2026-07-27 after a probe showed 143M send events / ~99M
+# distinct client-MNE pairs across Jan-May - hours of pandas transfer over teradatasql, with ~80% of
+# that volume being campaign detail for programs entirely outside cards. Aggregating SERVER-SIDE
+# (GROUP BY mne, COUNT DISTINCT CLNT_NO) means only ~200 rows (one per MNE) ever cross the wire,
+# regardless of how many billions of send events sit behind them.
+#
+# ONE QUERY, the full 12-month window - NOT four quarterly pulls summed. A client mailed by the
+# same MNE in more than one quarter would be double-counted by COUNT(DISTINCT) applied separately
+# per quarter and then added; only a single COUNT(DISTINCT) over the whole window counts them once.
+# Same reasoning as unsubs_12m's cross-quarter dedup (cell [5]) - the arithmetic does not distribute
+# over a UNION the way a raw COUNT would.
+#
+# disposition_cd = 1 is the SEND/mail event (see the Phase 2 stub, cell [23]: "mailed
+# (disposition_cd=1)"), as opposed to disposition_cd = 4 (unsub) used everywhere else in this file.
+#
+# load_tm bound: widened +/-1 month around the query's event window, same convention as the
+# unsubs_12m quarterly pulls (cell [4]) - event window 2025-07-01..2026-07-01 -> load_tm bound
+# 2025-06-01..2026-08-01.
+_SENDERS_SQL = """
+SELECT SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne, COUNT(DISTINCT m.CLNT_NO) AS senders
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-07-01' AND disposition_dt_tm < DATE '2026-07-01'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2026-08-01'
+GROUP BY 1
+"""
+land("senders_by_mne", _SENDERS_SQL)
+
+# QUARTERLY FALLBACK (commented out - use ONLY if the single 12-month query above spools, i.e.
+# Teradata error 2646 "no more spool space"). If used, rates built from these are PER-QUARTER and
+# MUST be labelled as such - do NOT sum senders_by_mne_q1..q4 into a 12-month total; the same client
+# mailed by the same MNE in two different quarters would be counted twice.
+#
+# _SENDERS_Q_BOUNDS = [
+#     ("q1", "2025-07-01", "2025-10-01", "2025-06-01", "2025-11-01"),
+#     ("q2", "2025-10-01", "2026-01-01", "2025-09-01", "2026-02-01"),
+#     ("q3", "2026-01-01", "2026-04-01", "2025-12-01", "2026-05-01"),
+#     ("q4", "2026-04-01", "2026-07-01", "2026-03-01", "2026-08-01"),
+# ]
+#
+# def _senders_q_sql(ev_start, ev_end, ld_start, ld_end):
+#     return """
+# SELECT SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne, COUNT(DISTINCT m.CLNT_NO) AS senders
+# FROM (
+#     SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+#     FROM DTZV01.VENDOR_FEEDBACK_EVENT
+#     WHERE disposition_cd = 1
+#       AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+# ) ek
+# INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+#   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+# WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+# GROUP BY 1
+# """ % (ev_start, ev_end, ld_start, ld_end)
+#
+# for _q, _es, _ee, _ls, _le in _SENDERS_Q_BOUNDS:
+#     land("senders_by_mne_" + _q, _senders_q_sql(_es, _ee, _ls, _le))
+
+senders_by_mne = spark.read.parquet(BASE + "senders_by_mne")
+_n_senders_mnes = senders_by_mne.count()
+T("SENDERS - top 20 MNEs by distinct clients mailed, 2025-07-01 to 2026-07-01 (server-side "
+  "aggregate pull - no client-grain rows landed)",
+  senders_by_mne.orderBy(F.desc("senders")).limit(20))
+assert 0 < _n_senders_mnes < 5000, (
+    "senders_by_mne has " + str(_n_senders_mnes) + " distinct MNE rows - expected a sane MNE-"
+    "cardinality range (0, 5000). Investigate before joining this to leaver_banded in cell [19b].")
 
 # %% [8] UCP PARTITION PROBE - available MONTH_END_DATE partitions, min/max, before computing any
 # anchor. Needed because this window spans 12 months of unsub dates behind treatments that could
@@ -1061,6 +1146,139 @@ print("CUBE - csv written to", BASE + "cube_csv", "(", _n_csv_back, "rows, readb
 print("To pull it down as one local file for Excel, run this in a terminal (NOT in this kernel):")
 print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/cube_csv unsub_value_cube.csv")
 
+# %% [19b] L6 - CAMPAIGN SUMMARY + CSV (Andre, 2026-07-27). ONE row per MNE, the file's first RATE
+# output - unsub_per_1000 uses the senders_by_mne aggregate (cell [7b]) as its denominator, which
+# L1-L5/CUBE/leaver_spine explicitly do NOT have (see the header's "NO RATES ... ONE NAMED
+# EXCEPTION" note, cell [0]). This is that denominator finally landing, at MNE grain only - still
+# not a per-client stayer pool, so it does not retire the "NO RATES" language attached to L1-L5.
+#
+# THE KNOWN LIMITATION (state this on the printed table AND here): the profile columns
+# (age/tenure/prod/prof stats, pct_single_product, pct_top_prof_quintile, pct_high_potential)
+# describe the MNE's LEAVERS, not its senders. unsub_per_1000 says WHERE a campaign loses clients;
+# the profile columns say WHO it lost - but neither says whether a campaign loses YOUNG clients or
+# simply MAILS young clients (i.e. whether the leaver profile differs from the sender profile, or
+# just mirrors it). Answering that needs a sender-level profile (cards-only, a later phase) - out
+# of scope here.
+#
+# ONE WIDE FRAME, built once - CSV/parquet get the full width (mean + p25/p50/p75, every MNE); the
+# printed T() below is a .select() of a narrow, L1-shaped column list off the SAME frame (Andre's
+# refinement, 2026-07-27: L6 should read on one screen like L1, medians only, top 25 by senders).
+# Nothing is computed twice.
+def program_from_mne(mne_col):
+    # Same mapping as add_mne_program's second withColumn (cell [7]), applied directly to a bare
+    # mne string instead of a TREATMENT_ID - needed here because senders_by_mne (cell [7b]) never
+    # carries TREATMENT_ID past the server-side GROUP BY, only the decoded mne.
+    return (F.when(mne_col == "DEFAULT", F.lit("DEFAULT"))
+             .when(mne_col.isin(list(CARDS_MNES)), F.lit("CARDS"))
+             .otherwise(F.lit("NON_CARDS")))
+
+# CAVEAT: senders_by_mne's mne comes straight from SUBSTR(TREATMENT_ID, 8, 3) in Teradata (cell
+# [7b]'s SQL, specified exactly by Andre) - it does NOT apply add_mne_program's DEFAULT-literal/
+# blank-substr special case the way leaver_banded's mne does. A TREATMENT_ID of literal 'DEFAULT' or
+# one with a blank MNE substring will therefore label differently on the senders side than the
+# leaver side for that narrow slice. Left as-is (the SQL was specified exactly); flagged here rather
+# than silently patched - review if DEFAULT/blank rows show up oddly in L6.
+_l6_leaver_totals = (leaver_banded.groupBy("mne")
+                      .agg(F.count("*").alias("leaver_clients"))
+                      .withColumn("unsubs", F.col("leaver_clients")))
+
+# matched-only profile - reuses _matched_banded (defined in cell [16], leaver_banded filtered to
+# ucp_matched), the exact same "profile the leavers, matched only" convention as L1/L3/L4.
+_l6_matched_profile = (
+    _matched_banded.groupBy("mne")
+    .agg(
+        F.count("*").alias("matched_clients"),
+        F.round(F.avg("AGE"), 1).alias("mean_age"),
+        F.expr("percentile_approx(AGE, 0.25)").alias("p25_age"),
+        F.expr("percentile_approx(AGE, 0.5)").alias("p50_age"),
+        F.expr("percentile_approx(AGE, 0.75)").alias("p75_age"),
+        F.round(F.avg("TENURE_RBC_YEARS"), 1).alias("mean_tenure"),
+        F.expr("percentile_approx(TENURE_RBC_YEARS, 0.25)").alias("p25_tenure"),
+        F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("p50_tenure"),
+        F.expr("percentile_approx(TENURE_RBC_YEARS, 0.75)").alias("p75_tenure"),
+        F.round(F.avg("prod_cnt"), 2).alias("mean_prod"),
+        F.expr("percentile_approx(prod_cnt, 0.25)").alias("p25_prod"),
+        F.expr("percentile_approx(prod_cnt, 0.5)").alias("p50_prod"),
+        F.expr("percentile_approx(prod_cnt, 0.75)").alias("p75_prod"),
+        F.round(F.avg("PROF_TOT_ANNUAL"), 0).alias("mean_prof"),
+        F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.25)").alias("p25_prof"),
+        F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("p50_prof"),
+        F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.75)").alias("p75_prof"),
+        F.round(100.0 * F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)) / F.count("*"), 1)
+            .alias("pct_single_product"),
+        F.round(100.0 * F.sum(F.when(F.col("prof_quintile") == "5", 1).otherwise(0)) / F.count("*"), 1)
+            .alias("pct_top_prof_quintile"),
+        F.round(100.0 * F.sum(F.col("high_potential").cast("int")) / F.count("*"), 1)
+            .alias("pct_high_potential"),
+    ))
+
+_l6_leaver_side = (_l6_leaver_totals
+                    .join(_l6_matched_profile, "mne", "left")
+                    .withColumn("matched_clients", F.coalesce(F.col("matched_clients"), F.lit(0))))
+
+# OUTER join against senders_by_mne: MNEs with senders but zero unsubs still appear (unsubs/
+# leaver_clients/matched_clients filled 0); MNEs with unsubs but no senders row also appear
+# (senders stays NULL - not 0 - so unsub_per_1000 is correctly null, per spec, rather than an
+# infinite/undefined rate).
+l6_wide = (senders_by_mne
+           .join(_l6_leaver_side, "mne", "outer")
+           .withColumn("leaver_clients", F.coalesce(F.col("leaver_clients"), F.lit(0)))
+           .withColumn("unsubs", F.coalesce(F.col("unsubs"), F.lit(0)))
+           .withColumn("matched_clients", F.coalesce(F.col("matched_clients"), F.lit(0)))
+           .withColumn("unsub_per_1000",
+                       F.when(F.col("senders").isNotNull() & (F.col("senders") > 0),
+                              F.round(1000.0 * F.col("unsubs") / F.col("senders"), 2)))
+           .withColumn("program", program_from_mne(F.col("mne")))
+           .select("mne", "program", "senders", "unsubs", "unsub_per_1000", "leaver_clients",
+                   "matched_clients", "mean_age", "p25_age", "p50_age", "p75_age",
+                   "mean_tenure", "p25_tenure", "p50_tenure", "p75_tenure",
+                   "mean_prod", "p25_prod", "p50_prod", "p75_prod",
+                   "mean_prof", "p25_prof", "p50_prof", "p75_prof",
+                   "pct_single_product", "pct_top_prof_quintile", "pct_high_potential")
+           .orderBy(F.desc("senders")))
+l6_wide.cache()
+_n_l6_rows = l6_wide.count()
+
+# PRINTED VIEW - L1-shaped narrow slice of l6_wide, medians only, top 25 by senders. NOT a
+# re-aggregation - p50_* columns are just relabelled "median_*" to match L1's naming, off the same
+# computed frame.
+l6_printed = (l6_wide
+              .select("mne", "program", "senders", "unsubs", "unsub_per_1000", "leaver_clients",
+                      "matched_clients",
+                      F.col("p50_age").alias("median_age"),
+                      F.col("p50_tenure").alias("median_tenure_years"),
+                      F.col("p50_prod").alias("median_prod_cnt"),
+                      F.col("p50_prof").alias("median_prof_annual"),
+                      "pct_single_product", "pct_top_prof_quintile", "pct_high_potential")
+              .orderBy(F.desc("senders"))
+              .limit(25))
+T("L6 - CAMPAIGN SUMMARY | one row per MNE, TOP 25 by senders (full " + str(_n_l6_rows) +
+  " MNEs in campaign_summary/campaign_summary_csv) | senders = distinct clients mailed "
+  "2025-07..2026-07 | profile columns describe the MNE's LEAVERS (matched only) | rows overlap: a "
+  "client mailed by several campaigns appears in several rows, so columns do not sum", l6_printed)
+print("NOTE: no TOTAL row - a client mailed by several MNEs appears in several rows above, so")
+print("summing any column (senders, unsubs, leaver_clients, matched_clients) would double-count")
+print("that client once per campaign that mailed them. Read each row independently.")
+
+# CSV COPY - HDFS through Spark, coalesce(1), NOT the notebook working directory (same convention
+# as the cube csv above; no pandas .to_csv/.to_excel anywhere in this file). FULL WIDTH, ALL MNEs -
+# the printed table above is truncated to top 25, this is not.
+l6_wide.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "campaign_summary_csv")
+_n_l6_csv_back = spark.read.option("header", True).csv(BASE + "campaign_summary_csv").count()
+assert _n_l6_csv_back == _n_l6_rows, (
+    "campaign_summary_csv readback mismatch: wrote " + str(_n_l6_rows) + " read back " + str(_n_l6_csv_back))
+print("L6 - csv written to", BASE + "campaign_summary_csv", "(", _n_l6_csv_back, "rows, readback confirmed )")
+print("To pull it down as one local file, run this in a terminal (NOT in this kernel):")
+print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/campaign_summary_csv campaign_summary.csv")
+
+# PARQUET COPY - the durable artifact; csv above is the fetch copy.
+l6_wide.write.mode("overwrite").parquet(BASE + "campaign_summary")
+_n_l6_parquet_back = spark.read.parquet(BASE + "campaign_summary").count()
+assert _n_l6_parquet_back == _n_l6_rows, (
+    "campaign_summary parquet readback mismatch: wrote " + str(_n_l6_rows) + " read back " +
+    str(_n_l6_parquet_back))
+print("L6 - parquet written to", BASE + "campaign_summary", "(", _n_l6_parquet_back, "rows, readback confirmed )")
+
 # %% [20] ONE-SCREEN SUMMARY
 display(Markdown("## UNSUB VALUE MUSEUM - PHASE 1 (LEAVERS ONLY) SUMMARY"))
 
@@ -1148,7 +1366,10 @@ else:
 
     # build the exact raw paths from the SAME constant the pull cell uses, so this list can never
     # drift out of sync with what was actually landed - no shell wildcards, every path listed.
-    _raw_paths = ["unsubs_12m/" + _q for _q in _P1_QUARTERS]
+    # senders_by_mne (cell [7b]) is a raw EDW pull too - it belongs on this list alongside
+    # unsubs_12m/q1..q4, not in the KEPT list below (campaign_summary/campaign_summary_csv, the
+    # DERIVED outputs built from it, are what's durable and KEPT).
+    _raw_paths = ["unsubs_12m/" + _q for _q in _P1_QUARTERS] + ["senders_by_mne"]
 
     print("Deleting", len(_raw_paths), "raw landing paths under", BASE, ":")
     for _p in _raw_paths:
@@ -1173,6 +1394,8 @@ else:
         [{"dataset": _p, "status": "REMOVED"} for _p in _raw_paths]
         + [{"dataset": "leaver_spine", "status": "KEPT (durable output)"},
            {"dataset": "cube", "status": "KEPT (durable output)"},
+           {"dataset": "campaign_summary", "status": "KEPT (durable output, cell [19b])"},
+           {"dataset": "campaign_summary_csv", "status": "KEPT (durable output, csv fetch copy, cell [19b])"},
            {"dataset": "ucp_spine", "status": "KEPT (derived - regenerable, but cheap to keep and saves the 30-partition UCP scan)"},
            {"dataset": "_meta/* manifests", "status": "KEPT (audit trail)"}]
     )
