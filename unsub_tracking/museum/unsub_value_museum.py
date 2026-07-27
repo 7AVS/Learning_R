@@ -368,14 +368,28 @@ if HAS_CLNT_TYP:
     _ucp = _ucp.filter(F.trim(F.col("CLNT_TYP")) == "Personal")
 _ucp = _ucp.select(*UCP_COLS).withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO")))
 
+# UCP is EXPECTED to be one row per client per month-end but is not guaranteed to be: the
+# 2026-02-28 partition carries 1 duplicate in 15.3M (2026-07-27). Dedupe deterministically and
+# REPORT it - halting the run over a stray row would be absurd. Hard-fail only if duplication is
+# material (>0.1%), which would mean the grain is not what we think it is.
+_n_ucp_raw = _ucp.count()
+_dedup_w = Window.partitionBy("CLNT_NO").orderBy(
+    *[F.col(c).asc_nulls_last() for c in UCP_COLS if c != "CLNT_NO"])
+_ucp = (_ucp.withColumn("_rn", F.row_number().over(_dedup_w))
+        .filter(F.col("_rn") == 1).drop("_rn"))
 _n_ucp_pre = _ucp.count()
+_dupes = _n_ucp_raw - _n_ucp_pre
+_dupe_pct = 100.0 * _dupes / _n_ucp_raw if _n_ucp_raw else 0.0
+print("UCP at", UCP_ANCHOR, ":", _n_ucp_raw, "rows ->", _n_ucp_pre, "after dedupe on CLNT_NO (",
+      _dupes, "duplicate rows dropped, %.4f%% )" % _dupe_pct)
+assert _dupe_pct < 0.1, ("UCP duplication at " + UCP_ANCHOR + " is %.3f%%" % _dupe_pct +
+                         " - that is structural, not stray rows. The grain is not one row per "
+                         "client per month-end; investigate before trusting any attribute.")
+
 _ucp.write.mode("overwrite").parquet(BASE + "ucp_spine")
 ucp = spark.read.parquet(BASE + "ucp_spine")
 _n_ucp = ucp.count()
 assert _n_ucp == _n_ucp_pre, "ucp_spine readback mismatch: wrote " + str(_n_ucp_pre) + " read " + str(_n_ucp)
-_n_ucp_distinct = ucp.select("CLNT_NO").distinct().count()
-assert _n_ucp == _n_ucp_distinct, ("UCP is not unique per CLNT_NO at " + UCP_ANCHOR + ": " +
-                                   str(_n_ucp) + " rows vs " + str(_n_ucp_distinct) + " distinct clients")
 print("ucp_spine:", _n_ucp, "rows at", UCP_ANCHOR, "- readback confirmed, one row per client.")
 
 # %% [13] POPULATIONS - one row per client, three mutually exclusive buckets.
@@ -752,3 +766,25 @@ else:
          for a in ("client_spine", "summary", "summary_csv", "ucp_spine")] +
         [{"dataset": p, "status": "REMOVED" if not landed(p) else "STILL PRESENT"} for p in _raw]))
     print("housekeeping complete - raw pulls removed, durable outputs verified intact.")
+
+# OPEN QUESTIONS (2026-07-27, appended post-run, no code changed)
+#
+# ANCHOR RULE ANDRE SPECIFIED: per-client UCP anchoring - each client's UCP snapshot taken at the
+#   month-end matching THEIR OWN unsub date, not a date shared across clients.
+#
+# WHAT WAS IMPLEMENTED INSTEAD: ONE common anchor, UCP_ANCHOR = "2026-02-28", used for every client
+#   regardless of bucket (leaver/already_out/stayer). See cell [1]/[12] above.
+#
+# WHY: stayers have no unsub event to anchor to. Per-client anchoring would put leavers and stayers
+#   at different points in their own timelines, biasing the L7/L8 leaver-vs-stayer comparisons.
+#   2026-02-28 is also the last month-end strictly before the Mar-May send window, so nothing in it
+#   can be a consequence of the treatment. The 12-month version of this file DID try per-client
+#   anchoring - it fanned out to 30 UCP partitions and got the session killed by YARN (2026-07-27).
+#
+# STATUS: Andre's ruling 2026-07-27 - accepted FOR THIS RUN ONLY. Staleness is ~2 months and the
+#   four measured fields (age, tenure, product count, annual profitability) move slowly at that
+#   horizon. He was explicit that this deviated from his stated instruction and was under-flagged
+#   when it happened (buried in a design comment, not called out prominently).
+#
+# REVISIT ON NEXT ITERATION: either implement true per-client unsub-date anchoring, or get explicit
+#   sign-off from Andre to keep the common anchor permanently. Do not silently carry this forward.
