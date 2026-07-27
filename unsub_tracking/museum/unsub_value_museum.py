@@ -257,9 +257,11 @@ except Exception as e:
 if _base_exists:
     print("HDFS round-trip OK - own namespace", BASE, "already exists (not the first run).")
 else:
-    print("FIRST-EVER RUN - own namespace", BASE, "does not exist yet on HDFS. Expected before any "
-          "land() call below has run; land() will create it. If you expected prior landings here, "
-          "STOP and investigate before proceeding.")
+    # NOT an alarm: datasets live in SUBPATHS (unsubs_12m/q1, _meta/...), so BASE itself holds no
+    # parquet and Spark cannot infer a schema there even when landings exist. The authoritative
+    # per-dataset status is what land() prints below - trust that, not this line.
+    print("No parquet directly at", BASE, "- normal, datasets live in subpaths. Per-dataset status "
+          "(SKIP vs landed) is reported by land() below; that is the authoritative check.")
 print("GATE PASSED - spark session live, HDFS reachable.")
 
 # %% [3] SIZE PROBE - EVENT-ONLY COUNT(*), disposition_cd = 4 (unsubs), per quarter. Gated on
