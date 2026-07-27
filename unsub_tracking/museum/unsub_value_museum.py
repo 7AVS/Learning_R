@@ -942,14 +942,11 @@ assert _n_cube_rows < 2_000_000, (
     "is expected, not a bug. Only suspect a band explosion (age/tenure/prod/prof producing far more "
     "distinct values than intended) if MNE cardinality does not explain the row count.")
 
-cube_pd = cube.orderBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile").toPandas()
+cube = cube.orderBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile")
 
-# DURABLE-FIRST SAVE ORDER - the HDFS parquet is THE artifact; csv/xlsx below are download
-# conveniences for Andre's Jupyter file browser and must never be able to lose the run. No script
-# in this repo uses to_excel/openpyxl/xlsxwriter, so that engine may not be installed - if to_excel
-# raised BEFORE the parquet writes, an ImportError would kill this cell with neither durable copy
-# on disk. Parquet (both tables) now writes and reads back FIRST; csv has no dependency risk and
-# comes next; xlsx is attempted last, inside a try/except that can never raise past this point.
+# EVERYTHING GOES TO HDFS. Local/working-directory writes do not work from this YARN/Spark kernel
+# (Andre, 2026-07-27), so pandas .to_csv/.to_excel appear nowhere in this file. Parquet is the
+# artifact; the csv copy below is the same data in a form Excel can open once fetched off HDFS.
 cube.write.mode("overwrite").parquet(BASE + "cube")
 _n_cube_after = spark.read.parquet(BASE + "cube").count()
 assert _n_cube_after == _n_cube_rows, (
@@ -971,22 +968,16 @@ print("leaver_spine saved to", BASE + "leaver_spine", "-", _n_spine_after, "rows
 print("unsub_tm is carried in this spine - any sub-window (a quarter, a single month) can be cut")
 print("later by filtering this column, WITHOUT re-pulling EDW.")
 
-# CSV DOWNLOAD COPY - no dependency risk (stdlib), unlike xlsx below. Both durable parquet copies
-# (cube, leaver_spine) are already written and readback-verified above this point.
-cube_pd.to_csv("unsub_value_cube.csv", index=False)
-print("CUBE - wrote", len(cube_pd), "rows to unsub_value_cube.csv (download copy)")
-
-# XLSX DOWNLOAD COPY - BEST EFFORT ONLY. openpyxl/xlsxwriter is not a dependency used anywhere else
-# in this repo, so it may not be installed in this kernel. Never allowed to raise past this point -
-# the durable parquet artifacts and the csv download copy are already safely on disk regardless of
-# what happens here.
-try:
-    cube_pd.to_excel("unsub_value_cube.xlsx", index=False)
-    print("CUBE - wrote", len(cube_pd), "rows to unsub_value_cube.xlsx (download copy)")
-except Exception as _xlsx_err:
-    print("CUBE - SKIPPED unsub_value_cube.xlsx (no working Excel writer engine - install openpyxl "
-          "to enable this download copy). csv and parquet copies above are unaffected. Error was:",
-          repr(_xlsx_err))
+# CSV COPY - written to HDFS through Spark, NOT to the notebook working directory. Local writes do
+# not work from this YARN/Spark kernel (Andre, 2026-07-27); pandas .to_csv/.to_excel are therefore
+# not used anywhere in this file. coalesce(1) makes it a single part-file so it can be fetched whole.
+cube.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "cube_csv")
+_n_csv_back = spark.read.option("header", True).csv(BASE + "cube_csv").count()
+assert _n_csv_back == _n_cube_rows, (
+    "cube_csv readback mismatch: wrote " + str(_n_cube_rows) + " read back " + str(_n_csv_back))
+print("CUBE - csv written to", BASE + "cube_csv", "(", _n_csv_back, "rows, readback confirmed )")
+print("To pull it down as one local file for Excel, run this in a terminal (NOT in this kernel):")
+print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/cube_csv unsub_value_cube.csv")
 
 # %% [20] ONE-SCREEN SUMMARY
 display(Markdown("## UNSUB VALUE MUSEUM - PHASE 1 (LEAVERS ONLY) SUMMARY"))
