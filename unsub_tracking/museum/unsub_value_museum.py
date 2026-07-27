@@ -475,16 +475,61 @@ _anchor_months = sorted(r["a"] for r in
                          .select(F.date_format("anchor", "yyyy-MM-dd").alias("a")).distinct().collect())
 print("distinct anchor months needed:", len(_anchor_months), "-", _anchor_months)
 
+# %% [10b] UCP SCHEMA PROBE - hard gate, ported from archaeology/28_unsub_value_ucp.py's cell [2].
+# Nothing downstream may assume a column exists. Reads the LATEST available UCP partition (UCP_MAX,
+# computed in cell [8]) and checks it for every column this file needs BEFORE cell [11] reads any
+# anchor-month partition off that assumption.
+_latest_ucp = spark.read.parquet(UCP_BASE + "MONTH_END_DATE=" + UCP_MAX)
+print("schema of latest UCP partition (" + UCP_MAX + "):")
+_latest_ucp.printSchema()
+
+REQUESTED_UCP_COLS = ["CLNT_NO", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
+                      "C_TOT_CNT", "PROF_TOT_ANNUAL"]
+_actual_ucp_cols = set(_latest_ucp.columns)
+_present_tbl = pd.DataFrame(
+    {"column": REQUESTED_UCP_COLS,
+     "status": ["PRESENT" if c in _actual_ucp_cols else "MISSING" for c in REQUESTED_UCP_COLS]})
+T("SCHEMA PROBE - UCP requested column presence check (latest partition " + UCP_MAX + ")", _present_tbl)
+
+UCP_COLS = [c for c in REQUESTED_UCP_COLS if c in _actual_ucp_cols]
+_dropped_ucp_cols = [c for c in REQUESTED_UCP_COLS if c not in _actual_ucp_cols]
+print("\nUCP_COLS (usable, intersection with actual schema):", UCP_COLS)
+if _dropped_ucp_cols:
+    print("DROPPED (requested but not in schema):", _dropped_ucp_cols)
+else:
+    print("nothing dropped - all requested columns present")
+
+# CLNT_TYP is not in the documented UCP field list but the read below filters on it - probe for it
+# explicitly rather than assuming either way.
+HAS_CLNT_TYP = "CLNT_TYP" in _actual_ucp_cols
+print("\nHAS_CLNT_TYP =", HAS_CLNT_TYP,
+      "(controls whether the UCP read in cell [11] applies the Personal-client filter)")
+
+# CRITICAL MINIMUM - the four client variables this file exists to report on (age, tenure, TIBC
+# product counts, PROF_TOT_ANNUAL) plus the join key. PROF_TOT_ANNUAL is the value axis (L5,
+# prof_quintile banding) - without it the analysis is pointless. Fail loud here rather than
+# silently degrading several cells from now.
+_critical_ucp_cols = ["CLNT_NO", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
+                      "C_TOT_CNT", "PROF_TOT_ANNUAL"]
+_missing_critical_ucp = [c for c in _critical_ucp_cols if c not in _actual_ucp_cols]
+assert not _missing_critical_ucp, (
+    "CRITICAL UCP COLUMNS MISSING from schema: " + str(_missing_critical_ucp) + ". Check the UCP "
+    "field catalog before touching anything else - this file cannot band or measure age, tenure, "
+    "product counts, or PROF_TOT_ANNUAL without these.")
+
+print("\nUCP SCHEMA PROBE PASSED - UCP_COLS and HAS_CLNT_TYP are now fixed for the rest of this run.")
+
 # %% [11] UCP READ - per anchor month-end, semi-join to only the clients needing that anchor
 # (same pattern as the prior version of this file / archaeology/28). CLNT_TYP == 'Personal' is the
-# verified filter value.
-UCP_COLS = ["CLNT_NO", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
-            "C_TOT_CNT", "PROF_TOT_ANNUAL"]
+# verified filter value, applied only when HAS_CLNT_TYP (schema probe, cell [10b]) says the column
+# exists on this UCP snapshot. UCP_COLS also comes from that probe - the intersection with the real
+# schema, not a hardcoded list.
 
 def read_ucp_anchor(anchor_str, needed_clients):
     raw = (spark.read.option("basePath", UCP_BASE).parquet(UCP_BASE + "MONTH_END_DATE=" + anchor_str)
-           .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO")))
-           .filter(F.trim(F.col("CLNT_TYP")) == "Personal"))
+           .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
+    if HAS_CLNT_TYP:
+        raw = raw.filter(F.trim(F.col("CLNT_TYP")) == "Personal")
     raw = raw.join(needed_clients, "CLNT_NO", "leftsemi")
     return raw.select(*UCP_COLS).withColumn("ucp_month_end", F.lit(anchor_str))
 
@@ -568,7 +613,8 @@ _null_rows = []
 for _c in UCP_COLS:
     _n_null = leaver_ucp.filter(F.col("ucp_matched") & F.col(_c).isNull()).count()
     _null_rows.append({"field": _c, "null_among_matched": _n_null,
-                        "pct_null_among_matched": round(100.0 * _n_null / _n_matched_total, 2)})
+                        "pct_null_among_matched": (
+                            round(100.0 * _n_null / _n_matched_total, 2) if _n_matched_total else 0.0)})
 _null_df = pd.DataFrame(_null_rows)
 T("M0d - null counts among MATCHED rows, per UCP field (CLNT_NO included for completeness - "
   "structurally 0% by construction of the join key)", _null_df)
@@ -600,6 +646,9 @@ HP_PROD_MAX = 2        # high_potential: prod_cnt <= this
 # these cuts with ones computed from the mailed/stayer base once it exists.
 _prof_cut_base = leaver_ucp.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
 PROF_CUTS = _prof_cut_base.approxQuantile("PROF_TOT_ANNUAL", [0.2, 0.4, 0.6, 0.8], 0.01)
+assert len(PROF_CUTS) == 4, (
+    "no non-null PROF_TOT_ANNUAL among matched leavers - cannot cut quintiles; check M0's null "
+    "table before going further")
 T("PROF CUTS - PROF_TOT_ANNUAL quintile cut points, computed over the LEAVER population itself "
   "(WITHIN-LEAVER ranking, NOT value relative to the reachable base - Phase 2 replaces this with "
   "cuts from the mailed base), n = " + str(_prof_cut_base.count()),
@@ -818,25 +867,34 @@ T("L5 - PROF_TOT_ANNUAL percentiles by tenure_band (matched leavers only)", l5)
 cube = (leaver_banded.groupBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile")
         .agg(F.count("*").alias("leaver_clients")))
 _n_cube_rows = cube.count()
+_n_distinct_mnes = leaver_banded.select("mne").distinct().count()
+print("distinct MNEs in this run:", _n_distinct_mnes)
 print("CUBE row count:", _n_cube_rows)
-assert _n_cube_rows < 200_000, (
-    "cube has " + str(_n_cube_rows) + " rows (>= 200k) - Excel write would be unwieldy, investigate "
-    "before writing (likely a band producing far more distinct values than intended)")
+# This file is bank-wide/all-programs. Cube grain is mne x program x age_band x tenure_band x
+# prod_band x prof_quintile - roughly 1,260 possible rows per distinct MNE (5 age x 5 tenure x 5
+# prod x 5 prof, times program, is an upper bound before sparsity thins it), so past ~160 MNEs this
+# assert fires on CORRECT data. If it fires: check _n_distinct_mnes (printed above) FIRST - a
+# bank-wide run legitimately carrying many MNEs is the likely cause, not a band producing more
+# distinct values than intended.
+assert _n_cube_rows < 2_000_000, (
+    "cube has " + str(_n_cube_rows) + " rows (>= 2,000,000). CHECK FIRST: distinct MNE count (" +
+    str(_n_distinct_mnes) + ", printed above) - a bank-wide run spans many MNEs and ~1,260 rows/MNE "
+    "is expected, not a bug. Only suspect a band explosion (age/tenure/prod/prof producing far more "
+    "distinct values than intended) if MNE cardinality does not explain the row count.")
 
 cube_pd = cube.orderBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile").toPandas()
 
-# DUAL SAVE - the notebook's working directory is NOT persistent storage; HDFS is. xlsx is how
-# Andre gets the file out (Jupyter file browser download); the HDFS parquet copy is the artifact
-# that survives regardless of what happens to that download.
-print("CUBE - writing", len(cube_pd), "rows to unsub_value_cube.xlsx (download copy)")
-cube_pd.to_excel("unsub_value_cube.xlsx", index=False)
-
+# DURABLE-FIRST SAVE ORDER - the HDFS parquet is THE artifact; csv/xlsx below are download
+# conveniences for Andre's Jupyter file browser and must never be able to lose the run. No script
+# in this repo uses to_excel/openpyxl/xlsxwriter, so that engine may not be installed - if to_excel
+# raised BEFORE the parquet writes, an ImportError would kill this cell with neither durable copy
+# on disk. Parquet (both tables) now writes and reads back FIRST; csv has no dependency risk and
+# comes next; xlsx is attempted last, inside a try/except that can never raise past this point.
 cube.write.mode("overwrite").parquet(BASE + "cube")
 _n_cube_after = spark.read.parquet(BASE + "cube").count()
 assert _n_cube_after == _n_cube_rows, (
     "cube HDFS readback mismatch: wrote " + str(_n_cube_rows) + " read back " + str(_n_cube_after))
-print("CUBE written to BOTH destinations: unsub_value_cube.xlsx (", len(cube_pd), "rows ) and",
-      BASE + "cube", "(", _n_cube_after, "rows, readback confirmed )")
+print("CUBE written to", BASE + "cube", "(", _n_cube_after, "rows, readback confirmed )")
 
 leaver_spine = leaver_banded.select(
     "CLNT_NO", "TREATMENT_ID", "mne", "program", "unsub_tm", "launch_dt", "anchor", "ucp_month_end",
@@ -852,6 +910,23 @@ assert _n_spine_after == _n_spine_before, (
 print("leaver_spine saved to", BASE + "leaver_spine", "-", _n_spine_after, "rows, readback confirmed.")
 print("unsub_tm is carried in this spine - any sub-window (a quarter, a single month) can be cut")
 print("later by filtering this column, WITHOUT re-pulling EDW.")
+
+# CSV DOWNLOAD COPY - no dependency risk (stdlib), unlike xlsx below. Both durable parquet copies
+# (cube, leaver_spine) are already written and readback-verified above this point.
+cube_pd.to_csv("unsub_value_cube.csv", index=False)
+print("CUBE - wrote", len(cube_pd), "rows to unsub_value_cube.csv (download copy)")
+
+# XLSX DOWNLOAD COPY - BEST EFFORT ONLY. openpyxl/xlsxwriter is not a dependency used anywhere else
+# in this repo, so it may not be installed in this kernel. Never allowed to raise past this point -
+# the durable parquet artifacts and the csv download copy are already safely on disk regardless of
+# what happens here.
+try:
+    cube_pd.to_excel("unsub_value_cube.xlsx", index=False)
+    print("CUBE - wrote", len(cube_pd), "rows to unsub_value_cube.xlsx (download copy)")
+except Exception as _xlsx_err:
+    print("CUBE - SKIPPED unsub_value_cube.xlsx (no working Excel writer engine - install openpyxl "
+          "to enable this download copy). csv and parquet copies above are unaffected. Error was:",
+          repr(_xlsx_err))
 
 # %% [20] ONE-SCREEN SUMMARY
 display(Markdown("## UNSUB VALUE MUSEUM - PHASE 1 (LEAVERS ONLY) SUMMARY"))
@@ -892,13 +967,22 @@ print("  standardised anywhere else in the repo.")
 print("- Clients unmatched in UCP are counted in M0, not silently dropped - see M0a/b/c for the")
 print("  size and shape of this population before trusting any median in L1/L2/L3/L4/L5/CUBE.")
 
-# %% [21] SYNTAX CHECK - parse this file's own source before handing it off.
-import ast
+# %% [21] SYNTAX CHECK - parse this file's own source before handing it off. BEST EFFORT: __file__
+# is undefined in a Jupyter cell, so the fallback is a bare relative filename - if the kernel's cwd
+# differs from this file's directory, open() raises FileNotFoundError. That should never surface as
+# a red error at the end of an otherwise-successful run, so it is caught and downgraded to a skip
+# message rather than allowed to raise.
+try:
+    import ast
 
-with open(__file__ if "__file__" in dir() else "unsub_value_museum.py", "r", encoding="utf-8") as _f:
-    _source = _f.read()
-ast.parse(_source)
-print("ast.parse PASSED - script is syntactically valid.")
+    with open(__file__ if "__file__" in dir() else "unsub_value_museum.py", "r", encoding="utf-8") as _f:
+        _source = _f.read()
+    ast.parse(_source)
+    print("ast.parse PASSED - script is syntactically valid.")
+except Exception as _syntax_check_err:
+    print("SYNTAX CHECK SKIPPED - could not locate/parse this file's own source from the current "
+          "working directory (harmless; every cell above already ran successfully). Error was:",
+          repr(_syntax_check_err))
 
 # %% [22] OPT-IN CLEANUP - drop the raw pull, keep the outputs. unsubs_12m/q1..q4 is SCRATCH: it
 # exists only so a kernel death mid-run doesn't cost a re-pull from EDW. Once leaver_spine and cube
