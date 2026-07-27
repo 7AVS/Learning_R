@@ -363,20 +363,26 @@ _Q2_MONTHS = [
     ("m2026_06", "2026-06-01", "2026-07-01", "2026-05-01", "2026-08-01"),
 ]
 
-_probe_rows = []
-for _name, _ds, _de, _ls, _le in _Q2_MONTHS:
-    _pdf = edw_pd("""
+# Whole-file rerun contract: the probe only costs Teradata time when there is actually something
+# left to pull - once all 3 months are landed it skips in seconds like everything else.
+_unlanded = [t for t in _Q2_MONTHS if not landed("sends_cards_q2/" + t[0])]
+if not _unlanded:
+    print("SIZE PROBE - all 3 sends_cards_q2 months already landed - SKIP (nothing left to size)")
+else:
+    _probe_rows = []
+    for _name, _ds, _de, _ls, _le in _unlanded:
+        _pdf = edw_pd("""
 SELECT COUNT(*) AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
 WHERE disposition_cd = 1
   AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
   AND SUBSTR(TREATMENT_ID, 8, 3) IN (%s)
 """ % (_ds, _de, _CARDS_MNE_SQL_LIST))
-    _probe_rows.append((_name, int(_pdf["event_rows"][0])))
+        _probe_rows.append((_name, int(_pdf["event_rows"][0])))
 
-_probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows"])
-print("SIZE PROBE - disp_cd=1 cards-MNE sends, per month (event-only, no join, no DISTINCT):")
-print(_probe.to_string(index=False))
+    _probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows"])
+    print("SIZE PROBE - disp_cd=1 cards-MNE sends, unlanded months only (event-only, no join, no DISTINCT):")
+    print(_probe.to_string(index=False))
 
 # %% [19] EXTRACT sends_cards_q2 2026-04 (load_tm 2026-03..2026-06)
 # Dedupe BEFORE the join (derived table ek): VENDOR_FEEDBACK_EVENT is filtered to disp_cd=1 +
