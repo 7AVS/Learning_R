@@ -782,11 +782,20 @@ print("leaver_banded:", leaver_banded.count(), "rows, bands applied")
 # %% [14] L1 - WHERE. GRAIN: one row per leaver client, bank-wide, 12-month window (2025-07 to
 # 2026-07). VOLUME + MIX ONLY - NO RATES (no denominator until Phase 2).
 def _l1_metrics(df, keys):
+    # leaver_clients = ALL leavers in the group (raw, matched + unmatched) - kept on the full
+    # population per house rule (raw counts are not band-derived). matched_clients (below) is the
+    # DENOMINATOR actually used for every pct_* column and median - band-derived figures cannot use
+    # unmatched rows (they have no bands), so the group's matched subset is the correct base, not
+    # leaver_clients. Fixed 2026-07-27: pct_single_product/pct_top_prof_quintile/pct_high_potential
+    # already filtered to ucp_matched BEFORE the groupBy (matched's F.count("*") is a matched-only
+    # count per key), so these percentages were already correct - matched_clients is now exposed as
+    # an explicit column so the reader can see the denominator instead of it being implicit.
     total = df.groupBy(*keys).agg(F.count("*").alias("leaver_clients"))
     total = total.withColumn("share_of_all_leavers_pct",
                               F.round(100.0 * F.col("leaver_clients") / _n_leavers_total, 2))
     matched = (df.filter(F.col("ucp_matched")).groupBy(*keys)
-               .agg(F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
+               .agg(F.count("*").alias("matched_clients"),
+                    F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
                     F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("median_tenure_years"),
                     F.expr("percentile_approx(prod_cnt, 0.5)").alias("median_prod_cnt"),
                     F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof_annual"),
@@ -800,24 +809,56 @@ def _l1_metrics(df, keys):
 
 l1_program = _l1_metrics(leaver_banded, ["program"]).orderBy(F.desc("leaver_clients"))
 T("L1 - WHERE, by program | window: unsub_tm in [2025-07-01, 2026-07-01), bank-wide | GRAIN: "
-  "distinct client, last qualifying unsub event | VOLUME + MIX ONLY - NO RATES (no denominator "
-  "until Phase 2)", l1_program)
+  "distinct client, last qualifying unsub event | leaver_clients = ALL leavers (raw, matched + "
+  "unmatched); matched_clients = UCP-matched subset - medians and every pct_* column are computed "
+  "over matched_clients, NOT leaver_clients | VOLUME + MIX ONLY - NO RATES (no denominator until "
+  "Phase 2)", l1_program)
 
 l1_mne = (_l1_metrics(leaver_banded, ["mne", "program"])
           .withColumn("is_cards", F.col("program") == F.lit("CARDS"))
           .orderBy(F.desc("leaver_clients")).limit(20))
-T("L1 - WHERE, top-20 MNEs by leaver-client volume | is_cards flags CARDS-program rows | VOLUME + "
-  "MIX ONLY - NO RATES (no denominator until Phase 2)", l1_mne)
+T("L1 - WHERE, top-20 MNEs by leaver-client volume | is_cards flags CARDS-program rows | "
+  "leaver_clients = ALL leavers (raw); matched_clients = UCP-matched subset - medians and every "
+  "pct_* column are computed over matched_clients, NOT leaver_clients | VOLUME + MIX ONLY - NO "
+  "RATES (no denominator until Phase 2)", l1_mne)
 
 # %% [15] L2 - WHO, cards vs non-cards leavers. Composition-against-composition, no denominator
 # required - THIS IS a legitimate comparison: it answers whether the people cards loses differ
 # from the people the rest of the bank loses. It does NOT say either group unsubscribes MORE - that
 # would need a mailed/reachable denominator per group, which does not exist until Phase 2.
+#
+# FIX (2026-07-27, Andre's finding on the 2026-07-27 run): every segment_dim here (prod_band,
+# tenure_band, age_band, prof_quintile, high_potential) is BAND-DERIVED - unmatched clients have no
+# bands and land in "unknown" (or, for prod_band/high_potential, get silently folded into "0"/False
+# by coalesce - see cell [13]). The percentages below were computed over ALL leavers in each group,
+# including unmatched ones. CARDS is 100% UCP-matched; NON_CARDS is ~92% matched - so every
+# NON_CARDS share was deflated by the unmatched slice and every cards/non-cards ratio was inflated
+# (observed: prod_band=1 showed ratio 2.17 on all-leaver denominators, 2.00 on matched-only;
+# high_potential showed 1.35 vs the correct 1.24). FIX: restrict BOTH sides to ucp_matched BEFORE
+# computing any percentage - the denominator per side is now matched clients in that program, not
+# all leavers in that program. segment_value itself is NOT filtered - if a dimension still produces
+# "unknown" after the matched filter (e.g. a matched client with a null PROF_TOT_ANNUAL), that is a
+# genuine data condition and stays visible.
 _l2_dims = ["prod_band", "tenure_band", "age_band", "prof_quintile", "high_potential"]
-_cards = leaver_banded.filter(F.col("program") == "CARDS")
-_noncards = leaver_banded.filter(F.col("program") != "CARDS")
+_cards_all = leaver_banded.filter(F.col("program") == "CARDS")
+_noncards_all = leaver_banded.filter(F.col("program") != "CARDS")
+_n_cards_total_all = _cards_all.count()
+_n_noncards_total_all = _noncards_all.count()
+
+_cards = _cards_all.filter(F.col("ucp_matched"))
+_noncards = _noncards_all.filter(F.col("ucp_matched"))
 _n_cards_total = _cards.count()
 _n_noncards_total = _noncards.count()
+_cards_match_pct = round(100.0 * _n_cards_total / _n_cards_total_all, 1) if _n_cards_total_all else 0.0
+_noncards_match_pct = round(100.0 * _n_noncards_total / _n_noncards_total_all, 1) if _n_noncards_total_all else 0.0
+
+T("L2 DENOMINATORS - matched vs total leavers per side, BEFORE any L2 percentage is computed",
+  pd.DataFrame([
+      {"side": "CARDS", "matched_clients": _n_cards_total, "total_leaver_clients": _n_cards_total_all,
+       "match_pct": _cards_match_pct},
+      {"side": "NON_CARDS", "matched_clients": _n_noncards_total, "total_leaver_clients": _n_noncards_total_all,
+       "match_pct": _noncards_match_pct},
+  ]))
 
 _l2_frames = []
 for _dim in _l2_dims:
@@ -846,60 +887,101 @@ l2 = _l2_frames[0]
 for _f in _l2_frames[1:]:
     l2 = l2.unionByName(_f)
 _w_l2 = Window.partitionBy("segment_dim").orderBy(F.desc("ratio"))
-T("L2 - WHO, cards vs non-cards leavers | ratio = pct_cards_leavers / pct_noncards_leavers, ratio "
-  "> 1 = over-represented among cards leavers relative to non-cards leavers | composition vs "
-  "composition, NO denominator, does NOT claim either group unsubscribes more often",
+T("L2 - WHO, cards vs non-cards leavers | GRAIN: distinct client, UCP-MATCHED leavers only (cards "
+  "n = " + str(_n_cards_total) + " of " + str(_n_cards_total_all) + " matched, non-cards n = " +
+  str(_n_noncards_total) + " of " + str(_n_noncards_total_all) + " matched) | ratio = pct_cards / "
+  "pct_noncards, >1 = over-represented among CARDS leavers | unmatched clients are EXCLUDED from "
+  "both sides - they have no bands, and cards/non-cards differ sharply in match rate (" +
+  str(_cards_match_pct) + "% vs " + str(_noncards_match_pct) + "%), so including them would "
+  "inflate every ratio | composition vs composition, does NOT claim either group unsubscribes "
+  "more often",
   l2.withColumn("_rn", F.row_number().over(_w_l2)).orderBy("segment_dim", "_rn").drop("_rn"))
 
 # %% [16] L3 - DOOR-CLOSING. GRAIN: distinct leaver client. A client who leaves while holding one
 # product closes the ONLY email door cards had into cross-selling every OTHER product they don't
 # hold. VOLUME + MIX ONLY - NO RATES.
-_single_overall = leaver_banded.filter(F.col("prod_band") == "1").count()
-display(Markdown("**L3 - DOOR-CLOSING** · single-product leavers as % of ALL leavers, bank-wide: **" +
-                  str(round(100.0 * _single_overall / _n_leavers_total, 1)) + "%** (" +
-                  str(_single_overall) + " of " + str(_n_leavers_total) + ") | VOLUME + MIX ONLY - "
-                  "NO RATES (no denominator until Phase 2)"))
+#
+# FIX (2026-07-27): prod_band is band-derived - an UNMATCHED client's T/I/B/C counts are all null,
+# coalesced to 0 in cell [13], so they can never land in prod_band "1" but they WERE still counted
+# in the denominator (leaver_clients, full population) below. That deflates pct_single_product for
+# any group with unmatched clients, same defect as L2. FIX: denominator for every pct_single_product
+# is now matched_clients (the UCP-matched subset of that group), exposed as its own column;
+# leaver_clients stays on the FULL population (it is a raw count, not band-derived).
+_matched_banded = leaver_banded.filter(F.col("ucp_matched"))
+_n_matched_leavers_total = _matched_banded.count()
+_single_overall = _matched_banded.filter(F.col("prod_band") == "1").count()
+display(Markdown("**L3 - DOOR-CLOSING** · single-product leavers as % of UCP-MATCHED leavers, "
+                  "bank-wide: **" + str(round(100.0 * _single_overall / _n_matched_leavers_total, 1)) +
+                  "%** (" + str(_single_overall) + " of " + str(_n_matched_leavers_total) +
+                  " matched, out of " + str(_n_leavers_total) + " leavers total) | VOLUME + MIX "
+                  "ONLY - NO RATES (no denominator until Phase 2)"))
 
-l3_by_program = (leaver_banded.groupBy("program")
-                  .agg(F.count("*").alias("leaver_clients"),
-                       F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients"))
-                  .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("leaver_clients"), 1))
+l3_by_program = (leaver_banded.groupBy("program").agg(F.count("*").alias("leaver_clients"))
+                  .join(_matched_banded.groupBy("program")
+                        .agg(F.count("*").alias("matched_clients"),
+                             F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients")),
+                        "program", "left")
+                  .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("matched_clients"), 1))
                   .orderBy(F.desc("leaver_clients")))
-T("L3 - DOOR-CLOSING, by program", l3_by_program)
+T("L3 - DOOR-CLOSING, by program | leaver_clients = ALL leavers (raw); pct_single_product = "
+  "single_product_clients / matched_clients (UCP-matched only - prod_band is band-derived, "
+  "unmatched rows have no valid band)", l3_by_program)
 
 l3_by_mne = (leaver_banded.filter(F.col("program") == "CARDS").groupBy("mne")
-             .agg(F.count("*").alias("leaver_clients"),
-                  F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients"))
-             .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("leaver_clients"), 1))
+             .agg(F.count("*").alias("leaver_clients"))
+             .join(_matched_banded.filter(F.col("program") == "CARDS").groupBy("mne")
+                   .agg(F.count("*").alias("matched_clients"),
+                        F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients")),
+                   "mne", "left")
+             .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("matched_clients"), 1))
              .orderBy(F.desc("leaver_clients")).limit(20))
-T("L3 - DOOR-CLOSING, top cards MNEs", l3_by_mne)
+T("L3 - DOOR-CLOSING, top cards MNEs | leaver_clients = ALL leavers (raw); pct_single_product = "
+  "single_product_clients / matched_clients (UCP-matched only)", l3_by_mne)
 
-l3_tibc = (leaver_banded.filter(F.col("prod_band") == "1").groupBy("tibc_mix")
+l3_tibc = (_matched_banded.filter(F.col("prod_band") == "1").groupBy("tibc_mix")
            .agg(F.count("*").alias("single_product_clients")).orderBy(F.desc("single_product_clients")))
-T("L3 - DOOR-CLOSING, single-product leavers by category held, bank-wide", l3_tibc)
+T("L3 - DOOR-CLOSING, single-product leavers by category held, bank-wide | UCP-matched only "
+  "(prod_band == '1' cannot occur for an unmatched row - see cell [13] - so this table was already "
+  "matched-only; label made explicit)", l3_tibc)
 
 # %% [17] L4 - HIGH POTENTIAL LOST. GRAIN: distinct leaver client. VOLUME + MIX ONLY - NO RATES.
+#
+# FIX (2026-07-27): high_potential is band-derived and forced False for any client missing AGE or
+# TENURE_RBC_YEARS (cell [13]), i.e. every unmatched client is automatically NOT high_potential -
+# but they were still counted in the denominator (leaver_clients, full population) below, deflating
+# pct_high_potential for any group with unmatched clients (same defect as L2/L3). FIX: denominator
+# is now matched_clients (UCP-matched subset), exposed as its own column; leaver_clients stays on
+# the full population (raw count, not band-derived).
 _HP_LABEL = ("high_potential = AGE < " + str(HP_AGE_MAX) + " AND TENURE_RBC_YEARS <= " +
              str(HP_TENURE_MAX) + " AND prod_cnt <= " + str(HP_PROD_MAX))
-_n_hp_total = leaver_banded.filter(F.col("high_potential")).count()
+_n_hp_total = _matched_banded.filter(F.col("high_potential")).count()
 display(Markdown("**L4 - HIGH POTENTIAL LOST** · " + _HP_LABEL + " · **" +
-                  str(round(100.0 * _n_hp_total / _n_leavers_total, 1)) + "%** of all leavers (" +
-                  str(_n_hp_total) + " of " + str(_n_leavers_total) + ") | VOLUME + MIX ONLY - NO "
-                  "RATES (no denominator until Phase 2)"))
+                  str(round(100.0 * _n_hp_total / _n_matched_leavers_total, 1)) +
+                  "%** of UCP-MATCHED leavers (" + str(_n_hp_total) + " of " +
+                  str(_n_matched_leavers_total) + " matched, out of " + str(_n_leavers_total) +
+                  " leavers total) | VOLUME + MIX ONLY - NO RATES (no denominator until Phase 2)"))
 
-l4_by_program = (leaver_banded.groupBy("program")
-                  .agg(F.count("*").alias("leaver_clients"),
-                       F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients"))
-                  .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("leaver_clients"), 1))
+l4_by_program = (leaver_banded.groupBy("program").agg(F.count("*").alias("leaver_clients"))
+                  .join(_matched_banded.groupBy("program")
+                        .agg(F.count("*").alias("matched_clients"),
+                             F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients")),
+                        "program", "left")
+                  .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("matched_clients"), 1))
                   .orderBy(F.desc("leaver_clients")))
-T("L4 - HIGH POTENTIAL LOST, by program | " + _HP_LABEL, l4_by_program)
+T("L4 - HIGH POTENTIAL LOST, by program | " + _HP_LABEL + " | leaver_clients = ALL leavers (raw); "
+  "pct_high_potential = high_potential_clients / matched_clients (UCP-matched only - high_potential "
+  "is band-derived and forced False for unmatched rows)", l4_by_program)
 
 l4_by_mne = (leaver_banded.filter(F.col("program") == "CARDS").groupBy("mne")
-             .agg(F.count("*").alias("leaver_clients"),
-                  F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients"))
-             .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("leaver_clients"), 1))
+             .agg(F.count("*").alias("leaver_clients"))
+             .join(_matched_banded.filter(F.col("program") == "CARDS").groupBy("mne")
+                   .agg(F.count("*").alias("matched_clients"),
+                        F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients")),
+                   "mne", "left")
+             .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("matched_clients"), 1))
              .orderBy(F.desc("leaver_clients")).limit(20))
-T("L4 - HIGH POTENTIAL LOST, top cards MNEs | " + _HP_LABEL, l4_by_mne)
+T("L4 - HIGH POTENTIAL LOST, top cards MNEs | " + _HP_LABEL + " | leaver_clients = ALL leavers "
+  "(raw); pct_high_potential = high_potential_clients / matched_clients (UCP-matched only)", l4_by_mne)
 
 # %% [18] L5 - PROF VETTING. PROF_TOT_ANNUAL percentiles by tenure_band. VOLUME + MIX ONLY - NO RATES.
 display(Markdown("**L5 - PROF VETTING** · 2026-07-27 FINDING (unchanged in this rewrite): "
