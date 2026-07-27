@@ -396,6 +396,36 @@ r7b = T("R7b - clients whose latest write on a switch is a TIE (standing positio
                  F.countDistinct(F.when(F.col("rows_at_latest") > 1, F.col("CLNT_NO"))).alias("clients_with_tie"))
             .orderBy("PREF_ID"))
 
+# %% [25] R8 - BLOCKER. ONE DENOMINATOR PER SWITCH. Every position, not just No and Yes.
+# Andre's catch 2026-07-26: D1 reports only standing_no and standing_yes, so the chart silently drops the
+# blank population - 2.9M clients on 1002, which the stated rule counts as YES. The chart therefore applies
+# the blank rule on 1014 and not on 1002. This cell puts every client holding a record on one visible base.
+r8 = T("R8 - clients holding a record on each switch at 1 Apr 2026, EVERY position, and receipt within each",
+       _asof.join(recn, "CLNT_NO", "left")
+            .withColumn("got", F.when(F.col("got_named") == 1, F.lit(1)).otherwise(F.lit(0)))
+            .groupBy("PREF_ID")
+            .agg(F.countDistinct("CLNT_NO").alias("clients_on_switch"),
+                 F.countDistinct(F.when(F.col("value") == "explicit_no", F.col("CLNT_NO"))).alias("explicit_no"),
+                 F.countDistinct(F.when((F.col("value") == "explicit_no") & (F.col("got") == 1), F.col("CLNT_NO"))).alias("explicit_no_got"),
+                 F.countDistinct(F.when(F.col("value") == "blank", F.col("CLNT_NO"))).alias("blank"),
+                 F.countDistinct(F.when((F.col("value") == "blank") & (F.col("got") == 1), F.col("CLNT_NO"))).alias("blank_got"),
+                 F.countDistinct(F.when(F.col("value") == "yes", F.col("CLNT_NO"))).alias("yes"),
+                 F.countDistinct(F.when((F.col("value") == "yes") & (F.col("got") == 1), F.col("CLNT_NO"))).alias("yes_got"),
+                 F.countDistinct(F.when(F.col("value") == "other", F.col("CLNT_NO"))).alias("other"),
+                 F.countDistinct(F.when(F.col("got") == 1, F.col("CLNT_NO"))).alias("all_got"))
+            .orderBy("PREF_ID"))
+
+# %% [26] R8b - the same thing collapsed to each switch's OWN rule, so No and Yes mean what sheet 1 says.
+# 1014: No = explicit + blank. 1002/1012/1006: Yes = explicit + blank. Columns sum to clients_on_switch.
+r8b = T("R8b - receipt by position UNDER EACH SWITCH'S OWN RULE (blank folded to the side the rule assigns)",
+        _asof.join(recn, "CLNT_NO", "left")
+             .withColumn("rule_side", F.when(F.col("is_no"), "No_under_rule")
+                                       .when(F.col("value") == "other", "other").otherwise("Yes_under_rule"))
+             .groupBy("PREF_ID", "rule_side")
+             .agg(F.countDistinct("CLNT_NO").alias("clients"),
+                  F.countDistinct(F.when(F.col("got_named") == 1, F.col("CLNT_NO"))).alias("got_named"))
+             .orderBy("PREF_ID", "rule_side"))
+
 # ============================ 7. THE DECK FEED ==============================
 
 # %% [17] DECK - every headline figure in one table. Photograph this cell.
