@@ -215,20 +215,33 @@ except NameError:
                        "SparkSession.builder call here by design - do not run this file outside "
                        "that kernel.")
 
-# Existence is checked through Spark's own reader, NOT spark._jvm - raw JVM gateway access
-# (FileSystem/Path) throws "does not exist in the JVM" on this kernel (2026-07-27). A read that
-# fails with a path-not-found message means the namespace is simply absent (first run); any other
-# failure means the session itself is broken and must stop the run.
+# No raw JVM access: spark._jvm.org.apache.hadoop.fs.FileSystem throws "does not exist in the JVM"
+# on this kernel (2026-07-27). The gate proves two things independently.
+# 1) the session executes at all.
+_ = spark.range(1).count()
+
+# 2) HDFS is genuinely reachable - proven against UCP_BASE, which always exists. Doing this against
+# our OWN namespace was wrong: an empty/absent path raises "Unable to infer schema for Parquet",
+# which is indistinguishable from a real failure and blocked the first-ever run (2026-07-27).
+try:
+    _ = spark.read.option("basePath", UCP_BASE).parquet(UCP_BASE).select("MONTH_END_DATE").limit(1).collect()
+except Exception as e:
+    raise RuntimeError("Cannot read UCP at " + UCP_BASE + " - HDFS is not reachable from this "
+                       "session. Fix it before running any pull cell. Underlying error: " + str(e)[:300])
+
+# 3) our own namespace: absent on a first run, which is expected and NOT an error. Every "empty or
+# missing" signal Spark emits is treated as absent; land() creates the namespace on its first write.
 try:
     spark.read.parquet(BASE).limit(1).collect()
     _base_exists = True
 except Exception as e:
     _msg = str(e)
-    if ("Path does not exist" in _msg) or ("PATH_NOT_FOUND" in _msg) or ("FileNotFound" in _msg):
-        _base_exists = False
-    else:
-        raise RuntimeError("Cannot reach HDFS to check " + BASE + " - fix the spark/HDFS session "
-                           "before running any pull cell. Underlying error: " + _msg[:300])
+    _absent = ("Path does not exist" in _msg or "PATH_NOT_FOUND" in _msg or "FileNotFound" in _msg
+               or "Unable to infer schema" in _msg or "UNABLE_TO_INFER_SCHEMA" in _msg)
+    if not _absent:
+        raise RuntimeError("Unexpected failure reading " + BASE + " - investigate before pulling. "
+                           "Underlying error: " + _msg[:300])
+    _base_exists = False
 
 if _base_exists:
     print("HDFS round-trip OK - own namespace", BASE, "already exists (not the first run).")
