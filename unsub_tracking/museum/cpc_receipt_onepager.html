@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unsubscribe × CPC — recorded consent position and subsequent campaign email</title>
+<style>
+  :root{
+    --blue:#0051A4; --navy:#002887; --sky:#0091DA; --vibrant:#006AC3;
+    --slate:#9DB0CF; --steel:#6E8DB8; --gold:#FDDF00; --amber:#C2620F;
+    --ink:#111C1F; --muted:#4f5763; --faint:#8b93a0;
+    --grid:#e5e8ec; --axis:#c5cbd3; --rule:#d9dee5;
+    --paper:#ffffff; --card:#F1F0EF; --ice:#EDF4F6; --pale:#DDE3EC; --warn:#FCF4EC;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#dfe3e8;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{font-variant-numeric:tabular-nums;padding:0 0 6vh}
+  .sheet{
+    width:min(1220px,96vw);margin:3vh auto;background:var(--paper);
+    border:1px solid #d3d7dd;box-shadow:0 12px 34px rgba(17,28,31,.10);
+    padding:30px 42px 16px;position:relative;
+  }
+  .mark{position:absolute;top:12px;right:20px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:7px}
+  h1{font-size:21px;line-height:1.24;font-weight:700;letter-spacing:-.01em;color:var(--blue);max-width:80ch}
+  h1.big{font-size:25px}
+  .hrule{height:2px;background:var(--slate);opacity:.55;margin:12px 0 12px}
+  figure{margin:0;width:100%}
+  svg{width:100%;height:auto;display:block}
+  .grid{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--axis);stroke-width:1.3}
+  .gl{font-size:11px;fill:var(--faint);text-anchor:end}
+  .val{font-size:15px;font-weight:700;fill:var(--ink);text-anchor:middle}
+  .valw{font-size:12.5px;font-weight:700;fill:#fff;text-anchor:middle}
+  .cat{font-size:11.5px;fill:var(--ink);text-anchor:middle;font-weight:600}
+  .sub{font-size:10.5px;fill:var(--faint);text-anchor:middle}
+  .grp{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;fill:var(--faint);text-anchor:middle;font-weight:700}
+  .ct{font-size:14.5px;font-weight:700;fill:var(--ink)}
+  .cs{font-size:11.5px;fill:var(--muted)}
+  .anno{font-size:11.5px;fill:var(--amber);font-weight:700}
+  .annos{font-size:11px;fill:var(--steel);font-weight:600}
+  .rowlab{font-size:12.5px;fill:var(--ink);font-weight:700;text-anchor:end}
+  .rowsub{font-size:10.5px;fill:var(--faint);text-anchor:end}
+  .rv{font-size:12.5px;font-weight:700;fill:var(--ink);text-anchor:start}
+  .read{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;font-weight:700}
+  .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:8px}
+  .read .k{font-weight:700;color:var(--navy)}
+  .note{font-size:11px;color:var(--muted);font-style:italic;margin-top:8px;line-height:1.4}
+  footer{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);margin-top:12px;padding-top:7px;
+    font-size:10.5px;color:var(--steel);font-style:italic}
+  .card{background:var(--card);border:1px solid #e3e2e0;border-radius:6px;padding:13px 15px;margin-top:4px}
+  .card.ice{background:var(--ice);border-color:#d5e3e8}
+  .card.warn{background:var(--warn);border-color:#EBD6BF}
+  .card h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--blue);margin-bottom:7px;font-weight:700}
+  .card.warn h3{color:var(--amber)}
+  .card p{font-size:12.4px;line-height:1.42;color:#23282f;margin-bottom:6px}
+  .card p:last-child{margin-bottom:0}
+  .kk{font-weight:700;color:var(--navy)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .deft{width:100%;border-collapse:collapse;font-size:11.8px}
+  .deft td{padding:4px 0;vertical-align:top;border-bottom:1px solid #e0dfdc}
+  .deft tr:last-child td{border-bottom:0}
+  .deft .code{font-weight:700;color:var(--blue);white-space:nowrap;padding-right:10px}
+  table.dt{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:2px}
+  table.dt th{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:700;
+    text-align:right;padding:6px 9px;border-bottom:1.5px solid var(--slate)}
+  table.dt th:first-child{text-align:left}
+  table.dt td{padding:6px 9px;text-align:right;border-bottom:1px solid #e8ebef;color:#23282f}
+  table.dt td:first-child{text-align:left;font-weight:600}
+  table.dt tr:last-child td{border-bottom:0}
+  table.dt .hi{background:#EDF4F6;font-weight:700;color:var(--navy)}
+  table.dt tr.dim td{color:var(--faint);background:#FAFAF9}
+  ul.q{list-style:none;margin-top:2px}
+  ul.q li{font-size:12.4px;line-height:1.36;color:#23282f;padding:4px 0 4px 17px;position:relative}
+  ul.q li::before{content:"▪";position:absolute;left:0;color:var(--blue)}
+
+  @media print{
+    html,body{background:#fff;padding:0}
+    .sheet{width:100%;margin:0;border:0;box-shadow:none;padding:11mm 12mm 7mm;page-break-after:always;break-after:page}
+    .sheet:last-of-type{page-break-after:auto;break-after:auto}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+  @page{size:A4 landscape;margin:0}
+</style>
+</head>
+<body>
+
+<!-- ============================ SHEET 1 ============================ -->
+<section class="sheet">
+  <span class="mark">Unsubscribe × CPC · Cards / NBA measurement</span>
+  <div class="eyebrow">Exploratory read · working document · not a compliance assessment</div>
+  <h1 class="big">Recorded consent position and subsequent campaign email — what the two records contain</h1>
+  <div class="hrule"></div>
+
+  <div class="two">
+    <div class="card">
+      <h3>What we examined</h3>
+      <p><span class="kk">319,733</span> clients recorded an email unsubscribe between July 2025 and June 2026, across <span class="kk">194</span> campaign mnemonics in the vendor feed.</p>
+      <p>We joined them on client number into the CPC preference log — <span class="kk">13,831,133</span> rows across four switches, earliest write 2003 — and then forward into who received campaign email in April–June 2026.</p>
+      <p class="note" style="margin-top:7px">Every figure reconciles to its control total: the monthly unsubscribe series sums to 319,733; each standing-position bar sums to that switch’s client count; the 1014 blank-by-year table sums to 3,557,099.</p>
+    </div>
+    <div class="card ice">
+      <h3>Vocabulary — held consistent throughout</h3>
+      <table class="deft">
+        <tr><td class="code">Unsubscribe</td><td>A client action in the email channel, recorded by the vendor against one campaign. Programme scope not established.</td></tr>
+        <tr><td class="code">Recorded position</td><td>The value standing on a CPC switch. May be an explicit answer <b>or</b> a value written by a system. We never call it “what the client said”.</td></tr>
+        <tr><td class="code">Standing</td><td>The client’s most recent write on that switch, as at a stated date.</td></tr>
+        <tr><td class="code">Received</td><td>A vendor event with disposition code 1 against a campaign carrying a mnemonic — see limits below.</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="two" style="margin-top:13px">
+    <div class="card">
+      <h3>The switches, and what a blank means on each</h3>
+      <p><span class="kk">1002</span> Do-not-solicit (RBC Royal Bank) · blank counts as <b>Yes</b> &nbsp;·&nbsp; <span class="kk">1012</span> Banking e-mail · blank counts as <b>Yes</b> &nbsp;·&nbsp; <span class="kk">1014</span> Share-for-Marketing, read by campaign decisioning · blank counts as <b>No</b> &nbsp;·&nbsp; <span class="kk">1006</span> carried for comparison only.</p>
+      <p class="note" style="margin-top:7px">States: 5001 Yes · 5002 No · 5003 blank. On 1014, an explicit No and a blank are one population and are counted together throughout. A client with <b>no row at all</b> holds no consent record and is counted in neither direction. No client on 1002, 1012 or 1014 holds a value outside these three.</p>
+    </div>
+    <div class="card warn">
+      <h3>Four limits to read before the exhibits</h3>
+      <p><b>Feed scope is not established here.</b> 194 mnemonics is wider than the Cards programme set, and the largest single source — VRE, <b>116,909</b> unsubscribes — is not identified in this run. Treat the cohort as the vendor feed, not as Cards mail.</p>
+      <p><b>“Received” is a disposition code, not a confirmed delivery.</b> Whether code 1 denotes sent, delivered or rendered is not documented here, and no seed or employee exclusion was applied.</p>
+      <p><b>Groups are not mailability-matched.</b> Every unsubscriber is by construction someone we hold an address for and did mail. A CPC population is not. Address coverage per group is not reported in this run.</p>
+      <p><b>Four switches only.</b> Any statement about movement into the consent record is bounded by 1002, 1006, 1012 and 1014.</p>
+    </div>
+  </div>
+
+  <footer><span>Sources: vendor email feedback and the CPC preference log · joined on client number</span><span>Unsubscribes July 2025 – June 2026 · sends April–June 2026</span></footer>
+</section>
+
+
+<!-- ============================ BRIDGE 1 ============================ -->
+<section class="sheet">
+  <span class="mark">Bridge test &#183; 1 of 2</span>
+  <div class="eyebrow">Does an unsubscribe reach the consent record?</div>
+  <h1 class="big">Of 319,733 clients who unsubscribed from email, 114 ever had a &#8220;No&#8221; written to their CPC record.</h1>
+  <div class="hrule"></div>
+
+  <figure>
+  <svg viewBox="0 0 1060 132" role="img" aria-label="A bar representing all 319,733 clients who unsubscribed between July 2025 and June 2026. The 114 who ever received a No on switch 1014 afterwards are a mark at the far left, drawn at minimum visible width because at true scale it would be one third of one pixel.">
+    <text class="ct" x="0" y="16">All clients who unsubscribed, and the ones a &#8220;No&#8221; ever reached &#183; switch 1014</text>
+    <rect x="60" y="42" width="950" height="52" fill="#EEF1F5" stroke="#dfe4ea"/>
+    <rect x="60" y="42" width="4" height="52" fill="#C2620F"/>
+    <line x1="64" y1="42" x2="150" y2="30" stroke="#C2620F" stroke-width="1.3"/>
+    <text class="anno" x="156" y="34" style="text-anchor:start">114 clients &#183; 0.036%</text>
+    <text class="valw" x="985" y="74" style="text-anchor:end;fill:#4f5763">319,733 unsubscribed</text>
+    <text class="sub" x="60" y="116" style="text-anchor:start">Drawn to scale. The 114 are shown at minimum visible width &#8212; at true scale the mark would be one third of one pixel.</text>
+  </svg>
+  </figure>
+
+  <figure style="margin-top:6px">
+  <svg viewBox="0 0 1060 236" role="img" aria-label="Of the 114 clients whose CPC record ever received a No after they unsubscribed, 3 arrived within one day, 7 within two to seven days, 22 within eight to thirty days, 26 within thirty-one to ninety days, 23 within ninety-one to one hundred and eighty days, and 33 after more than one hundred and eighty days.">
+    <text class="ct" x="0" y="16">Those 114, by how long after the unsubscribe the &#8220;No&#8221; appeared</text>
+    <line class="grid" x1="90" y1="196" x2="1010" y2="196"/>
+    <rect x="152" y="184.5" width="96" height="11.5" fill="#C2620F"/>
+      <text class="val" x="200" y="175.5">3</text>
+      <text class="cat" x="200" y="218">0-1 day</text>
+      <rect x="292" y="169.2" width="96" height="26.8" fill="#0051A4"/>
+      <text class="val" x="340" y="160.2">7</text>
+      <text class="cat" x="340" y="218">2-7 days</text>
+      <rect x="432" y="111.7" width="96" height="84.3" fill="#0051A4"/>
+      <text class="val" x="480" y="102.7">22</text>
+      <text class="cat" x="480" y="218">8-30 days</text>
+      <rect x="572" y="96.3" width="96" height="99.7" fill="#0051A4"/>
+      <text class="val" x="620" y="87.3">26</text>
+      <text class="cat" x="620" y="218">31-90 days</text>
+      <rect x="712" y="107.8" width="96" height="88.2" fill="#0051A4"/>
+      <text class="val" x="760" y="98.8">23</text>
+      <text class="cat" x="760" y="218">91-180 days</text>
+      <rect x="852" y="69.5" width="96" height="126.5" fill="#0051A4"/>
+      <text class="val" x="900" y="60.5">33</text>
+      <text class="cat" x="900" y="218">180+ days</text>
+    <line x1="200" y1="52" x2="200" y2="176" stroke="#C2620F" stroke-width="1.1" stroke-dasharray="4,4"/>
+    <text class="anno" x="212" y="58" style="text-anchor:start">an automated hand-off would cluster here &#8212; 3 clients did</text>
+  </svg>
+  </figure>
+
+  <div class="read">
+    <div>
+      <h2>Same test, other switches</h2>
+      <p>1002 &#8212; <span class="k">12</span> of 319,733. &#160; 1012 &#8212; <span class="k">32</span> of 319,733. &#160; 1014 &#8212; <span class="k">114</span> of 319,733.</p>
+      <p>Those that did appear were written predominantly by system <span class="k">7001</span>, associated with branch &#8212; not by an automated route.</p>
+    </div>
+    <div>
+      <h2>Bounds</h2>
+      <p class="note" style="margin-top:0">Measured forward from each client&#8217;s own unsubscribe date, within the four switches examined. 89,405 of the unsubscribers already held a No on 1014 before they unsubscribed, so nothing needed to be written for them; excluding those still leaves the rate at 0.049%. A switch outside these four could carry the write &#8212; not tested.</p>
+    </div>
+  </div>
+
+  <footer><span>Source: vendor email feedback joined to the CPC preference log on client number</span><span>Unsubscribes July 2025 &#8211; June 2026 &#183; CPC writes to 23 July 2026</span></footer>
+</section>
+
+
+<!-- ============================ BRIDGE 2 ============================ -->
+<section class="sheet">
+  <span class="mark">Bridge test &#183; 2 of 2</span>
+  <div class="eyebrow">And afterwards &#8212; does campaign email reach them again?</div>
+  <h1 class="big">Of 253,721 clients who unsubscribed before April, 111,651 received campaign email in the next quarter.</h1>
+  <div class="hrule"></div>
+
+  <figure>
+  <svg viewBox="0 0 1060 172" role="img" aria-label="Of 253,721 clients who unsubscribed before 1 April 2026, 111,651 or 44.0 percent received at least one named campaign email between April and June 2026, and the remaining 142,070 or 56.0 percent did not.">
+    <text class="ct" x="0" y="16">Clients who unsubscribed before 1 April 2026, and whether campaign email reached them again</text>
+    <text class="cs" x="0" y="34">Named campaign email sent 1 April &#8211; 30 June 2026 &#183; one bar, one denominator: all 253,721 of them</text>
+    <rect x="60" y="56" width="418" height="66" fill="#C2620F"/>
+    <rect x="478" y="56" width="532" height="66" fill="#EEF1F5" stroke="#dfe4ea"/>
+    <text class="valw" x="269" y="86" style="font-size:16px">111,651 &#8212; 44.0%</text>
+    <text class="valw" x="269" y="106" style="font-size:11.5px">mailed again</text>
+    <text class="valw" x="744" y="86" style="font-size:16px;fill:#4f5763">142,070 &#8212; 56.0%</text>
+    <text class="valw" x="744" y="106" style="font-size:11.5px;fill:#8b93a0">not mailed in the window</text>
+    <text class="sub" x="60" y="150" style="text-anchor:start">Bar drawn to scale &#183; denominator = 253,721 clients who unsubscribed before 1 April 2026</text>
+  </svg>
+  </figure>
+
+  <div class="read">
+    <div>
+      <h2>Read with sheet 1 of 2</h2>
+      <p>The unsubscribe does not appear in the consent record, and campaign email continues to reach the same clients. Both are descriptive counts over the same clients and the same year.</p>
+    </div>
+    <div>
+      <h2>Bounds</h2>
+      <p class="note" style="margin-top:0">&#8220;Received&#8221; is a vendor disposition code, not a confirmed delivery. If an unsubscribe is programme-scoped by design, a later send from a different programme is the system working as intended &#8212; the 111,651 has not yet been split that way. Clients who unsubscribed within about two weeks of 1 April sit inside the statutory honour window and are not separated out.</p>
+    </div>
+  </div>
+
+  <footer><span>Source: vendor email feedback joined to the CPC preference log on client number &#183; named campaigns only</span><span>Unsubscribes to 31 March 2026 &#183; sends April&#8211;June 2026</span></footer>
+</section>
+
+
+<!-- ============================ SHEET 2 — EXHIBIT 1 ============================ -->
+<section class="sheet">
+  <span class="mark">Exhibit 1 of 3</span>
+  <div class="eyebrow">Receipt of campaign email, by recorded position at 1 April 2026</div>
+  <h1>Within switch 1002, a recorded No sits at 18.1% receipt against 44.0% for a recorded Yes. On 1012 the two positions are level.</h1>
+  <div class="hrule"></div>
+
+  <figure>
+  <svg viewBox="0 0 1060 420" role="img" aria-label="Share of each group that received at least one named campaign email April to June 2026. Every bar is a percentage of its own denominator and the denominators differ. Switch 1002, position at 1 April 2026: recorded No 18.1 percent, 8,941 of 49,446; recorded Yes 44.0 percent, 492,925 of 1,120,205. Switch 1012, position at 1 April 2026: recorded No 28.9 percent, 9,561 of 33,103; recorded Yes 26.8 percent, 150,754 of 561,566. Switch 1014, position at 1 April 2026, hatched because its No group is 3.45 million defaulted blanks: recorded No 59.9 percent, 2,068,727 of 3,452,289; recorded Yes 31.1 percent, 165,085 of 531,224. Email unsubscribe cohort, unsubscribed before 1 April 2026: 44.0 percent, 111,651 of 253,721.">
+  <defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#ffffff" stroke-width="2.6" opacity="0.85"/></pattern></defs>
+  <text class="ct" x="0" y="16">Share of each group that received at least one named campaign email, sent April–June 2026</text>
+  <text class="cs" x="0" y="34">Each bar reads: clients who received ÷ clients in that group. Every bar is a percentage of its OWN denominator. The denominators are different populations and do not sum to anything.</text>
+  <text class="cs" x="0" y="51" style="fill:#8b93a0">CPC position measured as at 1 April 2026 · unsubscribe cohort = clients who unsubscribed before 1 April 2026 · send window 1 April – 30 June 2026</text>
+  <line class="grid" x1="90" y1="316" x2="1040" y2="316"/>
+  <text class="gl" x="80" y="320">0%</text>
+  <line class="grid" x1="90" y1="256" x2="1040" y2="256"/>
+  <text class="gl" x="80" y="260">15%</text>
+  <line class="grid" x1="90" y1="196" x2="1040" y2="196"/>
+  <text class="gl" x="80" y="200">30%</text>
+  <line class="grid" x1="90" y1="136" x2="1040" y2="136"/>
+  <text class="gl" x="80" y="140">45%</text>
+  <line class="grid" x1="90" y1="76" x2="1040" y2="76"/>
+  <text class="gl" x="80" y="80">60%</text>
+  <line class="axis" x1="90" y1="316" x2="1040" y2="316"/>
+  <rect x="196" y="243.6" width="78" height="72.4" fill="#0051A4"/>
+  <text class="val" x="235" y="234.6">18.1%</text>
+  <text class="cat" x="235" y="338">8,941</text>
+  <text class="sub" x="235" y="354">of 49,446</text>
+  <rect x="284" y="140.0" width="78" height="176.0" fill="#6E8DB8"/>
+  <text class="val" x="323" y="131.0">44.0%</text>
+  <text class="cat" x="323" y="338">492,925</text>
+  <text class="sub" x="323" y="354">of 1,120,205</text>
+  <rect x="416" y="200.4" width="78" height="115.6" fill="#0051A4"/>
+  <text class="val" x="455" y="191.4">28.9%</text>
+  <text class="cat" x="455" y="338">9,561</text>
+  <text class="sub" x="455" y="354">of 33,103</text>
+  <rect x="504" y="208.8" width="78" height="107.2" fill="#6E8DB8"/>
+  <text class="val" x="543" y="199.8">26.8%</text>
+  <text class="cat" x="543" y="338">150,754</text>
+  <text class="sub" x="543" y="354">of 561,566</text>
+  <rect x="636" y="76.4" width="78" height="239.6" fill="#0051A4" opacity="0.42"/>
+  <rect x="636" y="76.4" width="78" height="239.6" fill="url(#hatch)"/>
+  <text class="val" x="675" y="67.4" style="fill:#4f5763">59.9%</text>
+  <text class="cat" x="675" y="338" style="fill:#4f5763">2,068,727</text>
+  <text class="sub" x="675" y="354">of 3,452,289</text>
+  <rect x="724" y="191.6" width="78" height="124.4" fill="#6E8DB8" opacity="0.42"/>
+  <rect x="724" y="191.6" width="78" height="124.4" fill="url(#hatch)"/>
+  <text class="val" x="763" y="182.6" style="fill:#4f5763">31.1%</text>
+  <text class="cat" x="763" y="338" style="fill:#4f5763">165,085</text>
+  <text class="sub" x="763" y="354">of 531,224</text>
+  <rect x="880" y="140.0" width="78" height="176.0" fill="#C2620F"/>
+  <text class="val" x="919" y="131.0">44.0%</text>
+  <text class="cat" x="919" y="338">111,651</text>
+  <text class="sub" x="919" y="354">of 253,721</text>
+  <text class="grp" x="279" y="382">1002 — do-not-solicit</text>
+  <text class="grp" x="499" y="382">1012 — banking e-mail</text>
+  <text class="grp" x="719" y="382">1014 — share-for-marketing</text>
+  <text class="grp" x="919" y="382">Email unsubscribe</text>
+  <text class="sub" x="279" y="396">position at 1 Apr 2026</text>
+  <text class="sub" x="499" y="396">position at 1 Apr 2026</text>
+  <text class="sub" x="719" y="396">position at 1 Apr 2026</text>
+  <text class="sub" x="919" y="396">unsubscribed before 1 Apr 2026</text>
+  <text class="anno" x="719" y="414" text-anchor="middle">hatched — 3.45M defaulted blanks</text>
+  <text class="anno" x="919" y="414" text-anchor="middle">different population</text>
+  <line x1="841" y1="60" x2="841" y2="364" stroke="#c5cbd3" stroke-width="1.2" stroke-dasharray="5,4"/>
+  </svg>
+  </figure>
+
+  <div class="read">
+    <div>
+      <h2>What the data shows</h2>
+      <p>On 1002, of <span class="k">49,446</span> clients with a recorded No at 1 April, <span class="k">8,941</span> received named campaign email in Apr–Jun (<span class="k">18.1%</span>); of <span class="k">1,120,205</span> with a recorded Yes, <span class="k">492,925</span> did (<span class="k">44.0%</span>). That is one switch and one population split two ways.</p>
+      <p>On 1012 the two positions are level and slightly inverted — <span class="k">28.9%</span> for No against <span class="k">26.8%</span> for Yes. Separately, of <span class="k">253,721</span> clients who unsubscribed before April, <span class="k">111,651</span> received such email — <span class="k">44.0%</span>.</p>
+    </div>
+    <div>
+      <h2>What would have to be ruled out</h2>
+      <p>The unsubscribe bar is <b>not</b> like-for-like with the 1002 bars. Every unsubscriber is someone we hold an address for and did mail; the CPC populations include clients with no address, dormant relationships, and clients in no campaign audience. Restricting all groups to a common mailable base could move the CPC rates in either direction, and this run does not report address coverage.</p>
+      <p class="note">These figures also cannot separate suppression from composition: clients carrying a recorded No may differ from those carrying a Yes in ways that independently affect whether they are mailed — age of the record, dormancy, closure. No recency or activity cut has been run. Nothing here establishes that a recorded position caused a send or its absence.</p>
+    </div>
+  </div>
+
+  <footer><span>Source: CPC preference log joined to vendor email feedback on client number · disposition code 1 · named campaigns only</span><span>Position as at 1 April 2026 · sends April–June 2026</span></footer>
+</section>
+
+
+<!-- ============================ SHEET 3 — EXHIBIT 2 ============================ -->
+<section class="sheet">
+  <span class="mark">Exhibit 2 of 3</span>
+  <div class="eyebrow">What the consent record actually contains</div>
+  <h1>1012 holds 606,261 clients and 326 blanks. The other three hold about 4.1 million each, of which 2.9M, 3.6M and 3.6M are blank.</h1>
+  <div class="hrule"></div>
+
+  <figure>
+  <svg viewBox="0 0 1060 300" role="img" aria-label="Standing position on each switch, drawn on one common absolute scale so bar length is real client counts. Switch 1002, 4,111,565 clients: 49,952 explicit No, 2,905,053 blank, 1,156,560 explicit Yes. Switch 1006, 4,148,382 clients: 48,258 No, 3,627,727 blank, 472,397 Yes. Switch 1012, only 606,261 clients, about one seventh the size of the others: 33,369 No, 326 blank, 572,566 Yes. Switch 1014, 4,182,611 clients: 81,699 No, 3,557,099 blank, 543,813 Yes.">
+  <text class="ct" x="0" y="16">Standing position of every client holding a record, by switch</text>
+  <text class="cs" x="0" y="34">One common scale — bar length is the real number of clients. 1012 is genuinely about a seventh the size of the other three.</text>
+  <line class="grid" x1="262.0" y1="48" x2="262.0" y2="262"/>
+  <text class="sub" x="262.0" y="278">0</text>
+  <line class="grid" x1="428.7" y1="48" x2="428.7" y2="262"/>
+  <text class="sub" x="428.7" y="278">1M</text>
+  <line class="grid" x1="595.3" y1="48" x2="595.3" y2="262"/>
+  <text class="sub" x="595.3" y="278">2M</text>
+  <line class="grid" x1="762.0" y1="48" x2="762.0" y2="262"/>
+  <text class="sub" x="762.0" y="278">3M</text>
+  <line class="grid" x1="928.7" y1="48" x2="928.7" y2="262"/>
+  <text class="sub" x="928.7" y="278">4M</text>
+  <text class="rowlab" x="250" y="73">1002</text>
+  <text class="rowsub" x="250" y="87">4,111,565</text>
+  <rect x="262.0" y="58" width="8.33" height="34" fill="#0051A4"/>
+  <rect x="270.3" y="58" width="484.18" height="34" fill="#DDE3EC"/>
+  <rect x="754.5" y="58" width="192.76" height="34" fill="#6E8DB8"/>
+  <text class="valw" x="512.4" y="80" style="fill:#4f5763">blank — 2,905,053</text>
+  <text class="valw" x="850.9" y="80">1,156,560</text>
+  <text class="annos" x="262.0" y="54" style="fill:#0051A4">No 49,952</text>
+  <text class="rowlab" x="250" y="125">1006</text>
+  <text class="rowsub" x="250" y="139">4,148,382</text>
+  <rect x="262.0" y="110" width="8.04" height="34" fill="#0051A4"/>
+  <rect x="270.0" y="110" width="604.62" height="34" fill="#DDE3EC"/>
+  <rect x="874.7" y="110" width="78.73" height="34" fill="#6E8DB8"/>
+  <text class="valw" x="572.4" y="132" style="fill:#4f5763">blank — 3,627,727</text>
+  <text class="valw" x="914.0" y="132">472,397</text>
+  <text class="annos" x="262.0" y="106" style="fill:#0051A4">No 48,258</text>
+  <text class="rowlab" x="250" y="177">1012</text>
+  <text class="rowsub" x="250" y="191">606,261</text>
+  <rect x="262.0" y="162" width="5.56" height="34" fill="#0051A4"/>
+  <rect x="267.6" y="162" width="0.40" height="34" fill="#DDE3EC"/>
+  <rect x="267.6" y="162" width="95.43" height="34" fill="#6E8DB8"/>
+  <text class="rv" x="373.0" y="184">33,369 No · 326 blank · 572,566 Yes</text>
+  <text class="anno" x="693.0" y="184">← one seventh the size of the others</text>
+  <text class="rowlab" x="250" y="229">1014</text>
+  <text class="rowsub" x="250" y="243">4,182,611</text>
+  <rect x="262.0" y="214" width="13.62" height="34" fill="#0051A4"/>
+  <rect x="275.6" y="214" width="592.85" height="34" fill="#DDE3EC"/>
+  <rect x="868.5" y="214" width="90.64" height="34" fill="#6E8DB8"/>
+  <text class="valw" x="572.0" y="236" style="fill:#4f5763">blank — 3,557,099</text>
+  <text class="valw" x="913.8" y="236">543,813</text>
+  <text class="annos" x="262.0" y="210" style="fill:#0051A4">No 81,699</text>
+  <rect x="0" y="286" width="11" height="11" fill="#0051A4"/><text class="sub" x="17" y="296" style="text-anchor:start">explicit No (5002)</text>
+  <rect x="150" y="286" width="11" height="11" fill="#DDE3EC" stroke="#c5cbd3"/><text class="sub" x="167" y="296" style="text-anchor:start">blank (5003)</text>
+  <rect x="270" y="286" width="11" height="11" fill="#6E8DB8"/><text class="sub" x="287" y="296" style="text-anchor:start">explicit Yes (5001)</text>
+  </svg>
+  </figure>
+
+  <div class="read">
+    <div>
+      <h2>What the data shows</h2>
+      <p>On 1014, <span class="k">3,557,099</span> of 4,182,611 clients holding a record stand at blank. The top writer of those blanks is system <span class="k">7999</span>, at a share that rounds to <span class="k">1.000</span> across 5 writers present; the residual is not separately reported in this run. Blanks continue to accrue — 638,090 written in 2025 and 308,113 in the part-year 2026.</p>
+      <p>On 1012 there are <span class="k">326</span> blanks in total. Its blanks come from a different top writer (7006), and 7999 is active on 1012 — holding <span class="k">99.2%</span> of that switch’s 572,566 explicit Yes values.</p>
+    </div>
+    <div>
+      <h2>One possible reading</h2>
+      <p>This is consistent with 1012 being a switch clients are actually asked, and the others carrying a value that is set for them. Directionally, it suggests the 1014 “No” population — under the rule that counts blank as No — is largely a defaulted state rather than an expressed preference, which would make it unsuitable as a measure of client intent.</p>
+      <p class="note">The four switch populations differ in size (606,261 to 4,182,611), so shares are not like-for-like across rows. What 7999 is, and on what trigger it writes, is not established by this data. Standing position uses the latest write with no deterministic tie-break; the number of same-timestamp ties has not been quantified.</p>
+    </div>
+  </div>
+
+  <footer><span>Source: CPC preference log · latest write per client and switch, full history · writer = APP_SYS_CD on that write</span><span>Record as at 23 July 2026</span></footer>
+</section>
+
+
+<!-- ============================ SHEET 4 — EXHIBIT 3 ============================ -->
+<section class="sheet">
+  <span class="mark">Exhibit 3 of 3</span>
+  <div class="eyebrow">The two record systems over the same twelve months</div>
+  <h1>1014 receives about 52,700 writes to “No” a month, of which about 684 are explicit. The monthly count steps down by a third in November.</h1>
+  <div class="hrule"></div>
+
+  <figure>
+  <svg viewBox="0 0 1060 366" role="img" aria-label="Monthly series July 2025 to June 2026. Client-months written to No on switch 1014, counting blank as No: 67,845 then 70,789, 67,193, 65,820, 42,903, 38,241, 43,801, 38,153, 46,659, 47,040, 49,500, 54,455 — averaging 52,700 a month. Distinct clients unsubscribing, counted in the month of their first unsubscribe: 26,774 then 30,920, 28,859, 29,320, 28,164, 27,277, 26,119, 27,970, 28,318, 24,795, 18,746, 22,471 — averaging 26,644 a month. The two series sit on different grains and are not divided into a ratio.">
+    <text class="ct" x="0" y="16">Writes to “No” on 1014 each month, against clients unsubscribing from email</text>
+    <text class="cs" x="0" y="34">July 2025 – June 2026 · different grains: 1014 counts a client once per month; unsubscribes count each client once, in the month of their first unsubscribe</text>
+
+    <rect x="90" y="48" width="11" height="11" fill="#0051A4"/>
+    <text class="sub" x="107" y="58" style="text-anchor:start">1014 — client-months written to “No” · avg 52,700/mo</text>
+    <rect x="430" y="48" width="11" height="11" fill="#C2620F"/>
+    <text class="sub" x="447" y="58" style="text-anchor:start">distinct clients unsubscribing · avg 26,644/mo</text>
+
+    <line class="grid" x1="90" y1="320" x2="1010" y2="320"/>
+    <line class="grid" x1="90" y1="242" x2="1010" y2="242"/>
+    <line class="grid" x1="90" y1="164" x2="1010" y2="164"/>
+    <line class="grid" x1="90" y1="86"  x2="1010" y2="86"/>
+    <text class="gl" x="80" y="324">0</text>
+    <text class="gl" x="80" y="246">25,000</text>
+    <text class="gl" x="80" y="168">50,000</text>
+    <text class="gl" x="80" y="90">75,000</text>
+    <line class="axis" x1="90" y1="320" x2="1010" y2="320"/>
+
+    <polyline fill="none" stroke="#0051A4" stroke-width="2.6"
+      points="90,108.3 174,99.1 257,110.4 341,114.6 425,186.1 508,200.7 592,183.3 675,201.0 759,174.4 843,173.2 926,165.6 1010,150.1"/>
+    <circle cx="174" cy="99.1" r="4.2" fill="#0051A4"/>
+    <text class="val" x="190" y="95" style="text-anchor:start;fill:#0051A4">70,789</text>
+    <circle cx="675" cy="201.0" r="4.2" fill="#0051A4"/>
+    <text class="val" x="675" y="222" style="fill:#0051A4">38,153</text>
+
+    <polyline fill="none" stroke="#C2620F" stroke-width="2.6"
+      points="90,236.5 174,223.5 257,230.0 341,228.5 425,232.1 508,234.9 592,238.5 675,232.7 759,231.6 843,242.6 926,261.5 1010,249.9"/>
+    <circle cx="174" cy="223.5" r="4.2" fill="#C2620F"/>
+    <text class="val" x="190" y="219" style="text-anchor:start;fill:#C2620F">30,920</text>
+    <circle cx="926" cy="261.5" r="4.2" fill="#C2620F"/>
+    <text class="val" x="926" y="282" style="fill:#C2620F">18,746</text>
+
+    <line x1="383" y1="86" x2="383" y2="320" stroke="#C2620F" stroke-width="1.1" stroke-dasharray="4,4"/>
+    <text class="anno" x="394" y="112">Nov 2025 — 65,820 → 42,903</text>
+    <text class="annos" x="394" y="129" style="fill:#8b93a0">a 35% step down, not since recovered</text>
+
+    <text class="sub" x="90"  y="342" style="text-anchor:start">Jul</text>
+    <text class="sub" x="257" y="342">Sep</text>
+    <text class="sub" x="425" y="342">Nov</text>
+    <text class="sub" x="592" y="342">Jan</text>
+    <text class="sub" x="759" y="342">Mar</text>
+    <text class="sub" x="926" y="342">May</text>
+    <text class="sub" x="1010" y="342" style="text-anchor:end">Jun</text>
+  </svg>
+  </figure>
+
+  <div class="read">
+    <div>
+      <h2>What the data shows</h2>
+      <p>Across the twelve months, <span class="k">632,399</span> client-months were written to No on 1014 — an average of <span class="k">52,700</span>. Of those, roughly <span class="k">684</span> a month were explicit No; the remainder were blanks. Distinct clients unsubscribing averaged <span class="k">26,644</span> a month.</p>
+      <p>The 1014 series steps down between October (65,820) and November (42,903) and has climbed back only partially. The movement sits almost entirely in the blank column; the explicit-No count barely moves.</p>
+    </div>
+    <div>
+      <h2>One possible reading</h2>
+      <p>The two series do not move together, and the 1014 volume is dominated by a component with no obvious relationship to client action. The November step is consistent with a change in the writing process, though nothing here indicates what — a source-system change, a migration or a backfill would all look like this.</p>
+      <p class="note">The two series sit on different grains and should not be divided into a ratio: 52,700 is client-months, 26,644 is distinct clients. They are plotted together to compare shape and order of magnitude, not to quantify a relationship.</p>
+    </div>
+  </div>
+
+  <footer><span>Source: CPC preference log and vendor email feedback · 1014 counts explicit No and blank as one population</span><span>July 2025 – June 2026</span></footer>
+</section>
+
+
+<!-- ============================ SHEET 5 — FIGURES ============================ -->
+<section class="sheet">
+  <span class="mark">Underlying figures</span>
+  <div class="eyebrow">The table behind Exhibit 1, and how it reconciles to Exhibit 2</div>
+  <h1>Receipt of named campaign email, April–June 2026, by recorded position as at 1 April 2026</h1>
+  <div class="hrule"></div>
+
+  <table class="dt">
+    <thead>
+      <tr><th>Switch</th><th>Recorded No</th><th>received email</th><th>rate</th><th>Recorded Yes</th><th>received email</th><th>rate</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1002 — do-not-solicit</td><td>49,446</td><td>8,941</td><td class="hi">18.1%</td><td>1,120,205</td><td>492,925</td><td class="hi">44.0%</td></tr>
+      <tr><td>1012 — banking e-mail</td><td>33,103</td><td>9,561</td><td>28.9%</td><td>561,566</td><td>150,754</td><td>26.8%</td></tr>
+      <tr class="dim"><td>1014 — share-for-marketing <i>(not a suppression result)</i></td><td>3,452,289</td><td>2,068,727</td><td>59.9%</td><td>531,224</td><td>165,085</td><td>31.1%</td></tr>
+    </tbody>
+  </table>
+  <p class="note" style="margin-top:6px"><b>The 1014 row is not a suppression result and should not be quoted as one.</b> With 3,452,289 of its “No” population being defaulted blanks, that group approximates the general client base while its “Yes” group is small and self-selected — the contrast is very likely composition rather than anything about how mail is suppressed. <b>No row in this table is mailability-matched.</b></p>
+
+  <div class="two" style="margin-top:13px">
+    <div class="card ice">
+      <h3>Why these counts differ from Exhibit 2</h3>
+      <p>This table is <b>as at 1 April 2026</b>. Exhibit 2 is the <b>full history to 23 July 2026</b>. The same switch therefore carries two counts, and both are correct for their own date:</p>
+      <p style="margin-top:6px">1002 recorded No — <span class="kk">49,446</span> at 1 Apr · <span class="kk">49,952</span> at 23 Jul<br>
+      1012 recorded No — <span class="kk">33,103</span> at 1 Apr · <span class="kk">33,369</span> at 23 Jul<br>
+      1014 No under the rule — <span class="kk">3,452,289</span> at 1 Apr · <span class="kk">3,638,798</span> at 23 Jul</p>
+    </div>
+    <div class="card">
+      <h3>The unsubscribe cohort, and movement into the record</h3>
+      <p><span class="kk">253,721</span> clients unsubscribed before April 2026; <span class="kk">111,651</span> received named campaign email in April–June (<span class="kk">44.0%</span>). This is a different population from the rows above and is not directly comparable to them.</p>
+      <p><b>Within the four switches examined</b>, looking forward from each client’s own unsubscribe date, a No appears on 1014 for <span class="kk">114</span> clients ever and <span class="kk">3</span> within a day; <span class="kk">319,619</span> never see one. Those that do were written predominantly by system <span class="kk">7001</span>, associated with branch.</p>
+      <p class="note" style="margin-top:6px">Of the 89,518 unsubscribers standing No on 1014, 89,405 held that position before they unsubscribed — so this bucket mixes “nothing happened” with “nothing needed to happen”. Correcting for it moves the rate from 0.036% to 0.049%. A switch outside these four could carry the write; that has not been tested.</p>
+    </div>
+  </div>
+
+  <footer><span>X1, B1 and C4 each sum exactly to their control totals · the rows above are a CPC population, not the 319,733 cohort</span><span>Run of 26 July 2026</span></footer>
+</section>
+
+
+<!-- ============================ SHEET 6 — LIMITS ============================ -->
+<section class="sheet">
+  <span class="mark">Where this stops</span>
+  <div class="eyebrow">Limits, and what would have to change before anyone acted</div>
+  <h1>What this does not show, and what would make it actionable</h1>
+  <div class="hrule"></div>
+
+  <div class="two">
+    <div class="card">
+      <h3>What this does not establish</h3>
+      <p><b>No counterfactual.</b> We cannot say what an unsubscriber’s receipt rate would have been absent the unsubscribe. There is no pre-period baseline in this run.</p>
+      <p><b>No mailability match.</b> Restricting every group to clients with a deliverable address could move the CPC rates in either direction. This is the single change most likely to alter the reading.</p>
+      <p><b>Programme scope untested.</b> If an unsubscribe is programme-scoped by design, a later send from a different programme is the system working as intended. The 111,651 has not been split by in-programme versus cross-programme.</p>
+      <p><b>Timing untested.</b> The cohort pools clients who unsubscribed nine months before the send window with those who left days before it, including any inside the statutory honour window. No receipt-by-age cut has been run.</p>
+      <p><b>Record age untested.</b> A recorded No may date from 2003 or from last month. No recency or dormancy cut has been run, so suppression and composition cannot be separated.</p>
+      <p><b>Join quality unreported.</b> Everything rests on mapping a vendor email address to a client number. This run does not report the match rate or unmatched volume.</p>
+      <p><b>Nothing here is causal.</b> No exhibit shows that a recorded position caused a send or its absence, only that they appear together at different rates.</p>
+    </div>
+    <div>
+      <div class="card ice">
+        <h3>Open questions for the channel and system owners</h3>
+        <ul class="q">
+          <li>Which suppression list does send-time read, and from which switch?</li>
+          <li>What does vendor disposition code 1 denote — sent, delivered or rendered — and are seeds and employees in it?</li>
+          <li>Is the vendor feed enterprise-wide or programme-limited, and what is VRE (116,909 unsubscribes, the largest single source)?</li>
+          <li>Is an email unsubscribe intended to be programme-scoped, and is that documented?</li>
+          <li>What is system 7999, and on what trigger does it write a blank to 1014?</li>
+          <li>What are systems 7033, 7053 and 7058? They appear at volume and are not in the preference dictionary, which ends at 7030.</li>
+          <li>What changed in November 2025 that stepped 1014 write volume down by a third?</li>
+        </ul>
+      </div>
+      <div class="card warn" style="margin-top:11px">
+        <h3>What would make this actionable</h3>
+        <p>Three things, in order. <b>One:</b> a mailability-matched rerun of Exhibit 1 — same groups, restricted to clients with a send record in the window. <b>Two:</b> the 111,651 split by in-programme versus cross-programme send, which either confirms or removes the strongest alternative explanation. <b>Three:</b> an all-switch check for post-unsubscribe writes, since the present result is bounded by four switches.</p>
+        <p>Until those exist, this document supports a conversation with the channel and system owners. It does not support a change to any control.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer><span>Exploratory analysis · Cards / NBA measurement · figures from the HDFS reservoir run of 26 July 2026</span><span>For discussion — not for circulation outside the team</span></footer>
+</section>
+
+</body>
+</html>
