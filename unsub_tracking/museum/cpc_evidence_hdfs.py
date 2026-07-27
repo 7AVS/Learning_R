@@ -270,7 +270,133 @@ d2 = T("D2 - clients who unsubscribed before Apr 2026 and received named campaig
                       _pre.join(recn.select("CLNT_NO"), "CLNT_NO", "inner").count())],
                     columns=["measure", "clients"]))
 
-# ============================ 6. THE DECK FEED ==============================
+# ==================== 6. RED-TEAM ANSWERS (2026-07-26) ======================
+# Each cell answers one objection raised against the deck. All but R5 run off files ALREADY landed by
+# cpc_reservoir_extract.py - no new Teradata pull. A missing file prints what is missing and moves on;
+# it never fails silently.
+
+def _load(name, what):
+    try:
+        df = spark.read.option("recursiveFileLookup", "true").parquet(BASE + name)
+        df.limit(1).collect()
+        return df
+    except Exception as ex:
+        display(Markdown("**MISSING: `%s`** - needed for %s. Run the matching cell in "
+                         "cpc_reservoir_extract.py first. (%s)" % (name, what, type(ex).__name__)))
+        return None
+
+# %% [18] R1 - BLOCKER. Mailability-matched receipt.
+# Objection: unsubscribers are 100% mailable by construction; a CPC population is not, so 44.0% vs 44.0%
+# may be two opposite biases cancelling. Fix: restrict EVERY group to clients with ANY vendor send in the
+# same window (incl. the untagged DEFAULT stream) - that is demonstrated mailability, not inferred.
+_rall = _load("q2_recipients", "R1 mailability match")
+if _rall is not None:
+    mailable = _rall.select("CLNT_NO").distinct().withColumn("mailable", F.lit(1))
+    _a = (_asof.join(recn, "CLNT_NO", "left").join(mailable, "CLNT_NO", "left")
+               .filter("mailable = 1"))
+    r1 = T("R1 - receipt of named campaign email, MAILABLE CLIENTS ONLY (had >=1 vendor send Apr-Jun)",
+           _a.groupBy("PREF_ID")
+             .agg(F.countDistinct(F.when(F.col("is_no"), F.col("CLNT_NO"))).alias("no_mailable"),
+                  F.countDistinct(F.when(F.col("is_no") & (F.col("got_named") == 1), F.col("CLNT_NO"))).alias("no_got_named"),
+                  F.countDistinct(F.when(F.col("value") == "yes", F.col("CLNT_NO"))).alias("yes_mailable"),
+                  F.countDistinct(F.when((F.col("value") == "yes") & (F.col("got_named") == 1), F.col("CLNT_NO"))).alias("yes_got_named"))
+             .orderBy("PREF_ID"))
+    _pm = _pre.join(mailable, "CLNT_NO", "inner")
+    r1b = T("R1b - the same restriction applied to the unsubscribe cohort, so all groups sit on one base",
+            pd.DataFrame([("unsubscribed before Apr 2026", _pre.count()),
+                          ("of those, mailable (>=1 vendor send Apr-Jun)", _pm.count()),
+                          ("of the mailable, received NAMED campaign email",
+                           _pm.join(recn.select("CLNT_NO"), "CLNT_NO", "inner").count())],
+                         columns=["measure", "clients"]))
+
+# %% [19] R2 - MAJOR. Programme scope: was the later send the SAME programme they left, or a different one?
+# Objection: a programme-scoped unsubscribe honoured within its own programme is the system working.
+# postunsub_sends carries the unsub mnemonic AND the later send's mnemonic on the same row.
+_pus = _load("postunsub_sends", "R2 in-programme vs cross-programme")
+if _pus is not None:
+    _sc = (_pus.filter("disposition_cd = 1")
+               .withColumn("scope", F.when(F.trim(F.col("mne")) == F.trim(F.col("unsub_mne")), "same_programme")
+                                     .otherwise("different_programme")))
+    r2 = T("R2 - post-unsubscribe sends: same programme the client left, or a different one",
+           _sc.groupBy("scope").agg(F.countDistinct("CLNT_NO").alias("clients"),
+                                    F.count("*").alias("send_rows")).orderBy("scope"))
+    r2b = T("R2b - clients receiving from the SAME programme they unsubscribed from, by that programme",
+            _sc.filter("scope = 'same_programme'").groupBy(F.col("unsub_mne").alias("mne"))
+               .agg(F.countDistinct("CLNT_NO").alias("clients"))
+               .orderBy(F.col("clients").desc()))
+
+# %% [20] R3 - MAJOR. Does the unsubscribe land on a switch we do NOT monitor?
+# Objection: the null result is bounded by the four switches we chose. cpc_landing_allsw has NO PREF_ID
+# filter for this cohort. Rule for unmonitored switches is unknown, so report raw No/blank writes.
+_land = _load("cpc_landing_allsw", "R3 all-switch check")
+if _land is not None:
+    _post = (_land.join(unsub.select("CLNT_NO", "unsub_tm"), "CLNT_NO", "inner")
+                  .filter("CHG_TMSTMP > unsub_tm")
+                  .withColumn("monitored", F.when(F.col("PREF_ID").isin(SWITCHES + [1006]), "monitored")
+                                            .otherwise("NOT monitored"))
+                  .withColumn("within_90d", F.datediff("CHG_TMSTMP", "unsub_tm") <= 90))
+    r3 = T("R3 - post-unsubscribe No/blank writes on EVERY switch, monitored or not (rule unknown off-set)",
+           _post.groupBy("PREF_ID", "monitored")
+                .agg(F.countDistinct("CLNT_NO").alias("clients_any_time"),
+                     F.countDistinct(F.when(F.col("within_90d"), F.col("CLNT_NO"))).alias("clients_within_90d"))
+                .orderBy(F.col("clients_any_time").desc()))
+
+# %% [21] R4 - MAJOR. Receipt by how long ago they unsubscribed, incl. the statutory honour window.
+# Objection: the cohort pools someone who left 9 months before the send window with someone who left days
+# before it. AGE_BUCKET is measured from the unsubscribe to 1 Apr 2026, the start of the send window.
+_age = (_pre.withColumn("days_to_window", F.datediff(F.lit("2026-04-01").cast("date"), F.col("unsub_tm")))
+            .withColumn("age_bucket",
+                        F.when(F.col("days_to_window") <= 14, "a_0-14d (inside honour window)")
+                         .when(F.col("days_to_window") <= 30, "b_15-30d")
+                         .when(F.col("days_to_window") <= 90, "c_31-90d")
+                         .when(F.col("days_to_window") <= 180, "d_91-180d").otherwise("e_180d+"))
+            .join(recn, "CLNT_NO", "left"))
+r4 = T("R4 - receipt of named campaign email by how long before 1 Apr the client unsubscribed",
+       _age.groupBy("age_bucket").agg(F.countDistinct("CLNT_NO").alias("clients"),
+                                      F.countDistinct(F.when(F.col("got_named") == 1, F.col("CLNT_NO"))).alias("got_named"))
+           .orderBy("age_bucket"))
+
+# %% [22] R5 - MAJOR. How old is the standing No? Separates a live signal from stale state.
+r5 = T("R5 - year the standing No at 1 Apr 2026 was written, per switch (age of the recorded position)",
+       _asof.filter("is_no").withColumn("yr_written", F.year("CHG_TMSTMP"))
+            .groupBy("yr_written").pivot("PREF_ID", SWITCHES)
+            .agg(F.countDistinct("CLNT_NO")).orderBy("yr_written"))
+
+# %% [23] R6 - MAJOR. Join quality: the email-to-client weld everything rests on.
+_diag = _load("unsub_match_diag", "R6 join quality")
+_rows = [("distinct CLNT_NO in the matched unsubscribe cohort", N_UNSUB)]
+if _diag is not None:
+    _d = _diag.collect()[0]
+    _rows += [("distinct unsub email ids in the vendor EVENT log (unmatched, source side)", int(_d["unsub_email_ids"])),
+              ("unsubscribe events in the vendor EVENT log", int(_d["unsub_events"]))]
+_card = _load("no1002_email_card", "R6 addresses per client")
+if _card is not None:
+    _c = _card.agg(F.count("*").alias("clients"), F.sum("n_emails").alias("emails")).collect()[0]
+    _rows += [("1002=No clients with an address card", int(_c["clients"])),
+              ("distinct email addresses held by them", int(_c["emails"]))]
+r6 = T("R6 - email-to-client join: source-side ids against matched clients", pd.DataFrame(_rows, columns=["measure", "value"]))
+
+# %% [24] R7 - MINOR. What 'received' includes, and how many standing positions are ties.
+_named_only = recn.select("CLNT_NO").distinct()
+if _rall is not None:
+    _any = _rall.select("CLNT_NO").distinct()
+    r7 = T("R7a - what the send definition includes: any vendor send vs named-campaign only, Apr-Jun 2026",
+           pd.DataFrame([("clients with ANY vendor send (incl. untagged DEFAULT)", _any.count()),
+                         ("clients with a NAMED campaign send (deck definition)", _named_only.count()),
+                         ("difference = DEFAULT/untagged-only clients",
+                          _any.count() - _any.join(_named_only, "CLNT_NO", "inner").count())],
+                        columns=["measure", "clients"]))
+_tie = (cpc.filter(F.col("PREF_ID").isin(SWITCHES + [1006]))
+           .groupBy("CLNT_NO", "PREF_ID").agg(F.max("CHG_TMSTMP").alias("mx"), F.count("*").alias("n"))
+           .join(cpc.select("CLNT_NO", "PREF_ID", F.col("CHG_TMSTMP").alias("mx")), ["CLNT_NO", "PREF_ID", "mx"])
+           .groupBy("CLNT_NO", "PREF_ID").agg(F.count("*").alias("rows_at_latest")))
+r7b = T("R7b - clients whose latest write on a switch is a TIE (standing position resolves arbitrarily)",
+        _tie.groupBy("PREF_ID")
+            .agg(F.countDistinct("CLNT_NO").alias("clients"),
+                 F.countDistinct(F.when(F.col("rows_at_latest") > 1, F.col("CLNT_NO"))).alias("clients_with_tie"))
+            .orderBy("PREF_ID"))
+
+# ============================ 7. THE DECK FEED ==============================
 
 # %% [17] DECK - every headline figure in one table. Photograph this cell.
 _c2 = c2.set_index("PREF_ID"); _x1 = x1.set_index("PREF_ID")
