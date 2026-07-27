@@ -62,6 +62,7 @@ print("     12-month window) | everything else prints, nothing else saves")
 
 # %% [1] Setup
 import pandas as pd
+from IPython.display import display, Markdown
 from pyspark.sql import functions as F, Window
 
 pd.set_option("display.max_columns", None)
@@ -89,6 +90,24 @@ def norm_clnt(col):
     return F.regexp_replace(F.trim(col.cast("string")), "^0+", "")
 
 
+def T(label, df):
+    """Render a titled table AND return it. A bare name renders only as a cell's last expression;
+    this always renders, and still hands back the object to export or plot.
+    Timestamp columns are stringified first - pandas 2.x rejects Spark's unit-less datetime64.
+    Ported verbatim from cpc_evidence_hdfs.py's T() (museum evidence-table convention) - this
+    file's V1..V6 output is meant to read exactly like that file's E-tables."""
+    if hasattr(df, "toPandas"):
+        for f in df.schema.fields:
+            if f.dataType.typeName() in ("timestamp", "date", "timestamp_ntz"):
+                df = df.withColumn(f.name, F.date_format(F.col(f.name), "yyyy-MM-dd HH:mm:ss"))
+        out = df.toPandas()
+    else:
+        out = df
+    display(Markdown("**" + label + "**  ·  " + str(len(out)) + " rows"))
+    display(out)
+    return out
+
+
 print("helpers defined | BASE =", BASE, "| UCP_BASE =", UCP_BASE, "| OUT =", OUT)
 
 # %% [2] SCHEMA PROBE - hard gate, run first. Nothing downstream may assume a column exists.
@@ -114,11 +133,10 @@ REQUESTED_COLS = ["CLNT_NO", "AGE", "AGE_RNG", "TENURE_RBC_YEARS", "TENURE_RBC_R
                    "PROF_TOT_ANNUAL", "PROF_SEG_CD", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
 
 _actual = set(_latest.columns)
-print("\nrequested column presence check:")
 _present_tbl = pd.DataFrame(
     {"column": REQUESTED_COLS,
      "status": ["PRESENT" if c in _actual else "MISSING" for c in REQUESTED_COLS]})
-print(_present_tbl.to_string(index=False))
+T("PROBE1 - UCP requested column presence check (latest partition " + UCP_MAX + ")", _present_tbl)
 
 UCP_COLS = [c for c in REQUESTED_COLS if c in _actual]
 _dropped = [c for c in REQUESTED_COLS if c not in _actual]
@@ -170,6 +188,7 @@ assert len(_SEND_MONTHS) == 12, "expected exactly 12 monthly subpaths (Jul2025-J
 
 def read_sends_12m():
     frames = []
+    counts = []
     for sub in _SEND_MONTHS:
         f = (spark.read.parquet(BASE + "sends_12m/" + sub)
              .select("CLNT_NO", "TREATMENT_ID")
@@ -177,16 +196,18 @@ def read_sends_12m():
         n = f.count()
         assert n > 0, ("sends_12m/" + sub + " landed zero rows - a subpath failed to land "
                         "silently, fix before trusting any total in this run")
-        print("  sends_12m/" + sub + ":", n, "client x treatment rows")
+        counts.append({"month": sub, "client_treatment_rows": n})
         frames.append(f)
     out = frames[0]
     for f in frames[1:]:
         out = out.unionByName(f)
-    return out
+    return out, counts
 
 
 print("reading 12 monthly send subpaths (Jul2025-Jun2026)...")
-_sends_raw = read_sends_12m()
+_sends_raw, _send_month_counts = read_sends_12m()
+T("SEND1 - per-month send subpath row counts (sends_12m/, Jul2025-Jun2026)",
+  pd.DataFrame(_send_month_counts))
 _n_raw = _sends_raw.count()
 
 # Dedupe AFTER the union - the same (CLNT_NO, TREATMENT_ID) pair can legitimately appear in two
@@ -195,12 +216,12 @@ _n_raw = _sends_raw.count()
 # this dedup only removes cross-month duplicates of the exact same pair.
 sends = _sends_raw.dropDuplicates(["CLNT_NO", "TREATMENT_ID"])
 _n_dedup = sends.count()
-print("\nSEND BASE (client x TREATMENT_ID grain, full 12-month window):")
-print(pd.DataFrame([{
-    "rows_before_cross_month_dedup": _n_raw,
-    "rows_after_dedup": _n_dedup,
-    "cross_month_duplicate_pairs_removed": _n_raw - _n_dedup,
-}]).to_string(index=False))
+T("SEND2 - send base after cross-month dedup (client x TREATMENT_ID grain, full 12-month window)",
+  pd.DataFrame([{
+      "rows_before_cross_month_dedup": _n_raw,
+      "rows_after_dedup": _n_dedup,
+      "cross_month_duplicate_pairs_removed": _n_raw - _n_dedup,
+  }]))
 
 assert _n_dedup > 0, "sends after dedup is zero - something is badly wrong upstream"
 sends.cache()
@@ -236,13 +257,13 @@ sends = sends.withColumn(
 
 _mne_top20 = (sends.groupBy("mne", "program").agg(F.countDistinct("TREATMENT_ID").alias("treatments"),
                                                     F.count("*").alias("client_treatment_sends"))
-              .orderBy(F.desc("client_treatment_sends")).limit(20).toPandas())
-print("TOP 20 MNEs by client-treatment sends, program label attached:")
-print(_mne_top20.to_string(index=False))
-print("\nprogram totals (bank-wide, full window):")
-print(sends.groupBy("program").agg(F.countDistinct("TREATMENT_ID").alias("treatments"),
-                                    F.count("*").alias("client_treatment_sends"))
-      .orderBy(F.desc("client_treatment_sends")).toPandas().to_string(index=False))
+              .orderBy(F.desc("client_treatment_sends")).limit(20))
+T("MNE1 - top-20 MNEs by client-treatment sends, program label attached", _mne_top20)
+
+T("MNE2 - program totals (bank-wide, full window)",
+  sends.groupBy("program").agg(F.countDistinct("TREATMENT_ID").alias("treatments"),
+                                F.count("*").alias("client_treatment_sends"))
+       .orderBy(F.desc("client_treatment_sends")))
 
 # %% [5] TREATMENT_ID DECODE - launch date. DOCUMENTED: MNE = SUBSTR(TREATMENT_ID, 8, 3)
 # (UNSUB_TRACKING_KNOWLEDGE.md:145, and used identically across 02_campaign_unsub_tracker.py,
@@ -277,14 +298,13 @@ _decode_check = cohort.select("TREATMENT_ID", "_valid", "_fail_reason").dropDupl
 _n_ids = _decode_check.count()
 _n_valid = _decode_check.filter(F.col("_valid")).count()
 _pct_valid = round(100.0 * _n_valid / _n_ids, 2)
-print("TREATMENT_ID launch-date decode validation (distinct TREATMENT_IDs, positions 1-7 = YYYYDDD):")
-print(pd.DataFrame([{"distinct_treatment_ids": _n_ids, "decoded_valid": _n_valid,
-                      "pct_valid": _pct_valid}]).to_string(index=False))
+T("DECODE1 - TREATMENT_ID launch-date decode validation (distinct TREATMENT_IDs, positions 1-7 = YYYYDDD)",
+  pd.DataFrame([{"distinct_treatment_ids": _n_ids, "decoded_valid": _n_valid, "pct_valid": _pct_valid}]))
 
 if _n_valid < _n_ids:
-    print("\nFAILURES by reason (distinct TREATMENT_IDs):")
-    print(_decode_check.filter(~F.col("_valid")).groupBy("_fail_reason")
-          .agg(F.count("*").alias("distinct_treatment_ids")).toPandas().to_string(index=False))
+    T("DECODE2 - decode failures by reason (distinct TREATMENT_IDs)",
+      _decode_check.filter(~F.col("_valid")).groupBy("_fail_reason")
+                    .agg(F.count("*").alias("distinct_treatment_ids")))
 
 assert _pct_valid >= 99.0, (
     "TREATMENT_ID launch-date decode only validated for " + str(_pct_valid) + "% of distinct "
@@ -322,15 +342,14 @@ cohort.cache()
 _cohort_month_dist = (cohort.groupBy("cohort_month")
                        .agg(F.countDistinct("TREATMENT_ID").alias("treatments"),
                             F.count("*").alias("client_treatment_sends"))
-                       .orderBy("cohort_month").toPandas())
-print("COHORT_MONTH distribution (launch month, decoded from TREATMENT_ID):")
-print(_cohort_month_dist.to_string(index=False))
+                       .orderBy("cohort_month"))
+T("COHORT1 - cohort_month distribution (launch month, decoded from TREATMENT_ID)", _cohort_month_dist)
 
 _anchor_dist = (cohort.filter(F.col("ucp_anchor").isNotNull())
                  .groupBy("ucp_anchor").agg(F.count("*").alias("client_treatment_sends"))
-                 .orderBy("ucp_anchor").toPandas())
-print("\nUCP_ANCHOR distribution (month before launch, clamped to [", UCP_MIN, ",", UCP_MAX, "]):")
-print(_anchor_dist.to_string(index=False))
+                 .orderBy("ucp_anchor"))
+T("COHORT2 - UCP anchor distribution (month before launch, clamped to [" + UCP_MIN + ", " + UCP_MAX + "])",
+  _anchor_dist)
 
 # Flag (not hard-assert - the clamp already keeps this from crashing) any anchor month that got
 # clamped away from what the raw formula wanted, i.e. a launch close enough to UCP_MIN/UCP_MAX
@@ -371,11 +390,11 @@ cohort = cohort.withColumn("unsub_flag", F.when(F.col("unsub_tm").isNotNull(), F
 cohort.cache()
 
 _n_unsub_matched = cohort.filter(F.col("unsub_flag") == 1).count()
-print("\nNUMERATOR attached to send base (exact-key join, no time window):")
-print(pd.DataFrame([{
-    "client_treatment_sends": _before_numerator, "unsubbed": _n_unsub_matched,
-    "unsub_rate_per_1000_sends": round(1000.0 * _n_unsub_matched / _before_numerator, 2),
-}]).to_string(index=False))
+T("NUM1 - numerator attached to send base (exact-key join, no time window)",
+  pd.DataFrame([{
+      "client_treatment_sends": _before_numerator, "unsubbed": _n_unsub_matched,
+      "unsub_rate_per_1000_sends": round(1000.0 * _n_unsub_matched / _before_numerator, 2),
+  }]))
 
 # %% [8] UCP READ - one partition per distinct non-null ucp_anchor (~12-13 months of launches ->
 # ~12-13 partitions, per Andre's estimate). Semi-join to the clients needing that anchor BEFORE
@@ -391,6 +410,7 @@ def read_ucp_for_cohort(cohort_df, cols):
     anchor_months = sorted(str(r["ucp_anchor"]) for r in _rows)
     print("reading UCP for", len(anchor_months), "distinct anchor months:", anchor_months)
     frames = []
+    read_summary = []
     for m in anchor_months:
         needed = cohort_df.filter(F.col("ucp_anchor") == F.lit(m)).select("CLNT_NO").distinct()
         n_needed = needed.count()
@@ -401,16 +421,17 @@ def read_ucp_for_cohort(cohort_df, cols):
         raw = raw.join(needed, "CLNT_NO", "leftsemi")
         sel = raw.select(*cols).withColumn("ucp_month_end", F.lit(m))
         n = sel.count()
-        print("  UCP partition", m, ": needed", n_needed, "distinct clients, matched", n,
-              "rows (Personal filter =", HAS_CLNT_TYP, ")")
+        read_summary.append({"ucp_anchor": m, "needed_distinct_clients": n_needed,
+                              "matched_rows": n, "personal_filter_applied": HAS_CLNT_TYP})
         frames.append(sel)
     out = frames[0]
     for f in frames[1:]:
         out = out.unionByName(f)
-    return out
+    return out, read_summary
 
 
-ucp_spine = read_ucp_for_cohort(cohort, UCP_COLS)
+ucp_spine, _ucp_read_summary = read_ucp_for_cohort(cohort, UCP_COLS)
+T("UCP1 - per-anchor-month UCP read summary", pd.DataFrame(_ucp_read_summary))
 assert ucp_spine.count() > 0, "UCP anchor-month read returned zero rows - investigate before proceeding"
 
 # %% [9] JOIN + fan-out guard + THE ONLY SAVE IN THIS SCRIPT
@@ -435,11 +456,11 @@ print("fan-out guard OK: cohort rows preserved through UCP join (", _before_join
 
 _joined = _joined.withColumn("ucp_matched", F.col("AGE").isNotNull())
 _matched = _joined.filter(F.col("ucp_matched")).count()
-print("MATCH RATE (spine, client x treatment grain):")
-print(pd.DataFrame([{
-    "client_treatment_sends": _before_join, "matched": _matched, "unmatched": _before_join - _matched,
-    "match_pct": round(100.0 * _matched / _before_join, 1),
-}]).to_string(index=False))
+T("MATCH1 - UCP match rate (spine, client x treatment grain)",
+  pd.DataFrame([{
+      "client_treatment_sends": _before_join, "matched": _matched, "unmatched": _before_join - _matched,
+      "match_pct": round(100.0 * _matched / _before_join, 1),
+  }]))
 
 # BIG TABLE WARNING: this is client x treatment x (effectively) month - materially larger than
 # v2's client-grain spine. Persisting is still preferred over recomputing UCP on every re-cut
@@ -528,22 +549,15 @@ _w_earliest = Window.partitionBy("CLNT_NO").orderBy(F.col("ucp_month_end").asc()
 _earliest_client_rows = (spine.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
                           .withColumn("rn", F.row_number().over(_w_earliest)).filter("rn = 1"))
 PROF_CUTS = _earliest_client_rows.approxQuantile("PROF_TOT_ANNUAL", [0.2, 0.4, 0.6, 0.8], 0.01)
-print("PROF_TOT_ANNUAL quintile cut points (earliest-anchor distinct clients, n =",
-      _earliest_client_rows.count(), "):")
-print(pd.DataFrame([{"p20": PROF_CUTS[0], "p40": PROF_CUTS[1], "p60": PROF_CUTS[2], "p80": PROF_CUTS[3]}])
-      .to_string(index=False))
+T("PROF1 - PROF_TOT_ANNUAL quintile cut points (earliest-anchor distinct clients, n = " +
+  str(_earliest_client_rows.count()) + ")",
+  pd.DataFrame([{"p20": PROF_CUTS[0], "p40": PROF_CUTS[1], "p60": PROF_CUTS[2], "p80": PROF_CUTS[3]}]))
 
 spine_banded = apply_bands(spine, PROF_CUTS)
 spine_banded.cache()
 print("\nspine_banded (full window, bank-wide, client x treatment grain):", spine_banded.count(), "rows")
 
 # %% [11] V1 - WHERE we lose clients (Slide 1 feed). Grain: client x treatment sends.
-print("=" * 100)
-print("V1 - WHERE | window: full 12-month send window (bank-wide) | GRAIN: client-treatment sends")
-print("     | by program, then top-15 MNEs | unsub_rate_per_1000 is a TRUE rate (unsubbed sends /")
-print("     total sends) | median_prof/pct_single_product/pct_top_quintile computed on the")
-print("     UNSUBBED subset only (matched clients)")
-print("=" * 100)
 _total_sends = spine_banded.count()
 _total_unsubs = spine_banded.filter(F.col("unsub_flag") == 1).count()
 
@@ -565,21 +579,18 @@ def _v1_metrics(df, keys):
 
 
 v1_program = _v1_metrics(spine_banded, ["program"]).orderBy(F.desc("unsubs"))
-print("by program:")
-print(v1_program.toPandas().to_string(index=False))
+T("V1 - WHERE, by program | window: full 12-month send window (bank-wide) | GRAIN: client-treatment "
+  "sends | unsub_rate_per_1000 is a TRUE rate (unsubbed sends / total sends) | "
+  "median_prof/pct_single_product/pct_top_quintile computed on the UNSUBBED subset only (matched "
+  "clients)", v1_program)
 
 v1_mne = _v1_metrics(spine_banded, ["mne", "program"]).orderBy(F.desc("unsubs")).limit(15)
-print("\ntop-15 MNEs by unsub volume (program flag attached, CARDS rows are the ones this deck is about):")
-print(v1_mne.toPandas().to_string(index=False))
+T("V1 - WHERE, top-15 MNEs by unsub volume | window: full 12-month send window (bank-wide) | "
+  "GRAIN: client-treatment sends | program flag attached, CARDS rows are the ones this deck is about",
+  v1_mne)
 
 # %% [12] V2 - WHO, four-variable mix, unsubbed client-treatments vs ALL client-treatment sends
 # (Slide 2 feed). Both sides come from the SAME spine now - no separate base to reconcile.
-print("=" * 100)
-print("V2 - WHO | GRAIN: client-treatment | full 12-month window | unsubbed sends (n =", _total_unsubs,
-      ") vs ALL sends (n =", _total_sends, ") | ratio = pct_unsubs / pct_all_sends; ratio > 1 means")
-print("     that segment is OVER-represented among unsubs")
-print("=" * 100)
-
 _v2_dims = ["prod_band", "tenure_band", "age_band", "prof_quintile"]
 _v2_frames = []
 _unsub_rows = spine_banded.filter(F.col("unsub_flag") == 1)
@@ -600,70 +611,59 @@ for dim in _v2_dims:
 v2 = _v2_frames[0]
 for f in _v2_frames[1:]:
     v2 = v2.unionByName(f)
-print(v2.orderBy("segment_dim", F.desc("ratio")).toPandas().to_string(index=False))
+T("V2 - WHO, four-variable mix | GRAIN: client-treatment | full 12-month window | unsubbed sends "
+  "(n = " + str(_total_unsubs) + ") vs ALL sends (n = " + str(_total_sends) + ") | ratio = "
+  "pct_unsubs / pct_all_sends; ratio > 1 means that segment is OVER-represented among unsubs",
+  v2.orderBy("segment_dim", F.desc("ratio")))
 
 # %% [13] V3 - CONCENTRATION (the headline). TRUE rate per 1,000 sends by prof_quintile - no
 # circularity: the denominator is real sends at that quintile, not a separately-built base.
-print("=" * 100)
-print("V3 - CONCENTRATION | GRAIN: client-treatment | full 12-month window | top quintile = ")
-print("     prof_quintile '5' (cut points from cell [10], earliest-anchor distinct clients) |")
-print("     rate = unsubbed sends / all sends x 1000, BY quintile | share columns = that quintile's")
-print("     share of all unsubs vs its share of all sends")
-print("=" * 100)
-
 _v3_tbl = (spine_banded.groupBy("prof_quintile")
            .agg(F.count("*").alias("sends"), F.sum("unsub_flag").alias("unsubs"))
            .withColumn("unsub_rate_per_1000_sends", F.round(1000.0 * F.col("unsubs") / F.col("sends"), 2))
            .withColumn("pct_of_all_sends", F.round(100.0 * F.col("sends") / _total_sends, 1))
            .withColumn("pct_of_all_unsubs", F.round(100.0 * F.col("unsubs") / _total_unsubs, 1))
            .orderBy("prof_quintile"))
-print(_v3_tbl.toPandas().to_string(index=False))
+_v3_pd = T("V3 - CONCENTRATION | GRAIN: client-treatment | full 12-month window | top quintile = "
+           "prof_quintile '5' (cut points from cell [10], earliest-anchor distinct clients) | rate = "
+           "unsubbed sends / all sends x 1000, BY quintile | share columns = that quintile's share of "
+           "all unsubs vs its share of all sends", _v3_tbl)
 
-_v3_pd = _v3_tbl.toPandas()
 _top_row = _v3_pd[_v3_pd["prof_quintile"] == "5"]
 if len(_top_row):
-    print("\ntop quintile: unsub rate", _top_row["unsub_rate_per_1000_sends"].iloc[0],
-          "per 1,000 sends, vs bank-wide rate", round(1000.0 * _total_unsubs / _total_sends, 2),
-          "per 1,000 - it is", round(_top_row["unsub_rate_per_1000_sends"].iloc[0] /
-                                      (1000.0 * _total_unsubs / _total_sends), 2), "x the overall rate")
+    display(Markdown("**top quintile:** unsub rate **" + str(_top_row["unsub_rate_per_1000_sends"].iloc[0]) +
+                      "** per 1,000 sends, vs bank-wide rate **" +
+                      str(round(1000.0 * _total_unsubs / _total_sends, 2)) + "** per 1,000 - it is **" +
+                      str(round(_top_row["unsub_rate_per_1000_sends"].iloc[0] /
+                                (1000.0 * _total_unsubs / _total_sends), 2)) + "x** the overall rate"))
 
 # %% [14] V4 - DOOR-CLOSING. GRAIN: distinct CLIENTS (not client-treatments) - a client who
 # unsubs while holding one product closes the email door on every OTHER product the bank might
 # have cross-sold them, counted once per client, not once per treatment they unsubbed from.
-print("=" * 100)
-print("V4 - DOOR-CLOSING | GRAIN: distinct unsubbed CLIENTS (full window, bank-wide) | one row per")
-print("     client, taken at their LATEST unsub_tm if they unsubbed from more than one treatment")
-print("=" * 100)
-
 _w_last_unsub = Window.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").desc())
 unsub_clients = (spine_banded.filter(F.col("unsub_flag") == 1)
                   .withColumn("rn", F.row_number().over(_w_last_unsub)).filter("rn = 1"))
 _n_unsub_clients = unsub_clients.count()
 _single_overall = unsub_clients.filter(F.col("prod_band") == "1").count()
-print("single-product clients as % of ALL unsubbed clients:",
-      round(100.0 * _single_overall / _n_unsub_clients, 1), "% (", _single_overall, "of", _n_unsub_clients, ")")
+display(Markdown("**V4 - DOOR-CLOSING** · GRAIN: distinct unsubbed CLIENTS (full window, bank-wide) · "
+                  "one row per client, taken at their LATEST unsub_tm if they unsubbed from more than "
+                  "one treatment · single-product clients as % of ALL unsubbed clients: **" +
+                  str(round(100.0 * _single_overall / _n_unsub_clients, 1)) + "%** (" +
+                  str(_single_overall) + " of " + str(_n_unsub_clients) + ")"))
 
 v4_by_program = (unsub_clients.groupBy("program")
                   .agg(F.count("*").alias("unsub_clients"),
                        F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients"))
                   .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("unsub_clients"), 1))
                   .orderBy(F.desc("unsub_clients")))
-print("\nby program:")
-print(v4_by_program.toPandas().to_string(index=False))
+T("V4 - DOOR-CLOSING, by program", v4_by_program)
 
 v4_tibc = (unsub_clients.filter(F.col("prod_band") == "1").groupBy("tibc_mix")
            .agg(F.count("*").alias("single_product_clients")).orderBy(F.desc("single_product_clients")))
-print("\nsingle-product unsubs: which one category they hold:")
-print(v4_tibc.toPandas().to_string(index=False))
+T("V4 - DOOR-CLOSING, single-product unsubs by category held", v4_tibc)
 
 # %% [15] V5 - STABILITY. V3's rate-by-quintile split by cohort_month (launch month) - does the
 # concentration pattern hold every month of the year or is V3 a few months' noise.
-print("=" * 100)
-print("V5 - STABILITY | GRAIN: client-treatment | V3's rate-by-quintile, split by cohort_month")
-print("     (= launch month, not unsub month) | 12 real cohort months x 5 quintiles; UNKNOWN")
-print("     cohort_month (undecodable TREATMENT_ID) shown as its own row, excluded from the 12x5 grid")
-print("=" * 100)
-
 _v5_months = [m for m in sorted(spine_banded.select("cohort_month").distinct().toPandas()["cohort_month"])
               if m != "UNKNOWN"]
 _v5_tbl = (spine_banded.filter(F.col("cohort_month").isin(_v5_months))
@@ -671,12 +671,16 @@ _v5_tbl = (spine_banded.filter(F.col("cohort_month").isin(_v5_months))
            .agg(F.count("*").alias("sends"), F.sum("unsub_flag").alias("unsubs"))
            .withColumn("unsub_rate_per_1000_sends", F.round(1000.0 * F.col("unsubs") / F.col("sends"), 2))
            .orderBy("cohort_month", "prof_quintile"))
-print(_v5_tbl.toPandas().to_string(index=False))
+T("V5 - STABILITY | GRAIN: client-treatment | V3's rate-by-quintile, split by cohort_month (= launch "
+  "month, not unsub month) | 12 real cohort months x 5 quintiles; UNKNOWN cohort_month (undecodable "
+  "TREATMENT_ID) shown as its own row, excluded from the 12x5 grid", _v5_tbl)
 
 _unknown_n = spine_banded.filter(F.col("cohort_month") == "UNKNOWN").count()
 if _unknown_n:
-    print("\ncohort_month = UNKNOWN (decode failed, see cell [5]):", _unknown_n, "client-treatment sends,",
-          spine_banded.filter((F.col("cohort_month") == "UNKNOWN") & (F.col("unsub_flag") == 1)).count(), "unsubbed")
+    display(Markdown("cohort_month = UNKNOWN (decode failed, see cell [5]): **" + str(_unknown_n) +
+                      "** client-treatment sends, **" +
+                      str(spine_banded.filter((F.col("cohort_month") == "UNKNOWN") &
+                                               (F.col("unsub_flag") == 1)).count()) + "** unsubbed"))
 
 # %% [16] V6 - PROF_TOT_ANNUAL vetting. GRAIN: client-treatment, matched rows only -
 # investigation, not reporting. Checking whether the field behaves like current-year contribution
@@ -684,13 +688,6 @@ if _unknown_n:
 # profitability" on slides, NEVER "LTV" or "lifetime value", and flag that it will UNDERSTATE
 # young/new clients relative to their future trajectory - a young high-potential unsub looks
 # cheap here by construction.
-print("=" * 100)
-print("V6 - PROF_TOT_ANNUAL VETTING | GRAIN: client-treatment, matched rows only, full window |")
-print("     percentiles of PROF_TOT_ANNUAL by tenure_band - rising with tenure supports")
-print("     'current-year contribution'; flat or non-monotonic means the definition needs")
-print("     confirming before it goes anywhere near a slide")
-print("=" * 100)
-
 PCTS = [0.10, 0.25, 0.50, 0.75, 0.90]
 _matched_spine = spine_banded.filter(F.col("ucp_matched"))
 _v6_rows = []
@@ -701,29 +698,35 @@ for band in ["0-2", "3-5", "6-10", "11-20", "20+", "unknown"]:
         continue
     q = sub.approxQuantile("PROF_TOT_ANNUAL", PCTS, 0.01)
     _v6_rows.append({"tenure_band": band, "n": n, "p10": q[0], "p25": q[1], "p50": q[2], "p75": q[3], "p90": q[4]})
-print(pd.DataFrame(_v6_rows).to_string(index=False))
+T("V6 - PROF_TOT_ANNUAL VETTING | GRAIN: client-treatment, matched rows only, full window | "
+  "percentiles of PROF_TOT_ANNUAL by tenure_band - rising with tenure supports 'current-year "
+  "contribution'; flat or non-monotonic means the definition needs confirming before it goes "
+  "anywhere near a slide", pd.DataFrame(_v6_rows))
 
 # %% [17] ONE-SCREEN SUMMARY
-print("=" * 100)
-print("UNSUB VALUE / UCP v3 SUMMARY")
-print("=" * 100)
-print("send base: ", _total_sends, "client-treatment sends, full 12-month window (Jul2025-Jun2026), bank-wide")
-print("unsubs:    ", _total_unsubs, "(", round(1000.0 * _total_unsubs / _total_sends, 2), "per 1,000 sends)")
-print("match rate (spine, UCP at per-treatment anchor):", round(100.0 * _matched / _before_join, 1), "%")
-print("distinct unsubbed clients (V4 grain):", _n_unsub_clients)
+display(Markdown("## UNSUB VALUE / UCP v3 SUMMARY"))
 
-print("\nV1 top-3 programs by unsub VOLUME:")
-print(v1_program.orderBy(F.desc("unsubs")).limit(3).toPandas().to_string(index=False))
-print("\nV1 top-3 programs by unsub RATE (min 1000 sends to avoid small-n noise):")
-print(v1_program.filter(F.col("client_treatment_sends") >= 1000)
-      .orderBy(F.desc("unsub_rate_per_1000_sends")).limit(3).toPandas().to_string(index=False))
+_summary_rows = [
+    ("Send base (client-treatment sends, full 12-month window Jul2025-Jun2026, bank-wide)", _total_sends),
+    ("Unsubs", _total_unsubs),
+    ("Unsub rate per 1,000 sends", round(1000.0 * _total_unsubs / _total_sends, 2)),
+    ("Match rate, spine, UCP at per-treatment anchor (%)", round(100.0 * _matched / _before_join, 1)),
+    ("Distinct unsubbed clients (V4 grain)", _n_unsub_clients),
+]
+T("SUMMARY - headline figures", pd.DataFrame(_summary_rows, columns=["figure", "value"]))
+
+T("SUMMARY - V1 top-3 programs by unsub VOLUME", v1_program.orderBy(F.desc("unsubs")).limit(3))
+T("SUMMARY - V1 top-3 programs by unsub RATE (min 1000 sends to avoid small-n noise)",
+  v1_program.filter(F.col("client_treatment_sends") >= 1000)
+            .orderBy(F.desc("unsub_rate_per_1000_sends")).limit(3))
 
 if len(_top_row):
-    print("\nV3 concentration: top-quintile unsub rate is", _top_row["unsub_rate_per_1000_sends"].iloc[0],
-          "per 1,000 sends vs bank-wide", round(1000.0 * _total_unsubs / _total_sends, 2))
+    display(Markdown("**V3 concentration:** top-quintile unsub rate is **" +
+                      str(_top_row["unsub_rate_per_1000_sends"].iloc[0]) + "** per 1,000 sends vs "
+                      "bank-wide **" + str(round(1000.0 * _total_unsubs / _total_sends, 2)) + "**"))
 
-print("\nV4 door-closing:", round(100.0 * _single_overall / _n_unsub_clients, 1),
-      "% of distinct unsubbed clients (full window) hold exactly one product")
+display(Markdown("**V4 door-closing:** **" + str(round(100.0 * _single_overall / _n_unsub_clients, 1)) +
+                  "%** of distinct unsubbed clients (full window) hold exactly one product"))
 
 print("\nCAVEATS:")
 print("- mne/cohort attribution is TREATMENT-based, not last-touch: a client's outcome on a given")
