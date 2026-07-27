@@ -1,52 +1,85 @@
 # %% [0] HEADER
 # UNSUB VALUE MUSEUM - "the value of an unsubscribe", auditable and reproducible end to end.
 #
-# PURPOSE: pulls campaign send/unsub data STRAIGHT FROM EDW (no reservoir dependency - unlike
-# cpc_reservoir_extract.py, this file owns its own Teradata pulls) and client attributes from
-# HDFS UCP. Answers: who leaves vs who stays, and how campaigns compare. There is no EDW
-# client-attribute table - UCP is the only source for age/tenure/product-count/profitability, so
-# this file necessarily spans two engines: Teradata (EDW, vendor feedback) and Spark/YARN (HDFS,
-# UCP + this file's own landings). SUPERSEDES archaeology/28_unsub_value_ucp.py, which read off
-# the unsub_cpc reservoir and was scoped to Q2-2026 cards-only; this file is bank-wide and pulls
-# its own EDW data directly.
+# PHASE 1 REWRITE (Andre, 2026-07-27): the bank-wide SEND pull is KILLED. The probe run showed
+# 143M send events / ~99M distinct client-MNE pairs across Jan-May, hours of pandas transfer over
+# teradatasql, and ~80% of that volume was campaign detail for programs entirely outside cards.
+# That is not a "chunk it smaller" problem - it is the wrong shape of pull for what this file can
+# actually afford. Work is now split explicitly into two phases:
+#   PHASE 1 (this file, now)  - LEAVERS ONLY. Every unsubscriber, bank-wide, cards and non-cards,
+#                                12 months. No send pull, no stayer pool, no denominator. Volume
+#                                and composition only - "who leaves, and what do they look like."
+#   PHASE 2 (later, stubbed at the bottom of this file, no code yet) - STAYERS, scoped to CARDS
+#                                MNEs only (the cards Q2 send pull was 6.3M rows - tractable; the
+#                                bank-wide version was not). Adds denominators, and therefore rates.
+#
+# PURPOSE: pulls unsub events STRAIGHT FROM EDW (no reservoir dependency - unlike
+# cpc_reservoir_extract.py, this file owns its own Teradata pulls) and client attributes from HDFS
+# UCP. There is no EDW client-attribute table - UCP is the only source for age/tenure/product-
+# count/profitability, so this file necessarily spans two engines: Teradata (EDW, vendor feedback)
+# and Spark/YARN (HDFS, UCP + this file's own landings).
+# SUPERSEDES archaeology/28_unsub_value_ucp.py's V1 (bank-wide leaver profile) with a longer,
+# bank-wide-by-construction window; borrows its CARDS_MNES constant, its MNE/program mapping
+# (including the DEFAULT stream), and its Julian TREATMENT_ID launch-date decode + validation
+# pattern almost verbatim.
 #
 # SCOPE (Andre, 2026-07-27):
-#   - Window: sends Jan 1 2026 - Jun 1 2026 (Jan/Feb/Mar/Apr/May 2026), BANK-WIDE (no MNE filter).
-#   - Unsub response: UNBOUNDED FORWARD (Jan 2026 through run date) - a March cohort's June
-#     unsub still counts.
+#   - Window: unsubs (disposition_cd = 4) with disposition_dt_tm >= 2025-07-01 AND < 2026-07-01 -
+#     TWELVE months, not the send side's five. Leavers are cheap to pull (no 143M-row send scan
+#     behind them) and a full year gives a bigger, more stable sample per campaign than five months
+#     would. The unsub_tm of each client's attributed event is CARRIED IN THE OUTPUT (leaver_spine),
+#     so Andre can cut any sub-window (a quarter, a single month) later by filtering that column -
+#     WITHOUT re-pulling EDW.
+#   - Bank-wide, ALL programs, no MNE filter anywhere in the SQL - the whole point of Phase 1 is to
+#     see where the bank loses clients before deciding what to do about the cards slice of it.
 #   - FOUR client variables only: age, tenure, TIBC product counts, PROF_TOT_ANNUAL. No scope creep.
-#   - Own HDFS namespace: hdfs:///user/427966379/unsub_value_museum/ - must not collide with
-#     unsub_cpc/ (cpc_reservoir_extract.py's namespace).
+#   - Own HDFS namespace: hdfs:///user/427966379/unsub_value_museum/ - unchanged from the prior
+#     version of this file, must not collide with unsub_cpc/ (cpc_reservoir_extract.py's namespace).
 #
-# THE TWO TABLES:
-#   TABLE A - WHO leaves vs who stays. Grain: one row per mailed client (bank-wide, Jan-May 2026).
-#   TABLE B - WHERE, campaign comparison. Grain: distinct client x MNE (a client mailed by several
-#             campaigns appears in several rows, so its columns do NOT sum to Table A's totals).
-#   TABLE C - the same cube pre-aggregated for Excel pivoting (mne x age_band x tenure_band x
-#             prod_band x prof_quintile, counts only).
+# GRAIN: one row per client. A client can log several qualifying unsub events (different
+# treatments, different times); this file keeps only their LAST one (row_number over CLNT_NO
+# ordered by unsub_tm desc, TREATMENT_ID desc as tie-break) and calls that treatment their
+# attribution - the campaign whose link they clicked last is the one credited/blamed. How many
+# clients had more than one qualifying event is printed before the collapse (cell [6]), not thrown
+# away silently.
 #
-# OUTPUT CONTRACT: printed tables carry counts and medians. The saved Excel cube (Table C) is
-# COUNTS ONLY - rates are a pivot-time calculation, never baked into the file. Every printed
-# number is backed by a server round-trip or an assertion; no bare "done" prints (house hard rule).
+# NO RATES ANYWHERE IN THIS FILE. Every output table below is volume and composition - counts,
+# medians, percentage-of-leavers shares - never a rate against a denominator, because there is no
+# denominator (no stayer pool) until Phase 2 exists. Every printed/saved table repeats this in its
+# own label; this header states it once for the whole file.
 #
-# DURABLE vs SCRATCH (Andre, 2026-07-27): client_spine and cube (both saved to HDFS in cell [20];
-# cube is ALSO downloaded as unsub_value_cube.xlsx via the Jupyter file browser) plus the _meta/
-# manifests are the DURABLE artifacts - every table in this file re-derives from client_spine alone,
-# without touching EDW or UCP again. The four raw EDW landings (sends_mne/*, first_send,
-# unsubs_window/*, prior_unsubs) are SCRATCH - they exist only so a kernel death mid-pull doesn't
-# cost a re-pull from EDW, and are removable once the durable outputs are verified landed (see the
-# opt-in CLEANUP cell at the end of this file).
+# THE OUTPUT TABLES:
+#   M0 - COVERAGE & NULLS. Prints before any finding - proves or kills the "who's unmatched in UCP"
+#        question before trusting anything downstream of it.
+#   L1 - WHERE: leaver volume and composition by program then top-20 MNE.
+#   L2 - WHO: cards vs non-cards leavers, composition-vs-composition (no denominator needed for
+#        this one - it is a legitimate comparison of two populations against each other).
+#   L3 - DOOR-CLOSING: single-product leavers, i.e. clients who close the ONLY cross-sell channel
+#        cards had into every other product they don't hold.
+#   L4 - HIGH POTENTIAL LOST: count/share of leavers meeting the high_potential definition.
+#   L5 - PROF VETTING: reconfirms PROF_TOT_ANNUAL is current-year contribution, not LTV.
+#   CUBE - mne x program x age_band x tenure_band x prod_band x prof_quintile, counts only, for
+#        Excel pivoting. Dual-saved (xlsx download + HDFS parquet).
+#   leaver_spine - THE durable artifact, client grain, one row each. Every table above re-derives
+#        from this alone, without touching EDW or UCP again.
+#
+# OUTPUT CONTRACT: printed tables carry counts and medians, never a bare "done". Every printed
+# number is backed by a server round-trip or an assertion (house hard rule, unchanged).
+#
+# DURABLE vs SCRATCH: leaver_spine and cube (both saved in cell [19]; cube is ALSO downloaded as
+# unsub_value_cube.xlsx via the Jupyter file browser) are the DURABLE artifacts. The raw EDW
+# landing (unsubs_12m/q1..q4) is SCRATCH - it exists only so a kernel death mid-pull doesn't cost a
+# re-pull from EDW, and is removable once leaver_spine and cube are verified landed (opt-in
+# CLEANUP cell, updated for this file's actual pull paths).
 #
 # Engine split: Teradata-direct (DTZV01.VENDOR_FEEDBACK_EVENT / _MASTER, EDW pulls in cells
-# [4]-[11]) feeds this file's OWN HDFS reservoir; everything from cell [12] onward is Spark/YARN
+# [3]-[4]) feeds this file's OWN HDFS reservoir; everything from cell [5] onward is Spark/YARN
 # only, reading this file's landings plus UCP (/prod/sz/tsz/00172/data/ucp4/).
 #
 # Date: 2026-07-27.
 
-# %% [1] SETUP - bootstrap, EDW connect, land()/landed() (FIXED versions, 2026-07-26 fix: changed
-# SQL auto-repulls; landed() raises on unverifiable HDFS state instead of returning False), T(),
-# norm_clnt (FIXED decimal form - float64 CLNT_NO renders scientific notation otherwise, cost a
-# full debugging cycle in archaeology/28). Cloned from cpc_reservoir_extract.py + cpc_evidence_hdfs.py.
+# %% [1] SETUP - bootstrap, EDW connect, land()/landed(), T(), norm_clnt. Unchanged from the prior
+# version of this file (cloned originally from cpc_reservoir_extract.py + cpc_evidence_hdfs.py).
 
 # Bootstrap - install teradatasql from RBC artifactory; run ONCE per kernel.
 get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
@@ -173,7 +206,7 @@ def T(label, df):
 print("helpers defined: land()/landed() with SQL manifest | BASE =", BASE, "| UCP_BASE =", UCP_BASE)
 
 # %% [2] FAIL-FAST GATE - prove spark+HDFS are readable before any pull. First-ever run: this
-# namespace won't exist yet (handled gracefully). ANY other failure raises.
+# namespace won't exist yet (handled gracefully). ANY other failure raises. Unchanged.
 try:
     spark
 except NameError:
@@ -198,311 +231,233 @@ else:
           "STOP and investigate before proceeding.")
 print("GATE PASSED - spark session live, HDFS reachable.")
 
-# %% [3] SIZE PROBE - EVENT-ONLY (no join, no COUNT DISTINCT of pairs). Gated on landed() so it
-# costs nothing once P1 is fully landed - only unlanded months get sized.
-_P1_MONTHS = ["m2026_01", "m2026_02", "m2026_03", "m2026_04", "m2026_05"]
+# %% [3] SIZE PROBE - EVENT-ONLY COUNT(*), disposition_cd = 4 (unsubs), per quarter. Gated on
+# landed() so it costs nothing once all 4 quarters are landed - only unlanded quarters get sized.
+# This is a fraction of the send-side probe's cost by construction: unsubs are a small slice of
+# sends, which is exactly why Phase 1 can afford 12 months where the send pull could not afford 5.
+_P1_QUARTERS = ["q1", "q2", "q3", "q4"]
 _P1_BOUNDS = {
-    "m2026_01": ("2026-01-01", "2026-02-01"),
-    "m2026_02": ("2026-02-01", "2026-03-01"),
-    "m2026_03": ("2026-03-01", "2026-04-01"),
-    "m2026_04": ("2026-04-01", "2026-05-01"),
-    "m2026_05": ("2026-05-01", "2026-06-01"),
+    "q1": ("2025-07-01", "2025-10-01"),
+    "q2": ("2025-10-01", "2026-01-01"),
+    "q3": ("2026-01-01", "2026-04-01"),
+    "q4": ("2026-04-01", "2026-07-01"),
 }
-_p1_unlanded = [m for m in _P1_MONTHS if not landed("sends_mne/" + m)]
+_p1_unlanded = [q for q in _P1_QUARTERS if not landed("unsubs_12m/" + q)]
 
 if not _p1_unlanded:
-    print("SIZE PROBE - all 5 sends_mne months already landed - SKIP (nothing left to size)")
+    print("SIZE PROBE - all 4 unsubs_12m quarters already landed - SKIP (nothing left to size)")
 else:
     _probe_rows = []
-    for _m in _p1_unlanded:
-        _ds, _de = _P1_BOUNDS[_m]
+    for _q in _p1_unlanded:
+        _ds, _de = _P1_BOUNDS[_q]
         _pdf = edw_pd("""
 SELECT COUNT(*) AS event_rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT
-WHERE disposition_cd = 1
+WHERE disposition_cd = 4
   AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
 """ % (_ds, _de))
-        _probe_rows.append({"month": _m, "event_rows": int(_pdf["event_rows"][0])})
-    T("SIZE PROBE - disp_cd=1 send events, unlanded months only (event-only, no join, no DISTINCT)",
+        _probe_rows.append({"quarter": _q, "event_rows": int(_pdf["event_rows"][0])})
+    T("SIZE PROBE - disp_cd=4 unsub events, unlanded quarters only (event-only, no join, no DISTINCT)",
       pd.DataFrame(_probe_rows))
+    print("\nSTOP RULE: if any quarter's event_rows is unexpectedly huge (order of magnitude above")
+    print("the others), split that quarter's land() cell further (e.g. by month) before pulling.")
 
-    _pdf_whole = edw_pd("""
-SELECT COUNT(DISTINCT consumer_id_hashed) AS distinct_senders
-FROM DTZV01.VENDOR_FEEDBACK_EVENT
-WHERE disposition_cd = 1
-  AND disposition_dt_tm >= DATE '2026-01-01' AND disposition_dt_tm < DATE '2026-06-01'
-""")
-    print("distinct consumer_id_hashed, disp_cd=1, whole Jan-May 2026 window:",
-          int(_pdf_whole["distinct_senders"][0]))
-    print("\nSTOP RULE: if any month's event_rows is unexpectedly huge (order of magnitude above the")
-    print("others), split that month's land() cell further (e.g. by week) before pulling - the")
-    print("dedupe-before-join derived-table shape in P1 keeps the JOIN spool-safe regardless, but a")
-    print("single EVENT scan that large is still worth knowing about before committing to the pull.")
-
-# %% [4] EXTRACT sends_mne 2026-01 (load_tm 2025-12..2026-03). Collapsing to MNE at the server is
-# deliberate: a client mailed 12 times by one campaign becomes ONE row - this is Table B's grain
-# and it shrinks the pull by an order of magnitude vs client x treatment.
-land("sends_mne/m2026_01", """
-SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-01-01' AND disposition_dt_tm < DATE '2026-02-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-03-01'
-""")
-
-# %% [5] EXTRACT sends_mne 2026-02 (load_tm 2026-01..2026-04)
-land("sends_mne/m2026_02", """
-SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-02-01' AND disposition_dt_tm < DATE '2026-03-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-01-01' AND m.load_tm < DATE '2026-04-01'
-""")
-
-# %% [6] EXTRACT sends_mne 2026-03 (load_tm 2026-02..2026-05)
-land("sends_mne/m2026_03", """
-SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-03-01' AND disposition_dt_tm < DATE '2026-04-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-05-01'
-""")
-
-# %% [7] EXTRACT sends_mne 2026-04 (load_tm 2026-03..2026-06)
-land("sends_mne/m2026_04", """
-SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-04-01' AND disposition_dt_tm < DATE '2026-05-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-03-01' AND m.load_tm < DATE '2026-06-01'
-""")
-
-# %% [8] EXTRACT sends_mne 2026-05 (load_tm 2026-04..2026-07)
-land("sends_mne/m2026_05", """
-SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-05-01' AND disposition_dt_tm < DATE '2026-06-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2026-04-01' AND m.load_tm < DATE '2026-07-01'
-""")
-
-# %% [9] EXTRACT first_send - MIN(disposition_dt_tm) per client, whole Jan-May window, server-side
-# aggregate (one row per client, small). Dedupe-before-join: EVENT pre-aggregated to
-# (consumer_id_hashed, TREATMENT_ID) -> MIN(disposition_dt_tm) BEFORE the join, so the join runs on
-# a much smaller key set than the raw EVENT scan.
-land("first_send", """
-SELECT m.CLNT_NO, MIN(ek.first_dt) AS first_send_tm
-FROM (
-    SELECT consumer_id_hashed, TREATMENT_ID, MIN(disposition_dt_tm) AS first_dt
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2026-01-01' AND disposition_dt_tm < DATE '2026-06-01'
-    GROUP BY consumer_id_hashed, TREATMENT_ID
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2025-12-01' AND m.load_tm < DATE '2026-07-01'
-GROUP BY m.CLNT_NO
-""")
-
-# %% [10] EXTRACT unsubs_window - disposition_cd=4, disposition_dt_tm >= 2026-01-01, NO UPPER BOUND
-# (this IS the response window - a March cohort's June unsub still counts). Chunked by quarter
-# (JUDGMENT CALL: not spelled out verbatim in the brief, which says "chunk by quarter if the probe
-# says it's large" - the window is open-ended toward the run date, so an unbounded single pull only
-# grows on every future rerun; quarterly chunks keep each EVENT scan and MASTER load_tm bound small
-# and independently restartable). The last chunk has NO upper bound on either side, matching the
-# open EVENT window.
-_unsubs_window_chunks = [
-    ("q1", "2026-01-01", "2026-04-01", "2025-12-01", "2026-05-01"),
-    ("q2", "2026-04-01", "2026-07-01", "2026-03-01", "2026-08-01"),
-    ("q3", "2026-07-01", None, "2026-06-01", None),
+# %% [4] PULL unsubs_12m/q1..q4 - disposition_cd=4, 12-month bank-wide window, quarterly chunks.
+# DEDUPE-BEFORE-JOIN derived-table shape: `ek` pre-filters+DISTINCTs VENDOR_FEEDBACK_EVENT on
+# disposition_cd=4 + the quarter's date window BEFORE joining VENDOR_FEEDBACK_MASTER on
+# (consumer_id_hashed, TREATMENT_ID) - the join runs against a deduped key set, not the raw event
+# scan. MASTER load_tm is bounded ~+/-1 month around each quarter's edges (same convention as the
+# rest of this repo's EDW pulls). Output columns are exactly CLNT_NO, TREATMENT_ID, unsub_tm - NO
+# server-side MNE decode and NO aggregation to one-row-per-client here; that collapse happens in
+# Spark (cell [6]) so the tie-break logic is auditable and re-runnable without a re-pull.
+_unsubs_12m_chunks = [
+    ("q1", "2025-07-01", "2025-10-01", "2025-06-01", "2025-11-01"),
+    ("q2", "2025-10-01", "2026-01-01", "2025-09-01", "2026-02-01"),
+    ("q3", "2026-01-01", "2026-04-01", "2025-12-01", "2026-05-01"),
+    ("q4", "2026-04-01", "2026-07-01", "2026-03-01", "2026-08-01"),
 ]
 
-def _unsubs_window_sql(ev_start, ev_end, ld_start, ld_end):
-    ev_upper = "AND disposition_dt_tm < DATE '%s'" % ev_end if ev_end else ""
-    ld_upper = "AND m.load_tm < DATE '%s'" % ld_end if ld_end else ""
+def _unsubs_12m_sql(ev_start, ev_end, ld_start, ld_end):
     return """
-SELECT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne, MIN(ek.first_dt) AS unsub_tm
+SELECT DISTINCT m.CLNT_NO, ek.TREATMENT_ID, ek.disposition_dt_tm AS unsub_tm
 FROM (
-    SELECT consumer_id_hashed, TREATMENT_ID, MIN(disposition_dt_tm) AS first_dt
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 4
-      AND disposition_dt_tm >= DATE '%s' %s
-    GROUP BY consumer_id_hashed, TREATMENT_ID
+      AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '%s' %s
-GROUP BY m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3)
-""" % (ev_start, ev_upper, ld_start, ld_upper)
+WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+""" % (ev_start, ev_end, ld_start, ld_end)
 
-for _q, _es, _ee, _ls, _le in _unsubs_window_chunks:
-    land("unsubs_window/" + _q, _unsubs_window_sql(_es, _ee, _ls, _le))
+for _q, _es, _ee, _ls, _le in _unsubs_12m_chunks:
+    land("unsubs_12m/" + _q, _unsubs_12m_sql(_es, _ee, _ls, _le))
 
-# %% [11] EXTRACT prior_unsubs - disposition_cd=4, 2024-01-01 <= disposition_dt_tm < 2026-01-01
-# (2024 floor is a hard house rule). Single pull with a commented quarterly fallback if TDWM kills
-# it (same fallback shape as cpc_reservoir_extract.py's cpc_landing_allsw).
-land("prior_unsubs", """
-SELECT DISTINCT m.CLNT_NO
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 4
-      AND disposition_dt_tm >= DATE '2024-01-01' AND disposition_dt_tm < DATE '2026-01-01'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '2023-12-01' AND m.load_tm < DATE '2026-02-01'
-""")
-# FALLBACK if TDWM kills the single pull: land per disposition_dt_tm quarter, then cell [12] reads
-# prior_unsubs/* instead of prior_unsubs:
-# for _a, _b in [("2024-01-01","2024-04-01"), ("2024-04-01","2024-07-01"), ("2024-07-01","2024-10-01"),
-#                ("2024-10-01","2025-01-01"), ("2025-01-01","2025-04-01"), ("2025-04-01","2025-07-01"),
-#                ("2025-07-01","2025-10-01"), ("2025-10-01","2026-01-01")]:
-#     land("prior_unsubs/" + _a[:7], """... same shape, EVENT bounds _a/_b, load_tm _a-1mo/_b+1mo ...""")
-
-# %% [12] READ BACK all landings into Spark, normalize CLNT_NO on every one, print a labeled table.
-sends_mne_raw = (spark.read.parquet(BASE + "sends_mne/*")
-                  .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
-first_send_raw = (spark.read.parquet(BASE + "first_send")
+# %% [5] READ BACK all 4 quarters, normalize CLNT_NO, cross-quarter dedup. Cross-quarter dupes are
+# possible only in principle (the quarter EVENT windows are disjoint by construction), but the
+# same defensive dropDuplicates convention used for sends_q2 in archaeology/28 costs nothing here.
+unsubs_12m_raw = (spark.read.parquet(BASE + "unsubs_12m/*")
                    .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
-unsubs_window_raw = (spark.read.parquet(BASE + "unsubs_window/*")
-                      .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
-prior_unsubs_raw = (spark.read.parquet(BASE + "prior_unsubs")
-                     .withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO"))))
+_n_raw = unsubs_12m_raw.count()
+unsubs_12m_dedup = unsubs_12m_raw.dropDuplicates(["CLNT_NO", "TREATMENT_ID", "unsub_tm"])
+_n_dedup = unsubs_12m_dedup.count()
+unsubs_12m_dedup.cache()
 
-sends_mne_raw.cache(); first_send_raw.cache(); unsubs_window_raw.cache(); prior_unsubs_raw.cache()
+T("READBACK - unsubs_12m/*, all 4 quarters, after CLNT_NO normalization and cross-quarter dedup",
+  pd.DataFrame([{"rows_before_dedup": _n_raw, "rows_after_dedup": _n_dedup,
+                 "cross_quarter_duplicates_removed": _n_raw - _n_dedup,
+                 "distinct_clients": unsubs_12m_dedup.select("CLNT_NO").distinct().count()}]))
+assert _n_dedup > 0, "unsubs_12m read back zero rows after dedup - a land() cell above failed silently"
 
-_readback_rows = []
-for _name, _df in [("sends_mne", sends_mne_raw), ("first_send", first_send_raw),
-                    ("unsubs_window", unsubs_window_raw), ("prior_unsubs", prior_unsubs_raw)]:
-    _n = _df.count()
-    _dc = _df.select("CLNT_NO").distinct().count()
-    assert _n > 0, _name + " read back ZERO rows - a land() cell above failed to actually land data"
-    _readback_rows.append({"dataset": _name, "rows": _n, "distinct_clients": _dc})
+# %% [6] GRAIN REDUCTION - one row per client. A client can log several qualifying unsub events
+# (different treatments, different times, or the same treatment logged more than once); this file
+# keeps only their LAST one and calls that treatment their attribution. Print how many clients had
+# more than one qualifying event BEFORE collapsing, so the size of this judgment call is visible.
+_events_per_client = unsubs_12m_dedup.groupBy("CLNT_NO").agg(F.count("*").alias("n_events"))
+_n_multi_event = _events_per_client.filter(F.col("n_events") > 1).count()
+_n_distinct_clients = _events_per_client.count()
+print("clients with >1 qualifying unsub event in the 12-month window:", _n_multi_event, "of",
+      _n_distinct_clients, "(", round(100.0 * _n_multi_event / _n_distinct_clients, 2),
+      "% ) - each collapses to their LAST event below; the rest are unaffected by the collapse.")
 
-T("READBACK - all 4 landed datasets, rows and distinct clients after CLNT_NO normalization",
-  pd.DataFrame(_readback_rows))
+_w_last = Window.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").desc(), F.col("TREATMENT_ID").desc())
+leaver_last = (unsubs_12m_dedup.withColumn("rn", F.row_number().over(_w_last))
+               .filter("rn = 1").drop("rn"))
+_n_leaver_last = leaver_last.count()
+assert _n_leaver_last == _n_distinct_clients, (
+    "post-collapse row count (" + str(_n_leaver_last) + ") != distinct clients (" +
+    str(_n_distinct_clients) + ") - the window function did not collapse to exactly one row per client")
+leaver_last.cache()
+print("leaver_last: one row per client, LAST qualifying unsub event -", _n_leaver_last, "rows")
 
-# %% [13] BUCKETS - one row per mailed client: leaver / excluded / stayer.
-mailed = sends_mne_raw.select("CLNT_NO").distinct()
-_n_mailed = mailed.count()
+# %% [7] MNE / PROGRAM MAPPING - CARDS_MNES sourced from the repo's own MNE catalog, not invented
+# here (same set used by cpc_reservoir_extract.py and archaeology/28_unsub_value_ucp.py - keep all
+# three copies in sync if this set ever changes). Source: UNSUB_TRACKING_KNOWLEDGE.md section 4
+# "MNE tracking scope", Cards rows: PCQ, PCL, PCD, AUH, CLI, MVP, CRV.
+#
+# RULING (Andre, 2026-07-26, final): CTU and O2P are NOT cards - they are programs that involve
+# cards, reported inside async, but out of the cards package. They stay OUT of CARDS_MNES and
+# remain visible under their own MNEs (NON_CARDS here) - nothing is hidden, just not pre-labeled Cards.
+CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
 
-# every (client, mne) pair this client was actually mailed - the matching key for "unsub from an
-# mne they were mailed by in-window"
-mailed_pairs = sends_mne_raw.select("CLNT_NO", "mne").distinct()
+# DEFAULT stream (per UNSUB_TRACKING_KNOWLEDGE.md): TREATMENT_ID = 'DEFAULT' literally, or a blank
+# MNE substring - both mean "mail outside campaign taxonomy" (service + broken-template + untagged
+# marketing), invisible to MNE-based suppression, a governance finding in its own right. Kept as
+# its own program label, never collapsed into NON_CARDS.
+def add_mne_program(df):
+    df = df.withColumn(
+        "mne",
+        F.when((F.trim(F.col("TREATMENT_ID")) == "DEFAULT") |
+               (F.trim(F.substring(F.col("TREATMENT_ID"), 8, 3)) == ""), F.lit("DEFAULT"))
+         .otherwise(F.trim(F.substring(F.col("TREATMENT_ID"), 8, 3))))
+    df = df.withColumn(
+        "program",
+        F.when(F.col("mne") == "DEFAULT", F.lit("DEFAULT"))
+         .when(F.col("mne").isin(list(CARDS_MNES)), F.lit("CARDS"))
+         .otherwise(F.lit("NON_CARDS")))
+    return df
 
-# collapse unsubs_window's quarterly chunks to one row per (CLNT_NO, mne): earliest unsub_tm across
-# chunks (a client can have qualifying unsub events for the same mne split across quarter boundaries)
-unsub_by_mne = unsubs_window_raw.groupBy("CLNT_NO", "mne").agg(F.min("unsub_tm").alias("unsub_tm"))
+leaver_mne = add_mne_program(leaver_last)
+leaver_mne.cache()
+T("PROGRAM MIX - leaver counts by program, straight off the attributed (last) TREATMENT_ID",
+  leaver_mne.groupBy("program").agg(F.count("*").alias("leaver_clients")).orderBy(F.desc("leaver_clients")))
 
-# leaver = mailed AND has an unsub event on an mne they were mailed by; take the EARLIEST
-# qualifying (mne, unsub_tm) pair per client as THE unsub_mne/unsub_tm for the bucket
-_qualifying = mailed_pairs.join(unsub_by_mne, ["CLNT_NO", "mne"], "inner")
-_w_earliest = Window.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").asc(), F.col("mne").asc())
-leaver_rows = (_qualifying.withColumn("rn", F.row_number().over(_w_earliest))
-               .filter("rn = 1").drop("rn")
-               .withColumnRenamed("mne", "unsub_mne")
-               .select("CLNT_NO", "unsub_mne", "unsub_tm"))
-
-_leaver_flag = leaver_rows.select("CLNT_NO").distinct().withColumn("_is_leaver", F.lit(True))
-_excluded_flag = (mailed.join(_leaver_flag, "CLNT_NO", "left")
-                   .filter(F.col("_is_leaver").isNull())
-                   .join(prior_unsubs_raw.select("CLNT_NO").distinct(), "CLNT_NO", "inner")
-                   .select("CLNT_NO").distinct().withColumn("_is_excluded", F.lit(True)))
-
-client_bucket = (
-    mailed
-    .join(_leaver_flag, "CLNT_NO", "left")
-    .join(_excluded_flag, "CLNT_NO", "left")
-    .join(leaver_rows, "CLNT_NO", "left")
-    .withColumn("bucket",
-                F.when(F.col("_is_leaver").isNotNull(), "leaver")
-                 .when(F.col("_is_excluded").isNotNull(), "excluded")
-                 .otherwise("stayer"))
-    .select("CLNT_NO", "bucket", "unsub_mne", "unsub_tm"))
-client_bucket.cache()
-
-_n_bucketed = client_bucket.count()
-assert _n_bucketed == _n_mailed, (
-    "bucket assignment row count (" + str(_n_bucketed) + ") != mailed (" + str(_n_mailed) +
-    ") - a client got duplicated or dropped in the bucket build")
-
-_bucket_counts = (client_bucket.groupBy("bucket").agg(F.count("*").alias("clients"))
-                   .withColumn("pct_of_mailed", F.round(100.0 * F.col("clients") / _n_mailed, 2)))
-_bucket_pd = T("BUCKETS - leaver / excluded / stayer, one row per mailed client, % of mailed",
-               _bucket_counts.orderBy(F.desc("clients")))
-assert int(_bucket_pd["clients"].sum()) == _n_mailed, (
-    "bucket counts sum (" + str(int(_bucket_pd["clients"].sum())) + ") != mailed (" +
-    str(_n_mailed) + ") - the three buckets must exactly partition mailed")
-print("BUCKETS PASSED - leaver + excluded + stayer sums to mailed.")
-
-# %% [14] ANCHORS - last day of the month BEFORE first_send_tm's month. BOTH leavers and stayers
-# are anchored at FIRST EXPOSURE so every client is measured pre-treatment at the same point in
-# their own timeline. This replaces archaeology/28's asymmetric anchoring (last-unsub for leavers,
-# last-deployment for stayers), which let a leaver's UCP profile drift post-exposure while a
-# stayer's anchor stayed near their own first mail - biased in the leaver's favour or against it
-# depending on direction, and not comparable across the two groups either way.
-client_anchor = (client_bucket.join(first_send_raw.select("CLNT_NO", "first_send_tm"), "CLNT_NO", "left")
-                  .withColumn("anchor", F.last_day(F.add_months(F.col("first_send_tm"), -1))))
-
-_n_no_first_send = client_anchor.filter(F.col("first_send_tm").isNull()).count()
-assert _n_no_first_send == 0, (
-    str(_n_no_first_send) + " mailed clients have no first_send_tm - first_send (P2) must cover "
-    "every client in sends_mne (P1); check the pull windows match")
-
-_anchor_counts = (client_anchor.withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
-                   .groupBy("anchor_str").agg(F.count("*").alias("clients")).orderBy("anchor_str"))
-T("ANCHORS - clients per anchor month-end (expect exactly 5: 2025-12-31 .. 2026-04-30)", _anchor_counts)
-
-_expected_anchors = {"2025-12-31", "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"}
-_actual_anchors = set(r["anchor_str"] for r in
-                       client_anchor.withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
-                       .select("anchor_str").distinct().collect())
-assert _actual_anchors == _expected_anchors, (
-    "anchors present " + str(sorted(_actual_anchors)) + " != expected " + str(sorted(_expected_anchors)))
-print("ANCHOR SET CONFIRMED:", sorted(_actual_anchors))
-
-# assert every anchor partition exists in UCP before reading anything
+# %% [8] UCP PARTITION PROBE - available MONTH_END_DATE partitions, min/max, before computing any
+# anchor. Needed because this window spans 12 months of unsub dates behind treatments that could
+# have launched well before that, so (unlike the prior version of this file) the set of anchor
+# months needed cannot be enumerated in advance - it is discovered from the decoded launch dates,
+# then clamped to whatever UCP actually has on disk.
 _ucp_parts = (spark.read.option("basePath", UCP_BASE).parquet(UCP_BASE)
               .select("MONTH_END_DATE").distinct().toPandas())
-_ucp_avail = set(_ucp_parts["MONTH_END_DATE"].astype(str).tolist())
-_missing_ucp = sorted(_expected_anchors - _ucp_avail)
-assert not _missing_ucp, (
-    "UCP partition(s) missing for anchor(s) " + str(_missing_ucp) + " under " + UCP_BASE +
-    " - available partitions: " + str(sorted(_ucp_avail)))
-print("UCP PARTITION CHECK PASSED - all 5 anchor month-ends present under", UCP_BASE)
+_ucp_avail = sorted(_ucp_parts["MONTH_END_DATE"].astype(str).tolist())
+assert len(_ucp_avail) > 0, "no UCP partitions visible under " + UCP_BASE + " - check the path before proceeding"
+UCP_MIN, UCP_MAX = _ucp_avail[0], _ucp_avail[-1]
+print("UCP partitions available:", len(_ucp_avail), "| min:", UCP_MIN, "| max:", UCP_MAX)
 
-client_anchor.cache()
+# %% [9] TREATMENT_ID DECODE - launch date. DOCUMENTED: MNE = SUBSTR(TREATMENT_ID, 8, 3)
+# (UNSUB_TRACKING_KNOWLEDGE.md:145). The julian-date piece is NAMED but never given exact
+# positions anywhere in the repo. WORKING ASSUMPTION (carried from archaeology/28, unverified
+# beyond that file's own empirical check): positions 1-7 = julian launch date YYYYDDD (4-digit
+# year + 3-digit day-of-year). Validated empirically below over THIS file's own distinct
+# TREATMENT_IDs (the attributed/last-unsub treatment per client), not trusted blind.
+# FALLBACK if validation fails: decode launch date from DTZV01.TACTIC_EVNT_IP_AR_H60M instead
+# (has real deployment dates per TACTIC_ID) - out of scope for this file, would need a fresh pull.
+def add_launch_decode(df):
+    df = df.withColumn("_yr", F.substring(F.col("TREATMENT_ID"), 1, 4).cast("int"))
+    df = df.withColumn("_doy", F.substring(F.col("TREATMENT_ID"), 5, 3).cast("int"))
+    df = df.withColumn(
+        "_launch_dt_raw",
+        F.when(F.col("_yr").isNotNull() & F.col("_doy").between(1, 366),
+               F.expr("date_add(to_date(concat(_yr, '-01-01')), _doy - 1)")))
+    df = df.withColumn(
+        "_valid",
+        F.col("_launch_dt_raw").isNotNull() &
+        (F.col("_launch_dt_raw") >= F.lit("2020-01-01")) &
+        (F.col("_launch_dt_raw") < F.lit("2027-01-01")))
+    df = df.withColumn("launch_dt", F.when(F.col("_valid"), F.col("_launch_dt_raw")))
+    return df.drop("_yr", "_doy", "_launch_dt_raw")
 
-# %% [15] UCP READ - per anchor month-end, semi-join to only the clients needing that anchor.
-# CLNT_TYP == 'Personal' is the verified filter value (confirmed present 2026-07-27); all 8
-# selected fields confirmed present the same day.
+leaver_decoded = add_launch_decode(leaver_mne)
+leaver_decoded.cache()
+
+_decode_check = leaver_decoded.select("TREATMENT_ID", "_valid").dropDuplicates(["TREATMENT_ID"])
+_n_ids = _decode_check.count()
+_n_valid = _decode_check.filter(F.col("_valid")).count()
+_pct_valid = round(100.0 * _n_valid / _n_ids, 2)
+T("DECODE1 - TREATMENT_ID launch-date decode validation (distinct attributed TREATMENT_IDs, "
+  "positions 1-7 = YYYYDDD)",
+  pd.DataFrame([{"distinct_treatment_ids": _n_ids, "decoded_valid": _n_valid, "pct_valid": _pct_valid}]))
+
+if _n_valid < _n_ids:
+    _fail_reason = (
+        F.when(F.trim(F.col("TREATMENT_ID")) == "DEFAULT", F.lit("DEFAULT literal"))
+         .otherwise(F.lit("non-numeric prefix or decoded outside [2020-01-01, 2027-01-01)")))
+    T("DECODE2 - decode failures by reason (distinct TREATMENT_IDs)",
+      _decode_check.filter(~F.col("_valid")).withColumn("_fail_reason", _fail_reason)
+                    .groupBy("_fail_reason").agg(F.count("*").alias("distinct_treatment_ids")))
+
+assert _pct_valid >= 99.0, (
+    "TREATMENT_ID launch-date decode only validated for " + str(_pct_valid) + "% of distinct "
+    "TREATMENT_IDs (need >= 99%). The positions-1-7=YYYYDDD assumption is WRONG or needs "
+    "adjustment - do not proceed with the anchor built on this decode. See the fallback note above.")
+print("\nDECODE VALIDATED >= 99% - launch_dt trusted for the rest of this run.")
+leaver_decoded = leaver_decoded.drop("_valid")
+
+# %% [10] ANCHOR - month-end before the client's last-unsub TREATMENT's decoded launch date,
+# clamped to available UCP partitions. PRE-TREATMENT SNAPSHOT: this is the client's profile the
+# month before the campaign that (eventually) unsubbed them ever launched - Phase 2's stayers will
+# anchor at FIRST EXPOSURE for the same reason, and the two are comparable because both precede
+# the treatment that acted on the client, even though "the treatment that acted" means something
+# different for each group (attributed unsub vs. any mailing).
+leaver_anchored = leaver_decoded.withColumn(
+    "_anchor_raw", F.when(F.col("launch_dt").isNotNull(), F.last_day(F.add_months(F.col("launch_dt"), -1))))
+leaver_anchored = leaver_anchored.withColumn(
+    "anchor",
+    F.when(F.col("_anchor_raw").isNotNull(),
+           F.greatest(F.least(F.col("_anchor_raw"), F.lit(UCP_MAX).cast("date")),
+                      F.lit(UCP_MIN).cast("date")))).drop("_anchor_raw")
+leaver_anchored.cache()
+
+_n_no_launch = leaver_anchored.filter(F.col("launch_dt").isNull()).count()
+print("clients with no decodable launch_dt (excluded from anchor/UCP, per DECODE1's <1% floor):",
+      _n_no_launch)
+
+_n_clamped = leaver_anchored.filter(
+    F.col("launch_dt").isNotNull() &
+    (F.last_day(F.add_months(F.col("launch_dt"), -1)) != F.col("anchor"))).count()
+T("ANCHOR CLAMP CHECK - rows where the raw month-before-launch anchor got clamped to UCP_MIN/"
+  "UCP_MAX (their UCP snapshot is NOT the true month-before-launch)",
+  pd.DataFrame([{"clamped_rows": _n_clamped, "ucp_min": UCP_MIN, "ucp_max": UCP_MAX}]))
+
+_anchor_months = sorted(r["a"] for r in
+                         leaver_anchored.filter(F.col("anchor").isNotNull())
+                         .select(F.date_format("anchor", "yyyy-MM-dd").alias("a")).distinct().collect())
+print("distinct anchor months needed:", len(_anchor_months), "-", _anchor_months)
+
+# %% [11] UCP READ - per anchor month-end, semi-join to only the clients needing that anchor
+# (same pattern as the prior version of this file / archaeology/28). CLNT_TYP == 'Personal' is the
+# verified filter value.
 UCP_COLS = ["CLNT_NO", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
             "C_TOT_CNT", "PROF_TOT_ANNUAL"]
 
@@ -514,8 +469,8 @@ def read_ucp_anchor(anchor_str, needed_clients):
     return raw.select(*UCP_COLS).withColumn("ucp_month_end", F.lit(anchor_str))
 
 _ucp_frames, _ucp_read_summary = [], []
-for _a in sorted(_expected_anchors):
-    _needed = (client_anchor.withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
+for _a in _anchor_months:
+    _needed = (leaver_anchored.withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
                .filter(F.col("anchor_str") == _a).select("CLNT_NO").distinct())
     _n_needed = _needed.count()
     _sel = read_ucp_anchor(_a, _needed)
@@ -529,8 +484,8 @@ for _f in _ucp_frames[1:]:
 T("UCP1 - per-anchor-month read summary (needed vs matched)", pd.DataFrame(_ucp_read_summary))
 ucp_spine.cache()
 
-# fan-out guard: one row per (CLNT_NO, ucp_month_end) - a client must not appear twice at the
-# same anchor. Dedup fallback commented below if it ever trips.
+# fan-out guard: one row per (CLNT_NO, ucp_month_end) - a client must not appear twice at the same
+# anchor. Dedup fallback commented below if it ever trips.
 _n_spine = ucp_spine.count()
 _n_spine_distinct = ucp_spine.select("CLNT_NO", "ucp_month_end").distinct().count()
 assert _n_spine == _n_spine_distinct, (
@@ -541,50 +496,57 @@ assert _n_spine == _n_spine_distinct, (
 # ucp_spine = ucp_spine.withColumn("_rn", F.row_number().over(_w)).filter("_rn = 1").drop("_rn")
 print("UCP spine fan-out guard PASSED -", _n_spine, "rows, one per (CLNT_NO, ucp_month_end)")
 
-client_ucp = (client_anchor
+leaver_ucp = (leaver_anchored
               .withColumn("anchor_str", F.date_format("anchor", "yyyy-MM-dd"))
               .join(ucp_spine.withColumnRenamed("CLNT_NO", "_u_clnt"),
                     (F.col("CLNT_NO") == F.col("_u_clnt")) & (F.col("anchor_str") == F.col("ucp_month_end")),
                     "left")
               .drop("_u_clnt"))
 
-_n_before_ucp_join = client_anchor.count()
-_n_after_ucp_join = client_ucp.count()
+_n_before_ucp_join = leaver_anchored.count()
+_n_after_ucp_join = leaver_ucp.count()
 assert _n_before_ucp_join == _n_after_ucp_join, (
     "FAN-OUT on client x UCP join: " + str(_n_before_ucp_join) + " -> " + str(_n_after_ucp_join) +
     " rows. See the UCP spine fan-out guard above.")
-client_ucp = client_ucp.withColumn("ucp_matched", F.col("AGE").isNotNull())
-client_ucp.cache()
-print("client_ucp assembled:", _n_after_ucp_join, "rows (one per mailed client)")
+leaver_ucp = leaver_ucp.withColumn("ucp_matched", F.col("AGE").isNotNull())
+leaver_ucp.cache()
+print("leaver_ucp assembled:", _n_after_ucp_join, "rows (one per leaver client)")
 
-# %% [16] M0 - COVERAGE & NULLS. This prints BEFORE any finding.
-_cov_by_bucket = (client_ucp.groupBy("bucket")
-                   .agg(F.count("*").alias("clients"),
-                        F.sum(F.col("ucp_matched").cast("int")).alias("matched"))
-                   .withColumn("unmatched", F.col("clients") - F.col("matched"))
-                   .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)))
-T("M0a - UCP match rate by bucket", _cov_by_bucket.orderBy(F.desc("clients")))
+# %% [12] M0 - COVERAGE & NULLS. This prints BEFORE any finding. VOLUME + MIX ONLY - NO RATES (no
+# denominator until Phase 2).
+_n_leavers_total = leaver_ucp.count()
+_n_matched_total = leaver_ucp.filter(F.col("ucp_matched")).count()
 
-_unmatched = client_ucp.filter(~F.col("ucp_matched")).select("CLNT_NO", "anchor_str")
+_cov_by_program = (leaver_ucp.groupBy("program")
+                    .agg(F.count("*").alias("leaver_clients"),
+                         F.sum(F.col("ucp_matched").cast("int")).alias("matched"))
+                    .withColumn("unmatched", F.col("leaver_clients") - F.col("matched"))
+                    .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("leaver_clients"), 1)))
+T("M0a - UCP match rate by program | VOLUME + MIX ONLY - NO RATES (no denominator until Phase 2)",
+  _cov_by_program.orderBy(F.desc("leaver_clients")))
+
+# UNMATCHED BREAKDOWN - this is where the "business client" theory for unmatched gets proved or
+# killed. Unlike a SENDS pull (where "newly acquired mid-window" explains unmatched-at-anchor),
+# every client here already unsubscribed from real mail, so they existed as clients well before
+# their anchor month. A concentration of unmatched rows in specific anchor months or specific MNEs
+# would instead point to CLNT_TYP != 'Personal' (business/commercial clients, filtered out by the
+# UCP read's Personal-only filter) rather than a genuine data gap - proved or killed by M0b/M0c,
+# not assumed either way.
+_unmatched = leaver_ucp.filter(~F.col("ucp_matched")).select("CLNT_NO", "anchor_str")
 _cov_by_anchor = (_unmatched.groupBy("anchor_str").agg(F.count("*").alias("unmatched_clients"))
                    .orderBy("anchor_str"))
-T("M0b - unmatched clients by anchor month - proves/kills the hypothesis that unmatched clients "
-  "are newly-acquired (mailed inside their own first-send month, before that month's UCP snapshot "
-  "could reflect them)", _cov_by_anchor)
+T("M0b - unmatched clients by anchor month - see the 'business client' theory note in the comment "
+  "above this cell", _cov_by_anchor)
 
-_unmatched_mne = (_unmatched.select("CLNT_NO").distinct()
-                   .join(mailed_pairs, "CLNT_NO", "inner")
+_unmatched_mne = (_unmatched.join(leaver_ucp.select("CLNT_NO", "mne"), "CLNT_NO", "inner")
                    .groupBy("mne").agg(F.count("*").alias("unmatched_clients"))
                    .orderBy(F.desc("unmatched_clients")).limit(15))
-T("M0c - unmatched clients by top-15 MNE they were mailed by (a client mailed by several MNEs "
-  "counts once per MNE, same convention as Table B) - proves/kills the hypothesis that unmatched "
-  "clients concentrate in specific campaigns (e.g. business/non-Personal-heavy programs)",
-  _unmatched_mne)
+T("M0c - unmatched clients by top-15 MNE (their attributed/last-unsub treatment's MNE) - same "
+  "business-client theory, cut by campaign instead of by month", _unmatched_mne)
 
-_n_matched_total = client_ucp.filter(F.col("ucp_matched")).count()
 _null_rows = []
 for _c in UCP_COLS:
-    _n_null = client_ucp.filter(F.col("ucp_matched") & F.col(_c).isNull()).count()
+    _n_null = leaver_ucp.filter(F.col("ucp_matched") & F.col(_c).isNull()).count()
     _null_rows.append({"field": _c, "null_among_matched": _n_null,
                         "pct_null_among_matched": round(100.0 * _n_null / _n_matched_total, 2)})
 _null_df = pd.DataFrame(_null_rows)
@@ -595,26 +557,32 @@ _worst_field = _null_df.loc[_null_df["pct_null_among_matched"].idxmax()]
 if _worst_field["pct_null_among_matched"] > 5.0:
     print("VERDICT: '" + _worst_field["field"] + "' is", _worst_field["pct_null_among_matched"],
           "% null among matched rows (> 5%) - every median downstream using this field is suspect. "
-          "Check M0d before trusting Table A/B/C.")
+          "Check M0d before trusting L1/L2/L3/L4/L5/CUBE.")
 else:
     print("VERDICT: all UCP fields under 5% null among matched rows (worst =",
           _worst_field["field"], "at", _worst_field["pct_null_among_matched"], "%).")
 
-# %% [17] BANDING - one function, applied identically to every bucket. EDITABLE PARAMETERS, one
-# place: band cut points and the high_potential thresholds are OUR CHOICE, not documented anywhere
-# else in the repo.
+# %% [13] BANDING - one function, unchanged from the prior version of this file. EDITABLE
+# PARAMETERS, one place: band cut points and the high_potential thresholds are OUR CHOICE, not
+# documented anywhere else in the repo.
 TENURE_EDGES = [2, 5, 10, 20]     # years; bins: 0-2, 3-5, 6-10, 11-20, 20+
 AGE_EDGES = [24, 34, 44, 54, 64]  # bins: <25, 25-34, 35-44, 45-54, 55-64, 65+
-HP_AGE_MAX = 35       # high_potential: AGE < this
-HP_TENURE_MAX = 5     # high_potential: TENURE_RBC_YEARS <= this
+HP_AGE_MAX = 35        # high_potential: AGE < this
+HP_TENURE_MAX = 5      # high_potential: TENURE_RBC_YEARS <= this
 HP_PROD_MAX = 2        # high_potential: prod_cnt <= this
 # high_potential is the thesis as a countable definition: decades of banking life ahead, not yet
 # embedded, most of the wallet unsold, and email is now closed.
 
-_prof_cut_base = client_ucp.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
+# PROF_QUINTILE CUT POINTS COME FROM THE LEAVER POPULATION ITSELF (Phase 1 has no mailed/reachable
+# base to rank against - that base doesn't exist until Phase 2). This is a WITHIN-LEAVER ranking,
+# NOT value relative to the reachable base: "top prof quintile" here means "top-earning among
+# people who left", not "top-earning among everyone cards could have mailed". Phase 2 replaces
+# these cuts with ones computed from the mailed/stayer base once it exists.
+_prof_cut_base = leaver_ucp.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
 PROF_CUTS = _prof_cut_base.approxQuantile("PROF_TOT_ANNUAL", [0.2, 0.4, 0.6, 0.8], 0.01)
-T("PROF CUTS - PROF_TOT_ANNUAL quintile cut points, computed over ALL MAILED matched clients (the "
-  "reachable base), n = " + str(_prof_cut_base.count()),
+T("PROF CUTS - PROF_TOT_ANNUAL quintile cut points, computed over the LEAVER population itself "
+  "(WITHIN-LEAVER ranking, NOT value relative to the reachable base - Phase 2 replaces this with "
+  "cuts from the mailed base), n = " + str(_prof_cut_base.count()),
   pd.DataFrame([{"p20": PROF_CUTS[0], "p40": PROF_CUTS[1], "p60": PROF_CUTS[2], "p80": PROF_CUTS[3]}]))
 
 def apply_bands(df):
@@ -622,9 +590,8 @@ def apply_bands(df):
         "prod_cnt",
         F.coalesce(F.col("T_TOT_CNT"), F.lit(0)) + F.coalesce(F.col("I_TOT_CNT"), F.lit(0)) +
         F.coalesce(F.col("B_TOT_CNT"), F.lit(0)) + F.coalesce(F.col("C_TOT_CNT"), F.lit(0)))
-    # NOTE: the brief's prod_band list is '1','2','3-4','5+' - '0' is added here too (a real,
-    # reachable value: mailed clients holding no T/I/B/C product on file) so no client is silently
-    # misclassified into '1'.
+    # NOTE: '0' is added to the brief's '1','2','3-4','5+' list (a real, reachable value: leaver
+    # clients holding no T/I/B/C product on file) so no client is silently misclassified into '1'.
     df = df.withColumn(
         "prod_band",
         F.when(F.col("prod_cnt") == 0, "0").when(F.col("prod_cnt") == 1, "1")
@@ -679,300 +646,233 @@ def apply_bands(df):
                     (F.col("prod_cnt") <= HP_PROD_MAX)))
     return df
 
-client_banded = apply_bands(client_ucp)
-client_banded.cache()
-print("client_banded:", client_banded.count(), "rows, bands applied")
+leaver_banded = apply_bands(leaver_ucp)
+leaver_banded.cache()
+print("leaver_banded:", leaver_banded.count(), "rows, bands applied")
 
-# %% [18] TABLE A - WHO. GRAIN: one row per mailed client, bank-wide, Jan-May 2026 sends.
-_n_mailed_total = client_banded.count()
-_n_leavers_total = client_banded.filter(F.col("bucket") == "leaver").count()
-_n_stayers_total = client_banded.filter(F.col("bucket") == "stayer").count()
-_n_excluded_total = client_banded.filter(F.col("bucket") == "excluded").count()
+# %% [14] L1 - WHERE. GRAIN: one row per leaver client, bank-wide, 12-month window (2025-07 to
+# 2026-07). VOLUME + MIX ONLY - NO RATES (no denominator until Phase 2).
+def _l1_metrics(df, keys):
+    total = df.groupBy(*keys).agg(F.count("*").alias("leaver_clients"))
+    total = total.withColumn("share_of_all_leavers_pct",
+                              F.round(100.0 * F.col("leaver_clients") / _n_leavers_total, 2))
+    matched = (df.filter(F.col("ucp_matched")).groupBy(*keys)
+               .agg(F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
+                    F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("median_tenure_years"),
+                    F.expr("percentile_approx(prod_cnt, 0.5)").alias("median_prod_cnt"),
+                    F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof_annual"),
+                    F.round(100.0 * F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)) / F.count("*"), 1)
+                    .alias("pct_single_product"),
+                    F.round(100.0 * F.sum(F.when(F.col("prof_quintile") == "5", 1).otherwise(0)) / F.count("*"), 1)
+                    .alias("pct_top_prof_quintile"),
+                    F.round(100.0 * F.sum(F.col("high_potential").cast("int")) / F.count("*"), 1)
+                    .alias("pct_high_potential")))
+    return total.join(matched, list(keys), "left")
 
-a1 = (client_banded.groupBy("bucket").agg(F.count("*").alias("clients"))
-      .withColumn("pct_of_mailed", F.round(100.0 * F.col("clients") / _n_mailed_total, 2))
-      .withColumn("leavers_per_1000_mailed",
-                  F.when(F.col("bucket") == "leaver",
-                         F.round(1000.0 * F.col("clients") / _n_mailed_total, 2))))
-T("TABLE A1 - WHO, bucket totals | GRAIN: one row per mailed client, Jan-May 2026 sends, bank-wide",
-  a1.orderBy(F.desc("clients")))
+l1_program = _l1_metrics(leaver_banded, ["program"]).orderBy(F.desc("leaver_clients"))
+T("L1 - WHERE, by program | window: unsub_tm in [2025-07-01, 2026-07-01), bank-wide | GRAIN: "
+  "distinct client, last qualifying unsub event | VOLUME + MIX ONLY - NO RATES (no denominator "
+  "until Phase 2)", l1_program)
 
-_a2_dims = ["prod_band", "tenure_band", "age_band", "high_potential"]
-_a2_frames = []
-_lv = client_banded.filter(F.col("bucket") == "leaver")
-_st = client_banded.filter(F.col("bucket") == "stayer")
-for _dim in _a2_dims:
-    lb = (_lv.groupBy(_dim).count()
-          .withColumn("pct_leavers", F.round(100.0 * F.col("count") / _n_leavers_total, 2))
-          .withColumnRenamed("count", "leavers_n"))
-    sb = (_st.groupBy(_dim).count()
-          .withColumn("pct_stayers", F.round(100.0 * F.col("count") / _n_stayers_total, 2))
-          .withColumnRenamed("count", "stayers_n"))
-    m = (lb.join(sb, _dim, "outer")
-         .withColumn("pct_leavers", F.coalesce(F.col("pct_leavers"), F.lit(0.0)))
-         .withColumn("pct_stayers", F.coalesce(F.col("pct_stayers"), F.lit(0.0)))
-         .withColumn("leavers_n", F.coalesce(F.col("leavers_n"), F.lit(0)))
-         .withColumn("stayers_n", F.coalesce(F.col("stayers_n"), F.lit(0)))
-         .withColumn("ratio", F.round(F.col("pct_leavers") /
-                                       F.when(F.col("pct_stayers") == 0, None).otherwise(F.col("pct_stayers")), 2))
+l1_mne = (_l1_metrics(leaver_banded, ["mne", "program"])
+          .withColumn("is_cards", F.col("program") == F.lit("CARDS"))
+          .orderBy(F.desc("leaver_clients")).limit(20))
+T("L1 - WHERE, top-20 MNEs by leaver-client volume | is_cards flags CARDS-program rows | VOLUME + "
+  "MIX ONLY - NO RATES (no denominator until Phase 2)", l1_mne)
+
+# %% [15] L2 - WHO, cards vs non-cards leavers. Composition-against-composition, no denominator
+# required - THIS IS a legitimate comparison: it answers whether the people cards loses differ
+# from the people the rest of the bank loses. It does NOT say either group unsubscribes MORE - that
+# would need a mailed/reachable denominator per group, which does not exist until Phase 2.
+_l2_dims = ["prod_band", "tenure_band", "age_band", "prof_quintile", "high_potential"]
+_cards = leaver_banded.filter(F.col("program") == "CARDS")
+_noncards = leaver_banded.filter(F.col("program") != "CARDS")
+_n_cards_total = _cards.count()
+_n_noncards_total = _noncards.count()
+
+_l2_frames = []
+for _dim in _l2_dims:
+    cb = (_cards.groupBy(_dim).count()
+          .withColumn("pct_cards_leavers", F.round(100.0 * F.col("count") / _n_cards_total, 2))
+          .withColumnRenamed("count", "cards_n"))
+    nb = (_noncards.groupBy(_dim).count()
+          .withColumn("pct_noncards_leavers", F.round(100.0 * F.col("count") / _n_noncards_total, 2))
+          .withColumnRenamed("count", "noncards_n"))
+    m = (cb.join(nb, _dim, "outer")
+         .withColumn("pct_cards_leavers", F.coalesce(F.col("pct_cards_leavers"), F.lit(0.0)))
+         .withColumn("pct_noncards_leavers", F.coalesce(F.col("pct_noncards_leavers"), F.lit(0.0)))
+         .withColumn("cards_n", F.coalesce(F.col("cards_n"), F.lit(0)))
+         .withColumn("noncards_n", F.coalesce(F.col("noncards_n"), F.lit(0)))
+         .withColumn("ratio", F.round(F.col("pct_cards_leavers") /
+                                       F.when(F.col("pct_noncards_leavers") == 0, None)
+                                        .otherwise(F.col("pct_noncards_leavers")), 2))
          .withColumn("segment_dim", F.lit(_dim))
          .withColumnRenamed(_dim, "segment_value")
          .withColumn("segment_value", F.col("segment_value").cast("string"))
-         .select("segment_dim", "segment_value", "pct_leavers", "pct_stayers", "ratio", "leavers_n", "stayers_n"))
-    _a2_frames.append(m)
+         .select("segment_dim", "segment_value", "pct_cards_leavers", "pct_noncards_leavers",
+                  "ratio", "cards_n", "noncards_n"))
+    _l2_frames.append(m)
 
-a2 = _a2_frames[0]
-for _f in _a2_frames[1:]:
-    a2 = a2.unionByName(_f)
-_w_ratio = Window.partitionBy("segment_dim").orderBy(F.desc("ratio"))
-T("TABLE A2 - WHO, leavers vs stayers across band dims + high_potential | GRAIN: one row per "
-  "mailed client | ratio = pct_leavers / pct_stayers, ratio > 1 = over-represented among leavers "
-  "relative to stayers | sorted within dim by ratio desc",
-  a2.withColumn("_rn", F.row_number().over(_w_ratio)).orderBy("segment_dim", "_rn").drop("_rn"))
+l2 = _l2_frames[0]
+for _f in _l2_frames[1:]:
+    l2 = l2.unionByName(_f)
+_w_l2 = Window.partitionBy("segment_dim").orderBy(F.desc("ratio"))
+T("L2 - WHO, cards vs non-cards leavers | ratio = pct_cards_leavers / pct_noncards_leavers, ratio "
+  "> 1 = over-represented among cards leavers relative to non-cards leavers | composition vs "
+  "composition, NO denominator, does NOT claim either group unsubscribes more often",
+  l2.withColumn("_rn", F.row_number().over(_w_l2)).orderBy("segment_dim", "_rn").drop("_rn"))
 
-# %% [19] TABLE B - WHERE (campaign comparison). GRAIN: distinct client x MNE - a client mailed by
-# several campaigns appears in several rows here, so this table's columns do NOT sum to Table A's
-# totals (Table A is client grain, one bucket per client, picking their EARLIEST qualifying unsub
-# across campaigns; Table B asks "for THIS campaign specifically, who among ITS recipients unsubbed
-# from IT").
-_pair_unsub = (mailed_pairs.join(unsub_by_mne, ["CLNT_NO", "mne"], "left")
-               .withColumn("is_unsub_this_mne", F.col("unsub_tm").isNotNull()))
+# %% [16] L3 - DOOR-CLOSING. GRAIN: distinct leaver client. A client who leaves while holding one
+# product closes the ONLY email door cards had into cross-selling every OTHER product they don't
+# hold. VOLUME + MIX ONLY - NO RATES.
+_single_overall = leaver_banded.filter(F.col("prod_band") == "1").count()
+display(Markdown("**L3 - DOOR-CLOSING** · single-product leavers as % of ALL leavers, bank-wide: **" +
+                  str(round(100.0 * _single_overall / _n_leavers_total, 1)) + "%** (" +
+                  str(_single_overall) + " of " + str(_n_leavers_total) + ") | VOLUME + MIX ONLY - "
+                  "NO RATES (no denominator until Phase 2)"))
 
-_client_attrs = client_banded.select(
-    "CLNT_NO", "AGE", "TENURE_RBC_YEARS", "prod_cnt", "PROF_TOT_ANNUAL",
-    "prod_band", "tenure_band", "age_band", "prof_quintile", "high_potential", "bucket")
+l3_by_program = (leaver_banded.groupBy("program")
+                  .agg(F.count("*").alias("leaver_clients"),
+                       F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients"))
+                  .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("leaver_clients"), 1))
+                  .orderBy(F.desc("leaver_clients")))
+T("L3 - DOOR-CLOSING, by program", l3_by_program)
 
-_pair_profile = _pair_unsub.join(_client_attrs, "CLNT_NO", "left")
-_pair_profile.cache()
+l3_by_mne = (leaver_banded.filter(F.col("program") == "CARDS").groupBy("mne")
+             .agg(F.count("*").alias("leaver_clients"),
+                  F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)).alias("single_product_clients"))
+             .withColumn("pct_single_product", F.round(100.0 * F.col("single_product_clients") / F.col("leaver_clients"), 1))
+             .orderBy(F.desc("leaver_clients")).limit(20))
+T("L3 - DOOR-CLOSING, top cards MNEs", l3_by_mne)
 
-b_base = (_pair_profile.groupBy("mne")
-          .agg(F.countDistinct("CLNT_NO").alias("clients_mailed"),
-               F.countDistinct(F.when(F.col("is_unsub_this_mne"), F.col("CLNT_NO"))).alias("unsub_clients")))
-b_base = b_base.withColumn("unsub_per_1000", F.round(1000.0 * F.col("unsub_clients") / F.col("clients_mailed"), 2))
+l3_tibc = (leaver_banded.filter(F.col("prod_band") == "1").groupBy("tibc_mix")
+           .agg(F.count("*").alias("single_product_clients")).orderBy(F.desc("single_product_clients")))
+T("L3 - DOOR-CLOSING, single-product leavers by category held, bank-wide", l3_tibc)
 
-_leaver_pairs = _pair_profile.filter(F.col("is_unsub_this_mne"))
-b_profile = (_leaver_pairs.groupBy("mne")
-             .agg(F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
-                  F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("median_tenure_years"),
-                  F.expr("percentile_approx(prod_cnt, 0.5)").alias("median_prod_cnt"),
-                  F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof_annual"),
-                  F.round(100.0 * F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)) / F.count("*"), 1)
-                  .alias("pct_single_product"),
-                  F.round(100.0 * F.sum(F.when(F.col("prof_quintile") == "5", 1).otherwise(0)) / F.count("*"), 1)
-                  .alias("pct_top_prof_quintile"),
-                  F.round(100.0 * F.sum(F.col("high_potential").cast("int")) / F.count("*"), 1)
-                  .alias("pct_high_potential")))
+# %% [17] L4 - HIGH POTENTIAL LOST. GRAIN: distinct leaver client. VOLUME + MIX ONLY - NO RATES.
+_HP_LABEL = ("high_potential = AGE < " + str(HP_AGE_MAX) + " AND TENURE_RBC_YEARS <= " +
+             str(HP_TENURE_MAX) + " AND prod_cnt <= " + str(HP_PROD_MAX))
+_n_hp_total = leaver_banded.filter(F.col("high_potential")).count()
+display(Markdown("**L4 - HIGH POTENTIAL LOST** · " + _HP_LABEL + " · **" +
+                  str(round(100.0 * _n_hp_total / _n_leavers_total, 1)) + "%** of all leavers (" +
+                  str(_n_hp_total) + " of " + str(_n_leavers_total) + ") | VOLUME + MIX ONLY - NO "
+                  "RATES (no denominator until Phase 2)"))
 
-# FAIRNESS: indirect standardisation on (age_band x tenure_band x prod_band) targeting mix.
-# Campaigns target different populations (an acquisition campaign's clients are young/new/
-# single-product BY CONSTRUCTION), so raw unsub_per_1000 conflates targeting with performance.
-# expected_per_1000 = the rate this campaign would show if each of ITS mailed clients unsubscribed
-# at the OVERALL rate for their own cell; actual_minus_expected is the campaign's own contribution,
-# net of who it reaches. Cell rates computed over ALL MAILED clients (client grain, Table A's
-# population), joined back onto every (client, mne) pair, then averaged per mne.
-_cell_rate = (client_banded.groupBy("age_band", "tenure_band", "prod_band")
-              .agg(F.count("*").alias("cell_mailed"),
-                   F.sum(F.when(F.col("bucket") == "leaver", 1).otherwise(0)).alias("cell_leavers"))
-              .withColumn("cell_rate", F.col("cell_leavers") / F.col("cell_mailed")))
-T("FAIRNESS CELLS - overall leaver rate per (age_band x tenure_band x prod_band) cell, over ALL "
-  "mailed clients (client grain) - the standardisation reference for Table B's expected_per_1000",
-  _cell_rate.orderBy(F.desc("cell_mailed")))
+l4_by_program = (leaver_banded.groupBy("program")
+                  .agg(F.count("*").alias("leaver_clients"),
+                       F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients"))
+                  .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("leaver_clients"), 1))
+                  .orderBy(F.desc("leaver_clients")))
+T("L4 - HIGH POTENTIAL LOST, by program | " + _HP_LABEL, l4_by_program)
 
-_pair_cells = _pair_profile.join(
-    _cell_rate.select("age_band", "tenure_band", "prod_band", "cell_rate"),
-    ["age_band", "tenure_band", "prod_band"], "left")
-b_expected = (_pair_cells.groupBy("mne")
-              .agg(F.round(1000.0 * F.avg("cell_rate"), 2).alias("expected_per_1000")))
+l4_by_mne = (leaver_banded.filter(F.col("program") == "CARDS").groupBy("mne")
+             .agg(F.count("*").alias("leaver_clients"),
+                  F.sum(F.col("high_potential").cast("int")).alias("high_potential_clients"))
+             .withColumn("pct_high_potential", F.round(100.0 * F.col("high_potential_clients") / F.col("leaver_clients"), 1))
+             .orderBy(F.desc("leaver_clients")).limit(20))
+T("L4 - HIGH POTENTIAL LOST, top cards MNEs | " + _HP_LABEL, l4_by_mne)
 
-table_b = (b_base.join(b_profile, "mne", "left").join(b_expected, "mne", "left")
-           .withColumn("actual_minus_expected", F.round(F.col("unsub_per_1000") - F.col("expected_per_1000"), 2)))
-_B_COLS = ["mne", "clients_mailed", "unsub_clients", "unsub_per_1000", "median_age",
-           "median_tenure_years", "median_prod_cnt", "median_prof_annual", "pct_single_product",
-           "pct_top_prof_quintile", "pct_high_potential", "expected_per_1000", "actual_minus_expected"]
-table_b_pd = T("TABLE B - WHERE (campaign comparison) | GRAIN: distinct client x MNE | "
-    "expected_per_1000 = indirect standardisation (see FAIRNESS CELLS above) | "
-    "actual_minus_expected = the campaign's own contribution, net of who it targets",
-    table_b.select(*_B_COLS).orderBy(F.desc("clients_mailed")))
+# %% [18] L5 - PROF VETTING. PROF_TOT_ANNUAL percentiles by tenure_band. VOLUME + MIX ONLY - NO RATES.
+display(Markdown("**L5 - PROF VETTING** · 2026-07-27 FINDING (unchanged in this rewrite): "
+                  "PROF_TOT_ANNUAL medians RISE across tenure bands - roughly 19 -> 71 -> 144 -> "
+                  "366 -> 805 across 0-2 / 3-5 / 6-10 / 11-20 / 20+ years. This field is CURRENT-"
+                  "YEAR CONTRIBUTION, not LTV - label it **'annual profitability'** on any slide, "
+                  "never 'value' or 'LTV'. A leaver flagged 'low value' by this field partly just "
+                  "means 'young by construction', not low-potential."))
 
-# TOTAL row - same definitions, computed over the whole pool rather than per mne.
-_tot_base = _pair_profile.agg(
-    F.count("*").alias("clients_mailed"),
-    F.sum(F.col("is_unsub_this_mne").cast("int")).alias("unsub_clients")).collect()[0]
-_tot_clients_mailed = _tot_base["clients_mailed"]
-_tot_unsub_clients = _tot_base["unsub_clients"]
-_tot_unsub_per_1000 = round(1000.0 * _tot_unsub_clients / _tot_clients_mailed, 2)
+l5 = (leaver_banded.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
+      .groupBy("tenure_band")
+      .agg(F.count("*").alias("leaver_clients"),
+           F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.25)").alias("p25_prof_annual"),
+           F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof_annual"),
+           F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.75)").alias("p75_prof_annual"))
+      .orderBy(F.expr("CASE tenure_band "
+                       "WHEN '0-2' THEN 1 WHEN '3-5' THEN 2 WHEN '6-10' THEN 3 "
+                       "WHEN '11-20' THEN 4 WHEN '20+' THEN 5 ELSE 6 END")))
+T("L5 - PROF_TOT_ANNUAL percentiles by tenure_band (matched leavers only)", l5)
 
-_tot_profile = _leaver_pairs.agg(
-    F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
-    F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("median_tenure_years"),
-    F.expr("percentile_approx(prod_cnt, 0.5)").alias("median_prod_cnt"),
-    F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof_annual"),
-    F.round(100.0 * F.sum(F.when(F.col("prod_band") == "1", 1).otherwise(0)) / F.count("*"), 1).alias("pct_single_product"),
-    F.round(100.0 * F.sum(F.when(F.col("prof_quintile") == "5", 1).otherwise(0)) / F.count("*"), 1).alias("pct_top_prof_quintile"),
-    F.round(100.0 * F.sum(F.col("high_potential").cast("int")) / F.count("*"), 1).alias("pct_high_potential"),
-).collect()[0]
-
-_tot_expected = _pair_cells.agg(F.round(1000.0 * F.avg("cell_rate"), 2).alias("e")).collect()[0]["e"]
-_tot_actual_minus_expected = round(_tot_unsub_per_1000 - _tot_expected, 2)
-
-_total_row = pd.DataFrame([{
-    "mne": "TOTAL", "clients_mailed": _tot_clients_mailed, "unsub_clients": _tot_unsub_clients,
-    "unsub_per_1000": _tot_unsub_per_1000, "median_age": _tot_profile["median_age"],
-    "median_tenure_years": _tot_profile["median_tenure_years"],
-    "median_prod_cnt": _tot_profile["median_prod_cnt"],
-    "median_prof_annual": _tot_profile["median_prof_annual"],
-    "pct_single_product": _tot_profile["pct_single_product"],
-    "pct_top_prof_quintile": _tot_profile["pct_top_prof_quintile"],
-    "pct_high_potential": _tot_profile["pct_high_potential"],
-    "expected_per_1000": _tot_expected, "actual_minus_expected": _tot_actual_minus_expected,
-}])[_B_COLS]
-table_b_full = pd.concat([table_b_pd, _total_row], ignore_index=True)
-display(Markdown("**TABLE B + TOTAL row**"))
-display(table_b_full)
-
-# %% [20] TABLE C - THE CUBE, for Excel. GRAIN: mne x age_band x tenure_band x prod_band x
-# prof_quintile. COUNTS ONLY - rates are a pivot-time calculation in Excel, never baked in here.
-table_c = (_pair_profile.groupBy("mne", "age_band", "tenure_band", "prod_band", "prof_quintile")
-           .agg(F.count("*").alias("clients_mailed"),
-                F.sum(F.col("is_unsub_this_mne").cast("int")).alias("unsub_clients")))
-_n_cube_rows = table_c.count()
-print("TABLE C cube row count:", _n_cube_rows)
+# %% [19] CUBE + leaver_spine SAVE. CUBE GRAIN: mne x program x age_band x tenure_band x prod_band
+# x prof_quintile, COUNTS ONLY (leaver_clients) - rates are a pivot-time calculation in Excel,
+# never baked in here. leaver_spine is THE durable artifact - every table above re-derives from it
+# alone, without touching EDW or UCP again.
+cube = (leaver_banded.groupBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile")
+        .agg(F.count("*").alias("leaver_clients")))
+_n_cube_rows = cube.count()
+print("CUBE row count:", _n_cube_rows)
 assert _n_cube_rows < 200_000, (
     "cube has " + str(_n_cube_rows) + " rows (>= 200k) - Excel write would be unwieldy, investigate "
     "before writing (likely a band producing far more distinct values than intended)")
 
-table_c_pd = (table_c.orderBy("mne", "age_band", "tenure_band", "prod_band", "prof_quintile")
-              .toPandas())
+cube_pd = cube.orderBy("mne", "program", "age_band", "tenure_band", "prod_band", "prof_quintile").toPandas()
 
-# DUAL SAVE - the notebook's working directory is NOT persistent storage (kernel restart, pod
-# recycle, or workspace reset wipes it silently); HDFS is. The xlsx stays because it's how Andre
-# actually gets the file out (Jupyter file browser download), but it must not be the ONLY copy - if
-# the download never happens, or the kernel dies before he clicks it, the cube would otherwise be
-# gone. The HDFS parquet copy is the artifact that survives regardless of what happens to the tab.
-print("TABLE C - writing", len(table_c_pd), "rows to unsub_value_cube.xlsx (download copy)")
-table_c_pd.to_excel("unsub_value_cube.xlsx", index=False)
+# DUAL SAVE - the notebook's working directory is NOT persistent storage; HDFS is. xlsx is how
+# Andre gets the file out (Jupyter file browser download); the HDFS parquet copy is the artifact
+# that survives regardless of what happens to that download.
+print("CUBE - writing", len(cube_pd), "rows to unsub_value_cube.xlsx (download copy)")
+cube_pd.to_excel("unsub_value_cube.xlsx", index=False)
 
-table_c.write.mode("overwrite").parquet(BASE + "cube")
+cube.write.mode("overwrite").parquet(BASE + "cube")
 _n_cube_after = spark.read.parquet(BASE + "cube").count()
 assert _n_cube_after == _n_cube_rows, (
     "cube HDFS readback mismatch: wrote " + str(_n_cube_rows) + " read back " + str(_n_cube_after))
+print("CUBE written to BOTH destinations: unsub_value_cube.xlsx (", len(cube_pd), "rows ) and",
+      BASE + "cube", "(", _n_cube_after, "rows, readback confirmed )")
 
-print("TABLE C written to BOTH destinations:")
-print("  1) local (download via Jupyter file browser): unsub_value_cube.xlsx (", len(table_c_pd),
-      "rows,", list(table_c_pd.columns), ")")
-print("  2) HDFS (durable - survives kernel death whether or not the xlsx was ever downloaded):",
-      BASE + "cube", "-", _n_cube_after, "rows, readback confirmed")
+leaver_spine = leaver_banded.select(
+    "CLNT_NO", "TREATMENT_ID", "mne", "program", "unsub_tm", "launch_dt", "anchor", "ucp_month_end",
+    "ucp_matched", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
+    "PROF_TOT_ANNUAL", "prod_cnt", "prod_band", "tibc_mix", "tenure_band", "age_band",
+    "prof_quintile", "high_potential")
 
-# client-grain spine, saved so Andre can re-cut without re-pulling EDW or re-reading UCP. THIS IS
-# THE durable artifact of the whole file: every table above (A/B/C) is re-derivable from
-# client_spine alone, without touching EDW or UCP again.
-client_spine = client_banded.select(
-    "CLNT_NO", "bucket", "unsub_mne", "unsub_tm", "anchor", "ucp_month_end", "ucp_matched",
-    "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT", "PROF_TOT_ANNUAL",
-    "prod_cnt", "prod_band", "tibc_mix", "tenure_band", "age_band", "prof_quintile", "high_potential")
-
-_n_spine_before = client_spine.count()
-client_spine.write.mode("overwrite").parquet(BASE + "client_spine")
-_n_spine_after = spark.read.parquet(BASE + "client_spine").count()
+_n_spine_before = leaver_spine.count()
+leaver_spine.write.mode("overwrite").parquet(BASE + "leaver_spine")
+_n_spine_after = spark.read.parquet(BASE + "leaver_spine").count()
 assert _n_spine_after == _n_spine_before, (
-    "client_spine HDFS readback mismatch: wrote " + str(_n_spine_before) + " read back " + str(_n_spine_after))
-print("client_spine saved to", BASE + "client_spine", "-", _n_spine_after,
-      "rows, readback confirmed. Re-cut without re-pulling: spark.read.parquet('" +
-      BASE + "client_spine')")
+    "leaver_spine HDFS readback mismatch: wrote " + str(_n_spine_before) + " read back " + str(_n_spine_after))
+print("leaver_spine saved to", BASE + "leaver_spine", "-", _n_spine_after, "rows, readback confirmed.")
+print("unsub_tm is carried in this spine - any sub-window (a quarter, a single month) can be cut")
+print("later by filtering this column, WITHOUT re-pulling EDW.")
 
-# %% [21] ONE-SCREEN SUMMARY
-display(Markdown("## UNSUB VALUE MUSEUM SUMMARY"))
+# %% [20] ONE-SCREEN SUMMARY
+display(Markdown("## UNSUB VALUE MUSEUM - PHASE 1 (LEAVERS ONLY) SUMMARY"))
 
 _summary_rows = [
-    ("Mailed clients, Jan-May 2026, bank-wide", _n_mailed_total),
-    ("Leavers", _n_leavers_total),
-    ("Excluded (prior unsub 2024-2025, not counted as leaver or stayer)", _n_excluded_total),
-    ("Stayers", _n_stayers_total),
-    ("Leaver rate per 1,000 mailed",
-     round(1000.0 * _n_leavers_total / _n_mailed_total, 2)),
+    ("Leaver clients, bank-wide, 12-month window (2025-07-01 to 2026-07-01)", _n_leavers_total),
+    ("Of which CARDS program", leaver_banded.filter(F.col("program") == "CARDS").count()),
+    ("Of which NON_CARDS program", leaver_banded.filter(F.col("program") == "NON_CARDS").count()),
+    ("Of which DEFAULT stream", leaver_banded.filter(F.col("program") == "DEFAULT").count()),
+    ("Clients with >1 qualifying unsub event (collapsed to their last)", _n_multi_event),
 ]
-T("SUMMARY - headline sizes", pd.DataFrame(_summary_rows, columns=["figure", "value"]))
+T("SUMMARY - headline sizes | NO RATES ANYWHERE IN THIS TABLE", pd.DataFrame(_summary_rows, columns=["figure", "value"]))
 
-_overall_match_pct = round(100.0 * _n_matched_total / _n_mailed_total, 1)
-print("Overall UCP match rate:", _overall_match_pct, "% (see M0a for the per-bucket breakdown)")
+_overall_match_pct = round(100.0 * _n_matched_total / _n_leavers_total, 1)
+print("Overall UCP match rate:", _overall_match_pct, "% (see M0a for the per-program breakdown)")
 
-_a2_pd = a2.toPandas() if hasattr(a2, "toPandas") else a2
-_top_over = _a2_pd.sort_values("ratio", ascending=False).iloc[0]
-_top_under = _a2_pd.sort_values("ratio", ascending=True).iloc[0]
-print("TABLE A headline - strongest OVER-represented segment among leavers:",
+_l2_pd = l2.toPandas() if hasattr(l2, "toPandas") else l2
+_top_over = _l2_pd.sort_values("ratio", ascending=False).iloc[0]
+print("L2 headline - strongest OVER-represented segment among CARDS leavers vs NON-CARDS leavers:",
       _top_over["segment_dim"], "=", _top_over["segment_value"], "ratio", _top_over["ratio"])
-print("TABLE A headline - strongest UNDER-represented segment among leavers:",
-      _top_under["segment_dim"], "=", _top_under["segment_value"], "ratio", _top_under["ratio"])
-
-_b_no_total = table_b_full[table_b_full["mne"] != "TOTAL"].copy()
-_top3_volume = _b_no_total.sort_values("clients_mailed", ascending=False).head(3)
-_top3_ame = _b_no_total.sort_values("actual_minus_expected", ascending=False).head(3)
-T("SUMMARY - top 3 campaigns by clients_mailed", _top3_volume[["mne", "clients_mailed", "unsub_per_1000"]])
-T("SUMMARY - top 3 campaigns by actual_minus_expected (over-performing their targeting mix)",
-  _top3_ame[["mne", "unsub_per_1000", "expected_per_1000", "actual_minus_expected"]])
 
 print("\nCAVEATS:")
-print("- LAST-TOUCH ATTRIBUTION: the MNE on an unsub event is the email that carried the click/")
-print("  unsubscribe action - a client on several lists who unsubscribes once is attributed to")
-print("  whichever campaign's link they used, which is not necessarily the campaign that drove the")
-print("  decision. Heavy senders structurally inherit more of the blame under this rule.")
-print("- OVERLAPPING DENOMINATORS IN TABLE B: clients_mailed sums to MORE than Table A's mailed")
-print("  total, because a client mailed by 3 campaigns contributes a row to each of the 3. Table B")
-print("  rows are not independent samples of the same population.")
-print("- PROF_TOT_ANNUAL is CURRENT-YEAR CONTRIBUTION, not LTV (proven 2026-07-27 in")
-print("  archaeology/28_unsub_value_ucp.py V6: median rises 19 -> 71 -> 144 -> 366 -> 805 across")
-print("  tenure bands 0-2/3-5/6-10/11-20/20+). Label it 'annual profitability' on any slide, never")
-print("  'value' or 'LTV' - low current-year profitability partly just means young-by-construction,")
-print("  not low-potential.")
-print("- Clients acquired inside their own first-send month cannot match UCP at their anchor (the")
-print("  month-end BEFORE first exposure predates their existence as a client) - see M0b for the")
-print("  size of this population by anchor month.")
+print("- NO RATES ANYWHERE IN THIS FILE. Every number above is a count, a median, or a share of")
+print("  leavers - never unsubs-per-mailed. There is no stayer pool in Phase 1, so there is no")
+print("  denominator to build a rate from. Do not compute one from this file's outputs.")
+print("- LAST-TOUCH ATTRIBUTION: the MNE on a leaver's attributed unsub event is the email that")
+print("  carried the click/unsubscribe action - a client on several lists who unsubscribes once is")
+print("  attributed to whichever campaign's link they used, which is not necessarily the campaign")
+print("  that drove the decision. Heavy senders structurally inherit more of the blame.")
+print("- PROF_TOT_ANNUAL is CURRENT-YEAR CONTRIBUTION, not LTV (see L5). Label it 'annual")
+print("  profitability' on any slide, never 'value' or 'LTV'.")
+print("- prof_quintile cut points (cell [13]) come from the LEAVER population itself - a WITHIN-")
+print("  LEAVER ranking, not value relative to the reachable base. Phase 2 replaces these with cuts")
+print("  from the mailed base.")
 print("- Band cut points (TENURE_EDGES, AGE_EDGES) and the high_potential thresholds (HP_AGE_MAX,")
-print("  HP_TENURE_MAX, HP_PROD_MAX) are OUR PARAMETERS, editable in cell [17] - not documented or")
+print("  HP_TENURE_MAX, HP_PROD_MAX) are OUR PARAMETERS, editable in cell [13] - not documented or")
 print("  standardised anywhere else in the repo.")
-print("- prof_quintile cut points are relative to THIS run's mailed population (Jan-May 2026) - a")
-print("  re-run over a different window shifts them; Table A/B/C numbers are not comparable")
-print("  run-to-run without re-stating the cut points printed in cell [17].")
+print("- Clients unmatched in UCP are counted in M0, not silently dropped - see M0a/b/c for the")
+print("  size and shape of this population before trusting any median in L1/L2/L3/L4/L5/CUBE.")
 
-# %% [22] OPEN QUESTIONS (unverified, flag before this ships anywhere)
-# - P3 QUARTERLY CHUNKING: not spelled out verbatim in the brief ("chunk by quarter if the probe
-#   says it's large" describes a decision rule, but the SIZE PROBE in cell [3] only sizes P1's
-#   disp_cd=1 sends, not P3's disp_cd=4 unsubs). This file chunks P3 into quarters UNCONDITIONALLY
-#   as a judgment call, reasoning that an unbounded-forward EVENT window only grows on every future
-#   rerun and quarterly land() calls keep each chunk small and independently restartable. Revisit
-#   if Andre wants a literal size-probe-then-decide gate on P3 specifically.
-# - LEAVER ATTRIBUTION (Table A) vs PER-CAMPAIGN ATTRIBUTION (Table B): Table A's bucket picks ONE
-#   mne per client (their earliest qualifying unsub, across all campaigns that mailed them). Table B
-#   asks a per-(client, mne) question instead - a client can be a "leaver" for one campaign's row
-#   and NOT a leaver for another campaign's row in the same table, by design (see Table B's header
-#   comment). These two views are NOT reconcilable into a single "who caused the unsub" number.
-# - prod_band '0': the brief's literal list is '1','2','3-4','5+' - '0' was added (cell [17]) so
-#   zero-product mailed clients are not silently folded into '1'. If Andre wants '0' folded into
-#   '1' instead (i.e. exactly 4 bands as literally listed), that's a one-line change in apply_bands().
-# - CLNT_TYP == 'Personal' filter is applied WITHOUT a runtime presence probe (unlike
-#   archaeology/28's HAS_CLNT_TYP defensive check) - the brief states the field and value are
-#   "confirmed present 2026-07-27", so this file trusts that rather than re-verifying. If UCP's
-#   schema has since changed, cell [15] will raise a hard AnalysisException on the missing column,
-#   not silently skip the filter.
-# - UCP uniqueness per (CLNT_NO, MONTH_END_DATE) is asserted by cell [15]'s fan-out guard, not
-#   independently verified beyond that; the dedup fallback is commented immediately below the assert.
-# - EXCLUDED bucket definition checks ANY prior unsub 2024-2025 bank-wide (P4, disposition_cd=4,
-#   no MNE scoping) - it is not restricted to the same mne the client was mailed by in Jan-May 2026.
-#   A client who unsubbed from an unrelated program in 2025 and is mailed by a totally different
-#   campaign in 2026 is still "excluded", not "stayer". This matches the brief's literal P4
-#   definition (SELECT DISTINCT CLNT_NO, no mne column) - flagged here as a modelling choice, not
-#   independently confirmed with Andre.
-# - Table B's expected_per_1000 standardises on (age_band, tenure_band, prod_band) only - NOT
-#   prof_quintile, which is highly correlated with age/tenure by construction (see the "PROF_TOT_
-#   ANNUAL rises with tenure" caveat above). Leaving prof_quintile out of the standardisation cells
-#   was a judgment call to keep the reference population per cell reasonably sized; revisit if a
-#   4-dimension standardisation is wanted instead.
-# - MASTER load_tm bounds throughout this file use a SYMMETRIC +/-1 month buffer around each EVENT
-#   window's edges (not the -1/+2 buffer cpc_reservoir_extract.py used for sends_cards_q2) - chosen
-#   to match the brief's literal "~+/-1 month" wording. If a pull ever undercounts because a late-
-#   loading MASTER record falls outside this +/-1 month window, widen the buffer for that pull.
-
-# %% [23] SYNTAX CHECK - parse this file's own source before handing it off.
+# %% [21] SYNTAX CHECK - parse this file's own source before handing it off.
 import ast
 
 with open(__file__ if "__file__" in dir() else "unsub_value_museum.py", "r", encoding="utf-8") as _f:
@@ -980,46 +880,38 @@ with open(__file__ if "__file__" in dir() else "unsub_value_museum.py", "r", enc
 ast.parse(_source)
 print("ast.parse PASSED - script is syntactically valid.")
 
-# %% [24] CLEANUP - drop the raw pulls, keep the outputs. The four raw EDW landings
-# (sends_mne/*, first_send, unsubs_window/*, prior_unsubs) are SCRATCH: they exist only so a kernel
-# death mid-run doesn't cost a re-pull from EDW. Once client_spine and cube (cell [20]) are verified
-# landed, every downstream table (A/B/C, this whole file) re-derives from client_spine alone - the
-# raw pulls are then redundant weight sitting on HDFS. Manifests under _meta/ are KEPT regardless
-# (tiny, and they ARE the audit trail: exact SQL text, md5, row count, landed_at timestamp per pull).
+# %% [22] OPT-IN CLEANUP - drop the raw pull, keep the outputs. unsubs_12m/q1..q4 is SCRATCH: it
+# exists only so a kernel death mid-run doesn't cost a re-pull from EDW. Once leaver_spine and cube
+# (cell [19]) are verified landed, every downstream table (M0/L1-L5/CUBE) re-derives from
+# leaver_spine alone - the raw pull is then redundant weight sitting on HDFS. Manifests under
+# _meta/ are KEPT regardless (tiny, and they ARE the audit trail).
 
 RUN_CLEANUP = False  # flip to True once you're done pulling for the day, then run this cell.
                      # Andre runs this whole file top to bottom every time - if this defaulted to
                      # True, cleanup would fire on every run and force a re-pull on the very next one.
 
 if not RUN_CLEANUP:
-    print("CLEANUP skipped (RUN_CLEANUP = False) - raw pulls retained for restartability")
+    print("CLEANUP skipped (RUN_CLEANUP = False) - raw pull retained for restartability")
 else:
     # GUARD FIRST - refuse to delete anything unless BOTH durable outputs read back non-empty.
-    # landed() distinguishes "genuinely missing" (False) from "cannot verify HDFS state" (raises) -
-    # same semantics used everywhere else in this file, applied here before any destructive action.
-    _spine_landed = landed("client_spine")
+    _spine_landed = landed("leaver_spine")
     _cube_landed = landed("cube")
-    _spine_ok = _spine_landed and spark.read.parquet(BASE + "client_spine").count() > 0
+    _spine_ok = _spine_landed and spark.read.parquet(BASE + "leaver_spine").count() > 0
     _cube_ok = _cube_landed and spark.read.parquet(BASE + "cube").count() > 0
 
     if not (_spine_ok and _cube_ok):
-        print("REFUSAL - CLEANUP STOPPED. client_spine readable-and-nonempty:", _spine_ok,
+        print("REFUSAL - CLEANUP STOPPED. leaver_spine readable-and-nonempty:", _spine_ok,
               "| cube readable-and-nonempty:", _cube_ok)
         raise RuntimeError(
-            "Refusing to delete raw pulls: client_spine and/or cube did not read back non-empty "
-            "from HDFS. Re-run cell [20] and confirm BOTH readback prints succeed before running "
+            "Refusing to delete the raw pull: leaver_spine and/or cube did not read back non-empty "
+            "from HDFS. Re-run cell [19] and confirm BOTH readback prints succeed before running "
             "CLEANUP again. NOTHING WAS DELETED.")
 
-    print("GUARD PASSED - client_spine and cube both read back non-empty. Proceeding with cleanup.")
+    print("GUARD PASSED - leaver_spine and cube both read back non-empty. Proceeding with cleanup.")
 
-    # build the exact raw paths from the SAME constants the pull cells use, so this list can never
+    # build the exact raw paths from the SAME constant the pull cell uses, so this list can never
     # drift out of sync with what was actually landed - no shell wildcards, every path listed.
-    _raw_paths = (
-        ["sends_mne/" + _m for _m in _P1_MONTHS]
-        + ["first_send"]
-        + ["unsubs_window/" + _q for (_q, *_rest) in _unsubs_window_chunks]
-        + ["prior_unsubs"]
-    )
+    _raw_paths = ["unsubs_12m/" + _q for _q in _P1_QUARTERS]
 
     print("Deleting", len(_raw_paths), "raw landing paths under", BASE, ":")
     for _p in _raw_paths:
@@ -1031,19 +923,56 @@ else:
     get_ipython().system("hdfs dfs -ls " + BASE)
 
     # re-verify: the two durable outputs must STILL read back fine after the deletes above
-    _spine_after = spark.read.parquet(BASE + "client_spine").count()
+    _spine_after = spark.read.parquet(BASE + "leaver_spine").count()
     _cube_after = spark.read.parquet(BASE + "cube").count()
-    assert _spine_after > 0, ("client_spine unreadable/empty AFTER cleanup - this should be "
-                               "impossible (cleanup only touches raw paths), investigate immediately")
+    assert _spine_after > 0, ("leaver_spine unreadable/empty AFTER cleanup - this should be "
+                               "impossible (cleanup only touches the raw path), investigate immediately")
     assert _cube_after > 0, ("cube unreadable/empty AFTER cleanup - this should be impossible "
-                              "(cleanup only touches raw paths), investigate immediately")
-    print("POST-CLEANUP CHECK PASSED - client_spine (", _spine_after, "rows ) and cube (",
+                              "(cleanup only touches the raw path), investigate immediately")
+    print("POST-CLEANUP CHECK PASSED - leaver_spine (", _spine_after, "rows ) and cube (",
           _cube_after, "rows ) both still read back fine.")
 
     _cleanup_report = pd.DataFrame(
         [{"dataset": _p, "status": "REMOVED"} for _p in _raw_paths]
-        + [{"dataset": "client_spine", "status": "KEPT (durable output)"},
+        + [{"dataset": "leaver_spine", "status": "KEPT (durable output)"},
            {"dataset": "cube", "status": "KEPT (durable output)"},
            {"dataset": "_meta/* manifests", "status": "KEPT (audit trail)"}]
     )
     T("CLEANUP REPORT - dataset -> KEPT / REMOVED", _cleanup_report)
+
+# %% [23] PHASE 2 STUB - stayers, rates, indirect standardisation. NOT BUILT YET. Comments only,
+# no code - this is a fill-in for the next session, not a redesign.
+#
+# WHY PHASE 2 IS SEPARATE: the bank-wide SEND pull that would give Phase 1 a denominator was
+# killed 2026-07-27 - the probe showed 143M send events / ~99M distinct client-MNE pairs across
+# Jan-May, hours of pandas transfer, and ~80% of that volume was campaign detail for programs
+# entirely outside cards. Do NOT retry that pull blind - those are the numbers that killed it.
+#
+# WHAT PHASE 2 ADDS, scoped to make it affordable:
+#   - STAYER PULL, CARDS MNEs ONLY (not bank-wide) - the cards-Q2 send pull in
+#     archaeology/28_unsub_value_ucp.py / cpc_reservoir_extract.py was 6.3M rows, i.e. tractable at
+#     roughly two orders of magnitude smaller than the bank-wide attempt. Server-side MNE filter
+#     (SUBSTR(TREATMENT_ID,8,3) IN CARDS_MNES) applied in the extract SQL itself, same convention
+#     as that file's cell [18]-[21].
+#   - STAYER DEFINITION: mailed (disposition_cd=1) in the Phase 2 window AND no unsub event in that
+#     window AND no PRIOR unsub (any program, any time) - i.e. the "excluded" bucket from earlier
+#     versions of this file returns, scoped to cards only this time.
+#   - ANCHOR: first exposure (first disposition_cd=1 event for that client x cards-MNE population),
+#     NOT last-unsub-treatment launch. This is intentionally NOT the same anchor rule as Phase 1's
+#     leavers (which anchor at their attributed/last-unsub treatment's launch) - see cell [10]'s
+#     comment for why the two are still comparable: both are pre-treatment snapshots relative to
+#     the treatment that acted on that client, even though "the treatment that acted" means
+#     something different for each side.
+#   - RATES: leavers / (leavers + stayers), computed per band and per campaign, once stayers exist
+#     as a real population to divide by. This is the FIRST point in this project where a rate is
+#     defensible - Phase 1 has none because it has no denominator.
+#   - INDIRECT STANDARDISATION on the targeting mix (age_band x tenure_band x prod_band), same
+#     logic as the retired Table B's expected_per_1000: campaigns reach different populations by
+#     construction, so a raw rate conflates targeting with performance. Rebuild that standardisation
+#     once the stayer pool exists.
+#   - PROF_QUINTILE CUTS should be recomputed from the CARDS-Q2 MAILED base (leavers + stayers
+#     combined, matched clients only) at that point, replacing Phase 1's leaver-only cuts (cell
+#     [13]) - state the new cut points explicitly when they change, exactly as this file's caveats
+#     section states Phase 1's.
+#   - This file's leaver_spine (cell [19]) is Phase 1's contribution to Phase 2 - re-read it rather
+#     than re-pulling the 12-month leaver window from EDW; Phase 2 only needs to ADD the stayer pull.
