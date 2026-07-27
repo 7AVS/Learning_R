@@ -43,6 +43,7 @@
   .rowlab{font-size:12.5px;fill:var(--ink);font-weight:700;text-anchor:end}
   .rowsub{font-size:10.5px;fill:var(--faint);text-anchor:end}
   .rv{font-size:12.5px;font-weight:700;fill:var(--ink);text-anchor:start}
+  .num{font-size:13px;font-weight:700;fill:var(--ink);text-anchor:middle}
   .read{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:26px}
   .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;font-weight:700}
   .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:8px}
@@ -232,16 +233,16 @@
 <!-- ============================ SHEET 2 — EXHIBIT 1 ============================ -->
 <section class="sheet">
   <span class="mark">Exhibit 1 of 3</span>
-  <div class="eyebrow">Receipt of campaign email, by recorded position at 1 April 2026</div>
-  <h1>Within switch 1002, a recorded No sits at 18.1% receipt against 44.0% for a recorded Yes. On 1012 the two positions are level.</h1>
+  <div class="eyebrow">Who received campaign email, by recorded position at 1 April 2026</div>
+  <h1>On 1002, 18.1% of clients with a recorded No received a campaign email in April&#8211;June. Of those with a recorded Yes, 44.0% did.</h1>
   <div class="hrule"></div>
 
   <figure>
-  <svg viewBox="0 0 1060 420" role="img" aria-label="Share of each group that received at least one named campaign email April to June 2026. Every bar is a percentage of its own denominator and the denominators differ. Switch 1002, position at 1 April 2026: recorded No 18.1 percent, 8,941 of 49,446; recorded Yes 44.0 percent, 492,925 of 1,120,205. Switch 1012, position at 1 April 2026: recorded No 28.9 percent, 9,561 of 33,103; recorded Yes 26.8 percent, 150,754 of 561,566. Switch 1014, position at 1 April 2026, hatched because its No group is 3.45 million defaulted blanks: recorded No 59.9 percent, 2,068,727 of 3,452,289; recorded Yes 31.1 percent, 165,085 of 531,224. Email unsubscribe cohort, unsubscribed before 1 April 2026: 44.0 percent, 111,651 of 253,721.">
+  <svg viewBox="0 0 1060 442" role="img" aria-label="Share of each group that received at least one named campaign email sent April to June 2026. Every bar is a percentage of its own denominator and the denominators differ. Switch 1002 at 1 April 2026: recorded No, 8,941 of 49,446, 18.1 percent; recorded Yes, 492,925 of 1,120,205, 44.0 percent. Switch 1012 at 1 April 2026: recorded No, 9,561 of 33,103, 28.9 percent; recorded Yes, 150,754 of 561,566, 26.8 percent. Switch 1014 at 1 April 2026, hatched because its No group is 3.45 million defaulted blanks: recorded No, 2,068,727 of 3,452,289, 59.9 percent; recorded Yes, 165,085 of 531,224, 31.1 percent. Email unsubscribe cohort, unsubscribed before 1 April 2026: 111,651 of 253,721, 44.0 percent.">
   <defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="#ffffff" stroke-width="2.6" opacity="0.85"/></pattern></defs>
-  <text class="ct" x="0" y="16">Share of each group that received at least one named campaign email, sent April–June 2026</text>
-  <text class="cs" x="0" y="34">Each bar reads: clients who received ÷ clients in that group. Every bar is a percentage of its OWN denominator. The denominators are different populations and do not sum to anything.</text>
-  <text class="cs" x="0" y="51" style="fill:#8b93a0">CPC position measured as at 1 April 2026 · unsubscribe cohort = clients who unsubscribed before 1 April 2026 · send window 1 April – 30 June 2026</text>
+  <text class="ct" x="0" y="16">Share of each group that received at least one named campaign email, sent April&#8211;June 2026</text>
+  <text class="cs" x="0" y="34">Each bar reads: clients who received &#247; clients in that group. Every bar is a percentage of its OWN denominator. The denominators are different populations and do not sum to anything.</text>
+  <text class="cs" x="0" y="51" style="fill:#8b93a0">CPC position measured as at 1 April 2026 &#183; unsubscribe cohort = clients who unsubscribed before 1 April 2026 &#183; send window 1 April &#8211; 30 June 2026</text>
   <line class="grid" x1="90" y1="316" x2="1040" y2="316"/>
   <text class="gl" x="80" y="320">0%</text>
   <line class="grid" x1="90" y1="256" x2="1040" y2="256"/>
@@ -255,45 +256,52 @@
   <line class="axis" x1="90" y1="316" x2="1040" y2="316"/>
   <rect x="196" y="243.6" width="78" height="72.4" fill="#0051A4"/>
   <text class="val" x="235" y="234.6">18.1%</text>
-  <text class="cat" x="235" y="338">8,941</text>
-  <text class="sub" x="235" y="354">of 49,446</text>
+  <text class="cat" x="235" y="338">Recorded No</text>
+  <text class="num" x="235" y="356">8,941</text>
+  <text class="sub" x="235" y="370">of 49,446</text>
   <rect x="284" y="140.0" width="78" height="176.0" fill="#6E8DB8"/>
   <text class="val" x="323" y="131.0">44.0%</text>
-  <text class="cat" x="323" y="338">492,925</text>
-  <text class="sub" x="323" y="354">of 1,120,205</text>
+  <text class="cat" x="323" y="338">Recorded Yes</text>
+  <text class="num" x="323" y="356">492,925</text>
+  <text class="sub" x="323" y="370">of 1,120,205</text>
   <rect x="416" y="200.4" width="78" height="115.6" fill="#0051A4"/>
   <text class="val" x="455" y="191.4">28.9%</text>
-  <text class="cat" x="455" y="338">9,561</text>
-  <text class="sub" x="455" y="354">of 33,103</text>
+  <text class="cat" x="455" y="338">Recorded No</text>
+  <text class="num" x="455" y="356">9,561</text>
+  <text class="sub" x="455" y="370">of 33,103</text>
   <rect x="504" y="208.8" width="78" height="107.2" fill="#6E8DB8"/>
   <text class="val" x="543" y="199.8">26.8%</text>
-  <text class="cat" x="543" y="338">150,754</text>
-  <text class="sub" x="543" y="354">of 561,566</text>
+  <text class="cat" x="543" y="338">Recorded Yes</text>
+  <text class="num" x="543" y="356">150,754</text>
+  <text class="sub" x="543" y="370">of 561,566</text>
   <rect x="636" y="76.4" width="78" height="239.6" fill="#0051A4" opacity="0.42"/>
   <rect x="636" y="76.4" width="78" height="239.6" fill="url(#hatch)"/>
   <text class="val" x="675" y="67.4" style="fill:#4f5763">59.9%</text>
-  <text class="cat" x="675" y="338" style="fill:#4f5763">2,068,727</text>
-  <text class="sub" x="675" y="354">of 3,452,289</text>
+  <text class="cat" x="675" y="338" style="fill:#4f5763">Recorded No</text>
+  <text class="num" x="675" y="356">2,068,727</text>
+  <text class="sub" x="675" y="370">of 3,452,289</text>
   <rect x="724" y="191.6" width="78" height="124.4" fill="#6E8DB8" opacity="0.42"/>
   <rect x="724" y="191.6" width="78" height="124.4" fill="url(#hatch)"/>
   <text class="val" x="763" y="182.6" style="fill:#4f5763">31.1%</text>
-  <text class="cat" x="763" y="338" style="fill:#4f5763">165,085</text>
-  <text class="sub" x="763" y="354">of 531,224</text>
+  <text class="cat" x="763" y="338" style="fill:#4f5763">Recorded Yes</text>
+  <text class="num" x="763" y="356">165,085</text>
+  <text class="sub" x="763" y="370">of 531,224</text>
   <rect x="880" y="140.0" width="78" height="176.0" fill="#C2620F"/>
   <text class="val" x="919" y="131.0">44.0%</text>
-  <text class="cat" x="919" y="338">111,651</text>
-  <text class="sub" x="919" y="354">of 253,721</text>
-  <text class="grp" x="279" y="382">1002 — do-not-solicit</text>
-  <text class="grp" x="499" y="382">1012 — banking e-mail</text>
-  <text class="grp" x="719" y="382">1014 — share-for-marketing</text>
-  <text class="grp" x="919" y="382">Email unsubscribe</text>
-  <text class="sub" x="279" y="396">position at 1 Apr 2026</text>
-  <text class="sub" x="499" y="396">position at 1 Apr 2026</text>
-  <text class="sub" x="719" y="396">position at 1 Apr 2026</text>
-  <text class="sub" x="919" y="396">unsubscribed before 1 Apr 2026</text>
-  <text class="anno" x="719" y="414" text-anchor="middle">hatched — 3.45M defaulted blanks</text>
-  <text class="anno" x="919" y="414" text-anchor="middle">different population</text>
-  <line x1="841" y1="60" x2="841" y2="364" stroke="#c5cbd3" stroke-width="1.2" stroke-dasharray="5,4"/>
+  <text class="cat" x="919" y="338">Unsubscribed</text>
+  <text class="num" x="919" y="356">111,651</text>
+  <text class="sub" x="919" y="370">of 253,721</text>
+  <text class="grp" x="279" y="398">1002 &#8212; do-not-solicit</text>
+  <text class="sub" x="279" y="412">position at 1 Apr 2026</text>
+  <text class="grp" x="499" y="398">1012 &#8212; banking e-mail</text>
+  <text class="sub" x="499" y="412">position at 1 Apr 2026</text>
+  <text class="grp" x="719" y="398">1014 &#8212; share-for-marketing</text>
+  <text class="sub" x="719" y="412">position at 1 Apr 2026</text>
+  <text class="grp" x="919" y="398">Email unsubscribe</text>
+  <text class="sub" x="919" y="412">unsubscribed before 1 Apr 2026</text>
+  <text class="anno" x="719" y="430" text-anchor="middle">hatched &#8212; 3.45M defaulted blanks</text>
+  <text class="anno" x="919" y="430" text-anchor="middle">different population</text>
+  <line x1="841" y1="60" x2="841" y2="380" stroke="#c5cbd3" stroke-width="1.2" stroke-dasharray="5,4"/>
   </svg>
   </figure>
 
@@ -465,7 +473,7 @@
 <section class="sheet">
   <span class="mark">Underlying figures</span>
   <div class="eyebrow">The table behind Exhibit 1, and how it reconciles to Exhibit 2</div>
-  <h1>Receipt of named campaign email, April–June 2026, by recorded position as at 1 April 2026</h1>
+  <h1>Who received named campaign email in April–June 2026, by recorded position as at 1 April 2026</h1>
   <div class="hrule"></div>
 
   <table class="dt">
@@ -510,10 +518,10 @@
   <div class="two">
     <div class="card">
       <h3>What this does not establish</h3>
-      <p><b>No counterfactual.</b> We cannot say what an unsubscriber’s receipt rate would have been absent the unsubscribe. There is no pre-period baseline in this run.</p>
+      <p><b>No counterfactual.</b> We cannot say what an unsubscriber would have been mailed at absent the unsubscribe. There is no pre-period baseline in this run.</p>
       <p><b>No mailability match.</b> Restricting every group to clients with a deliverable address could move the CPC rates in either direction. This is the single change most likely to alter the reading.</p>
       <p><b>Programme scope untested.</b> If an unsubscribe is programme-scoped by design, a later send from a different programme is the system working as intended. The 111,651 has not been split by in-programme versus cross-programme.</p>
-      <p><b>Timing untested.</b> The cohort pools clients who unsubscribed nine months before the send window with those who left days before it, including any inside the statutory honour window. No receipt-by-age cut has been run.</p>
+      <p><b>Timing untested.</b> The cohort pools clients who unsubscribed nine months before the send window with those who left days before it, including any inside the statutory honour window. No cut by age of the unsubscribe has been run.</p>
       <p><b>Record age untested.</b> A recorded No may date from 2003 or from last month. No recency or dormancy cut has been run, so suppression and composition cannot be separated.</p>
       <p><b>Join quality unreported.</b> Everything rests on mapping a vendor email address to a client number. This run does not report the match rate or unmatched volume.</p>
       <p><b>Nothing here is causal.</b> No exhibit shows that a recorded position caused a send or its absence, only that they appear together at different rates.</p>
