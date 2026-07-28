@@ -104,7 +104,8 @@ def ucp(anchor, fields):
     missing = [f for f in fields if f not in have]
     if missing:
         raise RuntimeError("UCP %s is missing %s - check references/ucp/field_catalog_personal.md" % (anchor, missing))
-    out = df.select(key_sp(F.col("CLNT_NO")).alias("clnt_key"), *[F.col(f) for f in fields])
+    out = df.select(key_sp(F.col("CLNT_NO")).alias("clnt_key"), F.lit(1).alias("in_ucp"),
+                    *[F.col(f) for f in fields])
     n_raw = out.count(); n_key = out.select("clnt_key").distinct().count()
     print("UCP %s: %s rows, %s distinct clients%s" % (anchor, f"{n_raw:,}", f"{n_key:,}",
           "" if n_raw == n_key else "  !! NOT unique per client - deduping on clnt_key"))
@@ -209,15 +210,23 @@ assert n_cohort == n_all, "cohort lost rows crossing to Spark: %d -> %d" % (n_al
 print("cohort in Spark:", f"{n_cohort:,}", "clients |", cohort.filter("unsubbed = 1").count(), "unsubscribed")
 
 # %% [4] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
-UF = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT"]
+UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT"]
 base = ucp(BASELINE, UF)
-foll = ucp(FOLLOWUP, ["PROF_TOT_ANNUAL"]).withColumnRenamed("PROF_TOT_ANNUAL", "PROF_FOLLOWUP")
+foll = (ucp(FOLLOWUP, ["PROF_TOT_ANNUAL", "ACTV_PROD_CNT"])
+          .withColumnRenamed("in_ucp", "in_ucp_followup")
+          .withColumnRenamed("PROF_TOT_ANNUAL", "PROF_FOLLOWUP")
+          .withColumnRenamed("ACTV_PROD_CNT", "PROD_FOLLOWUP"))
 
-b = cohort.join(base, "clnt_key", "left")
-n_matched = b.filter(F.col("PROF_TOT_ANNUAL").isNotNull()).count()
-assert n_matched > 0, "ZERO baseline matches - CLNT_NO normalisation failed, compare key_pd() vs key_sp()"
-log(4, "matched to UCP %s" % BASELINE, "ucp4", "left join on clnt_key", n_matched, n_matched,
-    "%.1f%% of the universe" % (100.0 * n_matched / n_cohort))
+b = cohort.join(base.withColumnRenamed("in_ucp", "in_ucp_baseline"), "clnt_key", "left")
+n_row  = b.filter("in_ucp_baseline = 1").count()
+n_prof = b.filter(F.col("PROF_TOT_ANNUAL").isNotNull()).count()
+assert n_row > 0, "ZERO baseline matches - CLNT_NO normalisation failed, compare key_pd() vs key_sp()"
+log(4, "has a UCP row at %s" % BASELINE, "ucp4", "left join on clnt_key", n_row, n_row,
+    "%.1f%% of the universe" % (100.0 * n_row / n_cohort))
+log(5, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n_row - n_prof, n_row - n_prof,
+    "a UCP row with no profitability is NOT the same as no client")
+log(6, "no UCP row at all at %s" % BASELINE, "ucp4", "-", n_cohort - n_row, n_cohort - n_row,
+    "outside UCP personal - check CLNT_TYP")
 
 # %% [5] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
 # ntile MUST run over non-null rows only. asc_nulls_last still ranks the nulls, so they land in the top
@@ -233,11 +242,17 @@ _chk = (b.filter("baseline_prof_decile <> 'no_baseline_ucp'").groupBy("baseline_
 print("decile sizes: min %s max %s spread %.2f%%" % (f"{_chk.min():,}", f"{_chk.max():,}",
       100.0 * (_chk.max() - _chk.min()) / _chk.mean()))
 assert (_chk.max() - _chk.min()) / _chk.mean() < 0.01, "deciles are not equal-sized - ntile is picking up nulls again"
-panel = b.join(foll, "clnt_key", "left").withColumn("present_followup",
-                F.when(F.col("PROF_FOLLOWUP").isNotNull(), 1).otherwise(0)).cache()
+# STILL WITH US = has a UCP row at follow-up. NOT "has a non-null profitability" - a client can hold a
+# row with a null PROF_TOT_ANNUAL and is plainly still a client. Testing the value inflates attrition.
+panel = (b.join(foll, "clnt_key", "left")
+           .withColumn("present_followup", F.coalesce(F.col("in_ucp_followup"), F.lit(0)))
+           .withColumn("prod_delta", F.col("PROD_FOLLOWUP") - F.col("ACTV_PROD_CNT"))).cache()
 n_present = panel.filter("present_followup = 1").count()
-log(5, "present in UCP %s" % FOLLOWUP, "ucp4", "left join on clnt_key", n_present, n_present,
-    "%.1f%% still present" % (100.0 * n_present / n_cohort))
+n_pf      = panel.filter(F.col("PROF_FOLLOWUP").isNotNull()).count()
+log(7, "has a UCP row at %s" % FOLLOWUP, "ucp4", "left join on clnt_key", n_present, n_present,
+    "%.1f%% still present - THIS is the attrition denominator" % (100.0 * n_present / n_cohort))
+log(8, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n_present - n_pf,
+    n_present - n_pf, "present but unpriced")
 display(panel.groupBy("grp").agg(F.count("*").alias("clients"),
         F.sum("present_followup").alias("present_followup")).toPandas())
 
@@ -288,7 +303,10 @@ def prof(gcols):
         F.round(F.avg("PROF_FOLLOWUP"),   2).alias("mean_prof_followup"),
         F.round(F.avg("delta"), 2).alias("mean_delta"),
         q("delta", 0.25).alias("p25_delta"),
-        q("delta", 0.75).alias("p75_delta")))
+        q("delta", 0.75).alias("p75_delta"),
+        q("ACTV_PROD_CNT", 0.50).alias("median_prod_baseline"),
+        q("PROD_FOLLOWUP",  0.50).alias("median_prod_followup"),
+        F.round(F.avg("prod_delta"), 3).alias("mean_prod_delta")))
 _p = prof(["baseline_prof_decile", "grp"])
 _pa = prof(["grp"]).withColumn("baseline_prof_decile", F.lit("ALL")).select(_p.columns)
 _p = _p.unionByName(_pa)
@@ -314,6 +332,6 @@ c05 = (panel.filter("unsubbed = 1")
             .withColumn("control_median_delta", F.lit(_ctl_all))
             .withColumn("n_sufficient", F.when(F.col("clients_unsub_jul2025") >= 100, "Y").otherwise("N"))
             .orderBy(F.col("clients_unsub_jul2025").desc()))
-save(c05, "05_by_mne"); display(c05.toPandas().head(20))
+save(c05, "05_by_mne"); display(c05.toPandas())   # full table - the CSV has the same 107 rows
 
 print("\nAll five CSVs under", OUT, "- each is a folder holding one part-*.csv")
