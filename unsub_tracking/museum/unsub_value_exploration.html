@@ -1,0 +1,411 @@
+<title>Who unsubscribes — Mar–May 2026 exploration</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f4f4f1;
+    --border: #dededa;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7975;
+    --over: #eb6834;
+    --under: #2a78d6;
+    --neutral: #b9b8b3;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --grid: #e6e6e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --border: #3a3a38;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #918f86;
+      --over: #d95926;
+      --under: #3987e5;
+      --neutral: #5a5955;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --grid: #2e2e2c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border: #3a3a38;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #918f86;
+    --over: #d95926;
+    --under: #3987e5;
+    --neutral: #5a5955;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --grid: #2e2e2c;
+  }
+
+  .viz-root {
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 32px 24px 64px;
+    max-width: 1040px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 44px 0 4px; letter-spacing: -0.005em; }
+  h2:first-of-type { margin-top: 32px; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 18px; }
+  .kicker { color: var(--text-muted); font-size: 12px; text-transform: uppercase;
+            letter-spacing: 0.07em; margin: 0 0 8px; }
+  .note { color: var(--text-muted); font-size: 12.5px; margin-top: 10px; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+           gap: 12px; margin: 20px 0 8px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px 16px; }
+  .tile .n { font-size: 27px; font-weight: 620; letter-spacing: -0.02em;
+             font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--text-secondary); font-size: 12.5px; margin-top: 3px; }
+
+  .chart { margin: 14px 0 0; }
+  .row { display: grid; grid-template-columns: 108px 1fr 62px; align-items: center;
+         gap: 10px; padding: 2px 0; }
+  .row .cat { font-size: 13px; color: var(--text-secondary); text-align: right;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .val { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .track { position: relative; height: 22px; }
+  .axis { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--grid); }
+  .bar { position: absolute; top: 4px; height: 14px; }
+  .bar.pos { border-radius: 0 4px 4px 0; background: var(--over); }
+  .bar.neg { border-radius: 4px 0 0 4px; background: var(--under); }
+  .bar.plain { border-radius: 0 4px 4px 0; background: var(--series-1); left: 0; }
+  .bar.alt   { border-radius: 0 4px 4px 0; background: var(--series-2); left: 0; }
+  .grp { display: grid; grid-template-columns: 108px 1fr; gap: 10px; align-items: center;
+         padding: 5px 0; }
+  .grp .pair { display: grid; gap: 2px; }
+  .pairline { display: grid; grid-template-columns: 1fr 58px; gap: 8px; align-items: center; }
+  .minitrack { position: relative; height: 13px; }
+  .minibar { position: absolute; left: 0; top: 0; height: 13px; border-radius: 0 4px 4px 0; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0 4px; font-size: 12.5px;
+            color: var(--text-secondary); }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+            margin-right: 6px; vertical-align: -1px; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 10px;
+          font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 560; }
+  .scroll { overflow-x: auto; }
+
+  .callout { background: var(--surface-2); border-left: 3px solid var(--series-1);
+             border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 16px 0;
+             font-size: 14px; color: var(--text-primary); }
+  .callout strong { font-weight: 620; }
+  .q { color: var(--text-secondary); font-size: 13.5px; margin: 8px 0 0; }
+  [data-tip] { cursor: default; }
+</style>
+
+<div class="viz-root">
+
+<p class="kicker">Cards pod · exploration draft · not for circulation</p>
+<h1>Who unsubscribes from RBC email?</h1>
+<p class="sub">Every client the bank emailed in <strong>March–May 2026</strong>, split into those who
+unsubscribed and those who didn't, profiled on the UCP snapshot taken before the window opened.
+10.6 million clients. First time we've had both sides of this comparison.</p>
+
+<div class="tiles">
+  <div class="tile"><div class="n">10,606,141</div><div class="l">clients emailed, Mar–May</div></div>
+  <div class="tile"><div class="n">69,535</div><div class="l">unsubscribed &nbsp;·&nbsp; 0.66%</div></div>
+  <div class="tile"><div class="n">427,079</div><div class="l">emailed despite already opting out</div></div>
+  <div class="tile"><div class="n">4,335</div><div class="l">of the leavers came via a cards email</div></div>
+</div>
+<p class="note">UCP match rate 89.7–90.1% across all three groups; worst field 0.01% null. Unmatched
+are concentrated in business-banking programs (SBB and similar) — personal UCP cannot contain them.</p>
+
+<hr style="margin-top:34px">
+
+<h2>1. Leaving is about age and tenure — not value</h2>
+<p class="sub">Each bar compares a segment's share of <em>leavers</em> against its share of
+<em>stayers</em>. Right of the line = over-represented among leavers. This is the whole finding on one chart.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--over)"></span>over-represented among leavers</span>
+  <span><span class="swatch" style="background:var(--under)"></span>under-represented</span>
+  <span><span class="swatch" style="background:var(--neutral)"></span>1.00 = identical to stayers</span>
+</div>
+
+<div class="chart" id="c-ratios"></div>
+
+<div class="callout">
+  <strong>Young and new clients leave. Long-tenured and high-value clients don't.</strong>
+  Under-25s are 1.33× over-represented among leavers; 0–2 year clients 1.25×.
+  At the other end, 20+ year clients sit at 0.82 and the <em>top</em> profitability quintile at 0.84 —
+  our most valuable clients are the least likely to go.
+</div>
+
+<p class="q"><strong>The question this raises for the room:</strong> a 0.66% unsub rate is not a
+retention problem. But losing it disproportionately among the newest clients means we're closing the
+email channel on the people whose relationship hasn't been built yet — before we've had the chance
+to build it.</p>
+
+<details>
+  <summary>Show the numbers</summary>
+  <div class="scroll"><table id="t-ratios"></table></div>
+</details>
+
+<hr style="margin-top:40px">
+
+<h2>2. Value is flat — which kills the "we're losing our best clients" story</h2>
+<p class="sub">Profitability quintiles, cut on the whole mailed base so "top quintile" means valuable
+relative to who we can actually reach. If value drove unsubscribing, this chart would slope.</p>
+
+<div class="chart" id="c-prof"></div>
+
+<div class="callout">
+  Quintiles 1 through 4 sit between <strong>1.00 and 1.06</strong> — indistinguishable. Only the top
+  quintile moves, and it moves <em>down</em> (0.84). Whatever makes someone unsubscribe, it isn't
+  how much they're worth.
+</div>
+
+<p class="q"><strong>Caveat that matters:</strong> the profitability field is
+<em>current-year contribution</em>, not lifetime value — verified separately, medians rise steadily
+with tenure. So "low value" and "new client" are partly the same statement. Label it annual
+profitability anywhere this is shown.</p>
+
+<hr style="margin-top:40px">
+
+<h2>3. Cards campaigns: how many we lose per thousand mailed</h2>
+<p class="sub">Clients each campaign emailed who then unsubscribed, per 1,000 mailed.
+Bank-wide average is 6.6.</p>
+
+<div class="chart" id="c-rate"></div>
+
+<p class="q">CRV and PCL sit highest, PCQ mid-pack, AUH lowest by some distance. Volume differs
+wildly — PCL mailed 1.0M, CRV 189K — so read the rate, not the rank.</p>
+
+<details>
+  <summary>Show the numbers</summary>
+  <div class="scroll"><table id="t-cards"></table></div>
+</details>
+
+<hr style="margin-top:40px">
+
+<h2>4. Does a campaign lose single-product clients, or just mail them?</h2>
+<p class="sub">The fairness test. For each cards campaign: the share of single-product clients in
+who it <em>mailed</em>, against the share in who it <em>lost</em>. A gap means the campaign loses
+them faster than it sends to them.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--series-1)"></span>share of clients mailed</span>
+  <span><span class="swatch" style="background:var(--series-2)"></span>share of clients lost</span>
+</div>
+
+<div class="chart" id="c-pairs"></div>
+
+<div class="callout">
+  <strong>PCQ's headline number is mostly targeting — but not entirely.</strong> 43.7% of PCQ's
+  leavers hold one product, which looks alarming until you see PCQ mails single-product clients at
+  36.8%. The real signal is the <strong>+6.9pp gap</strong>: it does lose them faster than it mails
+  them. AUH shows the same at +5.8pp. PCL and CRV are <em>negative</em> — they lose fewer
+  single-product clients than they send to.
+</div>
+
+<p class="q"><strong>Why single-product matters:</strong> for a client who holds one product, email
+is the only channel we have into every product they don't hold. When they unsubscribe, that door
+closes on all of it at once.</p>
+
+<hr style="margin-top:40px">
+
+<h2>5. The number nobody asked about: 427,079</h2>
+<p class="sub">Clients we emailed in Mar–May who had <em>already unsubscribed</em> before the window
+opened. Four percent of everything we sent.</p>
+
+<div class="callout" style="border-left-color:var(--series-2)">
+  These are not leavers and not stayers — they were never reachable. They sit in a third bucket
+  precisely so they don't contaminate the comparison. But they are 6× the size of the leaver
+  population, and every one of them is a message sent to someone who told us to stop.
+</div>
+
+<p class="q"><strong>Open question for the room:</strong> is this a suppression-list latency problem,
+a cross-program consent gap, or expected behaviour we've simply never counted? We can answer it —
+the data is already landed.</p>
+
+<hr style="margin-top:40px">
+
+<h2>What I'd test next</h2>
+<p class="sub">Three things this dataset can answer without another pull.</p>
+<ol class="q" style="line-height:1.9; padding-left:20px">
+  <li><strong>Contact volume.</strong> Do leavers get more email than stayers? We measure who they
+  are, not how hard we hit them — and that's the most likely confound behind the age/tenure signal.</li>
+  <li><strong>Engagement.</strong> Opens and clicks are in the same vendor table. "Losing the
+  listeners, keeping the deaf" is testable directly.</li>
+  <li><strong>The 427,079.</strong> Which programs are mailing already-opted-out clients, and how
+  long after their unsubscribe.</li>
+</ol>
+
+<p class="note" style="margin-top:32px">Source: <code>unsub_value_museum.py</code>, run 2026-07-28,
+Mar–May 2026, bank-wide. All percentages computed on UCP-matched clients only. Rates in section 3
+count clients a campaign mailed who unsubscribed via any campaign; attribution-based rates differ
+and are reported separately in the run output.</p>
+
+</div>
+
+<script>
+(function () {
+  var RATIOS = [
+    ["Age <25", "age", 1.33, 9055, 985394],
+    ["Age 25–34", "age", 1.27, 15174, 1727684],
+    ["Age 35–44", "age", 0.95, 11958, 1822176],
+    ["Age 65+", "age", 0.88, 9696, 1588020],
+    ["Age 55–64", "age", 0.87, 8370, 1388933],
+    ["Age 45–54", "age", 0.78, 8405, 1560770],
+    ["Tenure 0–2", "tenure", 1.25, 15193, 1765016],
+    ["Tenure 3–5", "tenure", 1.15, 8115, 1021059],
+    ["Tenure 6–10", "tenure", 1.04, 10840, 1503188],
+    ["Tenure 11–20", "tenure", 0.92, 12679, 1998810],
+    ["Tenure 20+", "tenure", 0.82, 15831, 2784904],
+    ["High potential", "flag", 1.15, 6192, 780986],
+    ["3–4 products", "prod", 1.13, 20275, 2595559],
+    ["2 products", "prod", 0.97, 10319, 1543681],
+    ["5+ products", "prod", 0.96, 20591, 3107514],
+    ["1 product", "prod", 0.91, 11446, 1822813]
+  ];
+  var PROF = [
+    ["Quintile 1 (low)", 1.06, 13106, 1793182],
+    ["Quintile 2", 1.05, 13081, 1805105],
+    ["Quintile 3", 1.06, 13081, 1787679],
+    ["Quintile 4", 1.00, 12309, 1788862],
+    ["Quintile 5 (top)", 0.84, 11067, 1896902]
+  ];
+  var CARDS = [
+    ["CRV", 189474, 1638, 8.64, 7.0, 5.6, -1.4, 2.3, 3.7],
+    ["PCL", 1004155, 7928, 7.90, 10.3, 8.5, -1.8, 1.9, 2.8],
+    ["PCD", 660662, 4383, 6.63, 3.9, 4.2, 0.3, 2.1, 2.8],
+    ["PCQ", 675097, 4097, 6.07, 36.8, 43.7, 6.9, 14.7, 18.2],
+    ["AUH", 555974, 1491, 2.68, 17.9, 23.7, 5.8, 3.5, 5.4]
+  ];
+
+  function el(tag, cls, txt) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt !== undefined) n.textContent = txt;
+    return n;
+  }
+  function fmt(n) { return n.toLocaleString("en-CA"); }
+
+  // ---- diverging ratio bars, centred on 1.00 ----
+  function divergingChart(host, rows) {
+    var MAXDEV = 0.40;                       // ratio range shown: 0.60 – 1.40
+    rows.forEach(function (r) {
+      var label = r[0], ratio = r[2], lv = r[3], st = r[4];
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", label));
+
+      var track = el("div", "track");
+      var axis = el("div", "axis"); axis.style.left = "50%"; track.appendChild(axis);
+
+      var dev = Math.max(-MAXDEV, Math.min(MAXDEV, ratio - 1));
+      var pct = Math.abs(dev) / MAXDEV * 50;
+      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg"));
+      if (dev >= 0) { bar.style.left = "50%"; } else { bar.style.right = "50%"; }
+      bar.style.width = pct + "%";
+      bar.setAttribute("data-tip",
+        label + " — " + ratio.toFixed(2) + "× · " + fmt(lv) + " leavers vs " + fmt(st) + " stayers");
+      bar.title = bar.getAttribute("data-tip");
+      track.appendChild(bar);
+      row.appendChild(track);
+
+      row.appendChild(el("div", "val", ratio.toFixed(2) + "×"));
+      host.appendChild(row);
+    });
+  }
+
+  // ---- plain magnitude bars ----
+  function barChart(host, rows, accessor, labeller, alt) {
+    var max = Math.max.apply(null, rows.map(accessor));
+    rows.forEach(function (r) {
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", r[0]));
+      var track = el("div", "track");
+      var bar = el("div", "bar " + (alt ? "alt" : "plain"));
+      bar.style.width = (accessor(r) / max * 100) + "%";
+      bar.title = r[0] + " — " + labeller(r);
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "val", labeller(r)));
+      host.appendChild(row);
+    });
+  }
+
+  // ---- paired mailed vs lost ----
+  function pairChart(host, rows) {
+    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r[4], r[5]); }));
+    rows.forEach(function (r) {
+      var g = el("div", "grp");
+      var lab = el("div", "cat", r[0] + (r[6] > 0 ? "  +" + r[6].toFixed(1) + "pp" : "  " + r[6].toFixed(1) + "pp"));
+      lab.style.color = r[6] > 0 ? "var(--over)" : "var(--text-secondary)";
+      g.appendChild(lab);
+
+      var pair = el("div", "pair");
+      [[r[4], "var(--series-1)", "mailed"], [r[5], "var(--series-2)", "lost"]].forEach(function (p) {
+        var line = el("div", "pairline");
+        var mt = el("div", "minitrack");
+        var mb = el("div", "minibar");
+        mb.style.width = (p[0] / max * 100) + "%";
+        mb.style.background = p[1];
+        mb.title = r[0] + " — " + p[2] + ": " + p[0].toFixed(1) + "% single-product";
+        mt.appendChild(mb);
+        line.appendChild(mt);
+        line.appendChild(el("div", "val", p[0].toFixed(1) + "%"));
+        pair.appendChild(line);
+      });
+      g.appendChild(pair);
+      host.appendChild(g);
+    });
+  }
+
+  function table(host, head, rows) {
+    var thead = el("thead"), tr = el("tr");
+    head.forEach(function (h) { tr.appendChild(el("th", null, h)); });
+    thead.appendChild(tr); host.appendChild(thead);
+    var tb = el("tbody");
+    rows.forEach(function (r) {
+      var t = el("tr");
+      r.forEach(function (c) { t.appendChild(el("td", null, c)); });
+      tb.appendChild(t);
+    });
+    host.appendChild(tb);
+  }
+
+  divergingChart(document.getElementById("c-ratios"), RATIOS);
+  divergingChart(document.getElementById("c-prof"),
+    PROF.map(function (r) { return [r[0], "prof", r[1], r[2], r[3]]; }));
+
+  barChart(document.getElementById("c-rate"), CARDS,
+    function (r) { return r[3]; },
+    function (r) { return r[3].toFixed(2); });
+
+  pairChart(document.getElementById("c-pairs"), CARDS);
+
+  table(document.getElementById("t-ratios"),
+    ["Segment", "Ratio", "Leavers", "Stayers"],
+    RATIOS.concat(PROF.map(function (r) { return [r[0], "prof", r[1], r[2], r[3]]; }))
+      .map(function (r) { return [r[0], r[2].toFixed(2) + "×", fmt(r[3]), fmt(r[4])]; }));
+
+  table(document.getElementById("t-cards"),
+    ["Campaign", "Mailed", "Lost", "Per 1,000", "Mailed % 1-prod", "Lost % 1-prod", "Delta"],
+    CARDS.map(function (r) {
+      return [r[0], fmt(r[1]), fmt(r[2]), r[3].toFixed(2), r[4].toFixed(1) + "%",
+              r[5].toFixed(1) + "%", (r[6] > 0 ? "+" : "") + r[6].toFixed(1) + "pp"];
+    }));
+})();
+</script>
