@@ -90,18 +90,53 @@ def save(sdf, name):
 cur = EDW.cursor(); cur.execute("SELECT USER, CURRENT_TIMESTAMP")
 print("EDW round-trip returned:", cur.fetchall()); cur.close()
 
-# %% [2] EXTRACT the July 2025 cohort. Universe = mailed. Flag = unsubscribed. Streams with a running count.
-COHORT_SQL = """
-WITH sends AS (
-  SELECT DISTINCT m.CLNT_NO
-  FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-  INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-    ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-  WHERE e.disposition_cd = 1
-    AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
-    AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
-),
-unsub AS (
+# %% [2] EXTRACT the July 2025 cohort, in 10 bites.
+# Spool note (2026-07-28): the single-statement version hit Teradata error 2646. It materialised the
+# EVENT x MASTER join three times - once per CTE, then again for the outer LEFT JOIN - and carried a
+# DISTINCT and a window function on top. This version joins ONCE, derives both flags with conditional
+# aggregation, and splits on CLNT_NO MOD 10 so each bite holds a tenth of the spool. Restartable per bite.
+COHORT_TMPL = """
+SELECT m.CLNT_NO,
+       MAX(CASE WHEN e.disposition_cd = 1 THEN 1 ELSE 0 END) AS mailed,
+       MAX(CASE WHEN e.disposition_cd = 4 THEN 1 ELSE 0 END) AS unsubbed
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd IN (1, 4)
+  AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
+  AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
+  AND ABS(m.CLNT_NO) MOD 10 = %d
+GROUP BY m.CLNT_NO
+"""
+_bites = []
+for _i in range(10):
+    print("bite %d/10" % (_i + 1), flush=True)
+    _b = edw_pd(COHORT_TMPL % _i)
+    assert len(_b) > 0, "bite %d returned zero rows - investigate before continuing" % _i
+    _bites.append(_b)
+raw = pd.concat(_bites, ignore_index=True)
+print("cohort raw:", f"{len(raw):,}", "clients with a send or an unsubscribe in Jul 2025")
+
+n_raw       = len(raw)
+n_unsub_any = int((raw["unsubbed"] == 1).sum())
+pdf         = raw[raw["mailed"] == 1].copy()
+n_all       = len(pdf)
+n_uns       = int(pdf["unsubbed"].sum())
+
+pdf["clnt_key"] = key_pd(pdf["CLNT_NO"])
+pdf["unsubbed"] = pdf["unsubbed"].astype("int32")
+
+log(1, "send or unsub event, Jul 2025", "VENDOR_FEEDBACK", "disposition_cd IN (1,4)", n_raw, n_raw, "10 bites")
+log(2, "mailed in Jul 2025", "VENDOR_FEEDBACK", "mailed = 1", n_all, n_all, "THE UNIVERSE")
+log(3, "of those, unsubscribed Jul 2025", "VENDOR_FEEDBACK", "unsubbed = 1", n_uns, n_uns, "treatment group")
+log(4, "of those, did not unsubscribe", "VENDOR_FEEDBACK", "unsubbed = 0", n_all - n_uns, n_all - n_uns, "control group")
+log(5, "unsubscribed but no Jul send", "VENDOR_FEEDBACK", "unsubbed=1 AND mailed=0", n_unsub_any - n_uns,
+    n_unsub_any - n_uns, "excluded - left the universe undefined for them")
+display(pdf.head(5))
+
+# %% [2b] Triggering mnemonic, unsubscribers only. Small population, so a window function is affordable here.
+MNE_SQL = """
+SELECT CLNT_NO, unsub_mne FROM (
   SELECT m.CLNT_NO, SUBSTR(m.TREATMENT_ID, 8, 3) AS unsub_mne,
          ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO ORDER BY e.disposition_dt_tm ASC, m.TREATMENT_ID ASC) AS rn
   FROM DTZV01.VENDOR_FEEDBACK_EVENT e
@@ -110,24 +145,15 @@ unsub AS (
   WHERE e.disposition_cd = 4
     AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
     AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
-)
-SELECT s.CLNT_NO,
-       CASE WHEN u.CLNT_NO IS NULL THEN 0 ELSE 1 END AS unsubbed,
-       u.unsub_mne
-FROM sends s
-LEFT JOIN (SELECT CLNT_NO, unsub_mne FROM unsub WHERE rn = 1) u ON u.CLNT_NO = s.CLNT_NO
+) x WHERE rn = 1
 """
-pdf = edw_pd(COHORT_SQL)
-assert len(pdf) > 0, "cohort pulled zero rows - check the July 2025 send window"
-pdf["clnt_key"] = key_pd(pdf["CLNT_NO"])
-pdf["unsubbed"] = pdf["unsubbed"].astype("int32")
-pdf["unsub_mne"] = pdf["unsub_mne"].fillna("").str.strip()
-
-n_all, n_uns = len(pdf), int(pdf["unsubbed"].sum())
-log(1, "mailed in Jul 2025", "VENDOR_FEEDBACK", "disposition_cd=1", n_all, n_all, "the universe")
-log(2, "of those, unsubscribed Jul 2025", "VENDOR_FEEDBACK", "disposition_cd=4", n_uns, n_uns, "treatment group")
-log(3, "of those, did not unsubscribe", "VENDOR_FEEDBACK", "-", n_all - n_uns, n_all - n_uns, "control group")
-display(pdf.head(5))
+mne = edw_pd(MNE_SQL)
+mne["clnt_key"] = key_pd(mne["CLNT_NO"])
+mne["unsub_mne"] = mne["unsub_mne"].fillna("").str.strip()
+pdf = pdf.merge(mne[["clnt_key", "unsub_mne"]], on="clnt_key", how="left")
+pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
+assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
+print("mnemonic attached to", f"{int((pdf['unsub_mne'] != '').sum()):,}", "of", f"{n_uns:,}", "unsubscribers")
 
 # %% [3] Hand to Spark in-session. Nothing is written to disk here.
 cohort = (spark.createDataFrame(pdf[["clnt_key", "unsubbed", "unsub_mne"]])
