@@ -210,12 +210,13 @@ assert n_cohort == n_all, "cohort lost rows crossing to Spark: %d -> %d" % (n_al
 print("cohort in Spark:", f"{n_cohort:,}", "clients |", cohort.filter("unsubbed = 1").count(), "unsubscribed")
 
 # %% [4] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
-UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT"]
+# DEPTH is ACTV_PROD_CNT (how many). BREADTH is T/I/B/C (which lines of business). They are
+# different measures, not substitutes: 8 products in one category is not 4 across four.
+UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
 base = ucp(BASELINE, UF)
-foll = (ucp(FOLLOWUP, ["PROF_TOT_ANNUAL", "ACTV_PROD_CNT"])
-          .withColumnRenamed("in_ucp", "in_ucp_followup")
-          .withColumnRenamed("PROF_TOT_ANNUAL", "PROF_FOLLOWUP")
-          .withColumnRenamed("ACTV_PROD_CNT", "PROD_FOLLOWUP"))
+foll = ucp(FOLLOWUP, ["PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"])
+for _c in ["in_ucp", "PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]:
+    foll = foll.withColumnRenamed(_c, {"in_ucp": "in_ucp_followup"}.get(_c, _c + "_F"))
 
 b = cohort.join(base.withColumnRenamed("in_ucp", "in_ucp_baseline"), "clnt_key", "left")
 n_row  = b.filter("in_ucp_baseline = 1").count()
@@ -246,7 +247,7 @@ assert (_chk.max() - _chk.min()) / _chk.mean() < 0.01, "deciles are not equal-si
 # row with a null PROF_TOT_ANNUAL and is plainly still a client. Testing the value inflates attrition.
 panel = (b.join(foll, "clnt_key", "left")
            .withColumn("present_followup", F.coalesce(F.col("in_ucp_followup"), F.lit(0)))
-           .withColumn("prod_delta", F.col("PROD_FOLLOWUP") - F.col("ACTV_PROD_CNT"))).cache()
+           .withColumn("prod_delta", F.col("ACTV_PROD_CNT_F") - F.col("ACTV_PROD_CNT"))).cache()
 n_present = panel.filter("present_followup = 1").count()
 n_pf      = panel.filter(F.col("PROF_FOLLOWUP").isNotNull()).count()
 log(7, "has a UCP row at %s" % FOLLOWUP, "ucp4", "left join on clnt_key", n_present, n_present,
@@ -255,6 +256,27 @@ log(8, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n
     n_present - n_pf, "present but unpriced")
 display(panel.groupBy("grp").agg(F.count("*").alias("clients"),
         F.sum("present_followup").alias("present_followup")).toPandas())
+
+# %% [5b] BREADTH. n_cats = how many of Transaction / Investment / Borrow / Credit carry a non-zero count.
+# Depth and breadth move independently - a client can shed products without leaving a line of business,
+# or leave one entirely while the total barely moves. Both are needed to read "deepened the relationship".
+def _cats(cols):
+    return sum([F.when(F.coalesce(F.col(c), F.lit(0)) > 0, 1).otherwise(0) for c in cols])
+_B = ["T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
+panel = (panel
+    .withColumn("n_cats_base", _cats(_B))
+    .withColumn("n_cats_foll", _cats([c + "_F" for c in _B]))
+    .withColumn("cats_delta",  F.col("n_cats_foll") - F.col("n_cats_base"))
+    .withColumn("lost_a_category", F.when(F.col("cats_delta") < 0, 1).otherwise(0))
+    .withColumn("exited_cards", F.when((F.coalesce(F.col("C_TOT_CNT"), F.lit(0)) > 0) &
+                                       (F.coalesce(F.col("C_TOT_CNT_F"), F.lit(0)) == 0), 1).otherwise(0))
+    .cache())
+display(panel.filter("present_followup = 1 AND in_ucp_baseline = 1")
+             .groupBy("grp").agg(F.count("*").alias("clients"),
+                                 F.round(F.avg("n_cats_base"), 3).alias("mean_cats_baseline"),
+                                 F.round(F.avg("n_cats_foll"), 3).alias("mean_cats_followup"),
+                                 F.round(100.0 * F.avg("lost_a_category"), 2).alias("pct_lost_a_category"),
+                                 F.round(100.0 * F.avg("exited_cards"), 2).alias("pct_exited_cards")).toPandas())
 
 # %% [6] 01_cohort.csv - the audit trail
 c01 = spark.createDataFrame(pd.DataFrame(_LOG, columns=["step_no","step_label","source","filter_applied",
@@ -303,10 +325,7 @@ def prof(gcols):
         F.round(F.avg("PROF_FOLLOWUP"),   2).alias("mean_prof_followup"),
         F.round(F.avg("delta"), 2).alias("mean_delta"),
         q("delta", 0.25).alias("p25_delta"),
-        q("delta", 0.75).alias("p75_delta"),
-        q("ACTV_PROD_CNT", 0.50).alias("median_prod_baseline"),
-        q("PROD_FOLLOWUP",  0.50).alias("median_prod_followup"),
-        F.round(F.avg("prod_delta"), 3).alias("mean_prod_delta")))
+        q("delta", 0.75).alias("p75_delta")))
 _p = prof(["baseline_prof_decile", "grp"])
 _pa = prof(["grp"]).withColumn("baseline_prof_decile", F.lit("ALL")).select(_p.columns)
 _p = _p.unionByName(_pa)
@@ -334,4 +353,31 @@ c05 = (panel.filter("unsubbed = 1")
             .orderBy(F.col("clients_unsub_jul2025").desc()))
 save(c05, "05_by_mne"); display(c05.toPandas())   # full table - the CSV has the same 107 rows
 
-print("\nAll five CSVs under", OUT, "- each is a folder holding one part-*.csv")
+# %% [11] 06_relationship.csv - DEPTH and BREADTH side by side, the pair that answers "did they deepen
+# or shrink the relationship". Depth alone cannot tell 8 cards in one category from 4 products across
+# four; breadth alone cannot tell how much sits inside each. Neither is a substitute for the other.
+def rel(gcols):
+    return (panel.filter("present_followup = 1 AND in_ucp_baseline = 1").groupBy(*gcols).agg(
+        F.count("*").alias("clients_both_partitions"),
+        q("ACTV_PROD_CNT",   0.50).alias("median_depth_baseline"),
+        q("ACTV_PROD_CNT_F", 0.50).alias("median_depth_followup"),
+        F.round(F.avg("prod_delta"), 3).alias("mean_depth_delta"),
+        F.round(F.avg("n_cats_base"), 3).alias("mean_breadth_baseline"),
+        F.round(F.avg("n_cats_foll"), 3).alias("mean_breadth_followup"),
+        F.round(F.avg("cats_delta"), 4).alias("mean_breadth_delta"),
+        F.round(100.0 * F.avg("lost_a_category"), 2).alias("pct_lost_a_category"),
+        F.round(100.0 * F.avg("exited_cards"), 2).alias("pct_exited_cards")))
+_r  = rel(["baseline_prof_decile", "grp"])
+_ra = rel(["grp"]).withColumn("baseline_prof_decile", F.lit("ALL")).select(_r.columns)
+_r  = _r.unionByName(_ra)
+_rc = _r.filter("grp = 'mailed_not_unsub'").select("baseline_prof_decile",
+        F.col("mean_breadth_delta").alias("_b"), F.col("mean_depth_delta").alias("_d"))
+c06 = (_r.join(_rc, "baseline_prof_decile", "left")
+         .withColumn("breadth_delta_vs_control", F.when(F.col("grp") == "unsubscribed",
+                     F.round(F.col("mean_breadth_delta") - F.col("_b"), 4)))
+         .withColumn("depth_delta_vs_control", F.when(F.col("grp") == "unsubscribed",
+                     F.round(F.col("mean_depth_delta") - F.col("_d"), 3)))
+         .drop("_b", "_d").orderBy("baseline_prof_decile", "grp"))
+save(c06, "06_relationship"); display(c06.toPandas())
+
+print("\nAll six CSVs under", OUT, "- each is a folder holding one part-*.csv")
