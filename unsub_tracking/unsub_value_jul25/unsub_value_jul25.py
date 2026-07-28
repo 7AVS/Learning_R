@@ -58,9 +58,41 @@ def edw_pd(sql, chunksize=1_000_000):
         print("   ...", f"{n:,}", "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
-def key_pd(sr):
-    """EDW CLNT_NO -> canonical string key. pandas float64 renders 1.56314759E8 and joins to nothing."""
-    return sr.astype("float64").astype("int64").astype(str)
+def key_pd(sr, label=""):
+    """EDW CLNT_NO -> canonical string key. Two traps: pandas float64 renders 1.56314759E8 and joins to
+    nothing, and a NULL CLNT_NO makes .astype(int64) raise IntCastingNaNError. Nulls become NaN here and
+    are dropped by the caller, which reports how many."""
+    n = pd.to_numeric(sr, errors="coerce")
+    bad = int(n.isna().sum())
+    if bad:
+        print("   key_pd(%s): %s of %s CLNT_NO are null or non-numeric - these rows are dropped"
+              % (label, f"{bad:,}", f"{len(n):,}"))
+    return n.round(0).astype("Int64").astype("string")
+
+# ---- HDFS cache: land each Teradata pull once, re-pull only when the SQL text changes ----
+CACHE  = OUT + "_cache/"
+REPULL = False   # flip True to force a fresh pull regardless of what is landed
+
+def cached(name, sql_text, puller):
+    import hashlib, re as _re, datetime as _dt
+    key  = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
+    path, meta = CACHE + name, CACHE + "_meta/" + name
+    if not REPULL:
+        try:
+            old = spark.read.parquet(meta).collect()[0]
+            if old["sql_md5"] == key:
+                out = spark.read.parquet(path).toPandas()
+                print("CACHE HIT   %-12s %s rows (landed %s)" % (name, f"{len(out):,}", old["landed_at"]))
+                return out
+            print("CACHE STALE %-12s SQL changed since %s - re-pulling" % (name, old["landed_at"]))
+        except Exception:
+            print("CACHE MISS  %-12s - pulling from Teradata" % name)
+    out = puller()
+    spark.createDataFrame(out).write.mode("overwrite").parquet(path)
+    spark.createDataFrame([(name, key, _dt.datetime.now().isoformat(), len(out))],
+                          ["name", "sql_md5", "landed_at", "rows"]).write.mode("overwrite").parquet(meta)
+    print("LANDED      %-12s %s rows -> %s" % (name, f"{len(out):,}", path))
+    return out
 
 def key_sp(col):
     """UCP CLNT_NO -> same canonical form: trimmed, leading zeros stripped."""
@@ -108,23 +140,30 @@ WHERE e.disposition_cd IN (1, 4)
   AND ABS(m.CLNT_NO) MOD 10 = %d
 GROUP BY m.CLNT_NO
 """
-_bites = []
-for _i in range(10):
-    print("bite %d/10" % (_i + 1), flush=True)
-    _b = edw_pd(COHORT_TMPL % _i)
-    assert len(_b) > 0, "bite %d returned zero rows - investigate before continuing" % _i
-    _bites.append(_b)
-raw = pd.concat(_bites, ignore_index=True)
-print("cohort raw:", f"{len(raw):,}", "clients with a send or an unsubscribe in Jul 2025")
+def _pull_cohort():
+    bites = []
+    for i in range(10):
+        print("bite %d/10" % (i + 1), flush=True)
+        b = edw_pd(COHORT_TMPL % i)
+        assert len(b) > 0, "bite %d returned zero rows - investigate before continuing" % i
+        bites.append(b)
+    out = pd.concat(bites, ignore_index=True)
+    out["clnt_key"] = key_pd(out["CLNT_NO"], "cohort")
+    n0 = len(out); out = out[out["clnt_key"].notna()].copy()
+    if len(out) < n0:
+        print("   dropped %s rows with a null CLNT_NO" % f"{n0 - len(out):,}")
+    out["clnt_key"] = out["clnt_key"].astype(str)
+    out["mailed"]   = out["mailed"].astype("int32")
+    out["unsubbed"] = out["unsubbed"].astype("int32")
+    return out[["clnt_key", "mailed", "unsubbed"]]
+
+raw = cached("cohort_raw", COHORT_TMPL, _pull_cohort)
 
 n_raw       = len(raw)
 n_unsub_any = int((raw["unsubbed"] == 1).sum())
 pdf         = raw[raw["mailed"] == 1].copy()
 n_all       = len(pdf)
 n_uns       = int(pdf["unsubbed"].sum())
-
-pdf["clnt_key"] = key_pd(pdf["CLNT_NO"])
-pdf["unsubbed"] = pdf["unsubbed"].astype("int32")
 
 log(1, "send or unsub event, Jul 2025", "VENDOR_FEEDBACK", "disposition_cd IN (1,4)", n_raw, n_raw, "10 bites")
 log(2, "mailed in Jul 2025", "VENDOR_FEEDBACK", "mailed = 1", n_all, n_all, "THE UNIVERSE")
@@ -147,9 +186,15 @@ SELECT CLNT_NO, unsub_mne FROM (
     AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
 ) x WHERE rn = 1
 """
-mne = edw_pd(MNE_SQL)
-mne["clnt_key"] = key_pd(mne["CLNT_NO"])
-mne["unsub_mne"] = mne["unsub_mne"].fillna("").str.strip()
+def _pull_mne():
+    out = edw_pd(MNE_SQL)
+    out["clnt_key"] = key_pd(out["CLNT_NO"], "mne")
+    out = out[out["clnt_key"].notna()].copy()
+    out["clnt_key"] = out["clnt_key"].astype(str)
+    out["unsub_mne"] = out["unsub_mne"].fillna("").astype(str).str.strip()
+    return out[["clnt_key", "unsub_mne"]]
+
+mne = cached("unsub_mne", MNE_SQL, _pull_mne)
 pdf = pdf.merge(mne[["clnt_key", "unsub_mne"]], on="clnt_key", how="left")
 pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
 assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
