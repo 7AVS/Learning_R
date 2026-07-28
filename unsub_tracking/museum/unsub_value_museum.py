@@ -630,53 +630,56 @@ T("L8 - CARDS campaigns: LEAVERS vs that campaign's OWN mailed base | matched cl
 
 # %% [21] THE CSV - long format, three roles x four metrics, per MNE and bank-wide. Pivots natively:
 # put metric on rows and role on columns and the leaver-vs-stayer gap is immediate.
-_METRICS = [("age", "AGE"), ("tenure", "TENURE_RBC_YEARS"), ("prod", "prod_cnt"),
-            ("prof", "PROF_TOT_ANNUAL")]
+# ONE groupBy, not thousands of unions. The first version of this cell looped in Python over every
+# MNE x role x metric and unionByName'd the one-row results - ~2,400 stacked unions, each with its
+# own count(). The driver OOM'd building the plan (java.lang.OutOfMemoryError, 2026-07-28). The
+# shape below is: label each client row with its role(s), melt the four metrics into rows with
+# stack(), then a single grouped aggregation. Three unions total, one shuffle.
+_ROLE_ARR = F.when(F.col("bucket").isin("leaver", "stayer"),
+                   F.array(F.lit("sender"), F.col("bucket"))).otherwise(F.array(F.lit("sender")))
+_KEEP = ["mne", "program", "role", "CLNT_NO", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
+         "PROF_TOT_ANNUAL"]
 
+# cards MNEs: client x mne, so a client mailed by two cards campaigns contributes to both.
+# already_out clients are 'sender' only - they were mailed, but they are neither leaver nor stayer.
+_cards_roles = (cards_send.withColumn("role", F.explode(_ROLE_ARR)).select(*_KEEP))
 
-def _stats(df, mne_val, program_val, role):
-    parts = []
-    n = df.count()
-    for _label, _col in _METRICS:
-        parts.append(df.agg(
-            F.lit(mne_val).alias("mne"), F.lit(program_val).alias("program"),
-            F.lit(role).alias("role"), F.lit(n).alias("clients"), F.lit(_label).alias("metric"),
-            F.round(F.avg(F.col(_col)), 4).alias("mean"),
-            F.expr("percentile_approx(" + _col + ", 0.25)").cast("double").alias("p25"),
-            F.expr("percentile_approx(" + _col + ", 0.50)").cast("double").alias("p50"),
-            F.expr("percentile_approx(" + _col + ", 0.75)").cast("double").alias("p75")))
-    out = parts[0]
-    for p in parts[1:]:
-        out = out.unionByName(p)
-    return out
+# bank-wide block, one row per client
+_all_roles = (matched.withColumn("mne", F.lit("(ALL)")).withColumn("program", F.lit("(ALL)"))
+              .withColumn("role", F.explode(_ROLE_ARR)).select(*_KEEP))
 
+# every OTHER MNE: leavers only. Tier 3 is cards-only, so non-cards sender/stayer rows cannot be
+# measured at this grain - they are emitted below with NULL stats rather than omitted, because an
+# absent row reads as "no data" and that is not the same as "not measurable here".
+_noncards_roles = (matched.filter((F.col("bucket") == "leaver") &
+                                  (~F.col("mne").isin(*sorted(CARDS_MNES))))
+                   .withColumn("role", F.lit("leaver")).select(*_KEEP))
 
-# bank-wide block
-_all_parts = [_stats(matched, "(ALL)", "(ALL)", "sender"),
-              _stats(matched.filter(F.col("bucket") == "leaver"), "(ALL)", "(ALL)", "leaver"),
-              _stats(matched.filter(F.col("bucket") == "stayer"), "(ALL)", "(ALL)", "stayer")]
+_roles = _cards_roles.unionByName(_all_roles).unionByName(_noncards_roles)
 
-# per cards MNE: sender / leaver / stayer, all three available because Tier 3 gave us client x MNE
-for _row in senders_cards_raw.select("mne", "program").distinct().collect():
-    _m, _p = _row["mne"], _row["program"]
-    _sub = cards_send.filter(F.col("mne") == _m)
-    _all_parts.append(_stats(_sub, _m, _p, "sender"))
-    _all_parts.append(_stats(_sub.filter(F.col("bucket") == "leaver"), _m, _p, "leaver"))
-    _all_parts.append(_stats(_sub.filter(F.col("bucket") == "stayer"), _m, _p, "stayer"))
+_STACK = ("stack(4, 'age', CAST(AGE AS double), 'tenure', CAST(TENURE_RBC_YEARS AS double), "
+          "'prod', CAST(prod_cnt AS double), 'prof', CAST(PROF_TOT_ANNUAL AS double)) "
+          "AS (metric, value)")
+csv_long = (_roles.select("mne", "program", "role", "CLNT_NO", F.expr(_STACK))
+            .groupBy("mne", "program", "role", "metric")
+            .agg(F.countDistinct("CLNT_NO").alias("clients"),
+                 F.round(F.avg("value"), 4).alias("mean"),
+                 F.expr("percentile_approx(value, 0.25)").alias("p25"),
+                 F.expr("percentile_approx(value, 0.50)").alias("p50"),
+                 F.expr("percentile_approx(value, 0.75)").alias("p75")))
 
-# every OTHER MNE: leaver profile only. Tier 3 is cards-only, so sender/stayer rows are emitted with
-# NULL stats rather than omitted - an absent row would read as "no data", which is not the same as
-# "not measurable at this grain".
-_noncards = [r["mne"] for r in _leavers_by_mne.filter(~F.col("mne").isin(*sorted(CARDS_MNES)))
-             .select("mne").distinct().collect()]
-for _m in _noncards:
-    _sub = matched.filter((F.col("mne") == _m) & (F.col("bucket") == "leaver"))
-    _pg = "DEFAULT" if _m == "DEFAULT" else "NON_CARDS"
-    _all_parts.append(_stats(_sub, _m, _pg, "leaver"))
-
-csv_long = _all_parts[0]
-for _p in _all_parts[1:]:
-    csv_long = csv_long.unionByName(_p)
+# the null-stat placeholder rows for non-cards sender/stayer, so the CSV is honest about coverage
+_placeholder = (_leavers_by_mne.filter(~F.col("mne").isin(*sorted(CARDS_MNES)))
+                .select("mne", "program")
+                .crossJoin(spark.createDataFrame([("sender",), ("stayer",)], ["role"]))
+                .crossJoin(spark.createDataFrame([("age",), ("tenure",), ("prod",), ("prof",)],
+                                                 ["metric"]))
+                .withColumn("clients", F.lit(None).cast("long"))
+                .withColumn("mean", F.lit(None).cast("double"))
+                .withColumn("p25", F.lit(None).cast("double"))
+                .withColumn("p50", F.lit(None).cast("double"))
+                .withColumn("p75", F.lit(None).cast("double")))
+csv_long = csv_long.unionByName(_placeholder)
 
 csv_long = (csv_long
             .join(senders_mne.select("mne", "senders"), "mne", "left")
