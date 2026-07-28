@@ -219,8 +219,10 @@ print("cohort in Spark:", f"{n_cohort:,}", "clients |", cohort.filter("unsubbed 
 UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
 base = ucp(BASELINE, UF)
 foll = ucp(FOLLOWUP, ["PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"])
+_REN = {"in_ucp": "in_ucp_followup", "PROF_TOT_ANNUAL": "PROF_FOLLOWUP"}   # everything else gets _F
 for _c in ["in_ucp", "PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]:
-    foll = foll.withColumnRenamed(_c, {"in_ucp": "in_ucp_followup"}.get(_c, _c + "_F"))
+    foll = foll.withColumnRenamed(_c, _REN.get(_c, _c + "_F"))
+assert "PROF_FOLLOWUP" in foll.columns and "ACTV_PROD_CNT_F" in foll.columns, foll.columns
 
 b = cohort.join(base.withColumnRenamed("in_ucp", "in_ucp_baseline"), "clnt_key", "left")
 n_row  = b.filter("in_ucp_baseline = 1").count()
