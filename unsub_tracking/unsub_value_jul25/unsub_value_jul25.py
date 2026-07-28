@@ -70,13 +70,16 @@ def key_pd(sr, label=""):
     return n.round(0).astype("Int64").astype("string")
 
 # ---- HDFS cache: land each Teradata pull once, re-pull only when the SQL text changes ----
-CACHE  = OUT + "_cache/"
+# NO leading underscore. Hadoop's input-path filter skips names starting with "_" or ".",
+# so a cache under _cache/_meta/ writes fine and then silently fails to read back - which
+# looked exactly like a cache miss and re-pulled from Teradata every run (2026-07-28).
+CACHE  = OUT + "cache/"
 REPULL = False   # flip True to force a fresh pull regardless of what is landed
 
 def cached(name, sql_text, puller):
     import hashlib, re as _re, datetime as _dt
     key  = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
-    path, meta = CACHE + name, CACHE + "_meta/" + name
+    path, meta = CACHE + name, CACHE + "meta/" + name
     if not REPULL:
         try:
             old = spark.read.parquet(meta).collect()[0]
@@ -85,8 +88,9 @@ def cached(name, sql_text, puller):
                 print("CACHE HIT   %-12s %s rows (landed %s)" % (name, f"{len(out):,}", old["landed_at"]))
                 return out
             print("CACHE STALE %-12s SQL changed since %s - re-pulling" % (name, old["landed_at"]))
-        except Exception:
-            print("CACHE MISS  %-12s - pulling from Teradata" % name)
+        except Exception as ex:
+            _first = (str(ex).splitlines() or [""])[0][:120]
+            print("CACHE MISS  %-12s - pulling from Teradata (%s: %s)" % (name, type(ex).__name__, _first))
     out = puller()
     spark.createDataFrame(out).write.mode("overwrite").parquet(path)
     spark.createDataFrame([(name, key, _dt.datetime.now().isoformat(), len(out))],
