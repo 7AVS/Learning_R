@@ -657,6 +657,14 @@ _noncards_roles = (matched.filter((F.col("bucket") == "leaver") &
 
 _roles = _cards_roles.unionByName(_all_roles).unionByName(_noncards_roles)
 
+# MATERIALISE the role frame before aggregating. Everything upstream of here - the UCP join, the
+# 6M-row cards_send join, two explodes - was being replayed inside one shuffle alongside three
+# percentile_approx calls. Landing it first severs that lineage: the aggregation below then reads a
+# plain parquet file instead of rebuilding the world. This is why the write kept dying (2026-07-28).
+_roles.write.mode("overwrite").parquet(BASE + "roles_tmp")
+_roles = spark.read.parquet(BASE + "roles_tmp")
+print("roles frame materialised:", _roles.count(), "client-role rows at", BASE + "roles_tmp")
+
 _STACK = ("stack(4, 'age', CAST(AGE AS double), 'tenure', CAST(TENURE_RBC_YEARS AS double), "
           "'prod', CAST(prod_cnt AS double), 'prof', CAST(PROF_TOT_ANNUAL AS double)) "
           "AS (metric, value)")
@@ -666,11 +674,15 @@ csv_long = (_roles.select("mne", "program", "role", "CLNT_NO", F.expr(_STACK))
             # exactly once by construction, so the two are equal - but countDistinct holds every
             # client id in memory per group, which is ~10M values for the (ALL) rows and is what
             # kept OOM-ing the driver (2026-07-28).
+            # ONE percentile_approx call returning an array, at accuracy 100 rather than the default
+            # 10000 - three separate calls each built their own sketch per group. Accuracy 100 is
+            # ~1% error on a quartile, which is far below anything that changes a reading here.
             .agg(F.count("*").alias("clients"),
                  F.round(F.avg("value"), 4).alias("mean"),
-                 F.expr("percentile_approx(value, 0.25)").alias("p25"),
-                 F.expr("percentile_approx(value, 0.50)").alias("p50"),
-                 F.expr("percentile_approx(value, 0.75)").alias("p75")))
+                 F.expr("percentile_approx(value, array(0.25, 0.5, 0.75), 100)").alias("_q"))
+            .withColumn("p25", F.col("_q")[0])
+            .withColumn("p50", F.col("_q")[1])
+            .withColumn("p75", F.col("_q")[2]).drop("_q"))
 
 # the null-stat placeholder rows for non-cards sender/stayer, so the CSV is honest about coverage
 _placeholder = (_leavers_by_mne.filter(~F.col("mne").isin(*sorted(CARDS_MNES)))
@@ -769,7 +781,7 @@ else:
     _raw = (["unsubs_3m/" + m[0] for m in WIN_MONTHS] +
             ["senders_base/" + m[0] for m in WIN_MONTHS] +
             ["senders_cards/" + m[0] for m in WIN_MONTHS] +
-            ["senders_by_mne", "prior_unsubs"])
+            ["senders_by_mne", "prior_unsubs", "roles_tmp"])
     for _p in _raw:
         get_ipython().system("hdfs dfs -rm -r -f /user/427966379/unsub_value_museum/" + _p)
     T("CLEANUP - what survived", pd.DataFrame(
