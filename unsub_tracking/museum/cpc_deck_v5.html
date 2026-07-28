@@ -1,0 +1,346 @@
+<title>Email unsubscribes and the bank's consent record — Jul 2025 to Jun 2026</title>
+<style>
+  :root{
+    --navy:#0051A5; --amber:#D97706;
+    --ink:#16212b; --ink2:#4a5764; --muted:#78848f;
+    --surface:#fcfcfb; --rule:#dfe3e6; --panel:#f4f6f7;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--surface); color:var(--ink);
+    font-family:"Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+    font-size:15px; line-height:1.5;
+  }
+  .sheet{
+    max-width:1120px; margin:0 auto; padding:44px 56px 56px;
+    border-bottom:1px solid var(--rule);
+  }
+  .kicker{
+    font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; margin:0 0 10px;
+  }
+  h1{font-size:31px; line-height:1.22; font-weight:650; margin:0 0 6px; letter-spacing:-.01em}
+  .window{font-size:14px; color:var(--ink2); margin:0 0 26px}
+  h2{font-size:20px; font-weight:650; margin:34px 0 4px}
+  h3{font-size:15px; font-weight:650; margin:0 0 2px}
+  p{margin:0 0 12px; max-width:64ch}
+  .lede{font-size:17px; line-height:1.5; color:var(--ink); max-width:70ch; margin:0 0 22px}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:34px}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:22px}
+  .card{background:var(--panel); border-radius:6px; padding:18px 20px}
+  .card h3{margin-bottom:8px}
+  .card p{font-size:14px; color:var(--ink2); margin:0}
+  ul{margin:6px 0 0; padding-left:18px} li{margin-bottom:6px; color:var(--ink2)}
+
+  figure{margin:0 0 8px}
+  figcaption{margin:0 0 10px}
+  .fig-title{font-size:16px; font-weight:650; color:var(--ink); display:block}
+  .fig-sub{font-size:13px; color:var(--ink2); display:block; margin-top:2px}
+  svg{width:100%; height:auto; display:block}
+  .src{font-size:12px; color:var(--muted); margin:6px 0 0}
+
+  .legend{display:flex; gap:20px; margin:10px 0 4px; font-size:13px; color:var(--ink2)}
+  .legend span{display:flex; align-items:center; gap:7px}
+  .sw{width:12px; height:12px; border-radius:2px; display:inline-block}
+
+  table{border-collapse:collapse; width:100%; font-size:14px; margin:4px 0 6px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--rule)}
+  th{font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  td.num{text-align:right; font-variant-numeric:tabular-nums}
+  tr.flag td{background:#fdf5e9; font-weight:600}
+
+  .hero{display:flex; gap:46px; align-items:flex-start; margin:6px 0 20px; flex-wrap:wrap}
+  .stat .n{font-size:44px; font-weight:680; letter-spacing:-.02em; line-height:1; font-variant-numeric:tabular-nums}
+  .stat .n.alt{color:var(--amber)}
+  .stat .l{font-size:13px; color:var(--ink2); margin-top:7px; max-width:30ch}
+  .open{border:1px dashed #b9c2c9; border-radius:6px; padding:16px 20px; background:transparent}
+  .open h3{color:var(--ink2)}
+  .open li{color:var(--ink2)}
+
+  @media print{
+    body{font-size:12px}
+    .sheet{max-width:none; padding:24px 30px; border:0; page-break-after:always}
+    .sheet:last-child{page-break-after:auto}
+    h1{font-size:23px} .lede{font-size:14px} .stat .n{font-size:34px}
+    .card,tr.flag td{background:#f4f6f7 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+  }
+  @page{size:landscape; margin:12mm}
+</style>
+
+<!-- ============================ 1 ============================ -->
+<section class="sheet">
+  <p class="kicker">Cards pod &middot; measurement</p>
+  <h1>Email unsubscribes and the bank&rsquo;s consent record</h1>
+  <p class="window">All figures cover <strong>July 2025 &ndash; June 2026</strong>. Standing counts are as at <strong>1 April 2026</strong>.</p>
+
+  <p class="lede">Two systems record whether a client wants marketing email. They are maintained separately.
+  This deck sets out what each one contains over the same twelve months, and how much they overlap.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>The two data sources</h3>
+      <p><strong>Vendor feedback (SFMC)</strong> &mdash; one row per email unsubscribe, captured at the moment a client clicks unsubscribe.</p>
+      <p style="margin-top:10px"><strong>CPC preference log</strong> &mdash; the bank&rsquo;s client preference record. One row per change to a consent switch, with the system that wrote it.</p>
+    </div>
+    <div class="card">
+      <h3>The three switches we monitor</h3>
+      <p><strong>1002</strong> &mdash; RBC do-not-solicit<br>
+         <strong>1012</strong> &mdash; banking email consent<br>
+         <strong>1014</strong> &mdash; share for marketing across RBC</p>
+      <p style="margin-top:10px">These are the three email-relevant switches of roughly forty in the preference dictionary.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 2 ============================ -->
+<section class="sheet">
+  <p class="kicker">Slide 2 &middot; definition</p>
+  <h1>&ldquo;No&rdquo; is recorded differently on each switch</h1>
+  <p class="window">Consent values: 5001 Yes &middot; 5002 No &middot; 5003 blank. Rule per the preference dictionary.</p>
+
+  <table>
+    <tr><th>Switch</th><th>Meaning</th><th>An explicit 5002 means</th><th>A blank means</th></tr>
+    <tr><td><strong>1002</strong></td><td>RBC do-not-solicit</td><td>No</td><td>Yes</td></tr>
+    <tr><td><strong>1012</strong></td><td>Banking email consent</td><td>No</td><td>Yes</td></tr>
+    <tr class="flag"><td><strong>1014</strong></td><td>Share for marketing across RBC</td><td>No</td><td>No</td></tr>
+  </table>
+  <p style="font-size:13px;color:var(--ink2)">On 1014, blank and explicit&nbsp;No are <strong>one population</strong>. Counting 5002 alone on that switch omits 97.7% of it.</p>
+
+  <figure style="margin-top:24px">
+    <figcaption>
+      <span class="fig-title">Switch 1014: clients standing &ldquo;No&rdquo;, split by how it was recorded</span>
+      <span class="fig-sub">Standing position as at 1 April 2026 &middot; 3,452,289 clients in total</span>
+    </figcaption>
+    <div class="legend">
+      <span><i class="sw" style="background:#D97706"></i> Explicit 5002 &mdash; 79,330 (2.3%)</span>
+      <span><i class="sw" style="background:#0051A5"></i> Blank, which is No on 1014 &mdash; 3,372,959 (97.7%)</span>
+    </div>
+    <svg viewBox="0 0 900 150" role="img" aria-label="Of 3,452,289 clients standing No on switch 1014, 79,330 are explicit and 3,372,959 are blank">
+      <rect x="60" y="42" width="19" height="46" rx="4" fill="#D97706"/>
+      <rect x="81" y="42" width="799" height="46" rx="4" fill="#0051A5"/>
+      <line x1="60" y1="96" x2="880" y2="96" stroke="#dfe3e6" stroke-width="1"/>
+      <text x="60" y="34" font-size="13" fill="#4a5764">79,330 explicit</text>
+      <text x="876" y="34" font-size="13" fill="#4a5764" text-anchor="end">3,372,959 blank</text>
+      <text x="60" y="118" font-size="13" fill="#78848f">0</text>
+      <text x="880" y="118" font-size="13" fill="#78848f" text-anchor="end">3,452,289 clients</text>
+    </svg>
+    <p class="src">Source: CPC preference log, standing position at 1 April 2026.</p>
+  </figure>
+</section>
+
+<!-- ============================ 3 ============================ -->
+<section class="sheet">
+  <p class="kicker">Slide 3 &middot; scale</p>
+  <h1>The three switches hold very different numbers of clients</h1>
+  <p class="window">Standing &ldquo;No&rdquo; at 1 April 2026, each switch counted under its own rule. Shown on two scales &mdash; 1014 is roughly 70&times; the size of 1002.</p>
+
+  <div class="grid2" style="gap:44px">
+    <figure>
+      <figcaption>
+        <span class="fig-title">Switches 1002 and 1012</span>
+        <span class="fig-sub">Clients standing No &middot; blank counts as Yes &middot; scale 0&ndash;60,000</span>
+      </figcaption>
+      <svg viewBox="0 0 440 250" role="img" aria-label="Switch 1002 has 49,444 clients standing No; switch 1012 has 33,103">
+        <line x1="70" y1="200" x2="420" y2="200" stroke="#dfe3e6"/>
+        <rect x="110" y="35" width="96" height="165" rx="4" fill="#0051A5"/>
+        <rect x="270" y="90" width="96" height="110" rx="4" fill="#0051A5"/>
+        <text x="158" y="27" font-size="15" font-weight="650" fill="#16212b" text-anchor="middle">49,444</text>
+        <text x="318" y="82" font-size="15" font-weight="650" fill="#16212b" text-anchor="middle">33,103</text>
+        <text x="158" y="221" font-size="13" fill="#4a5764" text-anchor="middle">1002</text>
+        <text x="318" y="221" font-size="13" fill="#4a5764" text-anchor="middle">1012</text>
+        <text x="158" y="238" font-size="11" fill="#78848f" text-anchor="middle">do-not-solicit</text>
+        <text x="318" y="238" font-size="11" fill="#78848f" text-anchor="middle">banking email</text>
+        <text x="62" y="40" font-size="12" fill="#78848f" text-anchor="end">60k</text>
+        <text x="62" y="204" font-size="12" fill="#78848f" text-anchor="end">0</text>
+      </svg>
+    </figure>
+
+    <figure>
+      <figcaption>
+        <span class="fig-title">Switch 1014</span>
+        <span class="fig-sub">Clients standing No &middot; blank counts as No &middot; scale 0&ndash;4,000,000</span>
+      </figcaption>
+      <svg viewBox="0 0 440 250" role="img" aria-label="Switch 1014 has 3,452,289 clients standing No, of which 79,330 are explicit">
+        <line x1="70" y1="200" x2="420" y2="200" stroke="#dfe3e6"/>
+        <rect x="190" y="58" width="96" height="142" rx="4" fill="#0051A5"/>
+        <rect x="190" y="197" width="96" height="3" fill="#D97706"/>
+        <text x="238" y="50" font-size="15" font-weight="650" fill="#16212b" text-anchor="middle">3,452,289</text>
+        <text x="238" y="221" font-size="13" fill="#4a5764" text-anchor="middle">1014</text>
+        <text x="238" y="238" font-size="11" fill="#78848f" text-anchor="middle">share for marketing</text>
+        <text x="62" y="40" font-size="12" fill="#78848f" text-anchor="end">4M</text>
+        <text x="62" y="204" font-size="12" fill="#78848f" text-anchor="end">0</text>
+        <text x="298" y="203" font-size="11" fill="#D97706">79,330 explicit</text>
+      </svg>
+    </figure>
+  </div>
+  <p class="src">Source: CPC preference log, standing position at 1 April 2026. Deliberately not plotted on a shared axis &mdash; at one scale the smaller two switches disappear.</p>
+</section>
+
+<!-- ============================ 4 ============================ -->
+<section class="sheet">
+  <p class="kicker">Slide 4 &middot; the vendor side</p>
+  <h1>319,733 clients unsubscribed from email over the twelve months</h1>
+  <p class="window">Vendor feedback (SFMC), July 2025 &ndash; June 2026. Distinct clients, counted once each.</p>
+
+  <figure>
+    <figcaption>
+      <span class="fig-title">Email unsubscribes recorded by the vendor, by month</span>
+      <span class="fig-sub">July 2025 &ndash; June 2026 &middot; 319,733 clients in total &middot; monthly average 26,644</span>
+    </figcaption>
+    <svg viewBox="0 0 900 330" role="img" aria-label="Monthly email unsubscribes from July 2025 to June 2026, ranging from 18,746 in May to 30,920 in August">
+      <line x1="60" y1="270" x2="880" y2="270" stroke="#dfe3e6"/>
+      <line x1="60" y1="40" x2="880" y2="40" stroke="#eef1f2"/>
+      <line x1="60" y1="155" x2="880" y2="155" stroke="#eef1f2"/>
+      <text x="52" y="44" font-size="12" fill="#78848f" text-anchor="end">32k</text>
+      <text x="52" y="159" font-size="12" fill="#78848f" text-anchor="end">16k</text>
+      <text x="52" y="274" font-size="12" fill="#78848f" text-anchor="end">0</text>
+
+      <rect x="71"  y="78"  width="46" height="192" rx="4" fill="#0051A5"/>
+      <rect x="139" y="48"  width="46" height="222" rx="4" fill="#0051A5"/>
+      <rect x="208" y="63"  width="46" height="207" rx="4" fill="#0051A5"/>
+      <rect x="276" y="59"  width="46" height="211" rx="4" fill="#0051A5"/>
+      <rect x="344" y="68"  width="46" height="202" rx="4" fill="#0051A5"/>
+      <rect x="413" y="74"  width="46" height="196" rx="4" fill="#0051A5"/>
+      <rect x="481" y="82"  width="46" height="188" rx="4" fill="#0051A5"/>
+      <rect x="549" y="69"  width="46" height="201" rx="4" fill="#0051A5"/>
+      <rect x="618" y="67"  width="46" height="203" rx="4" fill="#0051A5"/>
+      <rect x="686" y="91"  width="46" height="179" rx="4" fill="#0051A5"/>
+      <rect x="754" y="135" width="46" height="135" rx="4" fill="#0051A5"/>
+      <rect x="823" y="109" width="46" height="161" rx="4" fill="#0051A5"/>
+
+      <text x="162" y="40"  font-size="12" font-weight="650" fill="#16212b" text-anchor="middle">30,920</text>
+      <text x="777" y="127" font-size="12" font-weight="650" fill="#16212b" text-anchor="middle">18,746</text>
+
+      <text x="94"  y="290" font-size="12" fill="#78848f" text-anchor="middle">Jul</text>
+      <text x="162" y="290" font-size="12" fill="#78848f" text-anchor="middle">Aug</text>
+      <text x="231" y="290" font-size="12" fill="#78848f" text-anchor="middle">Sep</text>
+      <text x="299" y="290" font-size="12" fill="#78848f" text-anchor="middle">Oct</text>
+      <text x="367" y="290" font-size="12" fill="#78848f" text-anchor="middle">Nov</text>
+      <text x="436" y="290" font-size="12" fill="#78848f" text-anchor="middle">Dec</text>
+      <text x="504" y="290" font-size="12" fill="#78848f" text-anchor="middle">Jan</text>
+      <text x="572" y="290" font-size="12" fill="#78848f" text-anchor="middle">Feb</text>
+      <text x="641" y="290" font-size="12" fill="#78848f" text-anchor="middle">Mar</text>
+      <text x="709" y="290" font-size="12" fill="#78848f" text-anchor="middle">Apr</text>
+      <text x="777" y="290" font-size="12" fill="#78848f" text-anchor="middle">May</text>
+      <text x="846" y="290" font-size="12" fill="#78848f" text-anchor="middle">Jun</text>
+      <text x="94"  y="308" font-size="11" fill="#a3adb6" text-anchor="middle">2025</text>
+      <text x="504" y="308" font-size="11" fill="#a3adb6" text-anchor="middle">2026</text>
+    </svg>
+    <p class="src">Source: vendor feedback (SFMC), distinct clients by month of first unsubscribe.</p>
+  </figure>
+</section>
+
+<!-- ============================ 5 ============================ -->
+<section class="sheet">
+  <p class="kicker">Slide 5 &middot; overlap</p>
+  <h1>Most unsubscribers already stood &ldquo;No&rdquo; on 1014 &mdash; by default, not by action</h1>
+  <p class="window">All 319,733 clients who unsubscribed July 2025 &ndash; June 2026, against their standing CPC position on switch 1014.</p>
+
+  <div class="hero">
+    <div class="stat">
+      <div class="n">89,518</div>
+      <div class="l">unsubscribers standing No on 1014 under the rule &mdash; <strong>28.0%</strong>. Of these, 912 by explicit action and <strong>88,606 by blank default</strong>.</div>
+    </div>
+    <div class="stat">
+      <div class="n">6,842</div>
+      <div class="l">standing an explicit Yes on 1014 &mdash; 2.1%. The remaining 223,373 have no row on the switch at all.</div>
+    </div>
+    <div class="stat">
+      <div class="n alt">1,387</div>
+      <div class="l">hold an explicit opt-out on any of the three switches &mdash; 0.43%. Of those, only 135 were recorded after the unsubscribe.</div>
+    </div>
+  </div>
+
+  <p style="font-size:13px;color:var(--ink2);max-width:78ch">On 1002 the same 319,733 unsubscribers show
+  <strong>384</strong> explicit No and 223,770 with no row; on 1012, <strong>581</strong> explicit No.
+  Under each switch&rsquo;s own rule, 319,349 of them read as contactable on 1002 and 319,152 on 1012.</p>
+
+  <figure>
+    <figcaption>
+      <span class="fig-title">How long after the unsubscribe the 135 consent changes were written</span>
+      <span class="fig-sub">The 135 clients whose explicit CPC opt-out was recorded after their unsubscribe &middot; July 2025 &ndash; June 2026</span>
+    </figcaption>
+    <svg viewBox="0 0 900 290" role="img" aria-label="Lag from unsubscribe to consent change: 10 clients within one day, 11 within two to seven days, 24 within eight to thirty days, 32 within thirty-one to ninety days, and 58 after more than ninety days">
+      <line x1="70" y1="230" x2="880" y2="230" stroke="#dfe3e6"/>
+      <line x1="70" y1="140" x2="880" y2="140" stroke="#eef1f2"/>
+      <text x="62" y="144" font-size="12" fill="#78848f" text-anchor="end">30</text>
+      <text x="62" y="234" font-size="12" fill="#78848f" text-anchor="end">0</text>
+
+      <rect x="96"  y="200" width="110" height="30"  rx="4" fill="#D97706"/>
+      <rect x="258" y="197" width="110" height="33"  rx="4" fill="#D97706"/>
+      <rect x="420" y="158" width="110" height="72"  rx="4" fill="#0051A5"/>
+      <rect x="582" y="134" width="110" height="96"  rx="4" fill="#0051A5"/>
+      <rect x="744" y="56"  width="110" height="174" rx="4" fill="#0051A5"/>
+
+      <text x="151" y="192" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">10</text>
+      <text x="313" y="189" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">11</text>
+      <text x="475" y="150" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">24</text>
+      <text x="637" y="126" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">32</text>
+      <text x="799" y="48"  font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">58</text>
+
+      <text x="151" y="251" font-size="13" fill="#4a5764" text-anchor="middle">within 1 day</text>
+      <text x="313" y="251" font-size="13" fill="#4a5764" text-anchor="middle">2&ndash;7 days</text>
+      <text x="475" y="251" font-size="13" fill="#4a5764" text-anchor="middle">8&ndash;30 days</text>
+      <text x="637" y="251" font-size="13" fill="#4a5764" text-anchor="middle">31&ndash;90 days</text>
+      <text x="799" y="251" font-size="13" fill="#4a5764" text-anchor="middle">over 90 days</text>
+      <text x="232" y="276" font-size="12" fill="#D97706" text-anchor="middle">an automated path would sit here</text>
+    </svg>
+    <p class="src">Source: CPC preference log, lag between each client&rsquo;s unsubscribe and their first subsequent explicit opt-out.</p>
+  </figure>
+
+  <p style="margin-top:14px"><strong>The shape rises with time instead of clustering at the start.</strong>
+  An automated hand-off would write within a day or two; 21 of the 135 fall in that range and 58 arrive more than
+  ninety days later. That is the profile of unrelated activity, not a transfer.</p>
+  <p>The same test on blank writes returns two clients per switch, all written by the onboarding batch.
+  Of the 6,232 explicit No writes on 1014 across the year, 93 followed a prior unsubscribe.</p>
+</section>
+
+<!-- ============================ 6 ============================ -->
+<section class="sheet">
+  <p class="kicker">Slide 6 &middot; behaviour</p>
+  <h1>The two switches behave differently against email delivery</h1>
+  <p class="window">Clients grouped by their standing position at 1 April 2026; email receipt measured April &ndash; June 2026.</p>
+
+  <figure>
+    <figcaption>
+      <span class="fig-title">Share of clients who received campaign email, by standing position</span>
+      <span class="fig-sub">April &ndash; June 2026 &middot; switch 1002 (n = 49,444 standing No) and switch 1014 (n = 3,452,289 standing No)</span>
+    </figcaption>
+    <div class="legend">
+      <span><i class="sw" style="background:#0051A5"></i> Clients standing No</span>
+      <span><i class="sw" style="background:#D97706"></i> Clients standing Yes</span>
+    </div>
+    <svg viewBox="0 0 900 300" role="img" aria-label="On switch 1002, 19.2 percent of No clients received email versus 58.9 percent of Yes clients. On switch 1014, 61.4 percent of No clients received email versus 32.3 percent of Yes clients.">
+      <line x1="70" y1="240" x2="880" y2="240" stroke="#dfe3e6"/>
+      <line x1="70" y1="126" x2="880" y2="126" stroke="#eef1f2"/>
+      <text x="62" y="130" font-size="12" fill="#78848f" text-anchor="end">50%</text>
+      <text x="62" y="244" font-size="12" fill="#78848f" text-anchor="end">0%</text>
+
+      <rect x="190" y="176" width="92" height="64"  rx="4" fill="#0051A5"/>
+      <rect x="290" y="46"  width="92" height="194" rx="4" fill="#D97706"/>
+      <rect x="560" y="38"  width="92" height="202" rx="4" fill="#0051A5"/>
+      <rect x="660" y="134" width="92" height="106" rx="4" fill="#D97706"/>
+
+      <text x="236" y="168" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">19.2%</text>
+      <text x="336" y="38"  font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">58.9%</text>
+      <text x="606" y="30"  font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">61.4%</text>
+      <text x="706" y="126" font-size="16" font-weight="650" fill="#16212b" text-anchor="middle">32.3%</text>
+
+      <text x="286" y="264" font-size="14" font-weight="650" fill="#16212b" text-anchor="middle">Switch 1002</text>
+      <text x="286" y="282" font-size="12" fill="#78848f" text-anchor="middle">do-not-solicit</text>
+      <text x="656" y="264" font-size="14" font-weight="650" fill="#16212b" text-anchor="middle">Switch 1014</text>
+      <text x="656" y="282" font-size="12" fill="#78848f" text-anchor="middle">share for marketing</text>
+    </svg>
+    <p class="src">Source: CPC standing position at 1 April 2026 against campaign email recipients, April &ndash; June 2026. Switch 1012 is not shown &mdash; the Yes-side comparison has not been computed.</p>
+  </figure>
+
+  <div class="open" style="margin-top:26px">
+    <h3>Open with the channel and system owners</h3>
+    <ul>
+      <li>Which suppression list does send-time read from?</li>
+      <li>Which switch is the campaign-email key, and what is its update SLA?</li>
+      <li>Does program-level consent override a standing opt-out?</li>
+    </ul>
+  </div>
+</section>

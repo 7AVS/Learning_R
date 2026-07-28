@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
+<title>Consent × Email — how they connect today</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Libre+Franklin:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet" />
+
+<style>
+  :root{
+    --ink:#14182a;
+    --ink-90:rgba(20,24,42,.92);
+    --ink-70:rgba(20,24,42,.72);
+    --ink-55:rgba(20,24,42,.55);
+    --ink-45:rgba(20,24,42,.45);
+    --ink-30:rgba(20,24,42,.28);
+    --ink-15:rgba(20,24,42,.14);
+    --ink-08:rgba(20,24,42,.08);
+
+    --paper:#f7f1e3;
+    --paper-dim:#ece0c8;
+    --paper-90:rgba(247,241,227,.9);
+
+    --accent:#9c5a1c;
+    --accent-soft:#d68a3c;
+    --accent-wash:rgba(156,90,28,.09);
+    --accent-line:rgba(156,90,28,.32);
+
+    --shadow-md:0 18px 40px -22px rgba(20,24,42,.45);
+    --shadow-lg:0 26px 60px -26px rgba(20,24,42,.5);
+
+    --pad-x:clamp(2rem,6vw,5.25rem);
+    --pad-y:clamp(1.6rem,4.5vh,2.75rem);
+
+    --serif:'Fraunces',ui-serif,Georgia,serif;
+    --sans:'Libre Franklin',ui-sans-serif,system-ui,sans-serif;
+  }
+
+  *,*::before,*::after{ box-sizing:border-box; }
+  html{ -webkit-text-size-adjust:100%; }
+  html,body{ height:100%; }
+
+  body{
+    margin:0;
+    font-family:var(--sans);
+    background:var(--paper);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    scroll-snap-type:y mandatory;
+    overflow-y:scroll;
+    scroll-behavior:smooth;
+    position:relative;
+  }
+
+  body::before{
+    /* faint paper grain — pure CSS, no image asset */
+    content:'';
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    z-index:0;
+    opacity:.5;
+    background-image: radial-gradient(rgba(20,24,42,.06) 1px, transparent 1px);
+    background-size: 3px 3px;
+    mix-blend-mode:multiply;
+  }
+
+  body::after{
+    content:'';
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    z-index:0;
+    background:
+      radial-gradient(ellipse 900px 560px at 88% -8%, rgba(156,90,28,.07), transparent 60%),
+      radial-gradient(ellipse 800px 520px at 4% 108%, rgba(20,24,42,.05), transparent 60%);
+  }
+
+  ul,p,h1,h2,h3{ margin:0; }
+  button{ font:inherit; color:inherit; }
+
+  ::selection{ background:var(--accent-soft); color:var(--ink); }
+
+  body::-webkit-scrollbar{ width:10px; }
+  body::-webkit-scrollbar-track{ background:var(--paper); }
+  body::-webkit-scrollbar-thumb{ background:var(--ink-30); border-radius:6px; }
+  body::-webkit-scrollbar-thumb:hover{ background:var(--ink-45); }
+
+  .visually-hidden{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+  }
+
+  /* ---------- deck / slides ---------- */
+
+  .deck{ position:relative; z-index:1; }
+
+  .slide{
+    position:relative;
+    height:100vh;
+    scroll-snap-align:start;
+    scroll-snap-stop:always;
+  }
+
+  .slide-mark{
+    position:absolute; top:var(--pad-y); left:var(--pad-x);
+    display:inline-flex; align-items:center; gap:.5rem;
+    font-family:var(--sans); font-weight:600; font-size:.78rem;
+    letter-spacing:.09em; text-transform:uppercase;
+    color:var(--ink-55);
+    z-index:5;
+  }
+  .mark-dot{
+    width:.4rem; height:.4rem; border-radius:50%; background:var(--accent-soft);
+    flex:0 0 auto;
+  }
+
+  .slide-index{
+    position:absolute; top:var(--pad-y); right:var(--pad-x);
+    font-family:var(--sans); font-weight:600; font-size:.78rem;
+    letter-spacing:.07em; color:var(--ink-45);
+    font-variant-numeric:tabular-nums;
+    z-index:5;
+  }
+
+  .slide-footer{
+    position:absolute; bottom:clamp(1.1rem,3vh,1.6rem); left:0; right:0;
+    text-align:center;
+    font-family:var(--sans); font-size:.72rem; letter-spacing:.03em;
+    color:var(--ink-45);
+    z-index:5;
+  }
+
+  .slide-frame{
+    height:100%;
+    padding:calc(var(--pad-y) + 2.1rem) var(--pad-x) calc(var(--pad-y) + 1.9rem);
+    display:flex; flex-direction:column; justify-content:center;
+    gap:clamp(1.15rem,2.6vh,1.9rem);
+  }
+
+  .slide-copy{ max-width:38rem; display:flex; flex-direction:column; }
+
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:.6rem;
+    font-family:var(--sans); font-weight:700;
+    font-size:clamp(.72rem,.65rem + .3vw,.85rem);
+    letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent);
+    margin-bottom:.9rem;
+  }
+  .eyebrow-rule{ width:1.5rem; height:2px; background:var(--accent); flex:0 0 auto; }
+
+  .headline{
+    font-family:var(--serif); font-weight:600; font-style:normal;
+    font-size:clamp(2rem,1.05rem + 3.4vw,3.55rem);
+    line-height:1.08; letter-spacing:-.01em;
+    color:var(--ink);
+  }
+
+  .body-text{
+    font-family:var(--sans); font-weight:400;
+    font-size:clamp(1rem,.94rem + .25vw,1.1rem);
+    line-height:1.62; color:var(--ink-70);
+    margin-top:1.1rem;
+  }
+
+  .bottom-caption{
+    max-width:34rem;
+    font-family:var(--serif); font-style:italic; font-weight:400;
+    font-size:clamp(1rem,.96rem + .2vw,1.15rem);
+    line-height:1.5; color:var(--ink-70);
+    border-left:3px solid var(--accent);
+    padding-left:1rem;
+  }
+
+  /* ---------- focal number ---------- */
+
+  .focal{
+    display:flex; align-items:baseline; flex-wrap:wrap;
+    column-gap:1.75rem; row-gap:.5rem;
+  }
+  .focal-number{
+    font-family:var(--serif); font-weight:600;
+    font-size:clamp(3.75rem,2rem + 8.5vw,7.25rem);
+    line-height:1; letter-spacing:-.02em;
+    color:var(--accent-soft);
+  }
+  .focal-caption{
+    font-family:var(--sans); font-size:clamp(.95rem,.9rem + .2vw,1.05rem);
+    line-height:1.5; color:var(--ink-70);
+    max-width:30rem;
+    padding-bottom:.5rem;
+  }
+
+  /* ---------- slide 1: two systems ---------- */
+
+  .systems{ display:flex; align-items:stretch; gap:clamp(1rem,3vw,2rem); }
+  .system-block{
+    flex:1 1 0;
+    background:var(--ink); color:var(--paper);
+    border-radius:8px;
+    padding:clamp(1.3rem,3vh,1.9rem) 1.5rem;
+    display:flex; align-items:center; justify-content:center; text-align:center;
+    min-height:clamp(6rem,15vh,8rem);
+    box-shadow:var(--shadow-md);
+  }
+  .system-label{
+    font-family:var(--sans); font-weight:600;
+    font-size:clamp(1rem,1vw + .8rem,1.2rem);
+    letter-spacing:.01em;
+  }
+  .link-gap{
+    flex:0 0 auto; width:clamp(64px,11vw,130px);
+    display:flex; align-items:center;
+  }
+  .link-dash{ flex:1; height:0; border-top:2px dashed var(--ink-30); }
+  .link-node{
+    flex:0 0 auto; width:2rem; height:2rem; margin:0 .4rem;
+    border-radius:50%; border:2px solid var(--accent);
+    background:var(--paper); position:relative;
+  }
+  .link-node::after{
+    content:''; position:absolute; top:50%; left:50%;
+    width:135%; height:2px; background:var(--accent);
+    transform:translate(-50%,-50%) rotate(-45deg);
+  }
+
+  /* ---------- slide 2: upstream / downstream ---------- */
+
+  .stages{ display:flex; align-items:stretch; gap:clamp(1rem,3vw,2rem); }
+  .stage{
+    flex:1 1 0; background:var(--paper-dim); border-radius:8px;
+    padding:1.4rem 1.6rem;
+    display:flex; flex-direction:column; gap:.8rem;
+  }
+  .stage-head{ display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+  .stage-kicker{
+    font-family:var(--sans); font-weight:700; font-size:.75rem;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--ink-55);
+  }
+  .stage-mark{
+    position:relative; flex:0 0 auto;
+    width:1.9rem; height:1.9rem; border-radius:50%;
+  }
+  .mark-good{ border:2px solid var(--ink-45); color:var(--ink-55); }
+  .mark-good::after{
+    content:''; position:absolute; left:50%; top:42%;
+    width:.62rem; height:.34rem;
+    border-left:2px solid currentColor; border-bottom:2px solid currentColor;
+    transform:translate(-50%,-50%) rotate(-45deg);
+  }
+  .mark-bad{ border:2px solid var(--accent); color:var(--accent); background:var(--accent-wash); }
+  .mark-bad::before,.mark-bad::after{
+    content:''; position:absolute; left:50%; top:50%;
+    width:2px; height:.8rem; background:currentColor; border-radius:1px;
+  }
+  .mark-bad::before{ transform:translate(-50%,-50%) rotate(45deg); }
+  .mark-bad::after{ transform:translate(-50%,-50%) rotate(-45deg); }
+  .stage-text{
+    font-family:var(--sans); font-size:1rem; line-height:1.5; color:var(--ink-90);
+  }
+
+  /* ---------- slide 3: compare columns ---------- */
+
+  .compare{ display:flex; align-items:stretch; gap:clamp(1rem,3vw,2rem); }
+  .compare-col{
+    flex:1 1 0; border-radius:8px; padding:1.4rem 1.6rem;
+    display:flex; flex-direction:column; gap:.6rem;
+  }
+  .compare-muted{ background:var(--paper-dim); }
+  .compare-accent{ background:var(--accent-wash); border:1px solid var(--accent-line); }
+  .compare-heading{
+    font-family:var(--sans); font-weight:700; font-size:.85rem;
+    color:var(--ink-70); padding-bottom:.55rem; margin-bottom:.15rem;
+    border-bottom:1px solid var(--ink-15);
+  }
+  .compare-accent .compare-heading{ color:var(--accent); border-bottom-color:var(--accent-line); }
+  .compare-item{ font-family:var(--serif); font-size:1.05rem; color:var(--ink); }
+
+  /* ---------- slide 4: callout card ---------- */
+
+  .callout{
+    background:var(--ink); color:var(--paper);
+    border-radius:10px;
+    padding:clamp(1.5rem,3vh,2.2rem) clamp(1.7rem,3vw,2.5rem);
+    box-shadow:var(--shadow-lg);
+  }
+  .callout-head{
+    display:flex; align-items:baseline; flex-wrap:wrap; gap:.9rem 1rem;
+    padding-bottom:1rem; margin-bottom:1.1rem;
+    border-bottom:1px solid rgba(247,241,227,.18);
+  }
+  .callout-tag{
+    font-family:var(--sans); font-weight:700; font-size:.76rem;
+    letter-spacing:.07em; color:var(--ink);
+    background:var(--accent-soft);
+    padding:.3rem .6rem; border-radius:4px;
+    white-space:nowrap;
+  }
+  .callout-title{
+    font-family:var(--serif); font-weight:600;
+    font-size:clamp(1.25rem,1rem + 1.4vw,1.65rem);
+    color:var(--paper);
+  }
+  .callout-body{
+    display:flex; flex-wrap:wrap; gap:clamp(1.4rem,4vw,2.75rem);
+  }
+  .callout-list{ flex:1 1 260px; min-width:240px; }
+  .callout-list h3{
+    font-family:var(--sans); font-weight:700; font-size:.82rem;
+    letter-spacing:.05em; color:var(--accent-soft);
+    margin-bottom:.7rem;
+  }
+  .callout-list ul{ list-style:none; padding:0; display:flex; flex-direction:column; gap:.55rem; }
+  .callout-list li{
+    position:relative; padding-left:1.05rem;
+    font-family:var(--sans); font-size:.96rem; line-height:1.5;
+    color:rgba(247,241,227,.88);
+  }
+  .callout-list li::before{
+    content:''; position:absolute; left:0; top:.55em;
+    width:5px; height:5px; border-radius:50%; background:var(--accent-soft);
+  }
+
+  /* ---------- reveal animation ---------- */
+
+  .reveal{ opacity:0; transform:translateY(20px); }
+  .slide.in-view .reveal{
+    animation:revealUp .75s cubic-bezier(.16,.84,.44,1) forwards;
+    animation-delay:calc(var(--i,0) * 100ms + 60ms);
+  }
+  @keyframes revealUp{ to{ opacity:1; transform:translateY(0); } }
+
+  @media (prefers-reduced-motion:reduce){
+    .reveal{ animation:none !important; opacity:1 !important; transform:none !important; }
+  }
+
+  /* ---------- floating nav ---------- */
+
+  .deck-nav{
+    position:fixed; right:clamp(1.4rem,4vw,3rem); bottom:clamp(1.2rem,3vh,2rem);
+    z-index:20; display:flex; align-items:center; gap:.85rem;
+    background:var(--paper-90); backdrop-filter:blur(6px);
+    padding:.45rem .6rem; border-radius:999px;
+    border:1px solid var(--ink-08); box-shadow:var(--shadow-md);
+  }
+  .nav-btn{
+    width:2.6rem; height:2.6rem; border-radius:50%;
+    background:transparent; border:1.5px solid var(--ink-30);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:border-color .2s ease, color .2s ease, transform .2s ease;
+    color:var(--ink-70);
+  }
+  .nav-btn:hover:not(:disabled){ border-color:var(--accent); color:var(--accent); transform:translateY(-1px); }
+  .nav-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .nav-btn:disabled{ opacity:.3; cursor:default; }
+  .chev{ width:.55rem; height:.55rem; border-right:2px solid currentColor; border-top:2px solid currentColor; }
+  .chev-prev{ transform:rotate(-135deg); margin-left:4px; }
+  .chev-next{ transform:rotate(45deg); margin-right:4px; }
+  .deck-counter{
+    font-family:var(--sans); font-weight:600; font-size:.85rem;
+    color:var(--ink-70); letter-spacing:.02em;
+    display:inline-flex; align-items:center; gap:.3rem;
+    min-width:2.6rem; justify-content:center;
+    font-variant-numeric:tabular-nums;
+  }
+  .counter-sep{ color:var(--ink-30); }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width:900px){
+    .systems, .stages, .compare, .callout-body{ flex-direction:column; }
+    .link-gap{ width:100%; height:2.5rem; }
+    .link-dash{ border-top:none; border-left:2px dashed var(--ink-30); width:0; height:100%; margin:0 auto; }
+  }
+
+  @media (max-height:700px){
+    .slide-frame{ gap:.9rem; }
+    .body-text{ margin-top:.7rem; }
+  }
+
+  /* ---------- print ---------- */
+
+  @media print{
+    @page{ size:landscape; margin:0; }
+    html,body{ height:auto; overflow:visible; scroll-snap-type:none; background:var(--paper); }
+    body::before,body::after{ display:none; }
+    .slide{
+      height:100vh; scroll-snap-align:none;
+      page-break-after:always; break-after:page; page-break-inside:avoid;
+    }
+    .slide:last-of-type{ page-break-after:auto; break-after:auto; }
+    .reveal{ opacity:1 !important; transform:none !important; animation:none !important; }
+    .deck-nav{ display:none !important; }
+    .system-block,.callout{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
+</style>
+</head>
+<body>
+
+<h1 class="visually-hidden">Consent × Email — how they connect today</h1>
+
+<main class="deck" id="deck">
+
+  <section class="slide" id="slide-1" aria-label="Slide 1 of 4">
+    <span class="slide-mark"><span class="mark-dot" aria-hidden="true"></span>Consent × Email</span>
+    <span class="slide-index" aria-hidden="true">01 · 04</span>
+
+    <div class="slide-frame">
+      <div class="slide-copy">
+        <p class="eyebrow reveal" style="--i:0"><span class="eyebrow-rule" aria-hidden="true"></span>How consent and email connect today</p>
+        <h2 class="headline reveal" style="--i:1">Two systems that were never wired together</h2>
+        <p class="body-text reveal" style="--i:2">When a client manages their marketing consent, that lives in the bank&rsquo;s Consent Preference Centre. When an email actually gets sent, that happens in the vendor email platform. These are two separate systems — and a decision in one does not automatically reach the other.</p>
+      </div>
+
+      <div class="visual systems reveal" style="--i:3" aria-hidden="true">
+        <div class="system-block"><span class="system-label">Consent Preference Centre</span></div>
+        <div class="link-gap">
+          <span class="link-dash"></span>
+          <span class="link-node"></span>
+          <span class="link-dash"></span>
+        </div>
+        <div class="system-block"><span class="system-label">Vendor email platform</span></div>
+      </div>
+
+      <div class="focal reveal" style="--i:4">
+        <span class="focal-number">0.3%</span>
+        <p class="focal-caption">of email unsubscribes ever show up as a change in the bank&rsquo;s consent record</p>
+      </div>
+
+      <p class="bottom-caption reveal" style="--i:5">This isn&rsquo;t a fault — the two systems were simply built to run on their own.</p>
+    </div>
+
+    <p class="slide-footer">Internal analysis · not a compliance assessment</p>
+  </section>
+
+  <section class="slide" id="slide-2" aria-label="Slide 2 of 4">
+    <span class="slide-mark"><span class="mark-dot" aria-hidden="true"></span>Consent × Email</span>
+    <span class="slide-index" aria-hidden="true">02 · 04</span>
+
+    <div class="slide-frame">
+      <div class="slide-copy">
+        <p class="eyebrow reveal" style="--i:0"><span class="eyebrow-rule" aria-hidden="true"></span>What happens to &ldquo;do not solicit&rdquo;</p>
+        <h2 class="headline reveal" style="--i:1">The flag keeps most clients out — but not the ones already on a list</h2>
+        <p class="body-text reveal" style="--i:2">A &ldquo;do not solicit&rdquo; flag filters most of these clients off send lists in the first place. But for the ones who do reach a list, the flag doesn&rsquo;t stop the email — most of them are sent to anyway.</p>
+      </div>
+
+      <div class="visual stages reveal" style="--i:3" aria-hidden="true">
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-kicker">Upstream</span>
+            <span class="stage-mark mark-good"></span>
+          </div>
+          <p class="stage-text">Before a client reaches a send list: the flag works. About 70% are filtered out.</p>
+        </div>
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-kicker">Downstream</span>
+            <span class="stage-mark mark-bad"></span>
+          </div>
+          <p class="stage-text">Once a client is on a send list: the flag doesn&rsquo;t stop the send.</p>
+        </div>
+      </div>
+
+      <div class="focal reveal" style="--i:4">
+        <span class="focal-number">~9,500</span>
+        <p class="focal-caption">do-not-solicit clients emailed in a single quarter — of the ~15,000 who reached a send list (the other ~70% were correctly kept off)</p>
+      </div>
+
+      <p class="bottom-caption reveal" style="--i:5">The safeguard holds at the front door, not at the moment of sending.</p>
+    </div>
+
+    <p class="slide-footer">Internal analysis · not a compliance assessment</p>
+  </section>
+
+  <section class="slide" id="slide-3" aria-label="Slide 3 of 4">
+    <span class="slide-mark"><span class="mark-dot" aria-hidden="true"></span>Consent × Email</span>
+    <span class="slide-index" aria-hidden="true">03 · 04</span>
+
+    <div class="slide-frame">
+      <div class="slide-copy">
+        <p class="eyebrow reveal" style="--i:0"><span class="eyebrow-rule" aria-hidden="true"></span>Reading the consent switches correctly</p>
+        <h2 class="headline reveal" style="--i:1">Not every &ldquo;no&rdquo; means &ldquo;don&rsquo;t email me&rdquo;</h2>
+        <p class="body-text reveal" style="--i:2">One switch that looks like an email opt-out — &ldquo;Share for Marketing across RBC&rdquo; — actually controls whether a client&rsquo;s data can be shared across RBC entities. It is not an email setting. A client can be &ldquo;No&rdquo; on sharing and still be perfectly emailable.</p>
+      </div>
+
+      <div class="visual compare reveal" style="--i:3" aria-hidden="true">
+        <div class="compare-col compare-muted">
+          <span class="compare-heading">Looks like an email opt-out (but isn&rsquo;t)</span>
+          <span class="compare-item">Share for Marketing across RBC</span>
+        </div>
+        <div class="compare-col compare-accent">
+          <span class="compare-heading">Actually controls email</span>
+          <span class="compare-item">Do-not-solicit</span>
+          <span class="compare-item">Email-channel consent</span>
+        </div>
+      </div>
+
+      <div class="focal reveal" style="--i:4">
+        <span class="focal-number">61%</span>
+        <p class="focal-caption">of clients set to &ldquo;No&rdquo; on the sharing switch still received email — more than those set to &ldquo;Yes&rdquo; (32%). It isn&rsquo;t an email control.</p>
+      </div>
+
+      <p class="bottom-caption reveal" style="--i:5">The real email gates are the do-not-solicit and email-channel switches — read those.</p>
+    </div>
+
+    <p class="slide-footer">Internal analysis · not a compliance assessment</p>
+  </section>
+
+  <section class="slide" id="slide-4" aria-label="Slide 4 of 4">
+    <span class="slide-mark"><span class="mark-dot" aria-hidden="true"></span>Consent × Email</span>
+    <span class="slide-index" aria-hidden="true">04 · 04</span>
+
+    <div class="slide-frame">
+      <div class="slide-copy">
+        <p class="eyebrow reveal" style="--i:0"><span class="eyebrow-rule" aria-hidden="true"></span>Where this leaves us</p>
+        <h2 class="headline reveal" style="--i:1">No closed loop between consent and send — and the fix is already being built</h2>
+        <p class="body-text reveal" style="--i:2">Across all of this, one pattern holds: consent decisions don&rsquo;t reliably reach the send system. The encouraging part — a project is already underway to build that missing link.</p>
+      </div>
+
+      <div class="callout reveal" style="--i:3">
+        <div class="callout-head">
+          <span class="callout-tag">MTEC-12644</span>
+          <span class="callout-title">Real-time CPC Unsubscribe</span>
+        </div>
+        <div class="callout-body">
+          <div class="callout-list">
+            <h3>What it should connect</h3>
+            <ul>
+              <li>Unsubscribes flowing back to the consent record</li>
+              <li>A consent check closer to the moment of sending, for do-not-solicit clients</li>
+              <li>Mail sent outside the campaign taxonomy, which today isn&rsquo;t covered by campaign-level suppression</li>
+            </ul>
+          </div>
+          <div class="callout-list">
+            <h3>What we need from the channel owners</h3>
+            <ul>
+              <li>Confirm how consent is applied to your sends today</li>
+              <li>Confirm nothing currently syncs the two systems</li>
+              <li>Confirm MTEC-12644&rsquo;s scope covers the gaps above</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="slide-footer">Internal analysis · not a compliance assessment</p>
+  </section>
+
+</main>
+
+<nav class="deck-nav" aria-label="Slide controls">
+  <button type="button" class="nav-btn nav-prev" aria-label="Previous slide">
+    <span class="chev chev-prev" aria-hidden="true"></span>
+  </button>
+  <div class="deck-counter" aria-live="polite">
+    <span class="counter-current">1</span><span class="counter-sep">/</span><span class="counter-total">4</span>
+  </div>
+  <button type="button" class="nav-btn nav-next" aria-label="Next slide">
+    <span class="chev chev-next" aria-hidden="true"></span>
+  </button>
+</nav>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var currentEl = document.querySelector('.counter-current');
+  var totalEl = document.querySelector('.counter-total');
+  var prevBtn = document.querySelector('.nav-prev');
+  var nextBtn = document.querySelector('.nav-next');
+  var activeIndex = 0;
+
+  totalEl.textContent = slides.length;
+
+  function setActive(index){
+    activeIndex = Math.max(0, Math.min(slides.length - 1, index));
+    currentEl.textContent = activeIndex + 1;
+    prevBtn.disabled = activeIndex === 0;
+    nextBtn.disabled = activeIndex === slides.length - 1;
+  }
+
+  function goTo(index){
+    var clamped = Math.max(0, Math.min(slides.length - 1, index));
+    slides[clamped].scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+
+  prevBtn.addEventListener('click', function(){ goTo(activeIndex - 1); });
+  nextBtn.addEventListener('click', function(){ goTo(activeIndex + 1); });
+
+  window.addEventListener('keydown', function(e){
+    if(e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown'){
+      e.preventDefault(); goTo(activeIndex + 1);
+    } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp'){
+      e.preventDefault(); goTo(activeIndex - 1);
+    }
+  });
+
+  if('IntersectionObserver' in window){
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        var idx = slides.indexOf(entry.target);
+        if(entry.isIntersecting && entry.intersectionRatio >= 0.55){
+          entry.target.classList.add('in-view');
+          setActive(idx);
+        } else if(!entry.isIntersecting){
+          entry.target.classList.remove('in-view');
+        }
+      });
+    }, { threshold:[0, 0.55, 1] });
+
+    slides.forEach(function(s){ io.observe(s); });
+  } else {
+    slides.forEach(function(s){ s.classList.add('in-view'); });
+  }
+
+  setActive(0);
+})();
+</script>
+
+</body>
+</html>

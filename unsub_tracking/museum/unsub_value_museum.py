@@ -630,98 +630,117 @@ T("L8 - CARDS campaigns: LEAVERS vs that campaign's OWN mailed base | matched cl
 
 # %% [21] THE CSV - long format, three roles x four metrics, per MNE and bank-wide. Pivots natively:
 # put metric on rows and role on columns and the leaver-vs-stayer gap is immediate.
-# ONE groupBy, not thousands of unions. The first version of this cell looped in Python over every
-# MNE x role x metric and unionByName'd the one-row results - ~2,400 stacked unions, each with its
-# own count(). The driver OOM'd building the plan (java.lang.OutOfMemoryError, 2026-07-28). The
-# shape below is: label each client row with its role(s), melt the four metrics into rows with
-# stack(), then a single grouped aggregation. Three unions total, one shuffle.
-_ROLE_ARR = F.when(F.col("bucket").isin("leaver", "stayer"),
-                   F.array(F.lit("sender"), F.col("bucket"))).otherwise(F.array(F.lit("sender")))
-_KEEP = ["mne", "program", "role", "CLNT_NO", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
-         "PROF_TOT_ANNUAL"]
+# %% [20b] L9 - THE L7 VIEW, PER CARDS CAMPAIGN. The bank-wide ratio chart is the strongest thing
+# in this analysis; this is the same comparison inside each cards campaign. It CANNOT come from the
+# main cube: there, stayers carry no MNE (only leavers do), so per-campaign leaver-vs-stayer has to
+# be built from cards_send, which is client x MNE with the bucket attached. Cards only - that is the
+# tier that pulled client x MNE.
+_CARD_DIMS = ["age_band", "tenure_band", "prod_band", "prof_quintile", "high_potential"]
 
-# cards MNEs: client x mne, so a client mailed by two cards campaigns contributes to both.
-# already_out clients are 'sender' only - they were mailed, but they are neither leaver nor stayer.
-_cards_roles = (cards_send.withColumn("role", F.explode(_ROLE_ARR)).select(*_KEEP))
+_l9_parts = []
+for _d in _CARD_DIMS:
+    _lv = (cards_send.filter(F.col("bucket") == "leaver")
+           .groupBy("mne", F.col(_d).cast("string").alias("segment_value"))
+           .agg(F.count("*").alias("leavers_n")))
+    _st = (cards_send.filter(F.col("bucket") == "stayer")
+           .groupBy("mne", F.col(_d).cast("string").alias("segment_value"))
+           .agg(F.count("*").alias("stayers_n")))
+    _l9_parts.append(_lv.join(_st, ["mne", "segment_value"], "outer")
+                     .withColumn("segment_dim", F.lit(_d)))
+l9 = _l9_parts[0]
+for _p in _l9_parts[1:]:
+    l9 = l9.unionByName(_p)
 
-# bank-wide block, one row per client
-_all_roles = (matched.withColumn("mne", F.lit("(ALL)")).withColumn("program", F.lit("(ALL)"))
-              .withColumn("role", F.explode(_ROLE_ARR)).select(*_KEEP))
+# denominators are per campaign, so each MNE's percentages sum to 100 within a dimension
+_tot = (cards_send.filter(F.col("bucket").isin("leaver", "stayer"))
+        .groupBy("mne", "bucket").agg(F.count("*").alias("n"))
+        .groupBy("mne")
+        .agg(F.sum(F.when(F.col("bucket") == "leaver", F.col("n")).otherwise(0)).alias("mne_leavers"),
+             F.sum(F.when(F.col("bucket") == "stayer", F.col("n")).otherwise(0)).alias("mne_stayers")))
 
-# every OTHER MNE: leavers only. Tier 3 is cards-only, so non-cards sender/stayer rows cannot be
-# measured at this grain - they are emitted below with NULL stats rather than omitted, because an
-# absent row reads as "no data" and that is not the same as "not measurable here".
-_noncards_roles = (matched.filter((F.col("bucket") == "leaver") &
-                                  (~F.col("mne").isin(*sorted(CARDS_MNES))))
-                   .withColumn("role", F.lit("leaver")).select(*_KEEP))
+l9 = (l9.join(_tot, "mne", "left")
+      .withColumn("leavers_n", F.coalesce(F.col("leavers_n"), F.lit(0)))
+      .withColumn("stayers_n", F.coalesce(F.col("stayers_n"), F.lit(0)))
+      .withColumn("pct_leavers", F.round(100.0 * F.col("leavers_n") / F.col("mne_leavers"), 2))
+      .withColumn("pct_stayers", F.round(100.0 * F.col("stayers_n") / F.col("mne_stayers"), 2))
+      .withColumn("ratio", F.when(F.col("pct_stayers") > 0,
+                                  F.round(F.col("pct_leavers") / F.col("pct_stayers"), 2)))
+      .select("mne", "segment_dim", "segment_value", "pct_leavers", "pct_stayers", "ratio",
+              "leavers_n", "stayers_n", "mne_leavers", "mne_stayers")
+      .orderBy("mne", "segment_dim", F.desc("ratio")))
 
-_roles = _cards_roles.unionByName(_all_roles).unionByName(_noncards_roles)
+T("L9 - LEAVERS vs STAYERS, PER CARDS CAMPAIGN | same comparison as L7, inside each campaign | "
+  "matched clients only | ratio > 1 = over-represented among that campaign's leavers | top 40 rows "
+  "shown, the CSV has all of them", l9.filter(F.col("stayers_n") > 50).limit(40))
 
-# MATERIALISE the role frame before aggregating. Everything upstream of here - the UCP join, the
-# 6M-row cards_send join, two explodes - was being replayed inside one shuffle alongside three
-# percentile_approx calls. Landing it first severs that lineage: the aggregation below then reads a
-# plain parquet file instead of rebuilding the world. This is why the write kept dying (2026-07-28).
-_roles.write.mode("overwrite").parquet(BASE + "roles_tmp")
-_roles = spark.read.parquet(BASE + "roles_tmp")
-print("roles frame materialised:", _roles.count(), "client-role rows at", BASE + "roles_tmp")
+# %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
+# MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN
+# a campaign. This is the file to open if the question is "which campaign loses which kind of client".
+cards_cube = (cards_send.groupBy("mne", "bucket", "age_band", "tenure_band", "prod_band",
+                                 "tibc_mix", "prof_quintile", "high_potential")
+              .agg(F.count("*").alias("clients"),
+                   F.round(F.avg("AGE"), 2).alias("mean_age"),
+                   F.round(F.avg("TENURE_RBC_YEARS"), 2).alias("mean_tenure"),
+                   F.round(F.avg("prod_cnt"), 2).alias("mean_prod"),
+                   F.round(F.avg("PROF_TOT_ANNUAL"), 2).alias("mean_prof")))
 
-_STACK = ("stack(4, 'age', CAST(AGE AS double), 'tenure', CAST(TENURE_RBC_YEARS AS double), "
-          "'prod', CAST(prod_cnt AS double), 'prof', CAST(PROF_TOT_ANNUAL AS double)) "
-          "AS (metric, value)")
-csv_long = (_roles.select("mne", "program", "role", "CLNT_NO", F.expr(_STACK))
-            .groupBy("mne", "program", "role", "metric")
-            # count(), NOT countDistinct(): within a (mne, role, metric) group each client appears
-            # exactly once by construction, so the two are equal - but countDistinct holds every
-            # client id in memory per group, which is ~10M values for the (ALL) rows and is what
-            # kept OOM-ing the driver (2026-07-28).
-            # ONE percentile_approx call returning an array, at accuracy 100 rather than the default
-            # 10000 - three separate calls each built their own sketch per group. Accuracy 100 is
-            # ~1% error on a quartile, which is far below anything that changes a reading here.
-            .agg(F.count("*").alias("clients"),
-                 F.round(F.avg("value"), 4).alias("mean"),
-                 F.expr("percentile_approx(value, array(0.25, 0.5, 0.75), 100)").alias("_q"))
-            .withColumn("p25", F.col("_q")[0])
-            .withColumn("p50", F.col("_q")[1])
-            .withColumn("p75", F.col("_q")[2]).drop("_q"))
+cards_cube.write.mode("overwrite").parquet(BASE + "cards_cube")
+cards_cube = spark.read.parquet(BASE + "cards_cube")
+print("CARDS CUBE:", cards_cube.count(), "rows ->", BASE + "cards_cube")
 
-# the null-stat placeholder rows for non-cards sender/stayer, so the CSV is honest about coverage
-_placeholder = (_leavers_by_mne.filter(~F.col("mne").isin(*sorted(CARDS_MNES)))
-                .select("mne", "program")
-                .crossJoin(spark.createDataFrame([("sender",), ("stayer",)], ["role"]))
-                .crossJoin(spark.createDataFrame([("age",), ("tenure",), ("prod",), ("prof",)],
-                                                 ["metric"]))
-                .withColumn("clients", F.lit(None).cast("long"))
-                .withColumn("mean", F.lit(None).cast("double"))
-                .withColumn("p25", F.lit(None).cast("double"))
-                .withColumn("p50", F.lit(None).cast("double"))
-                .withColumn("p75", F.lit(None).cast("double")))
-csv_long = csv_long.unionByName(_placeholder)
+# %% [21] # THE PIVOT CUBE - counts and means only. No explode, no stack, no percentile sketches.
+#
+# History, so nobody rebuilds the thing that failed: this cell first looped in Python over every
+# MNE x role x metric and unioned ~2,400 one-row frames (driver OOM). Then it melted 76M rows and
+# ran percentile_approx per group (driver OOM, four times). Percentiles over a 10M-client bank-wide
+# block are what cost the money - count() and avg() are single-pass and cheap. Bands give the shape
+# of the distribution anyway: a pivot on the quintile/band columns IS the percentile view.
+#
+# GRAIN: one row per campaign x program x bucket x age_band x tenure_band x prod_band x tibc_mix x
+# prof_quintile x high_potential, with the client count and the mean of each of the four measures.
+# bucket is a COLUMN (leaver / stayer / already_out), so leaver-vs-stayer is a pivot filter rather
+# than a separate export. Matched clients only - unmatched have no bands.
+cube = (matched.groupBy("mne", "program", "bucket", "age_band", "tenure_band", "prod_band",
+                        "tibc_mix", "prof_quintile", "high_potential")
+        .agg(F.count("*").alias("clients"),
+             F.round(F.avg("AGE"), 2).alias("mean_age"),
+             F.round(F.avg("TENURE_RBC_YEARS"), 2).alias("mean_tenure"),
+             F.round(F.avg("prod_cnt"), 2).alias("mean_prod"),
+             F.round(F.avg("PROF_TOT_ANNUAL"), 2).alias("mean_prof"))
+        .join(senders_mne.select("mne", "senders"), "mne", "left")
+        .join(_leavers_by_mne.select("mne", "unsubs"), "mne", "left")
+        .withColumn("unsub_per_1000",
+                    F.when(F.col("senders") > 0,
+                           F.round(1000.0 * F.col("unsubs") / F.col("senders"), 2))))
 
-csv_long = (csv_long
-            .join(senders_mne.select("mne", "senders"), "mne", "left")
-            .join(_leavers_by_mne.select("mne", "unsubs"), "mne", "left")
-            .withColumn("unsub_per_1000",
-                        F.when(F.col("senders") > 0,
-                               F.round(1000.0 * F.col("unsubs") / F.col("senders"), 2)))
-            .select("mne", "program", "role", "clients", "senders", "unsubs", "unsub_per_1000",
-                    "metric", "mean", "p25", "p50", "p75")
-            .orderBy("mne", "role", "metric"))
+cube.write.mode("overwrite").parquet(BASE + "cube")
+cube = spark.read.parquet(BASE + "cube")
+_n_cube = cube.count()
+print("CUBE:", _n_cube, "rows ->", BASE + "cube")
+assert _n_cube > 0, "cube landed empty - investigate before trusting anything downstream"
 
-# WRITE FIRST, count after. Counting a lazily-built frame forces the whole plan for a number we
-# throw away, then forces it AGAIN for the write. The result here is ~2,400 rows - trivial once
-# materialised - so land it, then count the read-back. Also severs the lineage for the csv write.
-csv_long.write.mode("overwrite").parquet(BASE + "summary")
-summary = spark.read.parquet(BASE + "summary")
-_n_csv = summary.count()
-print("CSV long-format rows:", _n_csv, "(3 roles x 4 metrics per cards MNE, leaver-only for the rest)")
-assert _n_csv > 0, "summary landed zero rows - investigate before trusting anything downstream"
+cube.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "cube_csv")
+assert spark.read.option("header", True).csv(BASE + "cube_csv").count() == _n_cube,     "cube_csv readback mismatch"
+print("cube csv ->", BASE + "cube_csv", "- readback confirmed.")
 
-summary.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "summary_csv")
-assert spark.read.option("header", True).csv(BASE + "summary_csv").count() == _n_csv, \
-    "summary_csv readback mismatch"
-print("summary written to", BASE + "summary", "and", BASE + "summary_csv", "- readback confirmed.")
-print("To fetch it for Excel, from a TERMINAL (not this kernel):")
-print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/summary_csv summary.csv")
+# The four on-screen tables, written out as well. Each is a few hundred rows at most; they are the
+# analysis as you read it, so they belong in the deliverable and not only in the notebook.
+for _nm, _df in [("l1_where_by_mne", _leaver_profile(banded, ["mne", "program"])),
+                 ("l6_campaign_summary", l6),
+                 ("l7_leaver_vs_stayer", l7),
+                 ("l8_cards_mailed_vs_leaver", l8),
+                 ("l9_per_campaign_ratios", l9),
+                 ("cards_cube", cards_cube)]:
+    _df.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "csv_" + _nm)
+    print("  csv_" + _nm, "->", spark.read.option("header", True).csv(BASE + "csv_" + _nm).count(),
+          "rows, readback confirmed")
+
+print("")
+print("To fetch for Excel, from a TERMINAL (not this kernel):")
+for _nm in ["cube_csv", "csv_l1_where_by_mne", "csv_l6_campaign_summary",
+            "csv_l7_leaver_vs_stayer", "csv_l8_cards_mailed_vs_leaver",
+            "csv_l9_per_campaign_ratios", "csv_cards_cube"]:
+    print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/" + _nm + " " + _nm + ".csv")
 
 # %% [22] SAVE - client_spine. THE durable artifact: every table above re-derives from it without
 # touching EDW or UCP again.
@@ -781,7 +800,7 @@ else:
     _raw = (["unsubs_3m/" + m[0] for m in WIN_MONTHS] +
             ["senders_base/" + m[0] for m in WIN_MONTHS] +
             ["senders_cards/" + m[0] for m in WIN_MONTHS] +
-            ["senders_by_mne", "prior_unsubs", "roles_tmp"])
+            ["senders_by_mne", "prior_unsubs"])
     for _p in _raw:
         get_ipython().system("hdfs dfs -rm -r -f /user/427966379/unsub_value_museum/" + _p)
     T("CLEANUP - what survived", pd.DataFrame(

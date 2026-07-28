@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CPC Consent Findings - Draft</title>
+<title>CPC Consent Findings</title>
 <style>
   :root{
     --navy:#14223d; --slate:#33445c; --mut:#6b7a90; --line:#dfe4ec; --bg:#ffffff;
@@ -36,7 +36,7 @@
   .sub{font-size:var(--t-body);color:var(--slate);line-height:1.5;max-width:80ch;margin-top:10px;font-weight:400;}
   .sub b{color:var(--navy);font-weight:650;}
 
-  /* hero stat row (slide 1) */
+  /* hero stat row */
   .hero-row{display:flex;align-items:flex-end;gap:34px;margin-top:16px;border-top:2px solid var(--navy);padding-top:14px;}
   .hero-num{font-size:clamp(54px,7.2vw,88px);font-weight:700;color:var(--accent);line-height:.9;letter-spacing:-1px;}
   .hero-lbl{font-size:13px;color:var(--mut);max-width:20ch;line-height:1.35;padding-bottom:6px;}
@@ -55,17 +55,17 @@
 
   .foot-line{font-size:13.5px;color:var(--slate);line-height:1.5;margin-top:16px;max-width:82ch;}
 
-  /* slide 2 : dual flow panels */
+  /* flow panels (single or dual) */
   .flow-grid{display:flex;gap:44px;margin-top:14px;}
-  .flow-panel{flex:1;min-width:0;}
+  .flow-panel{flex:1;min-width:0;margin-top:10px;}
   .flow-title{font-size:14px;font-weight:680;color:var(--navy);margin-bottom:10px;}
   .flow-panel svg{width:100%;height:auto;display:block;}
-  .callout{margin-top:10px;display:flex;align-items:baseline;gap:12px;}
+  .callout{margin-top:14px;display:flex;align-items:baseline;gap:12px;}
   .callout .cv{font-size:clamp(30px,3.6vw,42px);font-weight:700;color:var(--neg);line-height:1;letter-spacing:-.5px;}
-  .callout .cl{font-size:12px;color:var(--slate);line-height:1.35;max-width:26ch;}
+  .callout .cl{font-size:12px;color:var(--slate);line-height:1.35;max-width:32ch;}
   .sub2{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);}
   .sub2 .cv{font-size:clamp(22px,2.6vw,28px);color:var(--mut);}
-  .sub2 .cl{max-width:42ch;}
+  .sub2 .cl{max-width:46ch;}
 
   .strip{margin-top:20px;padding:10px 16px;background:#f7f8fa;border-left:3px solid var(--accent);}
   .strip .k{font-size:10.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);margin-right:8px;}
@@ -98,14 +98,28 @@
 <body>
 <div class="deck" id="deck">
 
-  <!-- 0 SLIDE 1 -->
+  <!-- 0 SLIDE 1 : title / context -->
   <section class="slide on">
-    <div class="hdr"><span>CPC Consent Findings - Draft</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
     <div class="rule"></div>
     <div class="body">
       <div class="eyebrow">Findings - consent &amp; preference - Jul 2025 - Jun 2026</div>
-      <h1>Email consent lives in two record systems of very different scope.</h1>
-      <p class="sub">A one-click unsubscribe and a deliberate preference-centre or assisted-channel action carry different friction. The volumes below measure that difference in behavior, not one system's failure.</p>
+      <h1>Email consent: what the data shows</h1>
+      <p class="sub">Cards pod measurement, window Jul 2025-Jun 2026. Universe: NBA campaign email (SFMC feed) against CPC preference-log switches <b>1002</b>, <b>1012</b>, and <b>1014</b> - the 3 email-relevant of roughly 40 preference codes in the CPC preference dictionary.</p>
+    </div>
+    <div class="method">Two independent record systems, compared over the same window. No number in this deck implies a causal link between an individual unsubscribe and an individual CPC event unless stated on that slide.</div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: museum/README.md (evidence map); museum/cpc_evidence.sql (Cards pod). Evidence 1-6 back every number in this deck.</span><span class="pg">1</span></div>
+  </section>
+
+  <!-- 1 SLIDE 2 : scope contrast -->
+  <section class="slide">
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Findings - consent &amp; preference</div>
+      <h1>Two record systems of very different scope</h1>
+      <p class="sub">A one-click email unsubscribe and a deliberate preference-centre or assisted-channel action carry different friction. The volumes below measure that difference in behavior, not one system's failure relative to the other.</p>
 
       <div class="hero-row">
         <div class="hero-num">35x</div>
@@ -127,82 +141,203 @@
         </div>
       </div>
 
-      <p class="foot-line">CPC opt-outs arrive via assisted channels (branch, contact centre). The email vendor's automated pipe writes ~15 clients/year (switch 1012 only).</p>
+      <p class="foot-line">CPC opt-outs are written overwhelmingly through assisted channels - branch and contact centre. The vendor's own automated pipe into CPC writes an estimated 15-16 clients per year, through switch 1012 only.</p>
     </div>
-    <div class="method">Universe: NBA campaign email (SFMC feed) vs CPC switches 1002/1012/1014 (entity do-not-solicit, banking email, marketing sharing - the 3 email-relevant of ~40 preference codes). Two independent event streams, same months; no linkage implied.</div>
+    <div class="method"><b>E1:</b> two independent event streams over the same months - no client-level link between an individual unsubscribe and an individual CPC opt-out is implied.</div>
     <div class="ftr-rule"></div>
-    <div class="ftr"><span class="src">Source: SFMC vendor feedback + CPC preference log, Jul 2025-Jun 2026. museum/cpc_evidence.sql (Evidence 1, 3).</span><span class="pg">1</span></div>
+    <div class="ftr"><span class="src">Source: SFMC vendor feedback + CPC preference log, Jul 2025-Jun 2026. museum/cpc_evidence.sql (Evidence 1, 3).</span><span class="pg">2</span></div>
   </section>
 
-  <!-- 1 SLIDE 2 -->
+  <!-- 2 SLIDE 3 : the blind gate -->
   <section class="slide">
-    <div class="hdr"><span>CPC Consent Findings - Draft</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
     <div class="rule"></div>
     <div class="body">
       <div class="eyebrow">Findings - consent &amp; preference</div>
-      <h1>19.2% of clients standing do-not-solicit (switch 1002) received campaign email the following quarter.</h1>
+      <h1>The two systems share almost nothing</h1>
 
-      <div class="flow-grid">
+      <div class="flow-panel" style="max-width:680px;">
+        <div class="flow-title">Vendor unsubscribe -&gt; CPC consent record</div>
+        <svg viewBox="0 0 520 150">
+          <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+          <text x="98" y="70" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">319,733</text>
+          <text x="98" y="90" text-anchor="middle" font-size="10.5" fill="#33445c">clients unsubscribed</text>
+          <text x="98" y="103" text-anchor="middle" font-size="10.5" fill="#33445c">(Jul 2025-Jun 2026)</text>
 
-        <!-- PANEL A -->
-        <div class="flow-panel">
-          <div class="flow-title">A. Unsubscribes never reach the consent record</div>
-          <svg viewBox="0 0 520 150">
-            <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
-            <text x="98" y="70" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">319,733</text>
-            <text x="98" y="90" text-anchor="middle" font-size="10.5" fill="#33445c">clients unsubscribed</text>
-            <text x="98" y="103" text-anchor="middle" font-size="10.5" fill="#33445c">(Jul 2025-Jun 2026)</text>
+          <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
+          <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+          <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
+          <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+          <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
+          <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">0.4% carries through</text>
 
-            <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
-            <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
-            <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
-            <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
-            <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
-            <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">0.4% carries through</text>
+          <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+          <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">1,387</text>
+          <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">hold an explicit CPC</text>
+          <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">opt-out (0.4%)</text>
+        </svg>
 
-            <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
-            <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">1,387</text>
-            <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">hold an explicit CPC</text>
-            <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">opt-out (0.4%)</text>
-          </svg>
-          <div class="callout"><div class="cv">99.6%</div><div class="cl">of unsubscribed clients are invisible to the consent record - even counting opt-outs at any time</div></div>
-          <div class="method">Consent standing = latest answer at any point in time, before or after the unsubscribe - the most generous read for CPC.</div>
-          <div class="pending"><b>SFMC-side suppression test:</b> <span>[Evidence 5 - pending run]</span></div>
+        <div class="mini" style="margin-left:0;margin-top:16px;">
+          <div class="cell" style="padding-left:0;border-left:none;"><div class="v">1,252</div><div class="l">recorded before the unsub</div></div>
+          <div class="cell"><div class="v">135</div><div class="l">recorded after the unsub</div></div>
         </div>
 
-        <!-- PANEL B -->
-        <div class="flow-panel">
-          <div class="flow-title">B. Do-not-solicit consent does not translate into delivery</div>
-          <svg viewBox="0 0 520 150">
-            <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
-            <text x="98" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">49,444</text>
-            <text x="98" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">clients standing do-not-solicit</text>
-            <text x="98" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">(1002), before Apr 1, 2026</text>
+        <div class="callout">
+          <div class="cv">135</div>
+          <div class="cl">clients/yr - the propagation ceiling: the most that any unsub-to-CPC event could reflect the unsub itself (0.04% of unsubscribers)</div>
+        </div>
 
-            <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
-            <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
-            <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
-            <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
-            <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
-            <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">19.2% received email</text>
+        <p class="foot-line">The 1,252 "before" group are clients who were already standing opted-out in CPC, received campaign mail, and later unsubscribed at the vendor - not evidence that the unsub reached CPC.</p>
+      </div>
+    </div>
+    <div class="method">Consent standing = latest answer recorded at any point in time, before or after the unsubscribe - the most generous read available for CPC.</div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 2); consent standing = full history.</span><span class="pg">3</span></div>
+  </section>
 
-            <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
-            <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">9,496</text>
-            <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">received campaign email</text>
-            <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">Apr-Jun 2026 (19.2%)</text>
+  <!-- 3 SLIDE 4 : the leaking channel -->
+  <section class="slide">
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Findings - consent &amp; preference</div>
+      <h1>Unsubscribing does not silence the channel</h1>
+
+      <div class="flow-panel" style="max-width:680px;">
+        <div class="flow-title">Vendor unsubscribe -&gt; continued campaign mail</div>
+        <svg viewBox="0 0 520 150">
+          <rect x="6" y="35" width="185" height="80" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+          <text x="98" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">248,130</text>
+          <text x="98" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">clients unsubscribed</text>
+          <text x="98" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">(Jul 2025-Mar 2026)</text>
+
+          <line x1="191" y1="75" x2="228" y2="75" stroke="#14223d" stroke-width="2"/>
+          <line x1="292" y1="75" x2="329" y2="75" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+          <polygon points="329,70 340,75 329,80" fill="#b7bfcc"/>
+          <circle cx="260" cy="75" r="13" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+          <text x="260" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8261c">&#215;</text>
+          <text x="260" y="55" text-anchor="middle" font-size="9.5" fill="#a8261c" font-weight="650">10.4% received email</text>
+
+          <rect x="330" y="35" width="185" height="80" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+          <text x="422" y="68" text-anchor="middle" font-size="19" font-weight="700" fill="#14223d">25,721</text>
+          <text x="422" y="88" text-anchor="middle" font-size="10.5" fill="#33445c">received campaign email</text>
+          <text x="422" y="101" text-anchor="middle" font-size="10.5" fill="#33445c">Apr-Jun 2026 (10.4%)</text>
+        </svg>
+
+        <div class="pending">
+          <b>Candidate mechanisms (open questions, not findings):</b>
+          <span>program-level suppression scope; multiple email addresses per client; re-consent between the unsub and Apr 2026.</span>
+        </div>
+      </div>
+    </div>
+    <div class="method">Sequenced: unsubscribed before Apr 1, 2026 -&gt; campaign email received Apr-Jun 2026 (3-month window). Fixed pre/post window, not a matched-pair test.</div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 5).</span><span class="pg">4</span></div>
+  </section>
+
+  <!-- 4 SLIDE 5 : do-not-solicit leak, by campaign -->
+  <section class="slide">
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Findings - consent &amp; preference</div>
+      <h1>Do-not-solicit clients receive named campaigns</h1>
+
+      <div class="hero-row">
+        <div class="hero-num">19.2%</div>
+        <div class="hero-lbl">of clients standing do-not-solicit (1002) before Apr 1, 2026 received campaign email Apr-Jun 2026</div>
+        <div class="mini">
+          <div class="cell"><div class="v">49,444</div><div class="l">standing do-not-solicit, before Apr 1</div></div>
+          <div class="cell"><div class="v">9,496</div><div class="l">received campaign email, Apr-Jun</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title"><span class="swatch" style="background:var(--accent)"></span>Campaign email reaching 1002 do-not-solicit clients <i>(Apr-Jun 2026, top 12 by clients)</i></div>
+        <svg id="chartMne" viewBox="0 0 580 220"></svg>
+      </div>
+
+      <p class="foot-line">Every row is a named campaign deployment, not transactional mail. Cards pod campaigns reaching this cohort: <b>PCD</b> 697, <b>PCL</b> 691, <b>PCQ</b> 525, <b>AUH</b> 518.</p>
+
+      <div class="sub2 callout">
+        <div class="cv">29.4%</div>
+        <div class="cl">across 1002/1012/1014 combined (96,317 clients); 47% among the 1012-only exclusive cohort (13,214 clients) - shown for scale, not weighted the same as the 1002 finding above.</div>
+      </div>
+      <div class="pending"><b>Switch mapping:</b> <span>1012 (banking email) and 1014 (marketing sharing) pending confirmation with system owners.</span></div>
+    </div>
+    <div class="method">Cohort: latest 1002 (entity do-not-solicit) standing before Apr 1, 2026. Sends: campaign email Apr-Jun 2026, by mne = SUBSTR(TREATMENT_ID, 8, 3).</div>
+    <div class="ftr-rule"></div>
+    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 4, 6).</span><span class="pg">5</span></div>
+  </section>
+
+  <!-- 5 SLIDE 6 : closing / system view -->
+  <section class="slide">
+    <div class="hdr"><span>CPC Consent Findings</span><span class="r">Confidential - Cards Pod</span></div>
+    <div class="rule"></div>
+    <div class="body">
+      <div class="eyebrow">Closing - consent &amp; preference</div>
+      <h1>The system view</h1>
+
+      <div style="max-width:620px;margin-top:8px;">
+
+        <div class="flow-panel" style="margin-top:6px;">
+          <svg viewBox="0 0 640 100">
+            <rect x="6" y="12" width="185" height="56" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+            <text x="98" y="44" text-anchor="middle" font-size="13" font-weight="650" fill="#14223d">Vendor unsub</text>
+            <line x1="191" y1="40" x2="222" y2="40" stroke="#14223d" stroke-width="2"/>
+            <line x1="278" y1="40" x2="309" y2="40" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+            <polygon points="309,35 320,40 309,45" fill="#b7bfcc"/>
+            <circle cx="250" cy="40" r="11" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+            <text x="250" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="#a8261c">&#215;</text>
+            <text x="250" y="24" text-anchor="middle" font-size="10.5" fill="#a8261c" font-weight="650">10.4%</text>
+            <rect x="310" y="12" width="324" height="56" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+            <text x="472" y="44" text-anchor="middle" font-size="13" font-weight="650" fill="#14223d">Continued campaign mail</text>
           </svg>
-          <div class="callout"><div class="cv">19.2%</div><div class="cl">~9,500 of ~49,400 clients standing do-not-solicit (1002) before Apr 1, 2026 received campaign email in Apr-Jun 2026 - the switch whose meaning is unambiguous</div></div>
-          <div class="sub2 callout"><div class="cv">29.4%</div><div class="cl">across 1002/1012/1014 combined (96,317 clients); 47% among the 1012-only exclusive cohort (13,214 clients). 1012 (banking email) and 1014 (marketing sharing) pending switch-mapping confirmation with system owners - shown for scale, not as breaches.</div></div>
-          <div class="method">Sequenced: opted-out standing before Apr 1, 2026 -&gt; campaign email received Apr-Jun 2026 (3-month window).</div>
-          <div class="pending"><b>Campaign mix reaching do-not-solicit clients:</b> <span>[Evidence 6 - pending run]</span></div>
+        </div>
+
+        <div class="flow-panel" style="margin-top:14px;">
+          <svg viewBox="0 0 640 100">
+            <rect x="6" y="12" width="185" height="56" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+            <text x="98" y="44" text-anchor="middle" font-size="13" font-weight="650" fill="#14223d">Vendor unsub</text>
+            <line x1="191" y1="40" x2="222" y2="40" stroke="#14223d" stroke-width="2"/>
+            <line x1="278" y1="40" x2="309" y2="40" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+            <polygon points="309,35 320,40 309,45" fill="#b7bfcc"/>
+            <circle cx="250" cy="40" r="11" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+            <text x="250" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="#a8261c">&#215;</text>
+            <text x="250" y="24" text-anchor="middle" font-size="10.5" fill="#a8261c" font-weight="650">0.04%</text>
+            <rect x="310" y="12" width="324" height="56" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+            <text x="472" y="44" text-anchor="middle" font-size="13" font-weight="650" fill="#14223d">CPC consent record</text>
+          </svg>
+        </div>
+
+        <div class="flow-panel" style="margin-top:14px;">
+          <svg viewBox="0 0 640 100">
+            <rect x="6" y="12" width="185" height="56" rx="6" fill="#f5f7fa" stroke="#c7cedb" stroke-width="1"/>
+            <text x="98" y="37" text-anchor="middle" font-size="12.5" font-weight="650" fill="#14223d">CPC do-not-solicit</text>
+            <line x1="191" y1="40" x2="222" y2="40" stroke="#14223d" stroke-width="2"/>
+            <line x1="278" y1="40" x2="309" y2="40" stroke="#b7bfcc" stroke-width="2" stroke-dasharray="4,4"/>
+            <polygon points="309,35 320,40 309,45" fill="#b7bfcc"/>
+            <circle cx="250" cy="40" r="11" fill="#ffffff" stroke="#a8261c" stroke-width="2"/>
+            <text x="250" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="#a8261c">&#215;</text>
+            <text x="250" y="24" text-anchor="middle" font-size="10.5" fill="#a8261c" font-weight="650">19.2%</text>
+            <rect x="310" y="12" width="324" height="56" rx="6" fill="#ffffff" stroke="#14223d" stroke-width="1.4"/>
+            <text x="472" y="44" text-anchor="middle" font-size="13" font-weight="650" fill="#14223d">Campaign delivery</text>
+          </svg>
+        </div>
+
+        <p class="sub" style="margin-top:18px;"><b>No single system in the chain treats no as no - and the systems do not talk to each other.</b></p>
+
+        <div class="strip"><span class="k">Coverage</span><span class="t">MTEC-12644 (blueprint, Jun 2026) addresses unsub -&gt; consent-record write-back only. The delivery side of the chain is a confirmation question to system owners.</span></div>
+        <div class="pending">
+          <b>Confirmation questions:</b>
+          <span>(1) which suppression list send-time reads; (2) which switch is the lawful campaign-email key, and its SLA; (3) does program-level express consent override a standing opt-out.</span>
         </div>
 
       </div>
-
-      <div class="strip"><span class="k">Coverage</span><span class="t">MTEC-12644 (blueprint, Jun 2026) addresses unsub -&gt; consent-record write-back. The consent-record -&gt; campaign-delivery contract (which switch gates what, which suppression list send-time reads) is a confirmation question to system owners.</span></div>
     </div>
+    <div class="method">Chain restates the rates from Evidence 2, 4, and 5; not independently recomputed here.</div>
     <div class="ftr-rule"></div>
-    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 2, 4); consent standing = full history. Evidence 5-6 pending run (see placeholders).</span><span class="pg">2</span></div>
+    <div class="ftr"><span class="src">Source: museum/cpc_evidence.sql (Evidence 2, 4, 5); MTEC-12644: museum/cpc_evidence_dossier.html section 7.</span><span class="pg">6</span></div>
   </section>
 
 </div>
@@ -280,6 +415,13 @@
   renderBars(document.getElementById('chartCpc'),{
     months, values:cpcOptout, color:'#8a6a17',
     domainMax:1050, ticks:[0,250,500,750,1000]
+  });
+
+  const mneCodes=['OCF','VRE','FWC','API','VRG','VME','PPQ','RFT','KFI','TAO','AUS','GIS'];
+  const mneClients=[5081,2831,2355,1739,1573,1395,1378,1285,1174,966,777,706];
+  renderBars(document.getElementById('chartMne'),{
+    months:mneCodes, values:mneClients, color:'#1f4e79',
+    domainMax:5200, ticks:[0,1000,2000,3000,4000,5000]
   });
 </script>
 </body>

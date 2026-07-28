@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unsubscribe × CPC — Evidence deck (v2)</title>
+<style>
+  :root{
+    --blue:#0051A4; --navy:#002887; --sky:#0091DA; --vibrant:#006AC3;
+    --slate:#9DB0CF; --steel:#6E8DB8; --gold:#FDDF00;
+    --ink:#111C1F; --muted:#4f5763; --faint:#8b93a0;
+    --grid:#e5e8ec; --axis:#c5cbd3; --rule:#d9dee5;
+    --paper:#ffffff; --card:#F1F0EF; --ice:#EDF4F6;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#dfe3e8;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{font-variant-numeric:tabular-nums}
+  .slide{
+    width:min(1220px,96vw);height:min(688px,91vh);margin:3vh auto;background:var(--paper);
+    border:1px solid #d3d7dd;box-shadow:0 12px 34px rgba(17,28,31,.10);
+    display:none;flex-direction:column;padding:30px 42px 14px;position:relative;
+  }
+  .slide.active{display:flex}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:7px}
+  h1{font-size:22px;line-height:1.22;font-weight:700;letter-spacing:-.01em;color:var(--blue);max-width:68ch}
+  .hrule{height:2px;background:var(--slate);opacity:.55;margin:13px 0 4px}
+  .body{display:grid;grid-template-columns:1.5fr 1fr;gap:32px;flex:1;align-items:center;min-height:0}
+  .body.wide{display:flex;flex-direction:column;justify-content:center;align-items:stretch}
+  figure{margin:0;width:100%}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin:0 0 2px 58px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+  .grid{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--axis);stroke-width:1.3}
+  .gl{font-size:11px;fill:var(--faint);text-anchor:end}
+  .val{font-size:13.5px;font-weight:700;fill:var(--ink);text-anchor:middle}
+  .valw{font-size:13px;font-weight:700;fill:#fff;text-anchor:middle}
+  .cat{font-size:11.5px;fill:var(--ink);text-anchor:middle;font-weight:600}
+  .sub{font-size:10px;fill:var(--faint);text-anchor:middle}
+  .pan{font-size:11.5px;fill:var(--muted);text-anchor:middle;font-weight:700}
+  .yt{font-size:11px;fill:var(--muted);text-anchor:middle}
+  .lend{font-size:12px;font-weight:700}
+  .anno{font-size:11px;fill:var(--steel);font-weight:600}
+  .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-weight:700}
+  .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:9px}
+  .read .k{font-weight:700;color:var(--navy)}
+  .read .concl{border-left:3px solid var(--blue);padding:8px 0 8px 13px;background:var(--ice);font-size:13.5px;line-height:1.4}
+  .read .note{font-size:11px;color:var(--muted);font-style:italic;margin-top:8px;line-height:1.38}
+  footer{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);margin-top:10px;padding-top:7px;
+    font-size:10.5px;color:var(--steel);font-style:italic}
+  .setup{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:15px;flex:1;align-content:stretch}
+  .card{background:var(--card);border:1px solid #e3e2e0;border-radius:6px;padding:14px 16px}
+  .card.ice{background:var(--ice);border-color:#d5e3e8}
+  .card h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--blue);margin-bottom:8px;font-weight:700}
+  .card p{font-size:12.5px;line-height:1.42;color:#23282f;margin-bottom:6px}
+  .card p:last-child{margin-bottom:0}
+  .card .kk{font-weight:700;color:var(--navy)}
+  .deft{width:100%;border-collapse:collapse;font-size:12px}
+  .deft td{padding:4px 0;vertical-align:top;border-bottom:1px solid #e0dfdc}
+  .deft tr:last-child td{border-bottom:0}
+  .deft .code{font-weight:700;color:var(--blue);white-space:nowrap;padding-right:9px}
+  .pend{font-size:10px;color:var(--steel);font-style:italic}
+  .fnote{font-size:10.5px;color:var(--muted);margin-top:7px;line-height:1.38}
+  .flow{display:flex;align-items:center;justify-content:center;margin:2px 0 16px}
+  .node{background:var(--card);border:1px solid var(--slate);border-radius:6px;padding:13px 18px;text-align:center;min-width:220px}
+  .node .nt{font-weight:700;color:var(--blue);font-size:14.5px}
+  .node .ns{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .gap{padding:0 16px;text-align:center;color:var(--muted)}
+  .gap .x{font-size:18px;color:var(--steel);font-weight:700;display:block}
+  .gap .gl2{font-size:10.5px;display:block;color:var(--faint);max-width:120px}
+  .bridge{margin:0 auto 16px;max-width:660px;text-align:center}
+  .bridge .bt{display:inline-block;background:var(--blue);color:#fff;padding:7px 15px;border-radius:6px;font-weight:700;font-size:13.5px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .cols h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;font-weight:700}
+  .cols ul{list-style:none}
+  .cols li{font-size:12.8px;line-height:1.36;color:#23282f;padding:5px 0 5px 16px;position:relative}
+  .cols li::before{content:"▪";position:absolute;left:0;color:var(--blue)}
+  .nav{position:fixed;right:22px;bottom:16px;display:flex;align-items:center;gap:11px;
+    background:#fff;border:1px solid #d3d7dd;border-radius:22px;padding:5px 9px;box-shadow:0 4px 14px rgba(17,28,31,.14);z-index:10}
+  .nav button{border:0;background:var(--blue);color:#fff;width:27px;height:27px;border-radius:50%;font-size:14px;cursor:pointer;line-height:1}
+  .nav button:disabled{background:var(--slate);cursor:default}
+  .nav .count{font-size:12px;color:var(--muted);font-weight:600;min-width:44px;text-align:center}
+  .mark{position:absolute;top:12px;right:20px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);font-weight:600}
+</style>
+</head>
+<body>
+
+  <!-- SLIDE 1 — SETUP -->
+  <section class="slide active">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Exploratory analysis · initial phase · what we studied</div>
+    <h1>The relationship between an email unsubscribe and the bank's consent record (CPC)</h1>
+    <div class="hrule"></div>
+    <div class="setup">
+      <div class="card">
+        <h3>The question</h3>
+        <p>When a client unsubscribes from a marketing email, does that action <span class="kk">reach — or relate to —</span> their consent state in the bank's Consent Preference Centre (CPC)?</p>
+        <p>An initial, exploratory read: we describe what we monitored and observed, and leave the conclusions to the reader.</p>
+      </div>
+      <div class="card">
+        <h3>The two data sources</h3>
+        <p><span class="kk">Vendor email feedback (SFMC):</span> every NBA marketing-campaign email unsubscribe — a one-click "unsubscribe" (disposition 4), across ~30 active programs. Grain = email address.</p>
+        <p><span class="kk">CPC preference log:</span> each client's consent switches and how they change. Grain = client × switch.</p>
+      </div>
+      <div class="card ice">
+        <h3>The switches we monitor</h3>
+        <table class="deft">
+          <tr><td class="code">1002</td><td><b>Do-not-solicit</b> (RBC Royal Bank) — marketing gate. Dictionary-confirmed.</td></tr>
+          <tr><td class="code">1012</td><td><b>Banking e-mail</b> — email channel consent. <span class="pend">meaning owner-confirm pending</span></td></tr>
+          <tr><td class="code">1014</td><td><b>Share-for-Marketing</b> across RBC — cross-entity data sharing, not email. <span class="pend">owner-confirm pending</span></td></tr>
+        </table>
+        <div class="fnote">Sharing family also: 1015 (services), 1016 (bank &amp; credit-bureau), 1036 (online-personalization). Consent states: <b>5001</b> Yes · <b>5002</b> No · <b>5003</b> blank. Policy treats blank as No on 1014/1015 for sharing; for measurement we keep blank separate (blank ≠ an answered No).</div>
+      </div>
+      <div class="card">
+        <h3>How we connect them (method)</h3>
+        <p>We follow the <span class="kk">same clients</span>. Of <span class="kk">319,733</span> who unsubscribed (Jul 2025 – Jun 2026), we join each on client number into their CPC records — any change within 90 days, and their latest standing.</p>
+        <p class="fnote" style="margin:0">Email-to-client join: 1.12 addresses per client; the reverse risk (one address → several clients) isn't yet quantified. Volume comparison (next slide) is two streams, not yet linked.</p>
+      </div>
+    </div>
+    <footer><span>Sources: DTZV01 vendor feedback (SFMC) · DDWV01 CPC preference log — via cpc_reservoir_extract.py / archaeology audit cells</span><span>Cards / NBA measurement</span></footer>
+  </section>
+
+  <!-- SLIDE 2 — SCALE -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Zoom out · two streams, not yet linked</div>
+    <h1>What we see first: email unsubscribes and CPC opt-outs are very different-sized&nbsp;streams</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <svg id="c1" viewBox="0 0 900 400" role="img" aria-label="Monthly email unsubscribes versus CPC opt-outs"></svg>
+      </figure>
+      <div class="read">
+        <h2>What we counted</h2>
+        <p><span class="k">Email unsubscribes</span> — clients by the month of their first unsubscribe (code 4): about <span class="k">27,000</span> a month.</p>
+        <p><span class="k">CPC opt-outs</span> — clients with a "No" (5002) flip on a monitored switch: about <span class="k">800</span> a month.</p>
+        <p class="concl">Two differently-sized streams, roughly <span class="k">35× apart</span> on the 12-month average — so even if every CPC opt-out were an unsubscriber, at most ~3% of monthly unsubs could be reaching CPC. The next slides ask whether the same clients connect.</p>
+        <p class="note">Volume only — no client-level link here, by design; each is against a different population at risk. Opt-out volume counts explicit-No on the 3 monitored switches (1002/1012/1014); the journey (slide 3) scans all switches.</p>
+      </div>
+    </div>
+    <footer><span>Source: cpc_evidence_hdfs.py · E1 — clients by first-unsub month; CPC opt-out = 5002 on 1002/1012/1014</span><span>Jul 2025 – Jun 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 3 — RELATIONSHIP (PLACEBO BASELINE) -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Zoom in · does an unsubscribe trigger a CPC change?</div>
+    <h1>What we observed: CPC changes after an unsubscribe are rare and human-written — no automated path</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <svg id="c3" viewBox="0 0 900 400" role="img" aria-label="Pre- versus post-unsubscribe CPC change rate, and day-lag of the writes"></svg>
+      </figure>
+      <div class="read">
+        <h2>What we tested</h2>
+        <p>Within 90 days of an unsubscribe, only <span class="k">0.28%</span> of clients show any CPC No/blank change (0.3% on clients with a full 90-day window, so it isn't a censoring effect).</p>
+        <p>Those few writes are <span class="k">branch / onboarding</span> activity on <span class="k">sharing</span> switches (1016/1036), not the email switches — the email platform reached just <span class="k">19 clients</span> (a low-volume SFMC path, scope to confirm). For context, the same clients' prior-90-day rate was 1.99%, but that pre-window likely reflects onboarding writes, so we don't lean on it.</p>
+        <p class="concl">No sign of an automated path from an unsubscribe into the consent record.</p>
+        <p class="note">"CPC No/blank change" = a new No or blank state written on any switch within 90 days of the unsubscribe (opt-ins excluded).</p>
+      </div>
+    </div>
+    <footer><span>Source: audit A1–A3, A7 — same clients; placebo = 90-day window before vs after; all switches; full-runway re-cut on 265,059</span><span>unsubs Jul 2025 – Jun 2026</span></footer>
+  </section>
+
+  <!-- SLIDE 4 — SWITCH × EMAIL (THREE-WAY) -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Zoom in · how each switch relates to email — explicit answer vs never-asked</div>
+    <h1>What we see: only do-not-solicit (1002) clearly tracks email; the others are weak or&nbsp;flat</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--navy)"></i>Explicit No (5002)</span>
+          <span><i class="sw" style="background:var(--sky)"></i>Explicit Yes (5001)</span>
+          <span><i class="sw" style="background:var(--slate)"></i>Blank — never asked</span>
+        </div>
+        <svg id="c4" viewBox="0 0 900 400" role="img" aria-label="Email receipt rate by three-way standing for 1002, 1012, 1014"></svg>
+      </figure>
+      <div class="read">
+        <h2>What we compared</h2>
+        <p>Share who received email in Apr–Jun, split by <span class="k">explicit</span> answer (not lumping in blanks).</p>
+        <p><span class="k">1002 (do-not-solicit):</span> an explicit No is emailed far less than Yes (19% vs 45%). <span class="k">1012:</span> No and Yes are the same (30% vs 29%). <span class="k">1014 (sharing):</span> No is only mildly below Yes (26% vs 32%).</p>
+        <p>The never-asked <span class="k">blank</span> majority is heavily emailed on 1002 and 1014 (60%+); on 1012 almost everyone is explicitly set (only 326 blanks). An earlier read that folded blanks into "No" overstated 1014 — corrected here.</p>
+        <p class="concl">1002 is the switch that tracks email; 1012 and 1014 do not clearly gate it.</p>
+        <p class="note">The 1002 No/Yes gap may partly reflect list composition, not only enforcement (a slide-6 ask); switch populations differ, and 1012 covers a smaller base.</p>
+      </div>
+    </div>
+    <footer><span>Source: audit A4 — distinct clients with a standing on the switch (2026-04-01); received ≥1 send Apr–Jun; universes differ, 1012 covers a smaller base; *small sample</span><span>1012 / 1014 meanings owner-confirm pending</span></footer>
+  </section>
+
+  <!-- SLIDE 5 — DO-NOT-SOLICIT LEAK -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Zoom in · do-not-solicit clients who receive marketing email</div>
+    <h1>What we see: a small but persistent share of do-not-solicit clients receive marketing&nbsp;email</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <svg id="c5" viewBox="0 0 900 400" role="img" aria-label="Do-not-solicit funnel from flagged to emailed"></svg>
+      </figure>
+      <div class="read">
+        <h2>What we counted</h2>
+        <p><span class="k">49,446</span> clients stand No on 1002. About <span class="k">70%</span> (34,430) have no send record; <span class="k">15,016</span> do, and <span class="k">9,498</span> received marketing email in Apr–Jun.</p>
+        <p>It is persistent, not a timing effect: the rate holds at <span class="k">19–22%</span> whether the No was set last month or over two years ago; only <span class="k">49</span> clients flipped back to Yes in the quarter; and the sends span many campaigns (codes QCF, VRE, Cards' PCD/PCL, and untagged "DEFAULT" mail).</p>
+        <p class="concl">A standing divergence between the 1002 flag and observed sends — cause not yet confirmed (see the slide-6 ask on how 1002 is consumed at send time).</p>
+        <p class="note">Sends = ~30 marketing campaigns in the vendor feed; "in the send system" = a vendor record in the trailing ~14 months (receipt window Apr–Jun 2026, standing 1 Apr). Candidate causes of the divergence: 1002's entity scope, the untagged DEFAULT stream, or the downstream suppression basis. <b>Open item:</b> the 34,430 with no send record aren't yet split by email-on-file / dormant / suppressed — tracked to-do (needs a client-attribute table).</p>
+      </div>
+    </div>
+    <footer><span>Source: audit A5 (recency) / A6 (churn) / A9 (program mix) — distinct clients; 1:1 email-to-client on the 15,016</span><span>1002 do-not-solicit</span></footer>
+  </section>
+
+  <!-- SLIDE 6 — PULL BACK -->
+  <section class="slide">
+    <span class="mark">Unsubscribe × CPC · Cards / NBA</span>
+    <div class="eyebrow">Pull back · what we take from this, and what's next</div>
+    <h1>What we've learned so far — and the questions it opens</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <div>
+        <div class="flow">
+          <div class="node"><div class="nt">Consent Preference Centre</div><div class="ns">where a client's "no" is recorded</div></div>
+          <div class="gap"><span class="x">⊘</span><span class="gl2">no systematic write-path (only 19 SFMC clients)</span></div>
+          <div class="node"><div class="nt">Vendor email platform (SFMC)</div><div class="ns">what actually sends</div></div>
+        </div>
+        <div class="bridge"><span class="bt">MTEC-12644 — Real-time CPC Unsubscribe</span><div class="ns" style="margin-top:5px;color:var(--muted)">a link between the two, reported in build — scope to confirm</div></div>
+        <div class="cols">
+          <div>
+            <h3>What the analysis opens</h3>
+            <ul>
+              <li>CPC changes after an unsubscribe are rare (0.3%) and branch/onboarding-written; the email platform reached just 19 clients — no systematic path</li>
+              <li>Of the monitored switches, only 1002 clearly tracks email; 1012 and 1014 do not</li>
+              <li>A persistent ~19% of do-not-solicit clients receive marketing email — unexplained</li>
+            </ul>
+          </div>
+          <div>
+            <h3>What we need from the channel owners</h3>
+            <ul>
+              <li>Confirm the meaning of 1012 and 1014 and how each is applied to sends</li>
+              <li>Confirm how 1002 is consumed at send time, and where in the selection-to-send cycle</li>
+              <li>Confirm the CPC writer-code taxonomy — could a sync write under a non-ESP code?</li>
+              <li>Confirm whether anything currently syncs the two systems, and MTEC-12644's scope</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer><span>Internal analysis · exploratory · not a compliance assessment</span><span>Cards / NBA measurement</span></footer>
+  </section>
+
+<div class="nav">
+  <button id="prev" aria-label="Previous">‹</button>
+  <span class="count" id="count">1 / 6</span>
+  <button id="next" aria-label="Next">›</button>
+</div>
+
+<script>
+(function(){
+  function svg(id,s){var e=document.getElementById(id); if(e) e.innerHTML=s;}
+  var INK="#111C1F", BLUE="#0051A4", NAVY="#002887", SKY="#0091DA", SLATE="#9DB0CF", STEEL="#6E8DB8";
+
+  /* C1 — scale lines */
+  (function(){
+    var email=[26774,30920,28859,29320,28164,27277,26119,27970,28318,24795,18746,22471];
+    var opt=[838,823,716,780,636,700,723,656,963,894,758,565];
+    var mL=["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
+    var x0=90,x1=792,top=44,base=330,MX=32000;
+    var X=function(i){return x0+i*((x1-x0)/11);};
+    var Y=function(v){return base-(v/MX)*(base-top);};
+    var s="";
+    [0,8000,16000,24000,32000].forEach(function(g){var y=Y(g);
+      s+='<line class="grid" x1="'+x0+'" x2="'+x1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(x0-8)+'" y="'+(y+4)+'">'+(g/1000)+'K</text>';});
+    s+='<line class="axis" x1="'+x0+'" y1="'+top+'" x2="'+x0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+x0+'" y1="'+base+'" x2="'+x1+'" y2="'+base+'"/>';
+    mL.forEach(function(m,i){s+='<text class="sub" x="'+X(i)+'" y="'+(base+18)+'">'+m+'</text>';});
+    s+='<text class="sub" x="'+X(2)+'" y="'+(base+31)+'">2025</text><text class="sub" x="'+X(8)+'" y="'+(base+31)+'">2026</text>';
+    function poly(a,col,w){var p=a.map(function(v,i){return X(i)+","+Y(v);}).join(" ");
+      var d='<polyline points="'+p+'" fill="none" stroke="'+col+'" stroke-width="'+w+'" stroke-linejoin="round"/>';
+      a.forEach(function(v,i){d+='<circle cx="'+X(i)+'" cy="'+Y(v)+'" r="3" fill="'+col+'"/>';});return d;}
+    s+=poly(opt,STEEL,2.6);
+    s+=poly(email,BLUE,3);
+    s+='<text x="'+(x1+8)+'" y="'+(Y(22471)+4)+'" class="lend" fill="'+BLUE+'">Email</text>';
+    s+='<text x="'+(x1+8)+'" y="'+(Y(22471)+19)+'" class="lend" fill="'+BLUE+'" font-size="10.5" font-weight="400">unsubscribes</text>';
+    s+='<circle cx="'+X(11)+'" cy="'+Y(565)+'" r="3.5" fill="'+STEEL+'"/>';
+    s+='<text x="'+(x1+8)+'" y="'+(Y(565)-11)+'" class="lend" fill="'+STEEL+'">CPC ~800/mo</text>';
+    var ax=X(3);
+    s+='<line x1="'+ax+'" y1="'+Y(email[3])+'" x2="'+ax+'" y2="'+Y(opt[3])+'" stroke="'+NAVY+'" stroke-width="1" stroke-dasharray="3 3"/>';
+    s+='<text x="'+(ax+8)+'" y="'+((Y(email[3])+Y(opt[3]))/2)+'" class="anno" fill="'+NAVY+'">≈35× apart (12-mo avg)</text>';
+    s+='<text class="yt" font-size="12.5" transform="translate(18,'+((top+base)/2)+') rotate(-90)">clients per month</text>';
+    svg("c1",s);
+  })();
+
+  /* C3 — placebo (left) + day-lag (right) */
+  (function(){
+    var s="";
+    // left: before vs after, % scale 0-2.5
+    var lx0=120,base=330,top=60,H=270,MXp=2.5;
+    var Yp=function(p){return base-(p/MXp)*H;};
+    [0,0.5,1.0,1.5,2.0,2.5].forEach(function(p){var y=Yp(p);
+      s+='<line class="grid" x1="'+lx0+'" x2="360" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(lx0-8)+'" y="'+(y+4)+'">'+p.toFixed(1)+'%</text>';});
+    s+='<line class="axis" x1="'+lx0+'" y1="'+top+'" x2="'+lx0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+lx0+'" y1="'+base+'" x2="360" y2="'+base+'"/>';
+    var lb=[{l:"Before",p:1.99,n:"6,363",c:SLATE},{l:"After",p:0.278,n:"889",c:NAVY}];
+    lb.forEach(function(b,i){var bx=lx0+30+i*110,bw=80,by=Yp(b.p),cx=bx+bw/2;
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+(base-by)+'" rx="3" '+(i===0?'fill="#fff" stroke="'+NAVY+'" stroke-width="2"':'fill="'+b.c+'"')+'/>';
+      s+='<text class="val" x="'+cx+'" y="'+(by-10)+'">'+b.p+'%</text>';
+      s+='<text class="cat" x="'+cx+'" y="'+(base+18)+'">'+b.l+' 90d</text>';
+      s+='<text class="sub" x="'+cx+'" y="'+(base+33)+'">'+b.n+' clients</text>';});
+    s+='<text class="pan" x="240" y="'+(base+55)+'">How often it changes — rate before vs after unsub</text>';
+    // right: who wrote the post-unsub changes (horizontal); SFMC=19 tiny
+    var wl=[{l:"Branch",v:627},{l:"Onboarding",v:173},{l:"Other assisted",v:137},{l:"SFMC (ESP)",v:19}];
+    var wx=600,ww=230,MXw=627,wy0=78,wh=32,wg=24;
+    s+='<text class="pan" x="'+(wx+40)+'" y="'+(wy0-20)+'" text-anchor="start" fill="#4f5763">Who wrote the after-unsub changes (of the 889)</text>';
+    wl.forEach(function(w,i){var y=wy0+i*(wh+wg);var bw=Math.max((w.v/MXw)*ww,3);var col=(i===3)?NAVY:BLUE;
+      s+='<text x="'+(wx-8)+'" y="'+(y+wh/2+4)+'" class="gl" fill="'+INK+'" font-weight="600">'+w.l+'</text>';
+      s+='<rect x="'+wx+'" y="'+y+'" width="'+bw+'" height="'+wh+'" rx="3" fill="'+col+'"/>';
+      s+='<text x="'+(wx+bw+8)+'" y="'+(y+wh/2+4)+'" text-anchor="start" fill="'+(i===3?NAVY:INK)+'" font-weight="700" font-size="'+(i===3?14:12)+'">'+w.v+(i===3?'  ← the only ESP path':'')+'</text>';});
+    s+='<text x="'+(wx-8)+'" y="'+(wy0+4*(wh+wg)+2)+'" font-size="11.5" fill="#4f5763" text-anchor="start">Writers overlap — 889 distinct clients total.</text>';
+    svg("c3",s);
+  })();
+
+  /* C4 — three-way, 3 panels x 3 bars */
+  (function(){
+    var top=58,base=326,H=268,x0=54,x1=880;
+    var Y=function(p){return base-(p/70)*H;};
+    var COL={No:NAVY,Yes:SKY,blank:SLATE};
+    var panels=[
+      {x:70,name:"1002 — Do-not-solicit",bars:[{s:"No",r:19.2,n:"49.4K"},{s:"Yes",r:45.4,n:"1.12M"},{s:"blank",r:64.4,n:"2.74M"}]},
+      {x:350,name:"1012 — Banking e-mail",bars:[{s:"No",r:30.2,n:"33.1K"},{s:"Yes",r:29.1,n:"562K"},{s:"blank",r:24.5,n:"326"}]},
+      {x:630,name:"1014 — Share-for-Marketing",bars:[{s:"No",r:26.2,n:"79.3K"},{s:"Yes",r:32.3,n:"531K"},{s:"blank",r:62.3,n:"3.37M"}]}
+    ];
+    var s="";
+    [0,20,40,60].forEach(function(p){var y=Y(p);
+      s+='<line class="grid" x1="'+x0+'" x2="'+x1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(x0-8)+'" y="'+(y+4)+'">'+p+'%</text>';});
+    s+='<line class="axis" x1="'+x0+'" y1="'+top+'" x2="'+x0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+x0+'" y1="'+base+'" x2="'+x1+'" y2="'+base+'"/>';
+    s+='<text class="yt" transform="translate(18,'+((top+base)/2)+') rotate(-90)">received ≥1 email (%)</text>';
+    panels.forEach(function(pan){pan.bars.forEach(function(b,i){
+      var bw=56,bx=pan.x+10+i*72,by=Y(b.r),cx=bx+bw/2;
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+(base-by)+'" rx="3" fill="'+COL[b.s]+'"><title>'+pan.name+' · '+b.s+' · '+b.r+'% (n='+b.n+')</title></rect>';
+      s+='<text class="val" x="'+cx+'" y="'+(by-9)+'" font-size="12.5">'+b.r+'%</text>';
+      s+='<text class="sub" x="'+cx+'" y="'+(base+14)+'">n='+b.n+(b.n==="326"?" *":"")+'</text>';});
+      s+='<text class="pan" x="'+(pan.x+118)+'" y="'+(base+30)+'">'+pan.name+'</text>';});
+    svg("c4",s);
+  })();
+
+  /* C5 — funnel: number + label ABOVE each bar (dark ink), bar below (no text inside) */
+  (function(){
+    var s="";
+    var x0=112,maxW=650,MX=49446;
+    var stages=[
+      {v:49446,lab:'Stand "No" on 1002 (do-not-solicit)',col:BLUE},
+      {v:15016,lab:"Appear in the send system  ·  30%",col:BLUE},
+      {v:9498,lab:"Received marketing email · Apr–Jun",col:NAVY}
+    ];
+    var y0=66,rowH=104;
+    stages.forEach(function(st,i){var y=y0+i*rowH;var w=Math.max((st.v/MX)*maxW,4);
+      s+='<text x="'+x0+'" y="'+y+'" font-size="23" font-weight="800" fill="'+NAVY+'">'+st.v.toLocaleString()+'</text>';
+      s+='<text x="'+(x0+112)+'" y="'+y+'" font-size="13" fill="#4f5763">'+st.lab+'</text>';
+      s+='<rect x="'+x0+'" y="'+(y+14)+'" width="'+maxW+'" height="30" fill="#eef1f4" rx="4"/>';
+      s+='<rect x="'+x0+'" y="'+(y+14)+'" width="'+w+'" height="30" rx="4" fill="'+st.col+'"/>';
+    });
+    s+='<text x="'+(x0+maxW)+'" y="'+(y0+rowH-16)+'" class="anno" text-anchor="end" fill="'+STEEL+'">▼ ~70% (34,430) have no send record</text>';
+    s+='<text x="'+(x0+maxW)+'" y="'+(y0+2*rowH-16)+'" class="anno" text-anchor="end" fill="'+NAVY+'">▼ 63% of those on a list</text>';
+    svg("c5",s);
+  })();
+
+  /* navigation */
+  var slides=[].slice.call(document.querySelectorAll(".slide"));
+  var i=0, prev=document.getElementById("prev"), next=document.getElementById("next"), count=document.getElementById("count");
+  function show(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach(function(s,k){s.classList.toggle("active",k===i);});
+    count.textContent=(i+1)+" / "+slides.length;
+    prev.disabled=i===0; next.disabled=i===slides.length-1;}
+  prev.onclick=function(){show(i-1);}; next.onclick=function(){show(i+1);};
+  document.addEventListener("keydown",function(e){if(e.key==="ArrowRight"||e.key==="PageDown")show(i+1);if(e.key==="ArrowLeft"||e.key==="PageUp")show(i-1);});
+  show(0);
+})();
+</script>
+</body>
+</html>
