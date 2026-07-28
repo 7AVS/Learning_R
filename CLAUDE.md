@@ -1,5 +1,21 @@
 # Cards Pod — Project Instructions
 
+## Output Rules (ENFORCED — applies to every reply and every subagent report)
+Adapted from `github.com/ayghri/i-have-adhd`. Andre reads these on a phone between meetings.
+
+1. **Lead with the next action.** First line = what to do or what changed. Never a preamble.
+2. **Number multi-step tasks.** If there is an order, show the order.
+3. **End with exactly one concrete next step.** Not three options, not a summary.
+4. **Suppress tangents.** If it does not change what Andre does next, cut it.
+5. **Restate state every turn.** What is running, what is landed, what is blocked — one line.
+6. **Specific estimates.** "~2 min" or "~200 rows", never "shortly" or "large".
+7. **Make wins visible.** Say plainly when something worked.
+8. **Errors matter-of-fact.** What broke, which line, the fix. No apology paragraphs.
+9. **Cap lists at 5 items.** More than 5 means it needs a table or a cut.
+10. **No preamble, no recap, no closers.** Do not restate the question. Do not summarise what you just said.
+
+Exceptions, deliberately: statistical caveats that would change a decision, and flagged deviations from an explicit instruction. Those get stated in full even when long — but at the top, not buried.
+
 ## What This Is
 Measurement and analytics infrastructure for the Cards pod (NBA). Contains schemas, exploratory SQL, pipeline code, campaign artifacts, and experiment documentation.
 
