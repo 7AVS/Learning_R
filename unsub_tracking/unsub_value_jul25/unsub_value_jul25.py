@@ -220,11 +220,19 @@ log(4, "matched to UCP %s" % BASELINE, "ucp4", "left join on clnt_key", n_matche
     "%.1f%% of the universe" % (100.0 * n_matched / n_cohort))
 
 # %% [5] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
-_w = W.orderBy(F.col("PROF_TOT_ANNUAL").asc_nulls_last())
-b = (b.withColumn("dec", F.when(F.col("PROF_TOT_ANNUAL").isNull(), F.lit(None))
-                          .otherwise(F.ntile(10).over(_w)))
+# ntile MUST run over non-null rows only. asc_nulls_last still ranks the nulls, so they land in the top
+# tiles and eat them: the first run put 630,531 nulls into decile 10, leaving it 104,609 real clients
+# against ~733,000 in every other decile - the top 1.5% of the distribution wearing a "decile 10" label.
+_nn  = b.filter(F.col("PROF_TOT_ANNUAL").isNotNull())
+_dec = _nn.withColumn("dec", F.ntile(10).over(W.orderBy(F.col("PROF_TOT_ANNUAL").asc()))).select("clnt_key", "dec")
+b = (b.join(_dec, "clnt_key", "left")
       .withColumn("baseline_prof_decile", F.coalesce(F.col("dec").cast("string"), F.lit("no_baseline_ucp")))
       .drop("dec"))
+_chk = (b.filter("baseline_prof_decile <> 'no_baseline_ucp'").groupBy("baseline_prof_decile")
+          .count().toPandas()["count"])
+print("decile sizes: min %s max %s spread %.2f%%" % (f"{_chk.min():,}", f"{_chk.max():,}",
+      100.0 * (_chk.max() - _chk.min()) / _chk.mean()))
+assert (_chk.max() - _chk.min()) / _chk.mean() < 0.01, "deciles are not equal-sized - ntile is picking up nulls again"
 panel = b.join(foll, "clnt_key", "left").withColumn("present_followup",
                 F.when(F.col("PROF_FOLLOWUP").isNotNull(), 1).otherwise(0)).cache()
 n_present = panel.filter("present_followup = 1").count()
