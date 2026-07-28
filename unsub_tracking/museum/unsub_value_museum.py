@@ -662,7 +662,11 @@ _STACK = ("stack(4, 'age', CAST(AGE AS double), 'tenure', CAST(TENURE_RBC_YEARS 
           "AS (metric, value)")
 csv_long = (_roles.select("mne", "program", "role", "CLNT_NO", F.expr(_STACK))
             .groupBy("mne", "program", "role", "metric")
-            .agg(F.countDistinct("CLNT_NO").alias("clients"),
+            # count(), NOT countDistinct(): within a (mne, role, metric) group each client appears
+            # exactly once by construction, so the two are equal - but countDistinct holds every
+            # client id in memory per group, which is ~10M values for the (ALL) rows and is what
+            # kept OOM-ing the driver (2026-07-28).
+            .agg(F.count("*").alias("clients"),
                  F.round(F.avg("value"), 4).alias("mean"),
                  F.expr("percentile_approx(value, 0.25)").alias("p25"),
                  F.expr("percentile_approx(value, 0.50)").alias("p50"),
@@ -691,12 +695,16 @@ csv_long = (csv_long
                     "metric", "mean", "p25", "p50", "p75")
             .orderBy("mne", "role", "metric"))
 
-_n_csv = csv_long.count()
-print("CSV long-format rows:", _n_csv, "(3 roles x 4 metrics per cards MNE, leaver-only for the rest)")
-
+# WRITE FIRST, count after. Counting a lazily-built frame forces the whole plan for a number we
+# throw away, then forces it AGAIN for the write. The result here is ~2,400 rows - trivial once
+# materialised - so land it, then count the read-back. Also severs the lineage for the csv write.
 csv_long.write.mode("overwrite").parquet(BASE + "summary")
-assert spark.read.parquet(BASE + "summary").count() == _n_csv, "summary parquet readback mismatch"
-csv_long.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "summary_csv")
+summary = spark.read.parquet(BASE + "summary")
+_n_csv = summary.count()
+print("CSV long-format rows:", _n_csv, "(3 roles x 4 metrics per cards MNE, leaver-only for the rest)")
+assert _n_csv > 0, "summary landed zero rows - investigate before trusting anything downstream"
+
+summary.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "summary_csv")
 assert spark.read.option("header", True).csv(BASE + "summary_csv").count() == _n_csv, \
     "summary_csv readback mismatch"
 print("summary written to", BASE + "summary", "and", BASE + "summary_csv", "- readback confirmed.")
