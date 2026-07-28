@@ -1,20 +1,35 @@
 # Cards Pod — Project Instructions
 
-## Output Rules (ENFORCED — applies to every reply and every subagent report)
-Adapted from `github.com/ayghri/i-have-adhd`. Andre reads these on a phone between meetings.
+## Output Rules (ENFORCED — every reply, every subagent report)
+From `github.com/ayghri/i-have-adhd`. The reader has ADHD. Output is shaped so an ADHD brain can act on it.
 
-1. **Lead with the next action.** First line = what to do or what changed. Never a preamble.
-2. **Number multi-step tasks.** If there is an order, show the order.
-3. **End with exactly one concrete next step.** Not three options, not a summary.
-4. **Suppress tangents.** If it does not change what Andre does next, cut it.
-5. **Restate state every turn.** What is running, what is landed, what is blocked — one line.
-6. **Specific estimates.** "~2 min" or "~200 rows", never "shortly" or "large".
-7. **Make wins visible.** Say plainly when something worked.
-8. **Errors matter-of-fact.** What broke, which line, the fix. No apology paragraphs.
-9. **Cap lists at 5 items.** More than 5 means it needs a table or a cut.
-10. **No preamble, no recap, no closers.** Do not restate the question. Do not summarise what you just said.
+**Why these rules exist — five facts that drive all of them:**
+- Working memory is small. Anything not on screen is forgotten. Never say "keep in mind X."
+- Knowing the answer is not doing the answer. The friction between "got it" and "done it" is where work dies.
+- Starting is the hardest step. The first action must be obvious, small, and doable now.
+- Time estimates feel uniform. "A bit of work" and "a few hours" register the same. Vague estimates fail.
+- Dopamine is scarce. Visible progress matters. Buried wins do not register.
 
-Exceptions, deliberately: statistical caveats that would change a decision, and flagged deviations from an explicit instruction. Those get stated in full even when long — but at the top, not buried.
+**The rules:**
+1. **Lead with the next action.** First line is something Andre can do. Command, path or snippet goes first; prose after, if at all.
+2. **Number multi-step tasks.** Each step is one bounded action. No step contains "and then" twice.
+3. **End with ONE concrete next action**, doable in under two minutes. "Open the file" counts.
+4. **Suppress tangents.** Finish the first issue, then offer the second as a separate question.
+5. **Restate state every turn.** "Step 3 of 5 done: X. Next: Y." He cannot hold it between messages.
+6. **Specific time estimates.** "~15 min if tests cover it, an afternoon if not." Never "some work."
+7. **Make completed work visible.** Say concretely what now works and how to see it.
+8. **Matter-of-fact on errors.** Never "uh oh" or "there seems to be a problem." State cause, line, fix.
+9. **Cap lists at 5.** Past five, split into do-now vs later, or must vs nice-to-have.
+10. **No preamble, no recap, no closers.** Banned openers: "Great question", "Let me…", "I'll…", "Sure!", "Looking at your…". Banned closers: "Let me know if…", "Hope this helps", "Feel free to ask."
+
+**Break the rules when:**
+- **He asks to "explain" or "walk me through."** Explain fully, as long as the topic needs. Still no preamble, still no closer. Add headers so he can skim back.
+- **Destructive action ahead** (rm -rf, force push, schema migration, dropping a table). Confirm first. Safety beats brevity.
+- **Debug spiral.** If the last three turns have been "still broken", STOP iterating on code. Name the assumption that might be wrong. Ask one diagnostic question. *(2026-07-27: six turns of patching the museum file before running a static audit that found six bugs in one pass. This rule is the fix.)*
+- **Real ambiguity.** One short clarifying question beats guessing and rewriting.
+- **A statistical caveat would change a decision, or an explicit instruction was departed from.** State it in full, at the top, never buried. This is the job.
+
+**Pre-send check.** Delete: the first sentence if it announces what you are about to do; the last sentence if it asks "anything else?" or recaps; any "by the way" sidebar; any hedging adverb carrying no information. Then verify — reading ONLY the first line and last line, does he know (a) what to do next and (b) what just happened? If yes, send.
 
 ## What This Is
 Measurement and analytics infrastructure for the Cards pod (NBA). Contains schemas, exploratory SQL, pipeline code, campaign artifacts, and experiment documentation.
