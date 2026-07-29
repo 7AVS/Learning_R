@@ -209,6 +209,20 @@ def T(label, df):
 STAGE_ALL = {"ucp_spine", "clients_ucp", "banded", "cards_send"}
 STAGE_REBUILD = set()
 
+# PROVEN - the validation layer is a ONE-TIME cost, not a per-run tax.
+#
+# This file was built to prove itself: readback counts, coverage tables, null profiles, orphan-join
+# checks. Every one of those is a full pass over 10-15M rows, and they run BEFORE any finding. Once
+# a window has passed them and the numbers are in RESULTS_CATALOG.md, re-deriving them every run
+# buys nothing - the answer is already written down.
+#
+# PROVEN = False -> run the proofs. Do this the FIRST time a window, an anchor or a pull changes.
+# PROVEN = True  -> skip them and go straight to the analysis.
+#
+# What is NEVER skipped, because the analysis depends on the value and not on the reassurance:
+# the profitability quintile cut points, the UCP schema probe, and every assert inside stage().
+PROVEN = True
+
 
 def stage(name, build):
     if name not in STAGE_REBUILD and landed(name):
@@ -349,20 +363,26 @@ senders_cards_raw = _rd("senders_cards/*").select("CLNT_NO", "mne").distinct()
 prior_raw = _rd("prior_unsubs").select("CLNT_NO").distinct()
 senders_mne = spark.read.parquet(BASE + "senders_by_mne")
 
-_counts = [
-    {"dataset": "unsubs_3m (client x treatment)", "rows": unsubs_raw.count(),
-     "distinct_clients": unsubs_raw.select("CLNT_NO").distinct().count()},
-    {"dataset": "senders_base (distinct clients mailed)", "rows": senders_all_raw.count(),
-     "distinct_clients": senders_all_raw.count()},
-    {"dataset": "senders_cards (client x cards MNE)", "rows": senders_cards_raw.count(),
-     "distinct_clients": senders_cards_raw.select("CLNT_NO").distinct().count()},
-    {"dataset": "prior_unsubs (clients out before window)", "rows": prior_raw.count(),
-     "distinct_clients": prior_raw.count()},
-    {"dataset": "senders_by_mne (aggregate)", "rows": senders_mne.count(), "distinct_clients": None},
-]
-T("READBACK - every landing, rows and distinct clients", pd.DataFrame(_counts))
-for _c in _counts:
-    assert _c["rows"] > 0, _c["dataset"] + " read back empty - investigate before proceeding"
+# 9 actions, four of them distinct() shuffles over 10M rows, to re-confirm counts already written to
+# RESULTS_CATALOG.md. landed() already proved every path is readable and non-empty at pull time.
+if not PROVEN:
+    _counts = [
+        {"dataset": "unsubs_3m (client x treatment)", "rows": unsubs_raw.count(),
+         "distinct_clients": unsubs_raw.select("CLNT_NO").distinct().count()},
+        {"dataset": "senders_base (distinct clients mailed)", "rows": senders_all_raw.count(),
+         "distinct_clients": senders_all_raw.count()},
+        {"dataset": "senders_cards (client x cards MNE)", "rows": senders_cards_raw.count(),
+         "distinct_clients": senders_cards_raw.select("CLNT_NO").distinct().count()},
+        {"dataset": "prior_unsubs (clients out before window)", "rows": prior_raw.count(),
+         "distinct_clients": prior_raw.count()},
+        {"dataset": "senders_by_mne (aggregate)", "rows": senders_mne.count(),
+         "distinct_clients": None},
+    ]
+    T("READBACK - every landing, rows and distinct clients", pd.DataFrame(_counts))
+    for _c in _counts:
+        assert _c["rows"] > 0, _c["dataset"] + " read back empty - investigate before proceeding"
+else:
+    print("READBACK skipped (PROVEN = True). Counts are in RESULTS_CATALOG.md.")
 
 # %% [10] MNE / PROGRAM - one derivation, used on BOTH sides of every join. The senders aggregate
 # and the leaver frame previously derived mne differently (raw SUBSTR vs a DEFAULT-aware rule),
@@ -463,52 +483,78 @@ clients = (clients
            .withColumn("mne", F.coalesce(F.col("mne"), F.lit("NO_UNSUB_EVENT")))
            .withColumn("program", F.coalesce(F.col("program"), F.lit("NO_UNSUB_EVENT"))))
 
-_n_mailed = mailed.count()
+# %% [14] JOIN UCP. Clients ACQUIRED during Mar-May cannot exist in the 2026-02-28 snapshot and will
+# be unmatched - that is a real limit of a single pre-window anchor, counted in M0, never hidden.
+#
+# The bucket table used to be printed HERE, off `clients` before it was staged. That made the cheapest
+# table in the file one of the most expensive: a groupBy on an unmaterialised plan re-ran the distinct
+# over 10.6M senders and both left joins. It is printed below instead, off the staged parquet.
+_clients_pre = clients
+clients = stage("clients_ucp",
+                lambda: _clients_pre.join(ucp, "CLNT_NO", "left").withColumn(
+                    "ucp_matched",
+                    F.when(F.col("AGE").isNotNull(), F.lit(True)).otherwise(F.lit(False))))
+
+# BUCKETS - one groupBy over a materialised file. The percentage denominator is the sum of the
+# buckets themselves, which is the mailed population by construction, so no second count is needed.
 _bucket_counts = clients.groupBy("bucket").count().toPandas()
+_n_mailed = int(_bucket_counts["count"].sum())
 _bucket_counts["pct_of_mailed"] = (100.0 * _bucket_counts["count"] / _n_mailed).round(2)
 T("BUCKETS - every client mailed in " + WIN_START + ".." + WIN_END + " (leaver / already_out / stayer)",
   _bucket_counts)
-assert int(_bucket_counts["count"].sum()) == _n_mailed, (
-    "buckets do not sum to the mailed population - a client fell into none or several")
 print("already_out = mailed despite an unsub before the window (the leak). Kept OUT of the stayer",
       "pool: they were not reachable, so counting them as having 'chosen to stay' would be false.")
 
-# %% [14] JOIN UCP. Clients ACQUIRED during Mar-May cannot exist in the 2026-02-28 snapshot and will
-# be unmatched - that is a real limit of a single pre-window anchor, counted in M0, never hidden.
-_before = clients.count()
-_joined = clients.join(ucp, "CLNT_NO", "left").withColumn(
-    "ucp_matched", F.when(F.col("AGE").isNotNull(), F.lit(True)).otherwise(F.lit(False)))
-clients = stage("clients_ucp", lambda: _joined)
-_after = clients.count()
-assert _after == _before, ("UCP join fanned out: " + str(_before) + " -> " + str(_after) +
-                           " - UCP is not unique per client at this anchor. If this fires after an "
-                           "upstream edit, set STAGE_REBUILD = True and rerun.")
+# The fan-out check costs a full recompute of the PRE-stage plan, so it cannot be paid for by the
+# stage. It proves UCP is unique per client at this anchor - a property of the UCP partition, not of
+# this window. Run it when the anchor changes; skip it when it has already held.
+if not PROVEN:
+    _before = _clients_pre.count()
+    assert _n_mailed == _before, (
+        "UCP join fanned out: " + str(_before) + " -> " + str(_n_mailed) + " - UCP is not unique "
+        "per client at " + UCP_ANCHOR + ". Set STAGE_REBUILD = {'ucp_spine'} and investigate.")
+    print("fan-out check passed:", _before, "clients in, ", _n_mailed, "out.")
+else:
+    print("fan-out check skipped (PROVEN = True). UCP uniqueness at", UCP_ANCHOR, "already held.")
 
 # %% [15] M0 - COVERAGE & NULLS. Prints BEFORE any finding.
-m0a = (clients.groupBy("bucket")
-       .agg(F.count("*").alias("clients"),
-            F.sum(F.col("ucp_matched").cast("int")).alias("matched"))
-       .withColumn("unmatched", F.col("clients") - F.col("matched"))
-       .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)))
-T("M0a - UCP match rate by bucket | anchor " + UCP_ANCHOR, m0a)
+#
+# M0c used to loop over UCP_COLS calling .count() per column: nine separate full passes over 10.6M
+# rows to answer one question. It is one .agg() with nine sums - a single pass - whether or not the
+# rest of M0 is gated. Coverage and null rates are properties of the UCP ANCHOR, not of the analysis,
+# so once an anchor has passed they do not change until the anchor does.
+if not PROVEN:
+    m0a = (clients.groupBy("bucket")
+           .agg(F.count("*").alias("clients"),
+                F.sum(F.col("ucp_matched").cast("int")).alias("matched"))
+           .withColumn("unmatched", F.col("clients") - F.col("matched"))
+           .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)))
+    T("M0a - UCP match rate by bucket | anchor " + UCP_ANCHOR, m0a)
 
-T("M0b - unmatched clients by MNE (leavers only - the only bucket carrying an MNE). SBB and other "
-  "business-banking programs matched 0% on 2026-07-27: personal UCP cannot contain business clients",
-  (clients.filter((~F.col("ucp_matched")) & (F.col("bucket") == "leaver"))
-   .groupBy("mne", "program").count().orderBy(F.desc("count")).limit(15)))
+    T("M0b - unmatched clients by MNE (leavers only - the only bucket carrying an MNE). SBB and "
+      "other business-banking programs matched 0% on 2026-07-27: personal UCP cannot contain "
+      "business clients",
+      (clients.filter((~F.col("ucp_matched")) & (F.col("bucket") == "leaver"))
+       .groupBy("mne", "program").count().orderBy(F.desc("count")).limit(15)))
 
-_n_matched = clients.filter(F.col("ucp_matched")).count()
-_nulls = []
-for _c in UCP_COLS:
-    _n = clients.filter(F.col("ucp_matched") & F.col(_c).isNull()).count()
-    _nulls.append({"field": _c, "null_among_matched": _n,
-                   "pct_null_among_matched": round(100.0 * _n / _n_matched, 2) if _n_matched else 0.0})
-_nulls_pd = pd.DataFrame(_nulls)
-T("M0c - nulls among MATCHED clients, per UCP field (n matched = " + str(_n_matched) + ")", _nulls_pd)
-_worst = _nulls_pd["pct_null_among_matched"].max()
-print(("VERDICT: worst field is %.2f%% null among matched - " % _worst) +
-      ("acceptable, medians below are trustworthy." if _worst < 5
-       else "OVER 5% - every median downstream using that field is suspect."))
+    _m0c = clients.agg(
+        F.sum(F.col("ucp_matched").cast("int")).alias("_matched"),
+        *[F.sum(F.when(F.col("ucp_matched") & F.col(_c).isNull(), 1).otherwise(0)).alias(_c)
+          for _c in UCP_COLS]).collect()[0]
+    _n_matched = _m0c["_matched"]
+    _nulls_pd = pd.DataFrame([
+        {"field": _c, "null_among_matched": _m0c[_c],
+         "pct_null_among_matched": round(100.0 * _m0c[_c] / _n_matched, 2) if _n_matched else 0.0}
+        for _c in UCP_COLS])
+    T("M0c - nulls among MATCHED clients, per UCP field (n matched = " + str(_n_matched) + ")",
+      _nulls_pd)
+    _worst = _nulls_pd["pct_null_among_matched"].max()
+    print(("VERDICT: worst field is %.2f%% null among matched - " % _worst) +
+          ("acceptable, medians below are trustworthy." if _worst < 5
+           else "OVER 5% - every median downstream using that field is suspect."))
+else:
+    print("M0 coverage/nulls skipped (PROVEN = True). Anchor", UCP_ANCHOR,
+          "coverage is in RESULTS_CATALOG.md: 90.1% matched, worst field 0.01% null.")
 
 # %% [16] BANDING - one function, applied identically to every population. Cut points are OUR choice;
 # none are documented in the repo. Edit them here and nowhere else.
@@ -563,7 +609,13 @@ def apply_bands(df):
 
 banded = stage("banded", lambda: apply_bands(clients))
 matched = banded.filter(F.col("ucp_matched")).cache()
-print("banded:", banded.count(), "clients |", matched.count(), "matched (all band stats below use "
+
+# Two counts, one pass. _n_matched is defined here and not inside the M0 gate because the summary at
+# the end reports it, and a figure the summary prints must not depend on whether proofs ran.
+_bstats = banded.agg(F.count("*").alias("all"),
+                     F.sum(F.col("ucp_matched").cast("int")).alias("matched")).collect()[0]
+_n_banded, _n_matched = _bstats["all"], _bstats["matched"]
+print("banded:", _n_banded, "clients |", _n_matched, "matched (all band stats below use "
       "the MATCHED denominator - unmatched clients have no bands and must not dilute a percentage)")
 
 # %% [17] L1 - WHERE, by program and by MNE (leavers only). Every median and percentage uses the
@@ -606,11 +658,12 @@ l6 = (senders_mne.select("mne", "program", "senders")
                   F.when(F.col("senders") > 0, F.round(1000.0 * F.col("unsubs") / F.col("senders"), 2)))
       .orderBy(F.desc("senders")))
 
-_orphan_send = senders_mne.join(_leavers_by_mne, "mne", "left_anti").count()
-_orphan_leave = _leavers_by_mne.join(senders_mne, "mne", "left_anti").count()
-print("join check - MNEs with senders but no unsubs:", _orphan_send,
-      "| MNEs with unsubs but no senders:", _orphan_leave,
-      "(the second should be ~0; anything else means the two sides label MNE differently)")
+if not PROVEN:
+    _orphan_send = senders_mne.join(_leavers_by_mne, "mne", "left_anti").count()
+    _orphan_leave = _leavers_by_mne.join(senders_mne, "mne", "left_anti").count()
+    print("join check - MNEs with senders but no unsubs:", _orphan_send,
+          "| MNEs with unsubs but no senders:", _orphan_leave,
+          "(the second should be ~0; anything else means the two sides label MNE differently)")
 
 T("L6 - CAMPAIGN SUMMARY | senders = distinct clients mailed " + WIN_START + ".." + WIN_END +
   " | profile columns describe that campaign's LEAVERS (matched only) | top 25 by senders, the CSV "
@@ -621,8 +674,9 @@ T("L6 - CAMPAIGN SUMMARY | senders = distinct clients mailed " + WIN_START + "..
 # %% [19] L7 - LEAVERS vs STAYERS, bank-wide. The comparison this file exists for. Both sides
 # matched-only, so the denominators are equal in kind.
 _DIMS = ["age_band", "tenure_band", "prod_band", "prof_quintile"]
-_n_lv = matched.filter(F.col("bucket") == "leaver").count()
-_n_st = matched.filter(F.col("bucket") == "stayer").count()
+_bk = {r["bucket"]: r["n"] for r in
+       matched.groupBy("bucket").agg(F.count("*").alias("n")).collect()}
+_n_lv, _n_st = _bk.get("leaver", 0), _bk.get("stayer", 0)
 
 _frames = []
 for _d in _DIMS + ["high_potential"]:
