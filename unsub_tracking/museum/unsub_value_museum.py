@@ -31,6 +31,24 @@
 #
 #   ANALYSIS ONLY (the normal case)   run [1], then [9] onward.
 #   FRESH PULL (rarely)               run [1], [1b], then [2]..[8], then [9] onward.
+#   BRIEF TOP-UP (2026-07-29)         run [1], [1b], then [5b] and [7b] ONLY, then [9] onward.
+#                                     Two new pulls, nothing already landed is touched.
+#
+# WHAT THE 2026-07-29 EDIT ADDED, and which brief item each one answers. Every new cell SKIPS with a
+# printed reason if its landing is absent, so the whole file still runs on 2026-07-29 08:29's data:
+#   [5b] cadence_by_mne   deployment waves per campaign        -> 1a "weekly, bi-weekly, monthly"
+#   [7b] senders_wide     client x mne BANK-WIDE, stratified   -> 3b breadth, 3c co-occurrence
+#   [19] tibc_mix in L7   computed since day one, never shown  -> 4a "depth of relationship (TIBC)"
+#   [16] prod_band 3-4 split into 3 and 4                      -> 4 "bucket 1 through 4"
+#   [20g] L13            pair rate vs both solo rates          -> 3c "do unsubs spike when
+#                                                                    specific campaigns run together"
+#   [6]  n_treatments -> n_mnes  (waves were being called campaigns)  -> 3b, correctly
+#
+# OUTPUT SHAPE. Ten csv exports became TWO, because there are only two grains:
+#   unsub_segments   a row is a SEGMENT,  campaign is a scope column  -> WHO leaves
+#   unsub_campaigns  a row is a CAMPAIGN or a PAIR, no client attrs   -> HOW MANY leave, HOW OFTEN
+# The L-tables still print on screen - that is where the analysis is read. The seven older csvs are
+# still written as backing detail for when a number is challenged.
 #
 # [1] holds imports, constants and helpers. It prompts for nothing, opens no connection and starts no
 # Spark job. [1b] is the ONLY cell that asks for a password, and nothing below [8] needs it. So the
@@ -362,6 +380,29 @@ WHERE m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-07-01'
 GROUP BY 1
 """ % (WIN_START, WIN_END))
 
+# %% [5b] PULL - CADENCE per campaign. Brief item 1a: "frequency per campaign to understand if
+# weekly, bi-weekly, monthly."
+#
+# EVENT ONLY - no MASTER join. Deployment cadence is a property of the TREATMENT_ID, and EVENT
+# already carries TREATMENT_ID and the timestamp. Joining MASTER here would buy nothing but the
+# client number, which cadence does not use. One table, one scan, ~200 rows back.
+#
+# TREATMENT_ID = TACTIC_ID = MNE + julian date, UNIQUE PER DEPLOYMENT WAVE. So COUNT(DISTINCT
+# TREATMENT_ID) per MNE IS the number of waves that campaign ran in the window, and that number
+# over the window length is the cadence the brief asks for. 13 waves over 92 days = weekly.
+land("cadence_by_mne", """
+SELECT SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+       COUNT(DISTINCT TREATMENT_ID)                  AS n_deployments,
+       COUNT(DISTINCT CAST(disposition_dt_tm AS DATE)) AS send_days,
+       MIN(CAST(disposition_dt_tm AS DATE))          AS first_send_dt,
+       MAX(CAST(disposition_dt_tm AS DATE))          AS last_send_dt,
+       COUNT(*)                                      AS send_events
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd = 1
+  AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+GROUP BY 1
+""" % (WIN_START, WIN_END))
+
 # %% [6] PULL - TIER 2: the mailed population, bank-wide. Now carries CONTACT VOLUME and ENGAGEMENT.
 #
 # This used to be SELECT DISTINCT m.CLNT_NO - one column, deliberately narrow to survive spool. That
@@ -376,10 +417,27 @@ GROUP BY 1
 #
 # MONTHLY, so a client mailed in March and April appears TWICE. [9] sums them - it must not DISTINCT
 # them, or the volume collapses back to presence and we are where we started.
+#
+# 2026-07-29 - n_treatments BECAME n_mnes, a swap not an addition.
+#   COUNT(DISTINCT TREATMENT_ID) counted DEPLOYMENT WAVES, not campaigns: TREATMENT_ID = TACTIC_ID =
+#   MNE + julian date, unique per wave, so three PCQ sends read as three campaigns. L10 was printing
+#   that number under the label "mean_distinct_campaigns". Brief item 3b asks for the number of
+#   CAMPAIGNS a client was contacted by, which is COUNT(DISTINCT SUBSTR(TREATMENT_ID,8,3)).
+#   Swapped rather than added because the comment above is load-bearing - a SECOND COUNT(DISTINCT)
+#   over this window is the shape that spooled on 2026-07-27. n_send_events already carries the
+#   frequency that n_treatments was standing in for, so nothing is lost.
+#
+#   CAVEAT, and it is real: this is monthly, and [9] SUMS across months. Distinct counts do not sum.
+#   A client mailed by PCQ in March and again in April contributes n_mnes=1 twice, and [9] reports 2.
+#   So n_mnes summed is an UPPER BOUND on campaign breadth - exact for a client active in one month,
+#   inflated by up to 3x for a client active in all three. [9] therefore also keeps the per-month MAX
+#   as a lower bound, and the truth is between them. The exact figure needs senders_wide ([7b]),
+#   which is client x mne and can be counted distinctly after the union.
 _SENDBASE_SQL = """
 SELECT m.CLNT_NO,
        SUM(CASE WHEN ek.disposition_cd = 1 THEN 1 ELSE 0 END) AS n_send_events,
-       COUNT(DISTINCT CASE WHEN ek.disposition_cd = 1 THEN ek.TREATMENT_ID END) AS n_treatments,
+       COUNT(DISTINCT CASE WHEN ek.disposition_cd = 1
+                           THEN SUBSTR(ek.TREATMENT_ID, 8, 3) END) AS n_mnes,
        SUM(CASE WHEN ek.disposition_cd = 2 THEN 1 ELSE 0 END) AS n_opens,
        SUM(CASE WHEN ek.disposition_cd = 3 THEN 1 ELSE 0 END) AS n_clicks,
        MAX(CASE WHEN ek.disposition_cd = 2 THEN 1 ELSE 0 END) AS opened,
@@ -416,6 +474,54 @@ WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
 """
 for _name, _ds, _de, _ls, _le in WIN_MONTHS:
     land("senders_cards/" + _name, _SENDCARDS_SQL % (_ds, _de, CARDS_SQL_LIST, _ls, _le))
+
+# %% [7b] PULL - TIER 3W: client x MNE, BANK-WIDE, on a stratified population. Brief items 3b and 3c.
+#
+# WHY THIS EXISTS. Tier 3 is Cards-only, so co-occurrence ("do unsubscribes spike when specific
+# campaigns run together") could only ever compare Cards against Cards. The question is how Cards
+# compares to the REST OF THE BANK, and that needs a client x MNE pairing over all ~200 mnemonics.
+#
+# WHY IT IS NOT THE PULL THAT DIED. The abandoned 2026-07-27 pull was all ~200 MNEs x every client -
+# ~99M pairs. Two facts shrink that by an order of magnitude without costing precision where it
+# matters:
+#   LEAVERS ARE RARE - 70,425 clients. Taken WHOLE. No sampling on the population being measured.
+#   STAYERS ARE ONLY A BASELINE - 10.1M clients. A 1-in-10 sample is ample, and it is weighted back
+#     up by SAMPLE_WEIGHT downstream. Never weight the leaver side: it is a census, not a sample.
+# ~1.07M clients x ~9 campaigns each = ~10M pairs, chunked monthly = ~3.3M/month. senders_cards
+# already moves ~3M/month without complaint, so this is a pull whose shape is already proven here.
+#
+# Both predicates resolve SERVER-SIDE - no client list crosses the wire. MOD(CLNT_NO,10) is the same
+# spool-control pattern pack 19 adopted after two spool failures. The unsub side keys on
+# consumer_id_hashed so it never touches MASTER a second time.
+#
+# already_out clients fall wherever the modulo puts them: they are neither leaver nor stayer here,
+# and [9] flags any that arrive so the weighting cannot silently mis-scale them.
+SAMPLE_MOD = 10                     # 1-in-10 stayers. Set to 1 for a census (expect ~99M pairs).
+_SENDWIDE_SQL = """
+SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+  AND ( MOD(m.CLNT_NO, %d) = 0
+        OR m.consumer_id_hashed IN (
+              SELECT DISTINCT consumer_id_hashed
+              FROM DTZV01.VENDOR_FEEDBACK_EVENT
+              WHERE disposition_cd = 4
+                AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s') )
+"""
+PULL_WIDE = True                    # set False to skip - everything else still runs
+if PULL_WIDE:
+    for _name, _ds, _de, _ls, _le in WIN_MONTHS:
+        land("senders_wide/" + _name,
+             _SENDWIDE_SQL % (_ds, _de, _ls, _le, SAMPLE_MOD, WIN_START, WIN_END))
+else:
+    print("senders_wide SKIPPED (PULL_WIDE = False) - bank-wide 3b/3c will not be available.")
 
 # %% [8] PULL - prior unsubscribers. Keeps the stayer pool honest: a client who opted out last year
 # and still got mail is not someone who "chose to stay".
@@ -460,14 +566,31 @@ senders_mne = spark.read.parquet(BASE + "senders_by_mne")
 # MAX for the flags: opened once in any month is opened.
 _sb = _rd("senders_base/*")
 HAVE_CONTACT = "n_send_events" in _sb.columns
+# BREADTH_COL - which column carries "how many campaigns", and is it the right one?
+#   n_mnes       : COUNT(DISTINCT mnemonic). Campaigns. What brief 3b asks for.
+#   n_treatments : COUNT(DISTINCT TREATMENT_ID). Deployment WAVES. What the pre-2026-07-29 landing
+#                  holds, and NOT campaigns - see the note in [6]. Usable, but it must not be
+#                  labelled as campaigns anywhere downstream, so the label follows the column.
+BREADTH_COL = ("n_mnes" if "n_mnes" in _sb.columns
+               else ("n_treatments" if "n_treatments" in _sb.columns else None))
+BREADTH_IS_CAMPAIGNS = BREADTH_COL == "n_mnes"
+BREADTH_LABEL = "campaigns" if BREADTH_IS_CAMPAIGNS else "deployment_waves"   # alias-safe, no spaces
 if HAVE_CONTACT:
-    senders_all_raw = (_sb.groupBy("CLNT_NO").agg(
-        F.sum("n_send_events").cast("int").alias("n_send_events"),
-        F.sum("n_treatments").cast("int").alias("n_treatments"),
-        F.sum("n_opens").cast("int").alias("n_opens"),
-        F.sum("n_clicks").cast("int").alias("n_clicks"),
-        F.max("opened").cast("int").alias("opened"),
-        F.max("clicked").cast("int").alias("clicked")))
+    _aggs = [F.sum("n_send_events").cast("int").alias("n_send_events"),
+             F.sum("n_opens").cast("int").alias("n_opens"),
+             F.sum("n_clicks").cast("int").alias("n_clicks"),
+             F.max("opened").cast("int").alias("opened"),
+             F.max("clicked").cast("int").alias("clicked")]
+    if BREADTH_COL:
+        # SUM is an upper bound and MAX a lower bound: the pull is monthly and distinct counts do
+        # not sum. Both are kept because a single number here would be a guess wearing a name.
+        _aggs += [F.sum(BREADTH_COL).cast("int").alias("breadth_upper"),
+                  F.max(BREADTH_COL).cast("int").alias("breadth_lower")]
+    senders_all_raw = _sb.groupBy("CLNT_NO").agg(*_aggs)
+    if not BREADTH_IS_CAMPAIGNS:
+        print("!! BREADTH COLUMN IS", BREADTH_COL, "- that is DEPLOYMENT WAVES, not campaigns.")
+        print("   Brief 3b asks for campaigns. Re-run [1b] and [6] for n_mnes, or read every")
+        print("   breadth figure below as waves. The label follows the column automatically.")
 else:
     print("!! CONTACT VOLUME / ENGAGEMENT UNAVAILABLE - senders_base has only", _sb.columns)
     print("   That landing predates cell [6]'s rewrite. Re-run [1b] and [6] to get them.")
@@ -482,6 +605,23 @@ if not HAVE_PRIOR_DETAIL:
     print("!! ALREADY-OUT DETAIL UNAVAILABLE - prior_unsubs has only", prior_raw.columns)
     print("   Re-run [1b] and [8] for the unsub date and mnemonic. L12 will skip.")
     prior_raw = prior_raw.select("CLNT_NO").distinct()
+
+# Cadence and the wide pairing are both OPTIONAL landings: everything that existed before them still
+# runs without them, and the cells that need them skip loudly rather than fail.
+HAVE_CADENCE = landed("cadence_by_mne")
+cadence_mne = spark.read.parquet(BASE + "cadence_by_mne") if HAVE_CADENCE else None
+if not HAVE_CADENCE:
+    print("!! CADENCE UNAVAILABLE - run [5b]. Brief 1a (weekly/bi-weekly/monthly) will be blank.")
+
+HAVE_WIDE = landed("senders_wide/" + WIN_MONTHS[0][0])
+if HAVE_WIDE:
+    # DISTINCT after the union, not before: the pull is monthly, so a client mailed by PCQ in March
+    # and April lands twice. This is the one place campaign breadth can be counted exactly.
+    senders_wide_raw = _rd("senders_wide/*").select("CLNT_NO", "mne").distinct()
+else:
+    senders_wide_raw = None
+    print("!! senders_wide NOT LANDED - run [7b]. Bank-wide 3b/3c unavailable; L13 falls back to")
+    print("   CARDS-ONLY co-occurrence off senders_cards, which cannot compare cards to the bank.")
 
 # 9 actions, four of them distinct() shuffles over 10M rows, to re-confirm counts already written to
 # RESULTS_CATALOG.md. landed() already proved every path is readable and non-empty at pull time.
@@ -609,6 +749,17 @@ if HAVE_CONTACT:
                            F.when(F.col("clicked") == 1, "clicked")
                             .when(F.col("opened") == 1, "opened_not_clicked")
                             .otherwise("never_opened")))
+    if BREADTH_COL:
+        # Brief 3b: "unsubs by number of campaigns client contacted by". Banded on the LOWER bound,
+        # deliberately - the upper bound inflates by up to 3x for a client active all three months,
+        # and a band built on an inflated number silently promotes clients into the wrong bucket.
+        # The lower bound understates breadth but never mis-assigns direction.
+        clients = clients.withColumn(
+            "breadth_band",
+            F.when(F.col("breadth_lower") <= 1, "1")
+             .when(F.col("breadth_lower") <= 2, "2")
+             .when(F.col("breadth_lower") <= 4, "3-4")
+             .when(F.col("breadth_lower") <= 8, "5-8").otherwise("9+"))
 
 if HAVE_PRIOR_DETAIL:
     clients = clients.withColumn(
@@ -620,8 +771,10 @@ if HAVE_PRIOR_DETAIL:
 # what makes the check work, because the pull is the only thing that knows what is actually there.
 STAGE_NEEDS = ["CLNT_NO", "bucket", "mne", "program"]
 if HAVE_CONTACT:
-    STAGE_NEEDS += ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened", "clicked",
+    STAGE_NEEDS += ["n_send_events", "n_opens", "n_clicks", "opened", "clicked",
                     "contact_band", "engagement"]
+    if BREADTH_COL:
+        STAGE_NEEDS += ["breadth_upper", "breadth_lower", "breadth_band"]
 if HAVE_PRIOR_DETAIL:
     STAGE_NEEDS += ["last_prior_unsub_dt", "last_prior_unsub_mne", "days_since_prior_unsub"]
 print("stages must carry:", STAGE_NEEDS)
@@ -712,6 +865,22 @@ else:
 # %% [16] BANDING - one function, applied identically to every population. Cut points are OUR choice;
 # none are documented in the repo. Edit them here and nowhere else.
 HP_AGE, HP_TENURE, HP_PRODS = 35, 5, 2          # high_potential thresholds
+
+# BAND_VERSION - the staleness contract for band CONTENTS, not band columns.
+#
+# stage() decides a frame is fresh by checking it carries the columns `requires` names. That works
+# for a new column and fails silently for a redefined one: splitting prod_band's "3-4" into "3" and
+# "4" changes every value in the column while leaving its name alone, so a rerun would happily reuse
+# the old banding. (That failure mode already cost a run once - 26b0750, "the staleness guard
+# compared stale against stale".)
+#
+# Fix: apply_bands stamps a column NAMED after this number, and it is in `requires`. Bump it and the
+# name stops matching, so stage() sees a missing column and rebuilds banded -> cards_send by itself.
+# BUMP THIS WHENEVER A CUT POINT, A BAND BOUNDARY OR AN HP THRESHOLD CHANGES.
+#   v1 -> v2  contact/engagement bands added
+#   v2 -> v3  2026-07-29: prod_band "3-4" split into "3" and "4" for brief item 4
+BAND_VERSION = 3
+BAND_STAMP = "band_v" + str(BAND_VERSION)
 _prof_src = clients.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
 PROF_CUTS = _prof_src.approxQuantile("PROF_TOT_ANNUAL", [0.2, 0.4, 0.6, 0.8], 0.01)
 assert len(PROF_CUTS) == 4, ("no non-null PROF_TOT_ANNUAL among matched clients - cannot cut "
@@ -724,9 +893,17 @@ T("PROF QUINTILE CUT POINTS - computed over ALL MAILED matched clients (the reac
 def apply_bands(df):
     df = df.withColumn("prod_cnt", sum(F.coalesce(F.col(c), F.lit(0))
                                        for c in ("T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT")))
+    # 2026-07-29 - "3-4" SPLIT into "3" and "4". Brief item 4 asks to "bucket by number of products
+    # 1 through 4", and a merged 3-4 bucket cannot answer it. 0 and 5+ stay: the population has them,
+    # and collapsing a band would file clients under a count they do not hold.
+    #
+    # !! THIS CHANGES A STAGED FRAME'S CONTENTS WITHOUT CHANGING ITS COLUMNS. stage() checks that a
+    # frame carries the columns it needs, which it still does - so a rerun would silently reuse the
+    # OLD 3-4 banding and the split would never appear. Rebuild is forced below, not left to memory.
     df = df.withColumn("prod_band",
                        F.when(F.col("prod_cnt") <= 0, "0").when(F.col("prod_cnt") == 1, "1")
-                        .when(F.col("prod_cnt") == 2, "2").when(F.col("prod_cnt") <= 4, "3-4")
+                        .when(F.col("prod_cnt") == 2, "2").when(F.col("prod_cnt") == 3, "3")
+                        .when(F.col("prod_cnt") == 4, "4")
                         .otherwise("5+"))
     _held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in
              ("T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT")]
@@ -755,13 +932,15 @@ def apply_bands(df):
                         .when(F.col("PROF_TOT_ANNUAL") <= PROF_CUTS[1], "2")
                         .when(F.col("PROF_TOT_ANNUAL") <= PROF_CUTS[2], "3")
                         .when(F.col("PROF_TOT_ANNUAL") <= PROF_CUTS[3], "4").otherwise("5"))
-    return df.withColumn("high_potential",
-                         (F.col("AGE") < HP_AGE) & (F.col("TENURE_RBC_YEARS") <= HP_TENURE) &
-                         (F.col("prod_cnt") <= HP_PRODS))
+    df = df.withColumn("high_potential",
+                       (F.col("AGE") < HP_AGE) & (F.col("TENURE_RBC_YEARS") <= HP_TENURE) &
+                       (F.col("prod_cnt") <= HP_PRODS))
+    return df.withColumn(BAND_STAMP, F.lit(BAND_VERSION))
 
 
 banded = stage("banded", lambda: apply_bands(clients),
-               requires=STAGE_NEEDS + ["age_band", "tenure_band", "prod_band", "prof_quintile"])
+               requires=STAGE_NEEDS + ["age_band", "tenure_band", "prod_band", "prof_quintile",
+                                       BAND_STAMP])
 matched = banded.filter(F.col("ucp_matched")).cache()
 
 # Two counts, one pass. _n_matched is defined here and not inside the M0 gate because the summary at
@@ -827,7 +1006,14 @@ T("L6 - CAMPAIGN SUMMARY | senders = distinct clients mailed " + WIN_START + "..
 
 # %% [19] L7 - LEAVERS vs STAYERS, bank-wide. The comparison this file exists for. Both sides
 # matched-only, so the denominators are equal in kind.
-_DIMS = ["age_band", "tenure_band", "prod_band", "prof_quintile"]
+# tibc_mix ADDED 2026-07-29. It has been computed since the first version of this file and never
+# reported - it was in the cube and in no table anyone read. Brief item 4a asks for exactly it:
+# "what is the depth of their relationship with RBC (TIBC)". prod_band counts products; tibc_mix
+# says which CATEGORIES are held, which is the question depth actually means.
+# breadth_band rides along when the pull carried it - brief item 3b.
+_DIMS = ["age_band", "tenure_band", "prod_band", "tibc_mix", "prof_quintile"]
+if "breadth_band" in matched.columns:
+    _DIMS.append("breadth_band")
 _bk = {r["bucket"]: r["n"] for r in
        matched.groupBy("bucket").agg(F.count("*").alias("n")).collect()}
 _n_lv, _n_st = _bk.get("leaver", 0), _bk.get("stayer", 0)
@@ -860,7 +1046,7 @@ T("L7 - LEAVERS vs STAYERS, bank-wide | matched clients only (leavers n = " + st
 # "Column 'age_band' does not exist", so the list is the union of what all three cells reference.
 _CARDS_CARRY = ["CLNT_NO", "bucket", "ucp_matched", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
                 "PROF_TOT_ANNUAL", "age_band", "tenure_band", "prod_band", "tibc_mix",
-                "prof_quintile", "high_potential"]
+                "prof_quintile", "high_potential", BAND_STAMP]
 _missing = [c for c in _CARDS_CARRY if c not in banded.columns]
 assert not _missing, "banded is missing " + str(_missing) + " - available: " + str(banded.columns)
 
@@ -961,7 +1147,12 @@ else:
         F.round(F.avg("n_send_events"), 2).alias("mean_sends"),
         F.expr("percentile_approx(n_send_events, 0.5)").alias("median_sends"),
         F.expr("percentile_approx(n_send_events, 0.9)").alias("p90_sends"),
-        F.round(F.avg("n_treatments"), 2).alias("mean_distinct_campaigns")))
+        # LABEL FOLLOWS THE COLUMN. This used to read mean_distinct_campaigns off n_treatments,
+        # which counts deployment WAVES - see [6]. The alias is now built from BREADTH_LABEL so it
+        # cannot claim "campaigns" when the landing only supports "deployment waves".
+        *([F.round(F.avg("breadth_lower"), 2).alias("mean_distinct_" + BREADTH_LABEL + "_min"),
+           F.round(F.avg("breadth_upper"), 2).alias("mean_distinct_" + BREADTH_LABEL + "_max")]
+          if BREADTH_COL else [])))
     T("L10a - CONTACT VOLUME by bucket | matched clients | if leavers sit well above stayers, every "
       "ratio in L7 is partly a contact effect", l10a)
 
@@ -1068,6 +1259,117 @@ else:
     T("L12c - WHICH campaign they left through, before being mailed again | this names where the "
       "suppression is not holding", l12c.limit(25))
 
+# %% [20g] L13 - CAMPAIGN CO-OCCURRENCE. Brief item 3c, verbatim: "once we've determined which
+# campaigns drive the highest unsubs, are certain campaigns causing unsubscribes alone, or do
+# unsubscribes spike when specific campaigns run together."
+#
+# The test is a comparison, not a ranking. For every pair (A,B):
+#   solo A  = clients mailed by A          -> unsub rate
+#   solo B  = clients mailed by B          -> unsub rate
+#   pair AB = clients mailed by BOTH       -> unsub rate
+# If pair_rate is materially above BOTH solo rates, the combination is doing something neither
+# campaign does alone. If it sits between them, it is composition - the pair population is just the
+# heavier-mailed clients, and the pair is not the cause.
+#
+# SOURCE, and it decides what the answer can say:
+#   senders_wide  - bank-wide, ~200 mnemonics, leavers whole + 1-in-10 stayers. Cards vs the bank.
+#   senders_cards - fallback, 7 cards mnemonics. Cards vs cards only. Cannot answer "how does cards
+#                   compare with other mnemonics in the bank", which is the point of the question.
+#
+# WEIGHTING. Leavers are a census (weight 1); non-leavers arrive through MOD(CLNT_NO,SAMPLE_MOD) and
+# are weighted back up by SAMPLE_MOD. Weighting the leaver side too would inflate the numerator and
+# hand back the sampling rate as a finding. Rates below use weighted denominators and RAW leaver
+# counts, so a rate is (real leavers) / (estimated mailed) - the only combination that is not a
+# sample artifact. Raw counts are printed alongside so nothing is hidden behind a weight.
+_WIDE_SRC = senders_wide_raw if HAVE_WIDE else (
+    senders_cards_raw.select("CLNT_NO", "mne") if senders_cards_raw is not None else None)
+_WIDE_BASIS = "BANK_WIDE_SAMPLED" if HAVE_WIDE else "CARDS_ONLY_CENSUS"
+_WIDE_W = SAMPLE_MOD if HAVE_WIDE else 1
+
+if _WIDE_SRC is None:
+    print("L13 skipped - neither senders_wide nor senders_cards is available.")
+else:
+    print("L13 basis:", _WIDE_BASIS, "| stayer weight =", _WIDE_W)
+    _pairbase = (_WIDE_SRC.join(banded.select("CLNT_NO", "bucket"), "CLNT_NO", "inner")
+                 .withColumn("w", F.when(F.col("bucket") == "leaver", F.lit(1))
+                             .otherwise(F.lit(_WIDE_W)))
+                 .withColumn("is_lv", (F.col("bucket") == "leaver").cast("int")))
+
+    # EXPLOSION GUARD. A self-join on client turns n campaigns into n*(n-1)/2 pairs: 9 campaigns is
+    # 36 rows, 50 campaigns is 1,225. A handful of very broadly-mailed clients would dominate the
+    # shuffle. Capped - and the cap is REPORTED, because a silent cap reads as full coverage.
+    MAX_MNE_PER_CLIENT = 25
+    _cnt = _pairbase.groupBy("CLNT_NO").agg(F.count("*").alias("n_mne"))
+    _over = _cnt.filter(F.col("n_mne") > MAX_MNE_PER_CLIENT)
+    _n_over = _over.count()
+    if _n_over:
+        _over_lv = (_over.join(_pairbase.filter(F.col("is_lv") == 1).select("CLNT_NO").distinct(),
+                               "CLNT_NO", "inner").count())
+        print("!! PAIR CAP: " + str(_n_over) + " clients hold more than " + str(MAX_MNE_PER_CLIENT) +
+              " campaigns and are EXCLUDED from pair rows (" + str(_over_lv) + " of them leavers).")
+        print("   They remain in the solo rows. Raise MAX_MNE_PER_CLIENT to include them.")
+    _keep = _cnt.filter(F.col("n_mne") <= MAX_MNE_PER_CLIENT).select("CLNT_NO")
+
+    # SOLO - one row per campaign, over the same population the pairs are drawn from, so a pair rate
+    # and a solo rate are comparable by construction. Using L6's senders here instead would compare
+    # a sampled numerator against a census denominator.
+    _solo = (_pairbase.groupBy("mne").agg(
+        F.sum("w").alias("clients_est"),
+        F.count("*").alias("clients_raw"),
+        F.sum("is_lv").alias("leavers_raw"))
+        .withColumn("mne_b", F.lit(""))
+        .withColumnRenamed("mne", "mne_a"))
+
+    _p = _pairbase.join(_keep, "CLNT_NO", "inner")
+    _pa = _p.select("CLNT_NO", F.col("mne").alias("mne_a"), "w", "is_lv")
+    _pb = _p.select("CLNT_NO", F.col("mne").alias("mne_b"))
+    _pairs = (_pa.join(_pb, "CLNT_NO", "inner").filter(F.col("mne_a") < F.col("mne_b"))
+              .groupBy("mne_a", "mne_b").agg(
+                  F.sum("w").alias("clients_est"),
+                  F.count("*").alias("clients_raw"),
+                  F.sum("is_lv").alias("leavers_raw")))
+
+    l13 = (_solo.unionByName(_pairs)
+           .withColumn("basis", F.lit(_WIDE_BASIS))
+           .withColumn("unsub_per_1000_est",
+                       F.when(F.col("clients_est") > 0,
+                              F.round(1000.0 * F.col("leavers_raw") / F.col("clients_est"), 2)))
+           .select("basis", "mne_a", "mne_b", "clients_est", "clients_raw", "leavers_raw",
+                   "unsub_per_1000_est"))
+
+    # THE COMPARISON the brief actually asks for: pair rate against the HIGHER of its two solo rates.
+    # Against the higher, not the average - a pair that beats only the weaker campaign has told you
+    # nothing except which of the two is worse.
+    _s = l13.filter(F.col("mne_b") == "").select(
+        F.col("mne_a").alias("_m"), F.col("unsub_per_1000_est").alias("_solo_rate"))
+    l13_pairs = (l13.filter(F.col("mne_b") != "")
+                 .join(_s.withColumnRenamed("_m", "mne_a").withColumnRenamed("_solo_rate", "rate_a"),
+                       "mne_a", "left")
+                 .join(_s.withColumnRenamed("_m", "mne_b").withColumnRenamed("_solo_rate", "rate_b"),
+                       "mne_b", "left")
+                 .withColumn("rate_worse_solo", F.greatest("rate_a", "rate_b"))
+                 .withColumn("lift_vs_worse_solo",
+                             F.when(F.col("rate_worse_solo") > 0,
+                                    F.round(F.col("unsub_per_1000_est") /
+                                            F.col("rate_worse_solo"), 2)))
+                 .select("mne_a", "mne_b", "clients_est", "leavers_raw", "unsub_per_1000_est",
+                         "rate_a", "rate_b", "rate_worse_solo", "lift_vs_worse_solo"))
+
+    # MIN_PAIR_LEAVERS is a precision floor, not a filter on the finding: a pair with 3 leavers can
+    # show any lift at all and none of it means anything. Everything survives into the CSV.
+    MIN_PAIR_LEAVERS = 30
+    T("L13 - CAMPAIGN PAIRS, top 25 by lift over the worse of the two solo rates | basis " +
+      _WIDE_BASIS + " | lift > 1 means the COMBINATION loses clients faster than either campaign "
+      "alone | pairs with fewer than " + str(MIN_PAIR_LEAVERS) + " leavers hidden here, kept in the "
+      "csv",
+      l13_pairs.filter(F.col("leavers_raw") >= MIN_PAIR_LEAVERS)
+      .orderBy(F.desc("lift_vs_worse_solo")).limit(25))
+    T("L13b - CARDS pairs specifically (either side is a cards campaign)",
+      l13_pairs.filter(F.col("mne_a").isin(*sorted(CARDS_MNES)) |
+                       F.col("mne_b").isin(*sorted(CARDS_MNES)))
+      .filter(F.col("leavers_raw") >= MIN_PAIR_LEAVERS)
+      .orderBy(F.desc("lift_vs_worse_solo")).limit(25))
+
 # %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
 # MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN
 # a campaign. This is the file to open if the question is "which campaign loses which kind of client".
@@ -1130,8 +1432,150 @@ for _nm, _df in [("l1_where_by_mne", _leaver_profile(banded, ["mne", "program"])
     print("  csv_" + _nm, "->", spark.read.option("header", True).csv(BASE + "csv_" + _nm).count(),
           "rows, readback confirmed")
 
+# %% [21b] THE TWO DELIVERABLE CSVs.
+#
+# Ten csv exports answered ten questions and made the reader hold ten files. There are only TWO
+# irreducible grains here, and everything above is one of them sliced differently:
+#
+#   A  unsub_segments   - a row is a SEGMENT.  Campaign is a scope COLUMN.   Answers WHO leaves.
+#   B  unsub_campaigns  - a row is a CAMPAIGN (or a pair). No client attributes. Answers HOW MANY.
+#
+# A pivot on A regenerates L1, L7, L8, L9, L10b, L11 and L12. B carries L6, cadence and L13. The
+# L-tables above stay on screen because that is where the analysis is read; these two files are what
+# leaves the notebook. Counts only - every rate in A is the reader's to compute from two columns, so
+# no denominator can be lost on the way to a slide.
+#
+# basis is on every row and it is not decoration. CENSUS rows count every client. SAMPLED rows come
+# through MOD(CLNT_NO,SAMPLE_MOD) with leavers whole, so their client counts are ESTIMATES and their
+# leaver counts are real. Mixing the two in one pivot without reading basis will produce a number
+# that is wrong by SAMPLE_MOD and looks perfectly reasonable.
+_SEG_DIMS = [d for d in (_DIMS + ["high_potential", "contact_band", "engagement"])
+             if d in matched.columns]
+print("segment dims:", _SEG_DIMS)
+
+
+def _seg_rows(df, scope_type, scope_col, basis, weight):
+    """One frame per dim, unioned. scope_col=None puts the whole frame under a single scope value.
+
+    Dims are intersected with the frame's OWN columns. cards_send carries only _CARDS_CARRY, so it
+    has no contact_band or engagement - asking for them would raise 200 lines from here. A dim that
+    a frame cannot supply is absent from that scope's rows, not an error, and it is printed so the
+    absence is visible rather than inferred from a gap in a pivot.
+    """
+    _out = []
+    _use = [d for d in _SEG_DIMS if d in df.columns]
+    _skip = [d for d in _SEG_DIMS if d not in df.columns]
+    if _skip:
+        print("  " + scope_type + "/" + basis + ": no", _skip, "on this frame - dims omitted")
+    for _d in _use:
+        _keys = ([scope_col] if scope_col else []) + ["bucket"]
+        _g = (df.groupBy(*(_keys + [F.col(_d).cast("string").alias("segment_value")]))
+              .agg(F.count("*").alias("clients")))
+        if scope_col:
+            _g = _g.withColumnRenamed(scope_col, "scope_value")
+        else:
+            _g = _g.withColumn("scope_value", F.lit("ALL"))
+        _out.append(_g.withColumn("segment_dim", F.lit(_d))
+                    .withColumn("scope_type", F.lit(scope_type))
+                    .withColumn("basis", F.lit(basis))
+                    .withColumn("clients_est",
+                                F.when(F.col("bucket") == "leaver", F.col("clients"))
+                                 .otherwise(F.col("clients") * F.lit(weight)))
+                    .select("scope_type", "scope_value", "basis", "bucket", "segment_dim",
+                            "segment_value", "clients", "clients_est"))
+    _u = _out[0]
+    for _f in _out[1:]:
+        _u = _u.unionByName(_f)
+    return _u
+
+
+_seg_parts = [_seg_rows(matched, "BANK", None, "CENSUS", 1),
+              _seg_rows(cards_send, "CAMPAIGN", "mne", "CARDS_CENSUS", 1)]
+if HAVE_WIDE:
+    _wide_banded = (senders_wide_raw.join(banded.filter(F.col("ucp_matched")), "CLNT_NO", "inner"))
+    _seg_parts.append(_seg_rows(_wide_banded, "CAMPAIGN", "mne", "BANK_WIDE_SAMPLED", SAMPLE_MOD))
+
+unsub_segments = _seg_parts[0]
+for _p in _seg_parts[1:]:
+    unsub_segments = unsub_segments.unionByName(_p)
+
+# CADENCE -> a word. 92 days in the window, so 13+ waves is weekly, 6-12 fortnightly, 2-5 monthly.
+# The raw n_deployments and send_days stay in the file: the label is a convenience, not the evidence.
+_WIN_DAYS = 92
+if HAVE_CADENCE:
+    _cad = (add_mne_program(cadence_mne, mne_col="mne").drop("program")
+            .withColumn("cadence",
+                        F.when(F.col("n_deployments") >= 13, "weekly_or_more")
+                         .when(F.col("n_deployments") >= 6, "fortnightly")
+                         .when(F.col("n_deployments") >= 2, "monthly")
+                         .otherwise("single_send"))
+            .withColumn("mean_days_between_waves",
+                        F.when(F.col("n_deployments") > 1,
+                               F.round(F.lit(_WIN_DAYS) / F.col("n_deployments"), 1)))
+            .select("mne", "n_deployments", "send_days", "first_send_dt", "last_send_dt",
+                    "cadence", "mean_days_between_waves"))
+else:
+    _cad = None
+
+# SOLO rows carry the census figures from L6 - senders and attributed unsubs are exact, no sample in
+# them. Pair rows can only come from the sampled wide pull. Both live here because a solo campaign is
+# the degenerate case of a pair, and splitting them would put brief 1a and brief 3c in two files that
+# the reader has to join by hand.
+_camp_solo = (senders_mne.select("mne", "program", "senders")
+              .join(_leavers_by_mne.select("mne", F.col("unsubs").alias("unsubs_attributed")),
+                    "mne", "left")
+              .withColumn("mne_a", F.col("mne")).withColumn("mne_b", F.lit(""))
+              .withColumn("basis", F.lit("CENSUS")))
+if _cad is not None:
+    _camp_solo = _camp_solo.join(_cad, "mne", "left")
+
+# The solo row carries BOTH readings side by side: the census senders/unsubs from L6, and the same
+# campaign as L13 measured it on the sampled pool. If they disagree by much more than sampling
+# noise, the sample is not representative and every pair rate built on it is suspect. That check is
+# only possible because both sit on one row.
+if _WIDE_SRC is not None:
+    _camp_solo = _camp_solo.join(
+        l13.filter(F.col("mne_b") == "").select(
+            F.col("mne_a").alias("mne"), "clients_est", "clients_raw", "leavers_raw",
+            "unsub_per_1000_est"), "mne", "left")
+_camp_solo = _camp_solo.drop("mne")
+
+# Explicit column list, not allowMissingColumns: that argument needs Spark 3.1 and this file has
+# never asserted a Spark version. Aligning by hand costs four lines and cannot surprise anyone.
+_CAMP_COLS = ["basis", "mne_a", "mne_b", "program", "senders", "unsubs_attributed",
+              "clients_est", "clients_raw", "leavers_raw", "unsub_per_1000_est"]
+if _cad is not None:
+    _CAMP_COLS += ["n_deployments", "send_days", "first_send_dt", "last_send_dt", "cadence",
+                   "mean_days_between_waves"]
+
+
+def _align(df):
+    return df.select(*[F.col(c) if c in df.columns else F.lit(None).alias(c) for c in _CAMP_COLS])
+
+
+if _WIDE_SRC is not None:
+    unsub_campaigns = _align(_camp_solo).unionByName(_align(l13.filter(F.col("mne_b") != "")))
+else:
+    unsub_campaigns = _align(_camp_solo)
+
+for _nm, _df in [("unsub_segments", unsub_segments), ("unsub_campaigns", unsub_campaigns)]:
+    _df.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + _nm)
+    _n = spark.read.option("header", True).csv(BASE + _nm).count()
+    assert _n > 0, _nm + " landed empty"
+    print("  " + _nm, "->", _n, "rows, readback confirmed")
+
+T("DELIVERABLE A - unsub_segments, first 20 rows (pivot this: scope_type x bucket x segment_dim)",
+  unsub_segments.orderBy("scope_type", "scope_value", "segment_dim", "segment_value").limit(20))
+T("DELIVERABLE B - unsub_campaigns, cards solo rows",
+  unsub_campaigns.filter((F.col("mne_b") == "") & F.col("mne_a").isin(*sorted(CARDS_MNES)))
+  .orderBy(F.desc("senders")))
+
 print("")
 print("To fetch for Excel, from a TERMINAL (not this kernel):")
+print("  THE TWO DELIVERABLES:")
+for _nm in ["unsub_segments", "unsub_campaigns"]:
+    print("  hdfs dfs -getmerge /user/427966379/unsub_value_museum/" + _nm + " " + _nm + ".csv")
+print("  BACKING DETAIL (only if a number is challenged):")
 for _nm in ["cube_csv", "csv_l1_where_by_mne", "csv_l6_campaign_summary",
             "csv_l7_leaver_vs_stayer", "csv_l8_cards_mailed_vs_leaver",
             "csv_l9_per_campaign_ratios", "csv_cards_cube"]:
@@ -1145,7 +1589,8 @@ _SPINE_CORE = ["CLNT_NO", "bucket", "mne", "program", "TREATMENT_ID", "unsub_tm"
                "tibc_mix", "tenure_band", "age_band", "prof_quintile", "high_potential"]
 # contact, engagement and already-out detail ride along when the pull carried them, so every table
 # above can be re-derived from this one file without going back to EDW.
-_SPINE_EXTRA = [c for c in ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened",
+_SPINE_EXTRA = [c for c in ["n_send_events", "n_mnes", "n_treatments", "breadth_upper",
+                            "breadth_lower", "breadth_band", "n_opens", "n_clicks", "opened",
                             "clicked", "contact_band", "engagement", "last_prior_unsub_dt",
                             "last_prior_unsub_mne", "n_prior_unsub_events",
                             "days_since_prior_unsub"] if c in banded.columns]
@@ -1181,8 +1626,24 @@ for _c in [
     "PROF_TOT_ANNUAL is CURRENT-YEAR CONTRIBUTION, not LTV. Proven 2026-07-27: medians rise "
     "-25.53 -> 35.96 -> 111.54 -> 257.70 -> 555.93 across tenure bands. Label it 'annual "
     "profitability' on any slide. A client flagged low-value is partly just young.",
-    "PER-CAMPAIGN SENDER AND STAYER PROFILES ARE CARDS-ONLY. Bank-wide client x MNE is ~99M pairs "
-    "and was abandoned; non-cards campaigns carry counts and a rate but null sender/stayer stats.",
+    ("PER-CAMPAIGN PROFILES: cards campaigns are a CENSUS (senders_cards). Non-cards campaigns come "
+     "from senders_wide, which is leavers-whole plus 1-in-" + str(SAMPLE_MOD) + " stayers, so their "
+     "client counts are ESTIMATES (clients_est) and their leaver counts are real. Read the `basis` "
+     "column before comparing a cards row with a non-cards row."
+     if HAVE_WIDE else
+     "PER-CAMPAIGN SENDER AND STAYER PROFILES ARE CARDS-ONLY. senders_wide was not pulled, so "
+     "non-cards campaigns carry counts and a rate but null sender/stayer stats, and 3c compares "
+     "cards against cards only."),
+    ("CAMPAIGN BREADTH is counted as " + BREADTH_LABEL.upper() + ", from column " +
+     str(BREADTH_COL) + ". It is reported as a RANGE (breadth_lower..breadth_upper) because the "
+     "pull is monthly and distinct counts do not sum across months: the lower bound is one month's "
+     "max, the upper is the sum. breadth_band uses the LOWER bound." +
+     ("" if BREADTH_IS_CAMPAIGNS else " THIS LANDING COUNTS DEPLOYMENT WAVES, NOT CAMPAIGNS - "
+      "brief item 3b needs n_mnes; re-run [6].")),
+    "L13 CO-OCCURRENCE IS A COMPARISON, NOT AN ATTRIBUTION. A pair rate above both solo rates says "
+    "the combination loses clients faster than either campaign alone; it does not say the pair "
+    "CAUSED it. Clients mailed by two campaigns are mailed more, and contact volume is the standing "
+    "confound - check the pair against L10 before calling a combination the cause.",
     "CLIENTS ACQUIRED DURING THE WINDOW cannot exist in the " + UCP_ANCHOR + " snapshot and come "
     "back unmatched. Counted in M0a, never dropped silently.",
     "BAND CUT POINTS and the high_potential thresholds (age<" + str(HP_AGE) + ", tenure<=" +
