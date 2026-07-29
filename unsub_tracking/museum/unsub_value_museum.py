@@ -435,18 +435,31 @@ print("already_out = mailed despite an unsub before the window (the leak). Kept 
 #
 # stage() lands a frame on HDFS and reads it back. On the next run the frame is already there, so the
 # build closure never executes and every table below reads a materialized file instead of a plan.
-# Set STAGE_REBUILD = True to force a rebuild after changing anything upstream of a staged frame.
-STAGE_REBUILD = False
+#
+# STAGE_REBUILD is a SET OF NAMES, not a switch. Rebuilding all three costs the full first-run price;
+# most edits only invalidate one. Name only what your edit actually changed:
+#
+#   set()                        - reuse everything (default, a rerun is minutes)
+#   {"clients_ucp", "banded"}    - changed buckets, mne/program, or the band cut points
+#   {"banded"}                   - changed only a band definition or high_potential
+#   {"cards_send"}               - changed CARDS_MNES or the columns L8/L9 read
+#   STAGE_ALL                    - changed the window, the anchor, or the reservoir SQL
+#
+# The stage names, in dependency order: clients_ucp -> banded -> cards_send. Rebuilding one does NOT
+# rebuild the ones after it, so if an edit changes what a later stage reads, name it too.
+STAGE_ALL = {"clients_ucp", "banded", "cards_send"}
+STAGE_REBUILD = set()
 
 
 def stage(name, build):
-    if not STAGE_REBUILD and landed(name):
+    if name not in STAGE_REBUILD and landed(name):
         df = spark.read.parquet(BASE + name)
         print("  stage", name, "- REUSED,", df.count(), "rows (build skipped)")
         return df
+    _why = "forced by STAGE_REBUILD" if name in STAGE_REBUILD else "not on HDFS yet"
     build().write.mode("overwrite").parquet(BASE + name)
     df = spark.read.parquet(BASE + name)
-    print("  stage", name, "- BUILT,", df.count(), "rows ->", BASE + name)
+    print("  stage", name, "- BUILT (" + _why + "),", df.count(), "rows ->", BASE + name)
     return df
 
 
