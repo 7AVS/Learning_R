@@ -494,66 +494,58 @@ def _read(name):
 _c = _read("cohort_raw")
 _m = _read("unsub_mne")
 
-# The three confound checks need columns cell [2] only started pulling on 2026-07-29. A cache landed
-# before that read back fine and then fails 200 lines down inside a groupBy. Decide it HERE, name the
-# missing columns, and let the analysis run without them rather than die at A11.
-_C12_COLS = ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened", "clicked"]
-_missing12 = [c for c in _C12_COLS if c not in _c.columns]
-HAVE_C12 = not _missing12
-if not HAVE_C12:
-    print("!! C1/C2 UNAVAILABLE - cohort_raw is missing", _missing12)
-    print("   That cache predates the contact/engagement columns. Re-run cell [2] to get them.")
-    print("   A1-A10 run normally; A11 and A12 will skip.")
+# Optional landings. Missing ones do not stop the analysis - the column simply reads "not_pulled",
+# which is visibly different from a real state and cannot be mistaken for one.
+def _opt(name, cols):
+    try:
+        return _read(name)
+    except Exception:
+        print("     %-14s not landed - continuing without it" % name)
+        return None
 
-try:
-    _pr = _read("prior_unsub").select("clnt_key",
-                                      F.col("last_prior_unsub_dt"),
-                                      F.col("n_prior_unsub_events").cast("int"))
-    HAVE_C3 = True
-except Exception:
-    _pr, HAVE_C3 = None, False
-    print("!! C3 UNAVAILABLE - no prior_unsub landing. Run cell [2d]. A13 will skip.")
+_d = _opt("dfp_card_state", None)          # [2f] cards open/closed/written off
+_p = _opt("prior_unsub", None)             # [2d] unsubscribed before July and mailed anyway
 
 cohort = (_c.withColumn("mailed",   F.col("mailed").cast("int"))
-            .withColumn("unsubbed", F.col("unsubbed").cast("int")))
-for _col in (_C12_COLS if HAVE_C12 else []):
-    cohort = cohort.withColumn(_col, F.coalesce(F.col(_col).cast("int"), F.lit(0)))
-
-cohort = (cohort.filter("mailed = 1")
+            .withColumn("unsubbed", F.col("unsubbed").cast("int"))
+            .filter("mailed = 1")
             .join(_m, "clnt_key", "left")
             .withColumn("unsub_mne", F.coalesce(F.col("unsub_mne"), F.lit("")))
-            .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub")))
+            .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub"))
+            .dropDuplicates(["clnt_key"]))
 
-if HAVE_C3:
-    cohort = (cohort.join(_pr, "clnt_key", "left")
-              .withColumn("already_out",
-                          F.when(F.col("last_prior_unsub_dt").isNotNull(), 1).otherwise(0))
-              # _read gives CSV, so the date arrives as a string - datediff on it returns null
-              .withColumn("days_since_prior_unsub",
-                          F.datediff(F.to_date(F.lit("2025-07-01")),
-                                     F.to_date(F.col("last_prior_unsub_dt")))))
+if _d is not None:
+    cohort = (cohort.join(_d.select("clnt_key", "card_state", "n_accts"), "clnt_key", "left")
+                    .withColumn("card_state", F.coalesce(F.col("card_state"), F.lit("no_card_record"))))
 else:
-    cohort = cohort.withColumn("already_out", F.lit(0))
+    cohort = cohort.withColumn("card_state", F.lit("not_pulled")).withColumn("n_accts", F.lit(None).cast("int"))
 
-if HAVE_C12:
-    # Contact bands, not raw counts: the DiD has to be re-cut INSIDE a band, and a band needs enough
-    # clients to hold a decile split. Cut points are ours - edit here and nowhere else.
-    cohort = cohort.withColumn(
-        "contact_band",
-        F.when(F.col("n_send_events") <= 1, "1")
-         .when(F.col("n_send_events") <= 3, "2-3")
-         .when(F.col("n_send_events") <= 6, "4-6")
-         .when(F.col("n_send_events") <= 12, "7-12").otherwise("13+"))
-    cohort = cohort.withColumn("engaged", F.when((F.col("opened") == 1) | (F.col("clicked") == 1),
-                                                 1).otherwise(0))
+if _p is not None:
+    cohort = (cohort.join(_p.select("clnt_key", F.lit(1).alias("already_out")), "clnt_key", "left")
+                    .withColumn("already_out", F.coalesce(F.col("already_out"), F.lit(0))))
+else:
+    cohort = cohort.withColumn("already_out", F.lit(None).cast("int"))
 
-cohort = cohort.dropDuplicates(["clnt_key"]).cache()
+cohort = cohort.cache()
+
 n_cohort = cohort.count()
 n_uns    = cohort.filter("unsubbed = 1").count()
 _LOG = []
 log(1, "mailed in Jul 2025",              "pull/cohort_raw", "mailed = 1",   n_cohort, n_cohort, "THE UNIVERSE")
 log(2, "of those, unsubscribed Jul 2025", "pull/cohort_raw", "unsubbed = 1", n_uns,    n_uns,    "treatment group")
 log(3, "of those, did not unsubscribe",   "pull/cohort_raw", "unsubbed = 0", n_cohort - n_uns, n_cohort - n_uns, "control group")
+
+_cs = cohort.groupBy("grp", "card_state").count().toPandas()
+if set(_cs["card_state"]) != {"not_pulled"}:
+    display(_cs.pivot(index="card_state", columns="grp", values="count").fillna(0).astype(int))
+    print("card_state is the CARD portfolio only. A client who closed a card and kept a mortgage")
+    print("reads as closed here. no_card_record = in the cohort but holds no card at all.")
+_ao = cohort.filter("already_out = 1").count() if _p is not None else None
+if _ao is not None:
+    print("already_out: %s clients unsubscribed BEFORE July 2025 and were mailed in it anyway."
+          % f"{_ao:,}")
+    print("             They are in the control group labelled as having chosen not to unsubscribe.")
+    print("             Filter them out before quoting any delta_vs_control.")
 print("mnemonic attached to", f'{cohort.filter("unsub_mne <> char(39)char(39)").count():,}' if False else
       f'{cohort.filter(F.col("unsub_mne") != "").count():,}', "of", f"{n_uns:,}", "unsubscribers")
 
