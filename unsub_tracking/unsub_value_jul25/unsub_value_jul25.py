@@ -74,13 +74,6 @@ def key_pd(sr, label=""):
               % (label, f"{bad:,}", f"{len(n):,}"))
     return n.round(0).astype("Int64").astype("string")
 
-# ---- HDFS cache: land each Teradata pull once, re-pull only when the SQL text changes ----
-# NO leading underscore. Hadoop's input-path filter skips names starting with "_" or ".",
-# so a cache under _cache/_meta/ writes fine and then silently fails to read back - which
-# looked exactly like a cache miss and re-pulled from Teradata every run (2026-07-28).
-CACHE  = OUT + "cache/"
-REPULL = False   # flip True to force a fresh pull regardless of what is landed
-
 # ==================== THE ONLY SWITCH ====================
 PULL = True     # True  = pull everything from Teradata (~25 min)
                 # False = reuse what is already in this kernel; fails loudly if it is not there
