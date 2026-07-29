@@ -81,38 +81,54 @@ def key_pd(sr, label=""):
 CACHE  = OUT + "cache/"
 REPULL = False   # flip True to force a fresh pull regardless of what is landed
 
+import os
+LOCAL = os.path.abspath("unsub_value_cache")   # pod-local disk, NOT HDFS
+os.makedirs(LOCAL, exist_ok=True)
+_MEM = {}   # in-session memo: re-running a cell never re-pulls while the kernel lives
+
 def cached(name, sql_text, puller):
-    """The SQL hash rides INSIDE the data parquet as a column - there is no separate manifest.
-    The side-file version failed on read with Py4JJavaError at collectToPython and re-pulled from
-    Teradata every run (2026-07-29). One path, one read: if the data is readable so is its key.
-    The readback assert below means a bad write fails HERE, loudly, not silently on the next run."""
+    """Local disk via pandas. Spark and HDFS are OUT of the cache path entirely.
+
+    Three HDFS designs failed here (2026-07-28/29): underscore-prefixed paths Hadoop silently skips,
+    a side manifest that threw Py4JJavaError on collectToPython, and an in-file hash that threw
+    Py4JJavaError on o92.parquet across sessions - each one costing a ~25 minute re-pull to discover.
+    pandas -> local parquet involves no JVM, so it cannot raise Py4JJavaError at all. The md5 sits in a
+    sidecar text file next to the data; if either is missing or stale it re-pulls, and nothing else can
+    go wrong. HDFS is still where the OUTPUT CSVs go - it is only the cache that moved."""
     import hashlib, re as _re, datetime as _dt
-    key  = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
-    path = CACHE + name
-    if not REPULL:
+    key = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
+    f, kf = os.path.join(LOCAL, name + ".parquet"), os.path.join(LOCAL, name + ".md5")
+
+    if not REPULL and name in _MEM and _MEM[name][0] == key:
+        out = _MEM[name][1]
+        print("MEMORY HIT  %-12s %s rows - still in this kernel, no disk read" % (name, f"{len(out):,}"))
+        return out.copy()
+
+    if not REPULL and os.path.exists(f) and os.path.exists(kf):
         try:
-            df  = spark.read.parquet(path)
-            hdr = df.select("_sql_md5", "_landed_at").limit(1).collect()
-            if hdr and hdr[0]["_sql_md5"] == key:
-                out = df.drop("_sql_md5", "_landed_at").toPandas()
-                print("CACHE HIT   %-12s %s rows (landed %s)" % (name, f"{len(out):,}", hdr[0]["_landed_at"]))
-                return out
-            print("CACHE STALE %-12s SQL changed since %s - re-pulling"
-                  % (name, hdr[0]["_landed_at"] if hdr else "?"))
+            stored, landed = open(kf).read().strip().split("|", 1)
+            if stored == key:
+                out = pd.read_parquet(f)
+                print("CACHE HIT   %-12s %s rows (landed %s, %.1f MB local)"
+                      % (name, f"{len(out):,}", landed, os.path.getsize(f) / 1e6))
+                _MEM[name] = (key, out)
+                return out.copy()
+            print("CACHE STALE %-12s SQL changed since %s - re-pulling" % (name, landed))
         except Exception as ex:
-            _first = (str(ex).splitlines() or [""])[0][:140]
-            print("CACHE MISS  %-12s - pulling from Teradata (%s: %s)" % (name, type(ex).__name__, _first))
+            print("CACHE MISS  %-12s - %s: %s" % (name, type(ex).__name__, str(ex).splitlines()[0][:120]))
+    elif not REPULL:
+        print("CACHE MISS  %-12s - nothing at %s" % (name, f))
+
     out = puller()
-    (spark.createDataFrame(out)
-          .withColumn("_sql_md5",   F.lit(key))
-          .withColumn("_landed_at", F.lit(_dt.datetime.now().isoformat()))
-          .write.mode("overwrite").parquet(path))
-    _back = spark.read.parquet(path)
-    _n, _k = _back.count(), _back.select("_sql_md5").limit(1).collect()[0]["_sql_md5"]
-    assert _n == len(out), "cache readback row mismatch: wrote %d, read %d" % (len(out), _n)
-    assert _k == key,      "cache readback key mismatch - the next run would re-pull"
-    print("LANDED      %-12s %s rows -> %s (readback confirms rows AND key)" % (name, f"{len(out):,}", path))
-    return out
+    out.to_parquet(f, index=False)
+    with open(kf, "w") as fh:
+        fh.write(key + "|" + _dt.datetime.now().isoformat())
+    back = pd.read_parquet(f)
+    assert len(back) == len(out), "cache readback mismatch: wrote %d, read %d" % (len(out), len(back))
+    print("LANDED      %-12s %s rows -> %s (%.1f MB, readback confirms)"
+          % (name, f"{len(out):,}", f, os.path.getsize(f) / 1e6))
+    _MEM[name] = (key, out)
+    return out.copy()
 
 def key_sp(col):
     """UCP CLNT_NO -> same canonical form: trimmed, leading zeros stripped."""
