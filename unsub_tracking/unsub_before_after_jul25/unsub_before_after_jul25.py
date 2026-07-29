@@ -1,4 +1,8 @@
-# UNSUB VALUE - JULY 2025 COHORT, 11-MONTH FOLLOW-UP
+# UNSUB BEFORE-AND-AFTER - JULY 2025 COHORT, 11-MONTH FOLLOW-UP
+#
+# NOT the same as unsub_tracking/museum/unsub_value_museum.py. Tell them apart by anchor count:
+#   museum        ONE UCP anchor (2026-02-28)  -> a snapshot. WHO unsubscribes.
+#   this file     TWO UCP anchors (2025-07-31, 2026-06-30) -> a change. WHAT HAPPENS AFTER.
 #
 # Question: among clients mailed in July 2025, did the ones who unsubscribed diverge from the ones who
 # did not - in whether they are still here, and in what they are worth?
@@ -72,7 +76,7 @@ spark.sparkContext.setLogLevel("ERROR")
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
-OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
+OUT       = "hdfs:///user/427966379/unsub_value_jul25/"   # HDFS path unchanged - the pull already landed here
 PULL_OUT  = OUT + "cache/"   # where the completed run actually landed
 BASELINE  = "2025-07-31"
 FOLLOWUP  = "2026-06-30"
@@ -348,7 +352,7 @@ spark.sparkContext.setLogLevel("ERROR")
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
-OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
+OUT       = "hdfs:///user/427966379/unsub_value_jul25/"   # HDFS path unchanged - the pull already landed here
 PULL_OUT  = OUT + "cache/"   # where the completed run actually landed
 BASELINE  = "2025-07-31"
 FOLLOWUP  = "2026-06-30"
