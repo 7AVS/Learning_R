@@ -493,14 +493,33 @@ log(6, "no UCP row at all at %s" % BASELINE, "ucp4", "-", n_cohort - n_row, n_co
 # against ~733,000 in every other decile - the top 1.5% of the distribution wearing a "decile 10" label.
 _nn  = b.filter(F.col("PROF_TOT_ANNUAL").isNotNull())
 _dec = _nn.withColumn("dec", F.ntile(10).over(W.orderBy(F.col("PROF_TOT_ANNUAL").asc()))).select("clnt_key", "dec")
+# The residual bucket used to be one label, "no_baseline_ucp", and that label was FALSE for most of
+# the clients in it. dec is null when PROF_TOT_ANNUAL is null - which is two different populations:
+# a client with no UCP row at all, and a client who HAS a row carrying a null profitability. Log
+# line 5 above already draws that distinction in words ("a UCP row with no profitability is NOT the
+# same as no client") and this line then collapsed it under the name of only one of them.
+#
+# It showed up in 06_relationship, which filters to in_ucp_baseline = 1: 267 clients appeared under
+# "no_baseline_ucp" in a table where every row provably HAS a baseline UCP row. Same numbers, wrong
+# name. Split, so the label says which one.
 b = (b.join(_dec, "clnt_key", "left")
-      .withColumn("baseline_prof_decile", F.coalesce(F.col("dec").cast("string"), F.lit("no_baseline_ucp")))
+      .withColumn("baseline_prof_decile",
+                  F.when(F.col("dec").isNotNull(), F.col("dec").cast("string"))
+                   .when(F.col("in_ucp_baseline").isNull(), F.lit("no_ucp_row"))
+                   .otherwise(F.lit("ucp_row_null_prof")))
       .drop("dec"))
-_chk = (b.filter("baseline_prof_decile <> 'no_baseline_ucp'").groupBy("baseline_prof_decile")
+NON_DECILE = ["no_ucp_row", "ucp_row_null_prof"]
+_chk = (b.filter(~F.col("baseline_prof_decile").isin(*NON_DECILE)).groupBy("baseline_prof_decile")
           .count().toPandas()["count"])
 print("decile sizes: min %s max %s spread %.2f%%" % (f"{_chk.min():,}", f"{_chk.max():,}",
       100.0 * (_chk.max() - _chk.min()) / _chk.mean()))
 assert (_chk.max() - _chk.min()) / _chk.mean() < 0.01, "deciles are not equal-sized - ntile is picking up nulls again"
+display(b.filter(F.col("baseline_prof_decile").isin(*NON_DECILE))
+         .groupBy("baseline_prof_decile", "grp").count()
+         .orderBy("baseline_prof_decile", "grp").toPandas())
+print("no_ucp_row        = not in UCP personal at all at", BASELINE, "- no attributes exist.")
+print("ucp_row_null_prof = IS a UCP client, profitability is null. Depth and breadth ARE measurable")
+print("                    for these, which is why they appear in 06_relationship.")
 # STILL WITH US = has a UCP row at follow-up. NOT "has a non-null profitability" - a client can hold a
 # row with a null PROF_TOT_ANNUAL and is plainly still a client. Testing the value inflates attrition.
 panel = (b.join(foll, "clnt_key", "left")
