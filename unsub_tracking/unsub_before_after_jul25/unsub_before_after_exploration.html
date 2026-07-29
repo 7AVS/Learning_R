@@ -18,43 +18,25 @@
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
       color-scheme: dark;
-      --surface-1: #1a1a19;
-      --surface-2: #232322;
-      --border: #3a3a38;
-      --text-primary: #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted: #918f86;
-      --over: #d95926;
-      --under: #3987e5;
-      --neutral: #5a5955;
-      --series-1: #3987e5;
-      --series-2: #d95926;
-      --grid: #2e2e2c;
+      --surface-1: #1a1a19; --surface-2: #232322; --border: #3a3a38;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #918f86;
+      --over: #d95926; --under: #3987e5; --neutral: #5a5955;
+      --series-1: #3987e5; --series-2: #d95926; --grid: #2e2e2c;
     }
   }
   :root[data-theme="dark"] .viz-root {
     color-scheme: dark;
-    --surface-1: #1a1a19;
-    --surface-2: #232322;
-    --border: #3a3a38;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #918f86;
-    --over: #d95926;
-    --under: #3987e5;
-    --neutral: #5a5955;
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --grid: #2e2e2c;
+    --surface-1: #1a1a19; --surface-2: #232322; --border: #3a3a38;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #918f86;
+    --over: #d95926; --under: #3987e5; --neutral: #5a5955;
+    --series-1: #3987e5; --series-2: #d95926; --grid: #2e2e2c;
   }
 
   .viz-root {
-    background: var(--surface-1);
-    color: var(--text-primary);
+    background: var(--surface-1); color: var(--text-primary);
     font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
-    padding: 32px 24px 64px;
-    max-width: 1040px;
-    margin: 0 auto;
+    padding: 32px 24px 64px; max-width: 1040px; margin: 0 auto;
+    font-variant-numeric: tabular-nums;
   }
   h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
   h2 { font-size: 19px; margin: 44px 0 4px; letter-spacing: -0.005em; }
@@ -69,29 +51,42 @@
            gap: 12px; margin: 20px 0 8px; }
   .tile { background: var(--surface-2); border: 1px solid var(--border);
           border-radius: 10px; padding: 14px 16px; }
-  .tile .n { font-size: 27px; font-weight: 620; letter-spacing: -0.02em;
-             font-variant-numeric: tabular-nums; }
+  .tile .n { font-size: 27px; font-weight: 620; letter-spacing: -0.02em; }
   .tile .l { color: var(--text-secondary); font-size: 12.5px; margin-top: 3px; }
 
   .chart { margin: 14px 0 0; }
-  .row { display: grid; grid-template-columns: 150px 1fr 74px; align-items: center;
-         gap: 10px; padding: 2px 0; }
-  .row .cat { font-size: 13px; color: var(--text-secondary); text-align: right;
-              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row .val { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-primary); }
-  .track { position: relative; height: 22px; }
-  .axis { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--grid); }
-  .bar { position: absolute; top: 4px; height: 14px; }
-  .bar.pos { border-radius: 0 4px 4px 0; background: var(--under); }
-  .bar.neg { border-radius: 4px 0 0 4px; background: var(--over); }
+  .row { display: grid; grid-template-columns: minmax(92px, max-content) 1fr 78px;
+         align-items: center; gap: 10px; padding: 1px 0; }
+  .row .cat { font-size: 13px; color: var(--text-secondary); text-align: right; white-space: nowrap; }
+  .row .val { font-size: 13px; color: var(--text-primary); }
+  .track { position: relative; height: 20px; }
+  .axis { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--grid); left: 50%; }
+  .bar { position: absolute; top: 3px; height: 14px; min-width: 2px; }
+  .bar.pos { border-radius: 0 4px 4px 0; background: var(--under); left: 50%; }
+  .bar.neg { border-radius: 4px 0 0 4px; background: var(--over); right: 50%; }
   .bar.plain { border-radius: 0 4px 4px 0; background: var(--series-1); left: 0; }
-  .bar.alt   { border-radius: 0 4px 4px 0; background: var(--series-2); left: 0; }
-  .grp { display: grid; grid-template-columns: 178px 1fr; gap: 10px; align-items: center;
-         padding: 5px 0; }
-  .grp .pair { display: grid; gap: 2px; }
-  .pairline { display: grid; grid-template-columns: 1fr 58px; gap: 8px; align-items: center; }
-  .minitrack { position: relative; height: 13px; }
-  .minibar { position: absolute; left: 0; top: 0; height: 13px; border-radius: 0 4px 4px 0; }
+  .bar:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+
+  .duo { display: grid; grid-template-columns: minmax(92px, max-content) 1fr 78px;
+         gap: 10px; align-items: center; padding: 6px 0;
+         border-bottom: 1px solid var(--border); }
+  .duo:last-child { border-bottom: 0; }
+  .duo .cat { font-size: 13px; text-align: right; white-space: nowrap; color: var(--text-secondary); }
+  .duo .stack { display: grid; gap: 3px; }
+  .duo .val { font-size: 12.5px; display: grid; gap: 3px; line-height: 20px; }
+
+  /* NO position:relative here - .tip is applied to .bar, and a later position:relative
+     would override .bar's position:absolute, sending every negative bar off the left edge.
+     An absolutely positioned .bar is already a containing block for its own ::after. */
+  .tip::after {
+    content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 7px);
+    transform: translateX(-50%); white-space: nowrap; z-index: 5;
+    background: var(--text-primary); color: var(--surface-1);
+    font-size: 11.5px; line-height: 1.4; padding: 5px 9px; border-radius: 6px;
+    opacity: 0; pointer-events: none; transition: opacity .12s;
+  }
+  .tip:hover::after, .tip:focus-visible::after { opacity: 1; }
+
   .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0 4px; font-size: 12.5px;
             color: var(--text-secondary); }
   .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
@@ -99,8 +94,7 @@
 
   details { margin-top: 14px; }
   summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
-  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 10px;
-          font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 10px; }
   th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--text-secondary); font-weight: 560; }
@@ -111,51 +105,90 @@
              font-size: 14px; color: var(--text-primary); }
   .callout strong { font-weight: 620; }
   .q { color: var(--text-secondary); font-size: 13.5px; margin: 8px 0 0; }
-  [data-tip] { cursor: default; }
+
+  @media (max-width: 640px) {
+    .row, .duo { grid-template-columns: 1fr; gap: 3px; }
+    .row .cat, .duo .cat, .row .val, .duo .val { text-align: left; }
+    .duo .val { grid-auto-flow: column; justify-content: start; gap: 14px; }
+  }
+  @media print {
+    .viz-root { color-scheme: light; background: #fff; --surface-1: #fff; }
+    details > summary { display: none; }
+    details > *:not(summary) { display: block !important; }
+    .row, .duo, .callout, table, ol { break-inside: avoid; page-break-inside: avoid; }
+    .tip::after { display: none; }
+  }
 </style>
 
 <div class="viz-root">
 
 <p class="kicker">Cards pod · exploration draft · not for circulation</p>
 <h1>What happens after someone unsubscribes?</h1>
-<p class="sub">Every client the bank emailed in <strong>July 2025</strong>, split into those who
-unsubscribed that month and those who didn't, then followed for <strong>eleven months</strong> to
-June 2026. Two UCP snapshots per client — one at the unsubscribe, one at the end. The companion page
-asks who leaves; this one asks what it costs.</p>
+<p class="sub">Every client the bank emailed in <strong>July 2025</strong>, split by whether they
+unsubscribed that month, then followed to <strong>June 2026</strong>. Two profitability readings per
+client — one at the unsubscribe, one eleven months on. The first time we can watch the same people
+before and after, rather than describe them once.</p>
 
 <div class="tiles">
   <div class="tile"><div class="n">7,354,166</div><div class="l">clients emailed, July 2025</div></div>
   <div class="tile"><div class="n">22,805</div><div class="l">unsubscribed &nbsp;·&nbsp; 0.31%</div></div>
-  <div class="tile"><div class="n">11</div><div class="l">months of follow-up</div></div>
-  <div class="tile"><div class="n">8,047</div><div class="l">unsubscribers in the top four deciles</div></div>
+  <div class="tile"><div class="n">−$73</div><div class="l">worst decile gap, per client</div></div>
+  <div class="tile"><div class="n">8,047</div><div class="l">clients that gap covers</div></div>
 </div>
-<p class="note">91.4% matched to the July-2025 UCP snapshot; of those, 358 clients carry a UCP row with
-no profitability figure. The 630,173 with no UCP row at all are held in a separate band throughout —
-they are almost entirely outside personal UCP, not a data gap.</p>
+<p class="note">Everything below is cut on the client's profitability decile at July 2025, both groups
+banded together so a decile means the same dollars on each side. 91.4% matched to that snapshot; the
+630,173 with no UCP row sit in their own band and are never pooled in. Profitability is
+<code>PROF_TOT_ANNUAL</code>, whose definition is undocumented — every dollar figure here is directional.</p>
 
 <hr style="margin-top:34px">
 
-<h2>1. Unsubscribers leave. In every decile.</h2>
-<p class="sub">Share of each group gone from UCP by June 2026, side by side within each baseline
-profitability decile. The comparison group is clients emailed the same month who did not unsubscribe.</p>
+<h2>1. In the top four deciles the two groups move in opposite directions</h2>
+<p class="sub">Change in annual profitability over the eleven months. Two bars per decile on one zero
+axis — the clients who stayed subscribed, then the clients who unsubscribed. Right of the line is a gain.</p>
 
 <div class="legend">
-  <span><span class="swatch" style="background:var(--series-1)"></span>did not unsubscribe</span>
-  <span><span class="swatch" style="background:var(--series-2)"></span>unsubscribed</span>
+  <span><span class="swatch" style="background:var(--under)"></span>gained over 11 months</span>
+  <span><span class="swatch" style="background:var(--over)"></span>lost</span>
+  <span><span class="swatch" style="background:var(--neutral)"></span>zero</span>
 </div>
 
-<div class="chart" id="c-attr"></div>
+<div class="chart" id="c-duo"></div>
 
 <div class="callout">
-  <strong>Ten deciles out of ten, the unsubscribers are gone more often.</strong> The gap runs
-  0.2 to 1.8 points — small in absolute terms, but 20% to 67% higher in relative terms, and it never
-  once reverses. Decile 4 is the widest: 8.61% against 6.85%.
+  <strong>This is a crossing, not a gap.</strong> Through decile 6 both bars sit on the same side of
+  zero and differ by a few dollars. From decile 7 they separate and point opposite ways — the stayers
+  gain $20, $32 and $28 while the unsubscribers lose $11, $31 and $45. Decile 10 is the only band
+  where both fall, and the unsubscribers fall four times further.
 </div>
 
-<p class="q"><strong>Read the deciles, never the total.</strong> Pooled across everyone the numbers
-say the opposite — 8.41% of unsubscribers gone against 10.90% of the comparison group. That inversion
-is Simpson's paradox, driven entirely by the no-UCP band, where the comparison group is
-proportionally larger. The pooled figure is arithmetically true and substantively backwards.</p>
+<p class="q"><strong>What would settle it:</strong> did the divergence start at the unsubscribe, or
+was it already underway? A profitability reading from three months <em>before</em> July answers that,
+and the same two-anchor code reads a third partition without a new pull.</p>
+
+<details>
+  <summary>Show the numbers</summary>
+  <div class="scroll"><table id="t-duo"></table></div>
+</details>
+
+<hr style="margin-top:40px">
+
+<h2>2. Attrition is worse for unsubscribers — by the same flat amount everywhere</h2>
+<p class="sub">How much more of each decile the unsubscribers lost by June 2026, against the clients
+who stayed subscribed. If unsubscribing cost us the valuable ones, this chart would slope.</p>
+
+<div class="chart" id="c-gap"></div>
+
+<div class="callout">
+  Ten deciles out of ten point the same way, and every gap sits between <strong>+0.6 and +1.8
+  points</strong> with no trend across the value range. That makes attrition a different phenomenon
+  from the profitability divergence above — one is flat everywhere, the other is nothing until
+  decile 7 and then everything.
+</div>
+
+<p class="q"><strong>Do not quote the pooled figure.</strong> Across everyone it reads 8.41% of
+unsubscribers gone against 10.90% of stayers — the reverse of all ten deciles. The inversion comes
+from the no-UCP band being proportionally larger on the stayer side. Arithmetically true,
+substantively backwards.</p>
 
 <details>
   <summary>Show the numbers</summary>
@@ -164,111 +197,107 @@ proportionally larger. The pooled figure is arithmetically true and substantivel
 
 <hr style="margin-top:40px">
 
-<h2>2. Value diverges — but only at the top</h2>
-<p class="sub">Change in annual profitability over the eleven months, unsubscribers minus the
-comparison group, within each baseline decile. Left of the line means unsubscribers did worse.</p>
+<h2>3. The biggest churn signal here has nothing to do with unsubscribing</h2>
+<p class="sub">Attrition among the clients who <em>stayed subscribed</em> — the comparison group on
+its own, by profitability decile. No unsubscribes in this chart at all.</p>
 
-<div class="legend">
-  <span><span class="swatch" style="background:var(--over)"></span>unsubscribers fell further behind</span>
-  <span><span class="swatch" style="background:var(--under)"></span>unsubscribers did better</span>
-  <span><span class="swatch" style="background:var(--neutral)"></span>0 = moved together</span>
-</div>
-
-<div class="chart" id="c-prof"></div>
+<div class="chart" id="c-hump"></div>
 
 <div class="callout">
-  <strong>Deciles 1 through 6 show nothing. Deciles 7 through 10 show everything.</strong>
-  In the bottom six bands the two groups move within a few dollars of each other. In the top four the
-  comparison group holds or grows while the unsubscribers fall — a swing of
-  <strong>&minus;$30 to &minus;$73</strong> per client, across 8,047 people.
+  <strong>Churn peaks at break-even, not at the bottom.</strong> Deciles 3, 4 and 5 lose 4.38%, 6.85%
+  and 3.40% of their clients, against 0.71% in the top decile and 1.68% in the lowest. Decile 4's
+  median client is worth <strong>−$30 a year</strong>. The band straddling zero profitability churns
+  roughly ten times harder than the top — among clients who never touched an unsubscribe link.
 </div>
 
-<p class="q"><strong>Why the stratification is not decoration:</strong> annual profitability is
-severely skewed, and unsubscribers sit slightly below the comparison group at baseline — median $119
-against $157. Comparing pooled averages would let regression to the mean manufacture a difference on
-its own. Cutting on the baseline decile is what stops that, and it is why the pooled figure
-(&minus;$0.61) is not the finding.</p>
-
-<details>
-  <summary>Show the numbers</summary>
-  <div class="scroll"><table id="t-prof"></table></div>
-</details>
+<p class="q"><strong>The question this raises for the room:</strong> is the break-even band a
+retention problem we have never named, or an artefact of how <code>PROF_TOT_ANNUAL</code> behaves near
+zero — clients flickering across the boundary rather than genuinely leaving? One deserves a programme;
+the other is a measurement note.</p>
 
 <hr style="margin-top:40px">
 
-<h2>3. It is not one campaign doing this</h2>
-<p class="sub">Where the 22,805 unsubscribes came from. VRE alone is 60% of them.</p>
+<h2>4. Sixty percent of this cohort came from one campaign</h2>
+<p class="sub">Where the 22,805 July unsubscribes originated, by triggering mnemonic.</p>
 
 <div class="chart" id="c-mne"></div>
 
-<p class="q">The concentration matters for a different reason than it looks. If VRE carries three in
-five unsubscribes, then a July-2025 finding is substantially a <em>VRE</em> finding — and whether it
-generalises to other months and other campaign mixes is untested. <strong>SBB</strong> is the outlier
-to ignore: 802 unsubscribers, 0.12% present at follow-up, no baseline profitability at all. Those are
-business clients, and personal UCP cannot contain them.</p>
+<div class="callout">
+  With VRE carrying three in five, <strong>a July-2025 result is substantially a VRE result.</strong>
+  That is a limit on the finding, not a finding about VRE. <strong>SBB</strong> is different again and
+  should be excluded rather than explained — 802 unsubscribers, 0.12% present at follow-up, no baseline
+  profitability at all. Business clients, and personal UCP cannot hold them.
+</div>
+
+<p class="q"><strong>Cheapest way to know whether this generalises:</strong> run October 2025 and
+January 2026 as their own cohorts. Different campaign mixes, same code, three results instead of one.</p>
 
 <hr style="margin-top:40px">
 
-<h2>4. What would change this reading</h2>
-<p class="sub">Three things, in the order they would bite.</p>
-<ol class="q" style="line-height:1.9; padding-left:20px">
-  <li><strong>The comparison group is contaminated.</strong> Clients who unsubscribed <em>before</em>
-  July 2025 and were emailed anyway are sitting in it, labelled as having chosen not to unsubscribe.
-  They chose nothing — they were already gone. Leaving them in makes the comparison group look worse
-  than it is, which pushes every gap in the optimistic direction. This is measurable and the pull is
-  already written.</li>
-  <li><strong>One cohort month.</strong> July 2025 is a single draw. If its campaign mix was unusual —
-  and with VRE at 60% it may well have been — the top-decile pattern could be a July artifact.
-  Running October and January as separate cohorts is a date change, and three matching results would
-  settle it.</li>
-  <li><strong>The groups are not mailability-matched.</strong> Every unsubscriber is by construction
-  someone we hold an address for and did mail. Restricting both sides to a common reachable base
-  could move the rates in either direction.</li>
-</ol>
+<h2>5. The comparison group contains people who had already left</h2>
+<p class="sub">No chart — a correction waiting to be applied, not a result.</p>
 
 <div class="callout" style="border-left-color:var(--series-2)">
-  <strong>What this does not say.</strong> Nothing here shows that unsubscribing <em>caused</em> the
-  divergence. Clients who unsubscribe may already have been disengaging for reasons that also reduce
-  their value — the unsubscribe would then be a symptom appearing alongside the decline, not its
-  cause. Separating those requires a pre-period baseline this run does not have.
+  A client who unsubscribed in March 2025 and was emailed anyway in July is sitting in the comparison
+  group, counted as having <em>chosen not to unsubscribe</em>. They chose nothing — they were already
+  gone. Leaving them in makes the comparison group look worse than it is, which pushes
+  <strong>every gap on this page in the optimistic direction</strong>. The real divergence is wider
+  than −$73, not narrower.
 </div>
 
+<p class="q"><strong>This is measurable and the pull is already written.</strong> Until it runs, read
+section 1 as a floor rather than an estimate.</p>
+
+<hr style="margin-top:40px">
+
+<h2>What I'd test next</h2>
+<p class="sub">Three things, cheapest first.</p>
+<ol class="q" style="line-height:1.9; padding-left:20px">
+  <li><strong>Strip the already-gone out of the comparison group.</strong> The pull exists; it is a
+  filter plus a rerun of the analysis cells. Widens every gap and removes the strongest objection
+  anyone will raise.</li>
+  <li><strong>A third anchor, three months before July.</strong> Turns "they diverged" into "they
+  diverged starting at the unsubscribe" — or kills the causal reading honestly. Same code, one more
+  partition, no new pull.</li>
+  <li><strong>Two more cohort months.</strong> October and January. If the decile 7–10 crossing repeats
+  on different campaign mixes it is real; if it shows up only in July, it was VRE.</li>
+</ol>
+
 <p class="note" style="margin-top:32px">Source: <code>unsub_before_after_jul25.py</code>, run
-2026-07-29. Universe = clients with a vendor send in July 2025. Profitability is
-<code>PROF_TOT_ANNUAL</code> at <code>2025-07-31</code> and <code>2026-06-30</code>; its definition
-(current-year contribution versus lifetime) is not documented, so all deltas are directional. Deciles
-cut across both groups together on the baseline snapshot, 672,363 clients each. Every figure
-reconciles to its control total.</p>
+2026-07-29, July 2025 cohort followed 11 months to 2026-06-30, bank-wide. Universe is clients with a
+vendor send in July 2025. Decile figures use UCP-matched clients only; the unmatched band is reported
+separately and never pooled. <code>PROF_TOT_ANNUAL</code> definition (current-year contribution versus
+lifetime) is undocumented, so dollar deltas are directional.</p>
 
 </div>
 
 <script>
 (function () {
-  // decile, control_attrited, unsub_attrited, unsub_n, control_n
-  var ATTR = [
-    ["Decile 1 (low)",  1.68, 2.53, 2292, 670072],
-    ["Decile 2",        2.39, 3.32, 2346, 670018],
-    ["Decile 3",        4.38, 5.08, 2246, 670118],
-    ["Decile 4",        6.85, 8.61, 2126, 670238],
-    ["Decile 5",        3.40, 4.53, 2276, 670088],
-    ["Decile 6",        2.29, 3.26, 2150, 670213],
-    ["Decile 7",        1.80, 2.67, 2175, 670188],
-    ["Decile 8",        1.32, 2.20, 2095, 670268],
-    ["Decile 9",        1.01, 1.60, 2062, 670301],
-    ["Decile 10 (top)", 0.71, 0.91, 1869, 670494]
+  // [decile, baselineMedian, stayerChange, unsubChange, unsubN, stayerN]
+  var DUO = [
+    ["Decile 1",  -781.65, 378.22, 395.47, 2234, 658812],
+    ["Decile 2",  -250.64,  40.51,  40.09, 2268, 653993],
+    ["Decile 3",  -126.19,   3.17,   5.13, 2132, 640776],
+    ["Decile 4",   -30.01,  -0.37,   2.25, 1943, 624303],
+    ["Decile 5",    73.60,   8.62,   8.69, 2173, 647288],
+    ["Decile 6",   266.35,  10.88,  20.16, 2080, 654876],
+    ["Decile 7",   587.97,  19.55, -11.08, 2117, 658111],
+    ["Decile 8",  1132.11,  31.98, -30.80, 2049, 661420],
+    ["Decile 9",  2142.21,  27.85, -44.92, 2029, 663507],
+    ["Decile 10", 4849.53, -15.63, -66.13, 1852, 665750]
   ];
-  // decile, gap, control_delta, unsub_delta, unsub_n, median_baseline
-  var PROF = [
-    ["Decile 1 (low)",   17.24,  378.22,  395.47, 2234,  -781.65],
-    ["Decile 2",         -0.42,   40.51,   40.09, 2268,  -250.64],
-    ["Decile 3",          1.95,    3.17,    5.13, 2132,  -126.19],
-    ["Decile 4",          2.63,   -0.37,    2.25, 1943,   -30.01],
-    ["Decile 5",          0.07,    8.62,    8.69, 2173,    73.60],
-    ["Decile 6",          9.27,   10.88,   20.16, 2080,   266.35],
-    ["Decile 7",        -30.64,   19.55,  -11.08, 2117,   587.97],
-    ["Decile 8",        -62.78,   31.98,  -30.80, 2049,  1132.11],
-    ["Decile 9",        -72.77,   27.85,  -44.92, 2029,  2142.21],
-    ["Decile 10 (top)", -50.49,  -15.63,  -66.13, 1852,  4849.53]
+  // [decile, stayerAttrited, unsubAttrited, unsubN, stayerN]
+  var ATTR = [
+    ["Decile 1",  1.68, 2.53, 2292, 670072],
+    ["Decile 2",  2.39, 3.32, 2346, 670018],
+    ["Decile 3",  4.38, 5.08, 2246, 670118],
+    ["Decile 4",  6.85, 8.61, 2126, 670238],
+    ["Decile 5",  3.40, 4.53, 2276, 670088],
+    ["Decile 6",  2.29, 3.26, 2150, 670213],
+    ["Decile 7",  1.80, 2.67, 2175, 670188],
+    ["Decile 8",  1.32, 2.20, 2095, 670268],
+    ["Decile 9",  1.01, 1.60, 2062, 670301],
+    ["Decile 10", 0.71, 0.91, 1869, 670494]
   ];
   var MNE = [
     ["VRE", 13659, 96.49],
@@ -278,82 +307,40 @@ reconciles to its control total.</p>
     ["PPQ",   600, 86.83]
   ];
 
-  function el(tag, cls, txt) {
-    var n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (txt !== undefined) n.textContent = txt;
+  function el(t, c, x) {
+    var n = document.createElement(t);
+    if (c) n.className = c;
+    if (x !== undefined) n.textContent = x;
     return n;
   }
   function fmt(n) { return n.toLocaleString("en-CA"); }
   function money(n) { return (n < 0 ? "−$" : "+$") + Math.abs(n).toFixed(0); }
 
-  // ---- paired bars: control vs unsub ----
-  function pairChart(host, rows) {
-    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r[1], r[2]); }));
-    rows.forEach(function (r) {
-      var g = el("div", "grp");
-      var gap = r[2] - r[1];
-      var lab = el("div", "cat", r[0] + "  +" + gap.toFixed(2) + "pp");
-      lab.style.color = "var(--series-2)";
-      g.appendChild(lab);
-      var pair = el("div", "pair");
-      [[r[1], "var(--series-1)", "did not unsubscribe"],
-       [r[2], "var(--series-2)", "unsubscribed"]].forEach(function (p) {
-        var line = el("div", "pairline");
-        var mt = el("div", "minitrack");
-        var mb = el("div", "minibar");
-        mb.style.width = (p[0] / max * 100) + "%";
-        mb.style.background = p[1];
-        mb.title = r[0] + " — " + p[2] + ": " + p[0].toFixed(2) + "% gone by Jun 2026";
-        mt.appendChild(mb);
-        line.appendChild(mt);
-        line.appendChild(el("div", "val", p[0].toFixed(2) + "%"));
-        pair.appendChild(line);
-      });
-      g.appendChild(pair);
-      host.appendChild(g);
-    });
+  function tipify(node, text) {
+    node.setAttribute("data-tip", text);
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "img");
+    node.setAttribute("aria-label", text);
   }
-
-  // ---- diverging bars centred on zero dollars ----
-  function divergingChart(host, rows) {
-    var MAX = 80;
-    rows.forEach(function (r) {
-      var label = r[0], gap = r[1];
-      var row = el("div", "row");
-      row.appendChild(el("div", "cat", label));
-      var track = el("div", "track");
-      var axis = el("div", "axis"); axis.style.left = "50%"; track.appendChild(axis);
-      var dev = Math.max(-MAX, Math.min(MAX, gap));
-      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg"));
-      if (dev >= 0) { bar.style.left = "50%"; } else { bar.style.right = "50%"; }
-      bar.style.width = (Math.abs(dev) / MAX * 50) + "%";
-      bar.title = label + " — " + money(gap) + " · comparison group " + money(r[2])
-                + ", unsubscribers " + money(r[3]) + " · n = " + fmt(r[4]);
-      track.appendChild(bar);
-      row.appendChild(track);
-      row.appendChild(el("div", "val", money(gap)));
-      host.appendChild(row);
-    });
+  function divergingTrack(value, max, tip) {
+    var tr = el("div", "track");
+    tr.appendChild(el("div", "axis"));
+    var dev = Math.max(-max, Math.min(max, value));
+    var b = el("div", "bar tip " + (dev >= 0 ? "pos" : "neg"));
+    b.style.width = (Math.abs(dev) / max * 50) + "%";
+    tipify(b, tip);
+    tr.appendChild(b);
+    return tr;
   }
-
-  function barChart(host, rows) {
-    var max = Math.max.apply(null, rows.map(function (r) { return r[1]; }));
-    rows.forEach(function (r) {
-      var row = el("div", "row");
-      row.appendChild(el("div", "cat", r[0]));
-      var track = el("div", "track");
-      var bar = el("div", "bar plain");
-      bar.style.width = (r[1] / max * 100) + "%";
-      if (r[0] === "SBB") bar.style.background = "var(--neutral)";
-      bar.title = r[0] + " — " + fmt(r[1]) + " unsubscribers, " + r[2].toFixed(2) + "% present at follow-up";
-      track.appendChild(bar);
-      row.appendChild(track);
-      row.appendChild(el("div", "val", fmt(r[1])));
-      host.appendChild(row);
-    });
+  function plainTrack(value, max, tip, colour) {
+    var tr = el("div", "track");
+    var b = el("div", "bar plain tip");
+    b.style.width = (value / max * 100) + "%";
+    if (colour) b.style.background = colour;
+    tipify(b, tip);
+    tr.appendChild(b);
+    return tr;
   }
-
   function table(host, head, rows) {
     var thead = el("thead"), tr = el("tr");
     head.forEach(function (h) { tr.appendChild(el("th", null, h)); });
@@ -367,21 +354,79 @@ reconciles to its control total.</p>
     host.appendChild(tb);
   }
 
-  pairChart(document.getElementById("c-attr"), ATTR);
-  divergingChart(document.getElementById("c-prof"), PROF);
-  barChart(document.getElementById("c-mne"), MNE);
+  // 1 - two change bars per decile, one shared zero axis
+  var MAXD = 80, hostD = document.getElementById("c-duo");
+  DUO.forEach(function (r) {
+    var g = el("div", "duo");
+    g.appendChild(el("div", "cat", r[0]));
+    var stack = el("div", "stack");
+    stack.appendChild(divergingTrack(r[2], MAXD,
+      r[0] + " · stayed subscribed: " + money(r[2]) + " over 11 months · n = " + fmt(r[5])));
+    stack.appendChild(divergingTrack(r[3], MAXD,
+      r[0] + " · unsubscribed: " + money(r[3]) + " over 11 months · n = " + fmt(r[4])));
+    g.appendChild(stack);
+    var v = el("div", "val");
+    var a = el("div", null, money(r[2])); a.style.color = "var(--text-secondary)";
+    var b = el("div", null, money(r[3])); b.style.color = r[3] < 0 ? "var(--over)" : "var(--under)";
+    v.appendChild(a); v.appendChild(b);
+    g.appendChild(v);
+    hostD.appendChild(g);
+  });
+
+  // 2 - the attrition gap on its own
+  // every value is positive - a zero axis would waste half the width and read backwards
+  var hostG = document.getElementById("c-gap");
+  var maxG = Math.max.apply(null, ATTR.map(function (r) { return r[2] - r[1]; }));
+  ATTR.forEach(function (r) {
+    var gap = r[2] - r[1];
+    var row = el("div", "row");
+    row.appendChild(el("div", "cat", r[0]));
+    row.appendChild(plainTrack(gap, maxG,
+      r[0] + " · " + r[2].toFixed(2) + "% of unsubscribers gone vs " + r[1].toFixed(2)
+      + "% of stayers · n = " + fmt(r[3]), "var(--over)"));
+    row.appendChild(el("div", "val", "+" + gap.toFixed(2) + "pp"));
+    hostG.appendChild(row);
+  });
+
+  // 3 - stayer-only churn by decile
+  var hostH = document.getElementById("c-hump");
+  var maxH = Math.max.apply(null, ATTR.map(function (r) { return r[1]; }));
+  ATTR.forEach(function (r, i) {
+    var row = el("div", "row");
+    row.appendChild(el("div", "cat", r[0]));
+    row.appendChild(plainTrack(r[1], maxH,
+      r[0] + " · " + r[1].toFixed(2) + "% of subscribed clients gone · median worth $"
+      + DUO[i][1].toFixed(0) + " · n = " + fmt(r[4]),
+      r[0] === "Decile 4" ? "var(--over)" : null));
+    row.appendChild(el("div", "val", r[1].toFixed(2) + "%"));
+    hostH.appendChild(row);
+  });
+
+  // 4 - source campaigns
+  var hostM = document.getElementById("c-mne");
+  var maxM = Math.max.apply(null, MNE.map(function (r) { return r[1]; }));
+  MNE.forEach(function (r) {
+    var row = el("div", "row");
+    row.appendChild(el("div", "cat", r[0]));
+    row.appendChild(plainTrack(r[1], maxM,
+      r[0] + " · " + fmt(r[1]) + " unsubscribers · " + r[2].toFixed(2)
+      + "% still present at follow-up",
+      r[0] === "SBB" ? "var(--neutral)" : null));
+    row.appendChild(el("div", "val", fmt(r[1])));
+    hostM.appendChild(row);
+  });
+
+  table(document.getElementById("t-duo"),
+    ["Decile", "Median at Jul 2025", "Stayed subscribed", "Unsubscribed", "Difference", "Unsub n"],
+    DUO.map(function (r) {
+      return [r[0], "$" + r[1].toFixed(0), money(r[2]), money(r[3]), money(r[3] - r[2]), fmt(r[4])];
+    }));
 
   table(document.getElementById("t-attr"),
-    ["Baseline decile", "Did not unsubscribe", "Unsubscribed", "Gap", "Unsub n", "Comparison n"],
+    ["Decile", "Stayers gone", "Unsubscribers gone", "Gap", "Unsub n", "Stayer n"],
     ATTR.map(function (r) {
       return [r[0], r[1].toFixed(2) + "%", r[2].toFixed(2) + "%",
               "+" + (r[2] - r[1]).toFixed(2) + "pp", fmt(r[3]), fmt(r[4])];
-    }));
-
-  table(document.getElementById("t-prof"),
-    ["Baseline decile", "Median at baseline", "Comparison change", "Unsub change", "Gap", "Unsub n"],
-    PROF.map(function (r) {
-      return [r[0], "$" + r[5].toFixed(0), money(r[2]), money(r[3]), money(r[1]), fmt(r[4])];
     }));
 })();
 </script>
