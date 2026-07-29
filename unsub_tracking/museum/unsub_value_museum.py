@@ -126,15 +126,35 @@ def _sqlkey(sql):
     return hashlib.md5(re.sub(r"\s+", " ", sql).strip().upper().encode()).hexdigest()
 
 
+def _reads_as_absent(msg):
+    """Does this Spark error mean 'nothing is there', as opposed to 'I could not look'?
+
+    The distinction is the whole point of landed(): a broken session must stop the run rather than
+    masquerade as an empty reservoir (that mistake re-pulled everything once, 2026-07-27).
+
+    "Unable to infer schema for Parquet" belongs on the ABSENT side and was missing from this list
+    until 2026-07-29. Spark raises it after it has SUCCESSFULLY listed the path and found no parquet
+    files - an empty directory, a directory holding only _SUCCESS, or on some Hadoop builds a path
+    that simply is not there. Every one of those is "not landed". A session that genuinely cannot
+    reach HDFS fails earlier and differently: ConnectException, IOException, auth. So this string is
+    evidence the session WORKS, and treating it as an unverifiable state aborted a run that had
+    nothing wrong with it.
+
+    Matching is case-insensitive because the wording moved: Spark 3.4 wraps the same condition in
+    the error class UNABLE_TO_INFER_SCHEMA.
+    """
+    m = msg.lower()
+    return any(s in m for s in ("path does not exist", "path_not_found", "filenotfound",
+                                "unable to infer schema", "unable_to_infer_schema"))
+
+
 def landed(name):
-    # "absent" and "cannot check" are NOT the same thing. A broken session must stop the run, not
-    # look like an empty reservoir - that mistake re-pulled everything once already (2026-07-27).
     try:
         spark.read.parquet(BASE + name).limit(1).collect()
         return True
     except Exception as e:
         msg = str(e)
-        if ("Path does not exist" in msg) or ("PATH_NOT_FOUND" in msg) or ("FileNotFound" in msg):
+        if _reads_as_absent(msg):
             return False
         raise RuntimeError(name + ": cannot VERIFY HDFS state - refusing to pull anything. "
                            "Fix the spark/HDFS session first. Underlying error: " + msg[:300])
@@ -165,7 +185,10 @@ def land(name, sql, replace=False):
             print(name, ": QUERY CHANGED since it landed", old["landed_at"], "- re-pulling and OVERWRITING")
         except Exception as e:
             msg = str(e)
-            if ("Path does not exist" in msg) or ("PATH_NOT_FOUND" in msg) or ("FileNotFound" in msg):
+            # Same classification as landed(), same reason. A manifest that was never written reads
+            # back as "unable to infer schema" just as often as "path does not exist", and treating
+            # that as unverifiable would refuse to re-pull data that is simply not there yet.
+            if _reads_as_absent(msg):
                 print(name, ": readable but NO manifest (partial/killed write) - re-pulling and OVERWRITING")
             else:
                 raise RuntimeError(name + ": data readable but manifest CANNOT BE VERIFIED - refusing "
@@ -613,7 +636,14 @@ cadence_mne = spark.read.parquet(BASE + "cadence_by_mne") if HAVE_CADENCE else N
 if not HAVE_CADENCE:
     print("!! CADENCE UNAVAILABLE - run [5b]. Brief 1a (weekly/bi-weekly/monthly) will be blank.")
 
-HAVE_WIDE = landed("senders_wide/" + WIN_MONTHS[0][0])
+# EVERY month, not just the first. A pull that died after March would leave HAVE_WIDE True on a
+# one-month pairing measured against a three-month leaver set - every pair rate understated, and
+# nothing on screen to say so. Partial counts as absent.
+_wide_months = [m[0] for m in WIN_MONTHS if landed("senders_wide/" + m[0])]
+HAVE_WIDE = len(_wide_months) == len(WIN_MONTHS)
+if _wide_months and not HAVE_WIDE:
+    print("!! senders_wide is PARTIAL -", _wide_months, "of", [m[0] for m in WIN_MONTHS], "landed.")
+    print("   Treated as ABSENT. Re-run [7b] to finish it; land() will skip the months already in.")
 if HAVE_WIDE:
     # DISTINCT after the union, not before: the pull is monthly, so a client mailed by PCQ in March
     # and April lands twice. This is the one place campaign breadth can be counted exactly.
