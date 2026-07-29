@@ -592,10 +592,15 @@ T("L7 - LEAVERS vs STAYERS, bank-wide | matched clients only (leavers n = " + st
 
 # %% [20] L8 - CARDS, per campaign: leavers vs that campaign's OWN mailed base. This is what
 # separates "this campaign LOSES young single-product clients" from "this campaign MAILS them".
-cards_send = (senders_cards_raw.join(banded.select("CLNT_NO", "bucket", "ucp_matched", "AGE",
-                                                   "TENURE_RBC_YEARS", "prod_cnt", "PROF_TOT_ANNUAL",
-                                                   "prod_band", "high_potential"),
-                                     "CLNT_NO", "inner")
+# carries EVERY band L8/L9/cards_cube consume - a short select here surfaces 200 lines later as
+# "Column 'age_band' does not exist", so the list is the union of what all three cells reference.
+_CARDS_CARRY = ["CLNT_NO", "bucket", "ucp_matched", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
+                "PROF_TOT_ANNUAL", "age_band", "tenure_band", "prod_band", "tibc_mix",
+                "prof_quintile", "high_potential"]
+_missing = [c for c in _CARDS_CARRY if c not in banded.columns]
+assert not _missing, "banded is missing " + str(_missing) + " - available: " + str(banded.columns)
+
+cards_send = (senders_cards_raw.join(banded.select(*_CARDS_CARRY), "CLNT_NO", "inner")
               .filter(F.col("ucp_matched")))
 
 
@@ -628,8 +633,6 @@ T("L8 - CARDS campaigns: LEAVERS vs that campaign's OWN mailed base | matched cl
   "positive delta_pct_single_product means the campaign loses single-product clients at a higher "
   "rate than it mails them - the campaign's own contribution, not its targeting", l8)
 
-# %% [21] THE CSV - long format, three roles x four metrics, per MNE and bank-wide. Pivots natively:
-# put metric on rows and role on columns and the leaver-vs-stayer gap is immediate.
 # %% [20b] L9 - THE L7 VIEW, PER CARDS CAMPAIGN. The bank-wide ratio chart is the strongest thing
 # in this analysis; this is the same comparison inside each cards campaign. It CANNOT come from the
 # main cube: there, stayers carry no MNE (only leavers do), so per-campaign leaver-vs-stayer has to
