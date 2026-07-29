@@ -22,10 +22,10 @@
 # =============================================================================
 #
 # CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
-#   TO PULL      run  [0] [1] [1b] [2] [2b] [2c]     ~25 min, writes to HDFS pull/
-#   TO ANALYSE   run  [1] then [3] .. [11]           no Teradata, no password, seconds
+#   TO ANALYSE   run  [3] .. [11]                    <- START HERE. Self-contained. Seconds.
+#   TO PULL      run  [0] [1] [1b] [2] [2b] [2c]     only when you need fresh data. ~25 min.
 #
-# [3] reads the pull back from HDFS, so it does NOT need [2] to have run in this kernel.
+# [3] defines everything it needs and reads the cohort back from HDFS. Nothing above [3] is required.
 # =============================================================================
 
 # %% [0] Bootstrap - teradatasql from artifactory; run ONCE per kernel
@@ -240,8 +240,52 @@ print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign 
 print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
 print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
 
-# %% [3] READ THE PULL FROM HDFS. This cell and everything below it run STANDALONE -
-# cell [2] does not need to have run in this kernel. Skip [0]-[2c] entirely if the pull is already landed.
+# %% [3] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then [4] to [11].
+# Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
+import pandas as pd
+from pyspark.sql import functions as F, Window as W
+
+spark.sparkContext.setLogLevel("ERROR")
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+
+UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
+OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
+PULL_OUT  = OUT + "pull/"
+BASELINE  = "2025-07-31"
+FOLLOWUP  = "2026-06-30"
+
+_LOG = []
+def log(step, label, source, filt, clients, rows, note=""):
+    _LOG.append((step, label, source, filt, clients, rows, note))
+    print("[%02d] %-34s clients=%-12s rows=%-12s %s" % (step, label, f"{clients:,}" if isinstance(clients,int) else clients,
+                                                        f"{rows:,}" if isinstance(rows,int) else rows, note))
+
+def key_sp(col):
+    return F.regexp_replace(F.trim(col.cast("string")), "^0+", "")
+
+def ucp(anchor, fields):
+    df = spark.read.option("basePath", UCP_BASE).parquet(UCP_BASE + "MONTH_END_DATE=" + anchor + "/")
+    missing = [f for f in fields if f not in set(df.columns)]
+    if missing:
+        raise RuntimeError("UCP %s is missing %s" % (anchor, missing))
+    out = df.select(key_sp(F.col("CLNT_NO")).alias("clnt_key"), F.lit(1).alias("in_ucp"),
+                    *[F.col(f) for f in fields])
+    n_raw = out.count(); n_key = out.select("clnt_key").distinct().count()
+    print("UCP %s: %s rows, %s distinct clients%s" % (anchor, f"{n_raw:,}", f"{n_key:,}",
+          "" if n_raw == n_key else "  !! NOT unique per client - deduping"))
+    if n_raw != n_key:
+        w = W.partitionBy("clnt_key").orderBy(F.col(fields[0]).desc_nulls_last())
+        out = out.withColumn("_r", F.row_number().over(w)).filter("_r = 1").drop("_r")
+    return out.cache()
+
+def save(sdf, name):
+    path = OUT + name
+    sdf.coalesce(1).write.mode("overwrite").option("header", True).csv(path)
+    print("SAVED %-18s -> %s  (%d rows)" % (name, path, spark.read.option("header", True).csv(path).count()))
+
+def q(col, p):
+    return F.expr("percentile_approx(%s, %s)" % (col, p))
+
 _c = spark.read.option("header", True).csv(PULL_OUT + "cohort_raw")
 _m = spark.read.option("header", True).csv(PULL_OUT + "unsub_mne")
 cohort = (_c.withColumn("mailed",   F.col("mailed").cast("int"))
@@ -337,7 +381,6 @@ c01 = spark.createDataFrame(pd.DataFrame(_LOG, columns=["step_no","step_label","
 save(c01, "01_cohort")
 
 # %% [7] 02_balance.csv - were the two groups comparable at baseline
-def q(col, p):  return F.expr("percentile_approx(%s, %s)" % (col, p))
 _bal = (panel.groupBy("grp").agg(
             F.count("*").alias("clients"),
             F.sum(F.when(F.col("PROF_TOT_ANNUAL").isNull(), 1).otherwise(0)).alias("missing_baseline_ucp"),
