@@ -298,7 +298,11 @@ print("The mailed row's client-mne pairs is the row count the client x mne pull 
 # and got mail in July 2025 is sitting in the CONTROL group labelled "chose not to unsubscribe".
 # They chose nothing. They were already gone. Leaving them in makes the control look worse than it
 # is, which biases every delta_vs_control in the optimistic direction.
-PRIOR_SQL = """
+# Spool note (2026-07-29): the first version scanned all 18 months in one statement split only 5 ways
+# on CLNT_NO MOD 5, and blew spool. July alone needs 10 bites for ONE month. Now chunked by MONTH, each
+# bite carrying its own narrow load_tm window - the same shape as the July pull and as
+# cpc_reservoir_extract.py's unsub_base. 18 small statements instead of 5 enormous ones.
+PRIOR_TMPL = """
 SELECT m.CLNT_NO,
        MAX(CAST(e.disposition_dt_tm AS DATE)) AS last_prior_unsub_dt,
        COUNT(*) AS n_prior_unsub_events
@@ -306,25 +310,43 @@ FROM DTZV01.VENDOR_FEEDBACK_EVENT e
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
 WHERE e.disposition_cd = 4
-  AND e.disposition_dt_tm >= DATE '2024-01-01' AND e.disposition_dt_tm < DATE '2025-07-01'
-  AND m.load_tm >= DATE '2023-12-01' AND m.load_tm < DATE '2025-08-01'
-  AND ABS(m.CLNT_NO) MOD 5 = %d
+  AND e.disposition_dt_tm >= DATE '%s' AND e.disposition_dt_tm < DATE '%s'
+  AND m.load_tm         >= DATE '%s' AND m.load_tm         < DATE '%s'
 GROUP BY m.CLNT_NO
 """
 
+def _months(first, last):
+    """[(evt_from, evt_to, load_from, load_to), ...] - one month of events, load window +/- 1 month."""
+    y, mo = int(first[:4]), int(first[5:7])
+    out = []
+    while "%04d-%02d" % (y, mo) < last:
+        def shift(k):
+            yy, mm = y, mo + k
+            yy += (mm - 1) // 12; mm = (mm - 1) % 12 + 1
+            return "%04d-%02d-01" % (yy, mm)
+        out.append((shift(0), shift(1), shift(-1), shift(2)))
+        mo += 1
+        if mo == 13: y, mo = y + 1, 1
+    return out
 
 def _pull_prior():
+    windows = _months("2024-01", "2025-07")
     bites = []
-    for i in range(5):
-        print("prior bite %d/5" % (i + 1), flush=True)
-        bites.append(edw_pd(PRIOR_SQL % i))
+    for i, w in enumerate(windows):
+        print("prior bite %d/%d  events %s" % (i + 1, len(windows), w[0][:7]), flush=True)
+        bites.append(edw_pd(PRIOR_TMPL % w))
     out = pd.concat(bites, ignore_index=True)
+    # a client can unsubscribe in several months - collapse to their LAST prior unsub
+    out["last_prior_unsub_dt"] = pd.to_datetime(out["last_prior_unsub_dt"])
+    out = (out.sort_values("last_prior_unsub_dt")
+              .groupby("CLNT_NO", as_index=False)
+              .agg(last_prior_unsub_dt=("last_prior_unsub_dt", "max"),
+                   n_prior_unsub_events=("n_prior_unsub_events", "sum")))
     out["clnt_key"] = key_pd(out["CLNT_NO"], "prior")
     out = out[out["clnt_key"].notna()].copy()
     out["clnt_key"] = out["clnt_key"].astype(str)
-    out["last_prior_unsub_dt"] = pd.to_datetime(out["last_prior_unsub_dt"]).dt.strftime("%Y-%m-%d")
-    out["n_prior_unsub_events"] = pd.to_numeric(out["n_prior_unsub_events"],
-                                                errors="coerce").fillna(0).astype("int32")
+    out["last_prior_unsub_dt"] = out["last_prior_unsub_dt"].dt.strftime("%Y-%m-%d")
+    out["n_prior_unsub_events"] = out["n_prior_unsub_events"].astype("int32")
     return out[["clnt_key", "last_prior_unsub_dt", "n_prior_unsub_events"]]
 
 
