@@ -50,7 +50,7 @@ spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
 OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
-PULL_OUT  = OUT + "pull/"
+PULL_OUT  = OUT + "cache/"   # where the completed run actually landed
 BASELINE  = "2025-07-31"
 FOLLOWUP  = "2026-06-30"
 
@@ -250,7 +250,7 @@ spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
 OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
-PULL_OUT  = OUT + "pull/"
+PULL_OUT  = OUT + "cache/"   # where the completed run actually landed
 BASELINE  = "2025-07-31"
 FOLLOWUP  = "2026-06-30"
 
