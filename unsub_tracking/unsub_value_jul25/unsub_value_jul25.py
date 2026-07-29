@@ -286,8 +286,22 @@ def save(sdf, name):
 def q(col, p):
     return F.expr("percentile_approx(%s, %s)" % (col, p))
 
-_c = spark.read.option("header", True).csv(PULL_OUT + "cohort_raw")
-_m = spark.read.option("header", True).csv(PULL_OUT + "unsub_mne")
+def _read(name):
+    """Reads whichever format landed. Earlier runs wrote parquet, later ones CSV; this stops the
+    format being one more thing that can cost a re-pull."""
+    path = PULL_OUT + name
+    for how in ("parquet", "csv"):
+        try:
+            df = spark.read.parquet(path) if how == "parquet" else spark.read.option("header", True).csv(path)
+            n = df.count()
+            print("READ %-12s %s rows from %s (%s)" % (name, f"{n:,}", path, how))
+            return df
+        except Exception as ex:
+            print("     %-12s not %s (%s)" % (name, how, type(ex).__name__))
+    raise RuntimeError("could not read %s as parquet or csv - list the folder and tell me what is in it" % path)
+
+_c = _read("cohort_raw")
+_m = _read("unsub_mne")
 cohort = (_c.withColumn("mailed",   F.col("mailed").cast("int"))
             .withColumn("unsubbed", F.col("unsubbed").cast("int"))
             .filter("mailed = 1")
