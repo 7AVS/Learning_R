@@ -20,20 +20,14 @@
 # 3. Two UCP partitions, fixed, shared by every client. Per-client anchoring fans out and kills YARN.
 # 4. PROF_TOT_ANNUAL's definition (current-year vs lifetime) is NOT documented. Deltas are directional.
 # =============================================================================
-
-# %% [SWITCH] RUN THIS FIRST. The only knob in the file.
-# ==========================================================
-PULL = True     # True  = pull everything from Teradata (~25 min)
-                # False = reuse what is already in this kernel
-# ==========================================================
-
-def reuse(varname, globs):
-    assert varname in globs, "PULL is False but '%s' is not in this kernel. Set PULL = True and rerun." % varname
-    v = globs[varname]
-    print("SKIP PULL   %-12s reusing %s rows already in this kernel" % (varname, f"{len(v):,}"))
-    return v
-
-print("PULL =", PULL, "->", "pulling from Teradata" if PULL else "reusing what is in this kernel")
+#
+# CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
+#   [0] [1]            setup, connection, helpers
+#   [2] [2b] [2c]      THE PULL - Teradata. Run once. ~25 min.
+#   [3] .. [11]        THE ANALYSIS - Spark/UCP only. Re-run as often as you like.
+#
+# raw, mne and spread stay in the kernel after [2c], so re-running [3] onward never re-pulls.
+# =============================================================================
 
 # %% [0] Bootstrap - teradatasql from artifactory; run ONCE per kernel
 get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
@@ -152,7 +146,7 @@ def _pull_cohort():
     out["unsubbed"] = out["unsubbed"].astype("int32")
     return out[["clnt_key", "mailed", "unsubbed"]]
 
-raw = _pull_cohort() if PULL else reuse("raw", globals())
+raw = _pull_cohort()
 
 n_raw       = len(raw)
 n_unsub_any = int((raw["unsubbed"] == 1).sum())
@@ -189,7 +183,7 @@ def _pull_mne():
     out["unsub_mne"] = out["unsub_mne"].fillna("").astype(str).str.strip()
     return out[["clnt_key", "unsub_mne"]]
 
-mne = _pull_mne() if PULL else reuse("mne", globals())
+mne = _pull_mne()
 pdf = pdf.merge(mne[["clnt_key", "unsub_mne"]], on="clnt_key", how="left")
 pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
 assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
@@ -222,7 +216,7 @@ SELECT 'mailed (disp 1)', n_mne, COUNT(*) FROM (
   GROUP BY m.CLNT_NO) y GROUP BY 1, 2
 ORDER BY 1, 2
 """
-spread = edw_pd(MNE_SPREAD_SQL) if PULL else reuse("spread", globals())
+spread = edw_pd(MNE_SPREAD_SQL)
 spread["clients"] = spread["clients"].astype("int64")
 spread["n_mne"]   = spread["n_mne"].astype("int64")
 display(spread)
