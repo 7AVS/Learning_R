@@ -365,6 +365,72 @@ if "pdf" in dir():
 else:
     print("       (run [2] in this kernel for the cohort overlap, or just run [A13])")
 
+# %% [2e] PROBE - seconds, and it decides whether [2f] is worth running at all.
+# DLY_FULL_PORTFOLIO's history depth is undocumented anywhere in the repo. If dt_record_ext does not
+# reach 2025-07-01 there is no baseline anchor for a cards trajectory, and [2f] should not be run.
+display(edw_pd("""
+SELECT MIN(dt_record_ext) AS earliest, MAX(dt_record_ext) AS latest, COUNT(*) AS rows_in_window
+FROM D3CV12A.DLY_FULL_PORTFOLIO
+WHERE dt_record_ext >= DATE '2025-07-01' AND dt_record_ext < DATE '2026-07-01'
+"""))
+print("\nIf earliest is later than 2025-07-01 the table does not reach the baseline anchor.")
+print("Stop and say so - it becomes a Jun-2026-state-only cut, not a before and after.")
+
+
+# %% [2f] REAL ATTRITION - card account status, rolled up to the client. CARDS ONLY.
+# WHY THIS IS CHEAP: status is one-way - once an account goes non-OPEN it stays non-OPEN - so the
+# account's FINAL state is MAX(CASE WHEN status = 'X' ...) over a plain GROUP BY. No window function,
+# no as-of join, no DISTINCT across the table. Those are the three things that blew spool earlier.
+# clnt_no is a direct column on DFP, so the account-to-client rollup needs no bridge table.
+#
+# WHAT IT CANNOT TELL YOU: this is the CARD portfolio. A client who closed their card and kept a
+# mortgage reads as attrited here. Right question for a Cards pod, wrong one for "left the bank" -
+# do not relabel it.
+DFP_TMPL = """
+SELECT clnt_no,
+       COUNT(DISTINCT acct_no) AS n_accts,
+       MAX(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS any_open,
+       MAX(CASE WHEN status = 'VOL'  THEN 1 ELSE 0 END) AS ever_voluntary,
+       MAX(CASE WHEN status = 'WOFF' THEN 1 ELSE 0 END) AS ever_writeoff,
+       MAX(CASE WHEN status = 'BKPT' THEN 1 ELSE 0 END) AS ever_bankrupt,
+       MIN(acct_cls_dt) AS first_close_dt,
+       MAX(acct_cls_dt) AS last_close_dt
+FROM D3CV12A.DLY_FULL_PORTFOLIO
+WHERE dt_record_ext >= DATE '2025-07-01' AND dt_record_ext < DATE '2026-07-01'
+  AND ABS(clnt_no) MOD 10 = %d
+GROUP BY clnt_no
+"""
+_b = []
+for _i in range(10):
+    print("dfp bite %d/10" % (_i + 1), flush=True)
+    _x = edw_pd(DFP_TMPL % _i)
+    assert len(_x) > 0, "dfp bite %d returned zero rows" % _i
+    _b.append(_x)
+dfp = pd.concat(_b, ignore_index=True)
+
+dfp["clnt_key"] = key_pd(dfp["clnt_no"], "dfp")
+dfp = dfp[dfp["clnt_key"].notna()].copy()
+dfp["clnt_key"] = dfp["clnt_key"].astype(str)
+for _c in ["n_accts", "any_open", "ever_voluntary", "ever_writeoff", "ever_bankrupt"]:
+    dfp[_c] = pd.to_numeric(dfp[_c], errors="coerce").fillna(0).astype("int32")
+for _c in ["first_close_dt", "last_close_dt"]:
+    dfp[_c] = pd.to_datetime(dfp[_c], errors="coerce").dt.strftime("%Y-%m-%d")
+
+# one mutually exclusive state per client. Any open card wins - a client with three closed cards and
+# one open one has not attrited.
+dfp["card_state"] = "closed_other"
+dfp.loc[dfp["ever_bankrupt"] == 1, "card_state"] = "bankrupt"
+dfp.loc[dfp["ever_writeoff"] == 1, "card_state"] = "written_off"
+dfp.loc[dfp["ever_voluntary"] == 1, "card_state"] = "closed_voluntary"
+dfp.loc[dfp["any_open"] == 1, "card_state"] = "open"
+
+dfp = dfp[["clnt_key", "card_state", "n_accts", "first_close_dt", "last_close_dt"]]
+land(dfp, "dfp_card_state")
+display(dfp["card_state"].value_counts().rename_axis("card_state").reset_index(name="clients"))
+print("\nClients in the cohort with NO row here hold no card at all - that is a third state,")
+print("and it is not the same as having left. [A1] onward keeps them separate.")
+
+
 # %% [A1] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A11.
 # Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
 import pandas as pd
