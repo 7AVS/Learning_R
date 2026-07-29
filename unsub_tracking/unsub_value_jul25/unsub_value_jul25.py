@@ -81,54 +81,16 @@ def key_pd(sr, label=""):
 CACHE  = OUT + "cache/"
 REPULL = False   # flip True to force a fresh pull regardless of what is landed
 
-import os
-LOCAL = os.path.abspath("unsub_value_cache")   # pod-local disk, NOT HDFS
-os.makedirs(LOCAL, exist_ok=True)
-_MEM = {}   # in-session memo: re-running a cell never re-pulls while the kernel lives
+# ==================== THE ONLY SWITCH ====================
+PULL = True     # True  = pull everything from Teradata (~25 min)
+                # False = reuse what is already in this kernel; fails loudly if it is not there
+# =========================================================
 
-def cached(name, sql_text, puller):
-    """Local disk via pandas. Spark and HDFS are OUT of the cache path entirely.
-
-    Three HDFS designs failed here (2026-07-28/29): underscore-prefixed paths Hadoop silently skips,
-    a side manifest that threw Py4JJavaError on collectToPython, and an in-file hash that threw
-    Py4JJavaError on o92.parquet across sessions - each one costing a ~25 minute re-pull to discover.
-    pandas -> local parquet involves no JVM, so it cannot raise Py4JJavaError at all. The md5 sits in a
-    sidecar text file next to the data; if either is missing or stale it re-pulls, and nothing else can
-    go wrong. HDFS is still where the OUTPUT CSVs go - it is only the cache that moved."""
-    import hashlib, re as _re, datetime as _dt
-    key = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
-    f, kf = os.path.join(LOCAL, name + ".parquet"), os.path.join(LOCAL, name + ".md5")
-
-    if not REPULL and name in _MEM and _MEM[name][0] == key:
-        out = _MEM[name][1]
-        print("MEMORY HIT  %-12s %s rows - still in this kernel, no disk read" % (name, f"{len(out):,}"))
-        return out.copy()
-
-    if not REPULL and os.path.exists(f) and os.path.exists(kf):
-        try:
-            stored, landed = open(kf).read().strip().split("|", 1)
-            if stored == key:
-                out = pd.read_parquet(f)
-                print("CACHE HIT   %-12s %s rows (landed %s, %.1f MB local)"
-                      % (name, f"{len(out):,}", landed, os.path.getsize(f) / 1e6))
-                _MEM[name] = (key, out)
-                return out.copy()
-            print("CACHE STALE %-12s SQL changed since %s - re-pulling" % (name, landed))
-        except Exception as ex:
-            print("CACHE MISS  %-12s - %s: %s" % (name, type(ex).__name__, str(ex).splitlines()[0][:120]))
-    elif not REPULL:
-        print("CACHE MISS  %-12s - nothing at %s" % (name, f))
-
-    out = puller()
-    out.to_parquet(f, index=False)
-    with open(kf, "w") as fh:
-        fh.write(key + "|" + _dt.datetime.now().isoformat())
-    back = pd.read_parquet(f)
-    assert len(back) == len(out), "cache readback mismatch: wrote %d, read %d" % (len(out), len(back))
-    print("LANDED      %-12s %s rows -> %s (%.1f MB, readback confirms)"
-          % (name, f"{len(out):,}", f, os.path.getsize(f) / 1e6))
-    _MEM[name] = (key, out)
-    return out.copy()
+def reuse(varname, globs):
+    assert varname in globs, "PULL is False but '%s' is not in this kernel. Set PULL = True and rerun." % varname
+    v = globs[varname]
+    print("SKIP PULL   %-12s reusing %s rows already in this kernel" % (varname, f"{len(v):,}"))
+    return v
 
 def key_sp(col):
     """UCP CLNT_NO -> same canonical form: trimmed, leading zeros stripped."""
@@ -194,7 +156,7 @@ def _pull_cohort():
     out["unsubbed"] = out["unsubbed"].astype("int32")
     return out[["clnt_key", "mailed", "unsubbed"]]
 
-raw = cached("cohort_raw", COHORT_TMPL, _pull_cohort)
+raw = _pull_cohort() if PULL else reuse("raw", globals())
 
 n_raw       = len(raw)
 n_unsub_any = int((raw["unsubbed"] == 1).sum())
@@ -231,7 +193,7 @@ def _pull_mne():
     out["unsub_mne"] = out["unsub_mne"].fillna("").astype(str).str.strip()
     return out[["clnt_key", "unsub_mne"]]
 
-mne = cached("unsub_mne", MNE_SQL, _pull_mne)
+mne = _pull_mne() if PULL else reuse("mne", globals())
 pdf = pdf.merge(mne[["clnt_key", "unsub_mne"]], on="clnt_key", how="left")
 pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
 assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
@@ -264,7 +226,7 @@ SELECT 'mailed (disp 1)', n_mne, COUNT(*) FROM (
   GROUP BY m.CLNT_NO) y GROUP BY 1, 2
 ORDER BY 1, 2
 """
-spread = cached("mne_spread", MNE_SPREAD_SQL, lambda: edw_pd(MNE_SPREAD_SQL))
+spread = edw_pd(MNE_SPREAD_SQL) if PULL else reuse("spread", globals())
 spread["clients"] = spread["clients"].astype("int64")
 spread["n_mne"]   = spread["n_mne"].astype("int64")
 display(spread)
