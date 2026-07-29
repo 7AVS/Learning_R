@@ -1,0 +1,387 @@
+<title>What happens after an unsubscribe — Jul 2025 cohort, 11 months on</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f4f4f1;
+    --border: #dededa;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7975;
+    --over: #eb6834;
+    --under: #2a78d6;
+    --neutral: #b9b8b3;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --grid: #e6e6e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --border: #3a3a38;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #918f86;
+      --over: #d95926;
+      --under: #3987e5;
+      --neutral: #5a5955;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --grid: #2e2e2c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border: #3a3a38;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #918f86;
+    --over: #d95926;
+    --under: #3987e5;
+    --neutral: #5a5955;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --grid: #2e2e2c;
+  }
+
+  .viz-root {
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 32px 24px 64px;
+    max-width: 1040px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 44px 0 4px; letter-spacing: -0.005em; }
+  h2:first-of-type { margin-top: 32px; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 18px; }
+  .kicker { color: var(--text-muted); font-size: 12px; text-transform: uppercase;
+            letter-spacing: 0.07em; margin: 0 0 8px; }
+  .note { color: var(--text-muted); font-size: 12.5px; margin-top: 10px; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+           gap: 12px; margin: 20px 0 8px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px 16px; }
+  .tile .n { font-size: 27px; font-weight: 620; letter-spacing: -0.02em;
+             font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--text-secondary); font-size: 12.5px; margin-top: 3px; }
+
+  .chart { margin: 14px 0 0; }
+  .row { display: grid; grid-template-columns: 150px 1fr 74px; align-items: center;
+         gap: 10px; padding: 2px 0; }
+  .row .cat { font-size: 13px; color: var(--text-secondary); text-align: right;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .val { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .track { position: relative; height: 22px; }
+  .axis { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--grid); }
+  .bar { position: absolute; top: 4px; height: 14px; }
+  .bar.pos { border-radius: 0 4px 4px 0; background: var(--under); }
+  .bar.neg { border-radius: 4px 0 0 4px; background: var(--over); }
+  .bar.plain { border-radius: 0 4px 4px 0; background: var(--series-1); left: 0; }
+  .bar.alt   { border-radius: 0 4px 4px 0; background: var(--series-2); left: 0; }
+  .grp { display: grid; grid-template-columns: 178px 1fr; gap: 10px; align-items: center;
+         padding: 5px 0; }
+  .grp .pair { display: grid; gap: 2px; }
+  .pairline { display: grid; grid-template-columns: 1fr 58px; gap: 8px; align-items: center; }
+  .minitrack { position: relative; height: 13px; }
+  .minibar { position: absolute; left: 0; top: 0; height: 13px; border-radius: 0 4px 4px 0; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0 4px; font-size: 12.5px;
+            color: var(--text-secondary); }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+            margin-right: 6px; vertical-align: -1px; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 10px;
+          font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 560; }
+  .scroll { overflow-x: auto; }
+
+  .callout { background: var(--surface-2); border-left: 3px solid var(--series-1);
+             border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 16px 0;
+             font-size: 14px; color: var(--text-primary); }
+  .callout strong { font-weight: 620; }
+  .q { color: var(--text-secondary); font-size: 13.5px; margin: 8px 0 0; }
+  [data-tip] { cursor: default; }
+</style>
+
+<div class="viz-root">
+
+<p class="kicker">Cards pod · exploration draft · not for circulation</p>
+<h1>What happens after someone unsubscribes?</h1>
+<p class="sub">Every client the bank emailed in <strong>July 2025</strong>, split into those who
+unsubscribed that month and those who didn't, then followed for <strong>eleven months</strong> to
+June 2026. Two UCP snapshots per client — one at the unsubscribe, one at the end. The companion page
+asks who leaves; this one asks what it costs.</p>
+
+<div class="tiles">
+  <div class="tile"><div class="n">7,354,166</div><div class="l">clients emailed, July 2025</div></div>
+  <div class="tile"><div class="n">22,805</div><div class="l">unsubscribed &nbsp;·&nbsp; 0.31%</div></div>
+  <div class="tile"><div class="n">11</div><div class="l">months of follow-up</div></div>
+  <div class="tile"><div class="n">8,047</div><div class="l">unsubscribers in the top four deciles</div></div>
+</div>
+<p class="note">91.4% matched to the July-2025 UCP snapshot; of those, 358 clients carry a UCP row with
+no profitability figure. The 630,173 with no UCP row at all are held in a separate band throughout —
+they are almost entirely outside personal UCP, not a data gap.</p>
+
+<hr style="margin-top:34px">
+
+<h2>1. Unsubscribers leave. In every decile.</h2>
+<p class="sub">Share of each group gone from UCP by June 2026, side by side within each baseline
+profitability decile. The comparison group is clients emailed the same month who did not unsubscribe.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--series-1)"></span>did not unsubscribe</span>
+  <span><span class="swatch" style="background:var(--series-2)"></span>unsubscribed</span>
+</div>
+
+<div class="chart" id="c-attr"></div>
+
+<div class="callout">
+  <strong>Ten deciles out of ten, the unsubscribers are gone more often.</strong> The gap runs
+  0.2 to 1.8 points — small in absolute terms, but 20% to 67% higher in relative terms, and it never
+  once reverses. Decile 4 is the widest: 8.61% against 6.85%.
+</div>
+
+<p class="q"><strong>Read the deciles, never the total.</strong> Pooled across everyone the numbers
+say the opposite — 8.41% of unsubscribers gone against 10.90% of the comparison group. That inversion
+is Simpson's paradox, driven entirely by the no-UCP band, where the comparison group is
+proportionally larger. The pooled figure is arithmetically true and substantively backwards.</p>
+
+<details>
+  <summary>Show the numbers</summary>
+  <div class="scroll"><table id="t-attr"></table></div>
+</details>
+
+<hr style="margin-top:40px">
+
+<h2>2. Value diverges — but only at the top</h2>
+<p class="sub">Change in annual profitability over the eleven months, unsubscribers minus the
+comparison group, within each baseline decile. Left of the line means unsubscribers did worse.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--over)"></span>unsubscribers fell further behind</span>
+  <span><span class="swatch" style="background:var(--under)"></span>unsubscribers did better</span>
+  <span><span class="swatch" style="background:var(--neutral)"></span>0 = moved together</span>
+</div>
+
+<div class="chart" id="c-prof"></div>
+
+<div class="callout">
+  <strong>Deciles 1 through 6 show nothing. Deciles 7 through 10 show everything.</strong>
+  In the bottom six bands the two groups move within a few dollars of each other. In the top four the
+  comparison group holds or grows while the unsubscribers fall — a swing of
+  <strong>&minus;$30 to &minus;$73</strong> per client, across 8,047 people.
+</div>
+
+<p class="q"><strong>Why the stratification is not decoration:</strong> annual profitability is
+severely skewed, and unsubscribers sit slightly below the comparison group at baseline — median $119
+against $157. Comparing pooled averages would let regression to the mean manufacture a difference on
+its own. Cutting on the baseline decile is what stops that, and it is why the pooled figure
+(&minus;$0.61) is not the finding.</p>
+
+<details>
+  <summary>Show the numbers</summary>
+  <div class="scroll"><table id="t-prof"></table></div>
+</details>
+
+<hr style="margin-top:40px">
+
+<h2>3. It is not one campaign doing this</h2>
+<p class="sub">Where the 22,805 unsubscribes came from. VRE alone is 60% of them.</p>
+
+<div class="chart" id="c-mne"></div>
+
+<p class="q">The concentration matters for a different reason than it looks. If VRE carries three in
+five unsubscribes, then a July-2025 finding is substantially a <em>VRE</em> finding — and whether it
+generalises to other months and other campaign mixes is untested. <strong>SBB</strong> is the outlier
+to ignore: 802 unsubscribers, 0.12% present at follow-up, no baseline profitability at all. Those are
+business clients, and personal UCP cannot contain them.</p>
+
+<hr style="margin-top:40px">
+
+<h2>4. What would change this reading</h2>
+<p class="sub">Three things, in the order they would bite.</p>
+<ol class="q" style="line-height:1.9; padding-left:20px">
+  <li><strong>The comparison group is contaminated.</strong> Clients who unsubscribed <em>before</em>
+  July 2025 and were emailed anyway are sitting in it, labelled as having chosen not to unsubscribe.
+  They chose nothing — they were already gone. Leaving them in makes the comparison group look worse
+  than it is, which pushes every gap in the optimistic direction. This is measurable and the pull is
+  already written.</li>
+  <li><strong>One cohort month.</strong> July 2025 is a single draw. If its campaign mix was unusual —
+  and with VRE at 60% it may well have been — the top-decile pattern could be a July artifact.
+  Running October and January as separate cohorts is a date change, and three matching results would
+  settle it.</li>
+  <li><strong>The groups are not mailability-matched.</strong> Every unsubscriber is by construction
+  someone we hold an address for and did mail. Restricting both sides to a common reachable base
+  could move the rates in either direction.</li>
+</ol>
+
+<div class="callout" style="border-left-color:var(--series-2)">
+  <strong>What this does not say.</strong> Nothing here shows that unsubscribing <em>caused</em> the
+  divergence. Clients who unsubscribe may already have been disengaging for reasons that also reduce
+  their value — the unsubscribe would then be a symptom appearing alongside the decline, not its
+  cause. Separating those requires a pre-period baseline this run does not have.
+</div>
+
+<p class="note" style="margin-top:32px">Source: <code>unsub_before_after_jul25.py</code>, run
+2026-07-29. Universe = clients with a vendor send in July 2025. Profitability is
+<code>PROF_TOT_ANNUAL</code> at <code>2025-07-31</code> and <code>2026-06-30</code>; its definition
+(current-year contribution versus lifetime) is not documented, so all deltas are directional. Deciles
+cut across both groups together on the baseline snapshot, 672,363 clients each. Every figure
+reconciles to its control total.</p>
+
+</div>
+
+<script>
+(function () {
+  // decile, control_attrited, unsub_attrited, unsub_n, control_n
+  var ATTR = [
+    ["Decile 1 (low)",  1.68, 2.53, 2292, 670072],
+    ["Decile 2",        2.39, 3.32, 2346, 670018],
+    ["Decile 3",        4.38, 5.08, 2246, 670118],
+    ["Decile 4",        6.85, 8.61, 2126, 670238],
+    ["Decile 5",        3.40, 4.53, 2276, 670088],
+    ["Decile 6",        2.29, 3.26, 2150, 670213],
+    ["Decile 7",        1.80, 2.67, 2175, 670188],
+    ["Decile 8",        1.32, 2.20, 2095, 670268],
+    ["Decile 9",        1.01, 1.60, 2062, 670301],
+    ["Decile 10 (top)", 0.71, 0.91, 1869, 670494]
+  ];
+  // decile, gap, control_delta, unsub_delta, unsub_n, median_baseline
+  var PROF = [
+    ["Decile 1 (low)",   17.24,  378.22,  395.47, 2234,  -781.65],
+    ["Decile 2",         -0.42,   40.51,   40.09, 2268,  -250.64],
+    ["Decile 3",          1.95,    3.17,    5.13, 2132,  -126.19],
+    ["Decile 4",          2.63,   -0.37,    2.25, 1943,   -30.01],
+    ["Decile 5",          0.07,    8.62,    8.69, 2173,    73.60],
+    ["Decile 6",          9.27,   10.88,   20.16, 2080,   266.35],
+    ["Decile 7",        -30.64,   19.55,  -11.08, 2117,   587.97],
+    ["Decile 8",        -62.78,   31.98,  -30.80, 2049,  1132.11],
+    ["Decile 9",        -72.77,   27.85,  -44.92, 2029,  2142.21],
+    ["Decile 10 (top)", -50.49,  -15.63,  -66.13, 1852,  4849.53]
+  ];
+  var MNE = [
+    ["VRE", 13659, 96.49],
+    ["VME",  2465, 98.05],
+    ["SBB",   802,  0.12],
+    ["VRG",   658, 98.63],
+    ["PPQ",   600, 86.83]
+  ];
+
+  function el(tag, cls, txt) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt !== undefined) n.textContent = txt;
+    return n;
+  }
+  function fmt(n) { return n.toLocaleString("en-CA"); }
+  function money(n) { return (n < 0 ? "−$" : "+$") + Math.abs(n).toFixed(0); }
+
+  // ---- paired bars: control vs unsub ----
+  function pairChart(host, rows) {
+    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r[1], r[2]); }));
+    rows.forEach(function (r) {
+      var g = el("div", "grp");
+      var gap = r[2] - r[1];
+      var lab = el("div", "cat", r[0] + "  +" + gap.toFixed(2) + "pp");
+      lab.style.color = "var(--series-2)";
+      g.appendChild(lab);
+      var pair = el("div", "pair");
+      [[r[1], "var(--series-1)", "did not unsubscribe"],
+       [r[2], "var(--series-2)", "unsubscribed"]].forEach(function (p) {
+        var line = el("div", "pairline");
+        var mt = el("div", "minitrack");
+        var mb = el("div", "minibar");
+        mb.style.width = (p[0] / max * 100) + "%";
+        mb.style.background = p[1];
+        mb.title = r[0] + " — " + p[2] + ": " + p[0].toFixed(2) + "% gone by Jun 2026";
+        mt.appendChild(mb);
+        line.appendChild(mt);
+        line.appendChild(el("div", "val", p[0].toFixed(2) + "%"));
+        pair.appendChild(line);
+      });
+      g.appendChild(pair);
+      host.appendChild(g);
+    });
+  }
+
+  // ---- diverging bars centred on zero dollars ----
+  function divergingChart(host, rows) {
+    var MAX = 80;
+    rows.forEach(function (r) {
+      var label = r[0], gap = r[1];
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", label));
+      var track = el("div", "track");
+      var axis = el("div", "axis"); axis.style.left = "50%"; track.appendChild(axis);
+      var dev = Math.max(-MAX, Math.min(MAX, gap));
+      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg"));
+      if (dev >= 0) { bar.style.left = "50%"; } else { bar.style.right = "50%"; }
+      bar.style.width = (Math.abs(dev) / MAX * 50) + "%";
+      bar.title = label + " — " + money(gap) + " · comparison group " + money(r[2])
+                + ", unsubscribers " + money(r[3]) + " · n = " + fmt(r[4]);
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "val", money(gap)));
+      host.appendChild(row);
+    });
+  }
+
+  function barChart(host, rows) {
+    var max = Math.max.apply(null, rows.map(function (r) { return r[1]; }));
+    rows.forEach(function (r) {
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", r[0]));
+      var track = el("div", "track");
+      var bar = el("div", "bar plain");
+      bar.style.width = (r[1] / max * 100) + "%";
+      if (r[0] === "SBB") bar.style.background = "var(--neutral)";
+      bar.title = r[0] + " — " + fmt(r[1]) + " unsubscribers, " + r[2].toFixed(2) + "% present at follow-up";
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "val", fmt(r[1])));
+      host.appendChild(row);
+    });
+  }
+
+  function table(host, head, rows) {
+    var thead = el("thead"), tr = el("tr");
+    head.forEach(function (h) { tr.appendChild(el("th", null, h)); });
+    thead.appendChild(tr); host.appendChild(thead);
+    var tb = el("tbody");
+    rows.forEach(function (r) {
+      var t = el("tr");
+      r.forEach(function (c) { t.appendChild(el("td", null, c)); });
+      tb.appendChild(t);
+    });
+    host.appendChild(tb);
+  }
+
+  pairChart(document.getElementById("c-attr"), ATTR);
+  divergingChart(document.getElementById("c-prof"), PROF);
+  barChart(document.getElementById("c-mne"), MNE);
+
+  table(document.getElementById("t-attr"),
+    ["Baseline decile", "Did not unsubscribe", "Unsubscribed", "Gap", "Unsub n", "Comparison n"],
+    ATTR.map(function (r) {
+      return [r[0], r[1].toFixed(2) + "%", r[2].toFixed(2) + "%",
+              "+" + (r[2] - r[1]).toFixed(2) + "pp", fmt(r[3]), fmt(r[4])];
+    }));
+
+  table(document.getElementById("t-prof"),
+    ["Baseline decile", "Median at baseline", "Comparison change", "Unsub change", "Gap", "Unsub n"],
+    PROF.map(function (r) {
+      return [r[0], "$" + r[5].toFixed(0), money(r[2]), money(r[3]), money(r[1]), fmt(r[4])];
+    }));
+})();
+</script>
