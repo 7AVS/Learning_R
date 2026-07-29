@@ -185,6 +185,43 @@ def T(label, df):
     return out
 
 
+# STAGE - the reason a rerun used to cost as much as a first run.
+#
+# The Teradata pulls skip on a rerun (SQL md5 manifest). Nothing else did. .cache() lives in executor
+# memory, so a kernel restart or an evicted executor threw it away and every downstream .count()
+# recomputed the 15M-row UCP join from parquet. Sixty-odd actions x one shuffle each.
+#
+# stage() lands a frame on HDFS and reads it back. On the next run the frame is already there, so the
+# build closure never executes and every table below reads a materialized file instead of a plan.
+#
+# STAGE_REBUILD is a SET OF NAMES, not a switch. Rebuilding all four costs the full first-run price;
+# most edits only invalidate one. Name only what your edit actually changed:
+#
+#   set()                        - reuse everything (default, a rerun is minutes)
+#   {"ucp_spine"}                - changed UCP_ANCHOR, UCP_COLS or the CLNT_TYP filter
+#   {"clients_ucp", "banded"}    - changed buckets, mne/program, or the band cut points
+#   {"banded"}                   - changed only a band definition or high_potential
+#   {"cards_send"}               - changed CARDS_MNES or the columns L8/L9 read
+#   STAGE_ALL                    - changed the window or the reservoir SQL
+#
+# Dependency order: ucp_spine -> clients_ucp -> banded -> cards_send. Rebuilding one does NOT rebuild
+# the ones after it, so if an edit changes what a later stage reads, name it too.
+STAGE_ALL = {"ucp_spine", "clients_ucp", "banded", "cards_send"}
+STAGE_REBUILD = set()
+
+
+def stage(name, build):
+    if name not in STAGE_REBUILD and landed(name):
+        df = spark.read.parquet(BASE + name)
+        print("  stage", name, "- REUSED,", df.count(), "rows (build skipped)")
+        return df
+    _why = "forced by STAGE_REBUILD" if name in STAGE_REBUILD else "not on HDFS yet"
+    build().write.mode("overwrite").parquet(BASE + name)
+    df = spark.read.parquet(BASE + name)
+    print("  stage", name, "- BUILT (" + _why + "),", df.count(), "rows ->", BASE + name)
+    return df
+
+
 print("helpers defined | BASE =", BASE, "| window", WIN_START, "->", WIN_END, "| UCP anchor", UCP_ANCHOR)
 
 # %% [2] FAIL-FAST GATE - prove the session and HDFS before any pull.
@@ -372,25 +409,34 @@ _ucp = _ucp.select(*UCP_COLS).withColumn("CLNT_NO", norm_clnt(F.col("CLNT_NO")))
 # 2026-02-28 partition carries 1 duplicate in 15.3M (2026-07-27). Dedupe deterministically and
 # REPORT it - halting the run over a stray row would be absurd. Hard-fail only if duplication is
 # material (>0.1%), which would mean the grain is not what we think it is.
-_n_ucp_raw = _ucp.count()
+# The row_number() window over 15.3M rows is a full sort shuffle - the single most expensive step in
+# this file. It used to run TWICE: once for the post-dedupe .count() and again for the write. Order
+# matters here: write first, then count off the written parquet, which is a metadata read.
 _dedup_w = Window.partitionBy("CLNT_NO").orderBy(
     *[F.col(c).asc_nulls_last() for c in UCP_COLS if c != "CLNT_NO"])
-_ucp = (_ucp.withColumn("_rn", F.row_number().over(_dedup_w))
-        .filter(F.col("_rn") == 1).drop("_rn"))
-_n_ucp_pre = _ucp.count()
-_dupes = _n_ucp_raw - _n_ucp_pre
-_dupe_pct = 100.0 * _dupes / _n_ucp_raw if _n_ucp_raw else 0.0
-print("UCP at", UCP_ANCHOR, ":", _n_ucp_raw, "rows ->", _n_ucp_pre, "after dedupe on CLNT_NO (",
-      _dupes, "duplicate rows dropped, %.4f%% )" % _dupe_pct)
-assert _dupe_pct < 0.1, ("UCP duplication at " + UCP_ANCHOR + " is %.3f%%" % _dupe_pct +
-                         " - that is structural, not stray rows. The grain is not one row per "
-                         "client per month-end; investigate before trusting any attribute.")
-
-_ucp.write.mode("overwrite").parquet(BASE + "ucp_spine")
-ucp = spark.read.parquet(BASE + "ucp_spine")
+_ucp_raw_for_count = _ucp
+ucp = stage("ucp_spine",
+            lambda: (_ucp.withColumn("_rn", F.row_number().over(_dedup_w))
+                     .filter(F.col("_rn") == 1).drop("_rn")))
 _n_ucp = ucp.count()
-assert _n_ucp == _n_ucp_pre, "ucp_spine readback mismatch: wrote " + str(_n_ucp_pre) + " read " + str(_n_ucp)
-print("ucp_spine:", _n_ucp, "rows at", UCP_ANCHOR, "- readback confirmed, one row per client.")
+
+# The duplicate report costs one extra scan of the raw partition (no window). Skipped on a reuse -
+# the dedupe already happened and its verdict is in this file's git history, not re-derivable value.
+if "ucp_spine" in STAGE_REBUILD or not landed("ucp_spine"):
+    _n_ucp_raw = _ucp_raw_for_count.count()
+    _dupes = _n_ucp_raw - _n_ucp
+    _dupe_pct = 100.0 * _dupes / _n_ucp_raw if _n_ucp_raw else 0.0
+    print("UCP at", UCP_ANCHOR, ":", _n_ucp_raw, "rows ->", _n_ucp, "after dedupe on CLNT_NO (",
+          _dupes, "duplicate rows dropped, %.4f%% )" % _dupe_pct)
+    assert _dupe_pct < 0.1, ("UCP duplication at " + UCP_ANCHOR + " is %.3f%%" % _dupe_pct +
+                             " - that is structural, not stray rows. The grain is not one row per "
+                             "client per month-end; investigate before trusting any attribute.")
+
+# No uniqueness assert here on purpose: row_number() == 1 makes one row per CLNT_NO by construction,
+# and verifying it would cost a second 15.3M-row groupBy shuffle to re-prove what the window did.
+# The claim is still checked - the UCP join in [14] asserts the row count does not fan out, which is
+# the same proof paid for by a join we were doing anyway.
+print("ucp_spine:", _n_ucp, "rows at", UCP_ANCHOR, "- one row per client by construction.")
 
 # %% [13] POPULATIONS - one row per client, three mutually exclusive buckets.
 _w = Window.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").desc(), F.col("TREATMENT_ID").desc())
@@ -426,42 +472,6 @@ assert int(_bucket_counts["count"].sum()) == _n_mailed, (
     "buckets do not sum to the mailed population - a client fell into none or several")
 print("already_out = mailed despite an unsub before the window (the leak). Kept OUT of the stayer",
       "pool: they were not reachable, so counting them as having 'chosen to stay' would be false.")
-
-# %% [13b] STAGE - the reason a rerun used to cost as much as a first run.
-#
-# The Teradata pulls skip on a rerun (SQL md5 manifest). Nothing else did. .cache() lives in executor
-# memory, so a kernel restart or an evicted executor threw it away and every downstream .count()
-# recomputed the 15M-row UCP join from parquet. Ten diagnostics x one shuffle each.
-#
-# stage() lands a frame on HDFS and reads it back. On the next run the frame is already there, so the
-# build closure never executes and every table below reads a materialized file instead of a plan.
-#
-# STAGE_REBUILD is a SET OF NAMES, not a switch. Rebuilding all three costs the full first-run price;
-# most edits only invalidate one. Name only what your edit actually changed:
-#
-#   set()                        - reuse everything (default, a rerun is minutes)
-#   {"clients_ucp", "banded"}    - changed buckets, mne/program, or the band cut points
-#   {"banded"}                   - changed only a band definition or high_potential
-#   {"cards_send"}               - changed CARDS_MNES or the columns L8/L9 read
-#   STAGE_ALL                    - changed the window, the anchor, or the reservoir SQL
-#
-# The stage names, in dependency order: clients_ucp -> banded -> cards_send. Rebuilding one does NOT
-# rebuild the ones after it, so if an edit changes what a later stage reads, name it too.
-STAGE_ALL = {"clients_ucp", "banded", "cards_send"}
-STAGE_REBUILD = set()
-
-
-def stage(name, build):
-    if name not in STAGE_REBUILD and landed(name):
-        df = spark.read.parquet(BASE + name)
-        print("  stage", name, "- REUSED,", df.count(), "rows (build skipped)")
-        return df
-    _why = "forced by STAGE_REBUILD" if name in STAGE_REBUILD else "not on HDFS yet"
-    build().write.mode("overwrite").parquet(BASE + name)
-    df = spark.read.parquet(BASE + name)
-    print("  stage", name, "- BUILT (" + _why + "),", df.count(), "rows ->", BASE + name)
-    return df
-
 
 # %% [14] JOIN UCP. Clients ACQUIRED during Mar-May cannot exist in the 2026-02-28 snapshot and will
 # be unmatched - that is a real limit of a single pre-window anchor, counted in M0, never hidden.
