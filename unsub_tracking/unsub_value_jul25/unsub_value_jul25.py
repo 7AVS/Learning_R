@@ -221,6 +221,49 @@ pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
 assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
 print("mnemonic attached to", f"{int((pdf['unsub_mne'] != '').sum()):,}", "of", f"{n_uns:,}", "unsubscribers")
 
+# %% [2c] DIAG - how many mnemonics does one client touch in the window?
+# Two things ride on this. (a) If an unsubscribe carries ONE treatment id, then a client who left via VRE
+# but was also mailed by PCL is a "stayer" under PCL - which is only defensible if unsubscribes really are
+# programme-scoped, still an open question. If it carries several, they are a leaver everywhere and there
+# is no third category to invent. (b) mean n_mne on the mailed side x 7.35M sizes the client x mne pull.
+MNE_SPREAD_SQL = """
+SELECT 'unsub  (disp 4)' AS which, n_mne, COUNT(*) AS clients FROM (
+  SELECT m.CLNT_NO, COUNT(DISTINCT SUBSTR(m.TREATMENT_ID, 8, 3)) AS n_mne
+  FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+  INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+  WHERE e.disposition_cd = 4
+    AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
+    AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
+  GROUP BY m.CLNT_NO) x GROUP BY 1, 2
+UNION ALL
+SELECT 'mailed (disp 1)', n_mne, COUNT(*) FROM (
+  SELECT m.CLNT_NO, COUNT(DISTINCT SUBSTR(m.TREATMENT_ID, 8, 3)) AS n_mne
+  FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+  INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+  WHERE e.disposition_cd = 1
+    AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
+    AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
+  GROUP BY m.CLNT_NO) y GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+spread = cached("mne_spread", MNE_SPREAD_SQL, lambda: edw_pd(MNE_SPREAD_SQL))
+spread["clients"] = spread["clients"].astype("int64")
+spread["n_mne"]   = spread["n_mne"].astype("int64")
+display(spread)
+
+for _w in spread["which"].unique():
+    _s = spread[spread["which"] == _w]
+    _tot  = int(_s["clients"].sum())
+    _one  = int(_s.loc[_s["n_mne"] == 1, "clients"].sum())
+    _pairs = int((_s["n_mne"] * _s["clients"]).sum())
+    print("%s  clients=%-12s  exactly 1 mnemonic=%-12s (%5.1f%%)  mean n_mne=%.2f  client-mne pairs=%s"
+          % (_w, f"{_tot:,}", f"{_one:,}", 100.0 * _one / _tot, _pairs / float(_tot), f"{_pairs:,}"))
+print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign is NOT a leaver under the")
+print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
+print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
+
 # %% [3] Hand to Spark in-session. Nothing is written to disk here.
 cohort = (spark.createDataFrame(pdf[["clnt_key", "unsubbed", "unsub_mne"]])
                .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub"))
