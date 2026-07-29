@@ -241,7 +241,7 @@ print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign 
 print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
 print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
 
-# %% [3] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A10.
+# % [A1] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A10.
 # Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
 import pandas as pd
 from pyspark.sql import functions as F, Window as W
@@ -319,7 +319,7 @@ log(3, "of those, did not unsubscribe",   "pull/cohort_raw", "unsubbed = 0", n_c
 print("mnemonic attached to", f'{cohort.filter("unsub_mne <> char(39)char(39)").count():,}' if False else
       f'{cohort.filter(F.col("unsub_mne") != "").count():,}', "of", f"{n_uns:,}", "unsubscribers")
 
-# %% [4] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
+# % [A2] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
 # DEPTH is ACTV_PROD_CNT (how many). BREADTH is T/I/B/C (which lines of business). They are
 # different measures, not substitutes: 8 products in one category is not 4 across four.
 UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
@@ -341,7 +341,7 @@ log(5, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n
 log(6, "no UCP row at all at %s" % BASELINE, "ucp4", "-", n_cohort - n_row, n_cohort - n_row,
     "outside UCP personal - check CLNT_TYP")
 
-# %% [5] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
+# % [A3] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
 # ntile MUST run over non-null rows only. asc_nulls_last still ranks the nulls, so they land in the top
 # tiles and eat them: the first run put 630,531 nulls into decile 10, leaving it 104,609 real clients
 # against ~733,000 in every other decile - the top 1.5% of the distribution wearing a "decile 10" label.
@@ -369,7 +369,7 @@ log(8, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n
 display(panel.groupBy("grp").agg(F.count("*").alias("clients"),
         F.sum("present_followup").alias("present_followup")).toPandas())
 
-# %% [5b] BREADTH. n_cats = how many of Transaction / Investment / Borrow / Credit carry a non-zero count.
+# % [A4] BREADTH. n_cats = how many of Transaction / Investment / Borrow / Credit carry a non-zero count.
 # Depth and breadth move independently - a client can shed products without leaving a line of business,
 # or leave one entirely while the total barely moves. Both are needed to read "deepened the relationship".
 def _cats(cols):
@@ -390,12 +390,12 @@ display(panel.filter("present_followup = 1 AND in_ucp_baseline = 1")
                                  F.round(100.0 * F.avg("lost_a_category"), 2).alias("pct_lost_a_category"),
                                  F.round(100.0 * F.avg("exited_cards"), 2).alias("pct_exited_cards")).toPandas())
 
-# %% [6] 01_cohort.csv - the audit trail
+# % [A5] 01_cohort.csv - the audit trail
 c01 = spark.createDataFrame(pd.DataFrame(_LOG, columns=["step_no","step_label","source","filter_applied",
                                                         "clients_remaining","rows_remaining","note"]))
 save(c01, "01_cohort")
 
-# %% [7] 02_balance.csv - were the two groups comparable at baseline
+# % [A6] 02_balance.csv - were the two groups comparable at baseline
 _bal = (panel.groupBy("grp").agg(
             F.count("*").alias("clients"),
             F.sum(F.when(F.col("PROF_TOT_ANNUAL").isNull(), 1).otherwise(0)).alias("missing_baseline_ucp"),
@@ -409,7 +409,7 @@ _rows = [(m, float(_bal.loc["unsubscribed", m]), float(_bal.loc["mailed_not_unsu
 c02 = spark.createDataFrame(pd.DataFrame(_rows, columns=["metric","unsub","control","difference"]))
 save(c02, "02_balance"); display(c02.toPandas())
 
-# %% [8] 03_attrition.csv - OUTCOME 1. Nobody dropped. Counts beside the rate.
+# % [A7] 03_attrition.csv - OUTCOME 1. Nobody dropped. Counts beside the rate.
 _att = (panel.groupBy("baseline_prof_decile", "grp")
              .agg(F.count("*").alias("clients_at_baseline"),
                   F.sum("present_followup").alias("clients_present_jun2026"))
@@ -425,7 +425,7 @@ _all = (panel.groupBy("grp").agg(F.count("*").alias("clients_at_baseline"),
 c03 = _att.unionByName(_all.select(_att.columns)).orderBy("baseline_prof_decile", "grp")
 save(c03, "03_attrition"); display(c03.toPandas())
 
-# %% [9] 04_profit.csv - OUTCOME 2. Among clients present in BOTH partitions.
+# % [A8] 04_profit.csv - OUTCOME 2. Among clients present in BOTH partitions.
 both = panel.filter("present_followup = 1 AND PROF_TOT_ANNUAL IS NOT NULL") \
             .withColumn("delta", F.col("PROF_FOLLOWUP") - F.col("PROF_TOT_ANNUAL"))
 def prof(gcols):
@@ -449,7 +449,7 @@ c04 = (_p.join(_ctl, "baseline_prof_decile", "left")
          .drop("_c").orderBy("baseline_prof_decile", "grp"))
 save(c04, "04_profit"); display(c04.toPandas())
 
-# %% [10] 05_by_mne.csv - every mnemonic ships; n_sufficient is a flag, not a filter.
+# % [A9] 05_by_mne.csv - every mnemonic ships; n_sufficient is a flag, not a filter.
 _ctl_all = float(_p.filter("grp = 'mailed_not_unsub' AND baseline_prof_decile = 'ALL'")
                    .select("median_delta").collect()[0][0] or 0.0)
 c05 = (panel.filter("unsubbed = 1")
@@ -466,7 +466,7 @@ c05 = (panel.filter("unsubbed = 1")
             .orderBy(F.col("clients_unsub_jul2025").desc()))
 save(c05, "05_by_mne"); display(c05.toPandas())   # full table - the CSV has the same 107 rows
 
-# %% [11] 06_relationship.csv - DEPTH and BREADTH side by side, the pair that answers "did they deepen
+# % [A10] 06_relationship.csv - DEPTH and BREADTH side by side, the pair that answers "did they deepen
 # or shrink the relationship". Depth alone cannot tell 8 cards in one category from 4 products across
 # four; breadth alone cannot tell how much sits inside each. Neither is a substitute for the other.
 def rel(gcols):
