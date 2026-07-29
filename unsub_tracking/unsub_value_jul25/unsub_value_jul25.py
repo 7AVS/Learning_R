@@ -21,6 +21,20 @@
 # 4. PROF_TOT_ANNUAL's definition (current-year vs lifetime) is NOT documented. Deltas are directional.
 # =============================================================================
 
+# %% [SWITCH] RUN THIS FIRST. The only knob in the file.
+# ==========================================================
+PULL = True     # True  = pull everything from Teradata (~25 min)
+                # False = reuse what is already in this kernel
+# ==========================================================
+
+def reuse(varname, globs):
+    assert varname in globs, "PULL is False but '%s' is not in this kernel. Set PULL = True and rerun." % varname
+    v = globs[varname]
+    print("SKIP PULL   %-12s reusing %s rows already in this kernel" % (varname, f"{len(v):,}"))
+    return v
+
+print("PULL =", PULL, "->", "pulling from Teradata" if PULL else "reusing what is in this kernel")
+
 # %% [0] Bootstrap - teradatasql from artifactory; run ONCE per kernel
 get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
 
@@ -73,17 +87,6 @@ def key_pd(sr, label=""):
         print("   key_pd(%s): %s of %s CLNT_NO are null or non-numeric - these rows are dropped"
               % (label, f"{bad:,}", f"{len(n):,}"))
     return n.round(0).astype("Int64").astype("string")
-
-# ==================== THE ONLY SWITCH ====================
-PULL = True     # True  = pull everything from Teradata (~25 min)
-                # False = reuse what is already in this kernel; fails loudly if it is not there
-# =========================================================
-
-def reuse(varname, globs):
-    assert varname in globs, "PULL is False but '%s' is not in this kernel. Set PULL = True and rerun." % varname
-    v = globs[varname]
-    print("SKIP PULL   %-12s reusing %s rows already in this kernel" % (varname, f"{len(v):,}"))
-    return v
 
 def key_sp(col):
     """UCP CLNT_NO -> same canonical form: trimmed, leading zeros stripped."""
