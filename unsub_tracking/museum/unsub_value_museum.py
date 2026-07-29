@@ -201,10 +201,14 @@ def T(label, df):
 #   {"cards_send"}               - changed CARDS_MNES or the columns L8/L9 read
 #   STAGE_ALL                    - changed the window or the reservoir SQL
 #
-# Dependency order: ucp_spine -> clients_ucp -> banded -> cards_send. Rebuilding one does NOT rebuild
-# the ones after it, so if an edit changes what a later stage reads, name it too.
+# Dependency order: ucp_spine -> clients_ucp -> banded -> cards_send. Rebuilding one CASCADES to the
+# ones after it - see STAGE_CHILDREN. Naming a stage is enough; you do not have to name its children.
 STAGE_ALL = {"ucp_spine", "clients_ucp", "banded", "cards_send"}
 STAGE_REBUILD = set()
+STAGE_CHILDREN = {"ucp_spine":  ["clients_ucp", "banded", "cards_send"],
+                  "clients_ucp": ["banded", "cards_send"],
+                  "banded":      ["cards_send"],
+                  "cards_send":  []}
 
 # PROVEN - the validation layer is a ONE-TIME cost, not a per-run tax.
 #
@@ -221,12 +225,41 @@ STAGE_REBUILD = set()
 PROVEN = True
 
 
-def stage(name, build):
-    if name not in STAGE_REBUILD and landed(name):
+def stage(name, build, requires=None):
+    """`requires` is the columns the CURRENT run needs from this frame. A staged parquet that lacks
+    one is stale by definition, and reusing it is how a widened pull reaches a groupBy as a missing
+    column two hundred lines later.
+
+    The first version of this check compared the staged frame against the frame above it. That was
+    useless: the frame above is staged too, so a stale parent and a stale child agree perfectly and
+    the check passes. Comparing against a REQUIRED LIST is what makes it work - the list comes from
+    the pull, which is the only thing that actually knows what was landed.
+    """
+    global STAGE_REBUILD
+    _stale = []
+    if name not in STAGE_REBUILD and landed(name) and requires:
+        _have = set(spark.read.parquet(BASE + name).columns)
+        _stale = [c for c in requires if c not in _have]
+
+    if name not in STAGE_REBUILD and landed(name) and not _stale:
         df = spark.read.parquet(BASE + name)
         print("  stage", name, "- REUSED,", df.count(), "rows (build skipped)")
         return df
-    _why = "forced by STAGE_REBUILD" if name in STAGE_REBUILD else "not on HDFS yet"
+
+    if _stale:
+        _why = "stale - missing " + str(_stale)
+    elif name in STAGE_REBUILD:
+        _why = "forced by STAGE_REBUILD"
+    else:
+        _why = "not on HDFS yet"
+
+    # a rebuilt parent invalidates every child, or the next stage quietly reuses a frame built from
+    # the version that just got replaced
+    _kids = [k for k in STAGE_CHILDREN.get(name, []) if k not in STAGE_REBUILD]
+    if _kids:
+        STAGE_REBUILD = set(STAGE_REBUILD) | set(_kids)
+        print("  stage", name, "rebuilds ->", _kids, "must rebuild too (cascade)")
+
     build().write.mode("overwrite").parquet(BASE + name)
     df = spark.read.parquet(BASE + name)
     print("  stage", name, "- BUILT (" + _why + "),", df.count(), "rows ->", BASE + name)
@@ -582,6 +615,17 @@ if HAVE_PRIOR_DETAIL:
         "days_since_prior_unsub",
         F.datediff(F.to_date(F.lit(WIN_START)), F.to_date(F.col("last_prior_unsub_dt"))))
 
+# THE staleness contract. What the pull landed decides what every staged frame must carry, and
+# stage() rebuilds anything that does not. This list - not a diff between two staged frames - is
+# what makes the check work, because the pull is the only thing that knows what is actually there.
+STAGE_NEEDS = ["CLNT_NO", "bucket", "mne", "program"]
+if HAVE_CONTACT:
+    STAGE_NEEDS += ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened", "clicked",
+                    "contact_band", "engagement"]
+if HAVE_PRIOR_DETAIL:
+    STAGE_NEEDS += ["last_prior_unsub_dt", "last_prior_unsub_mne", "days_since_prior_unsub"]
+print("stages must carry:", STAGE_NEEDS)
+
 # mne/program come from the client's OWN unsubscribe event, so only leavers have one. Left as NULL
 # they render as a single blank row in a pivot, which reads as missing data. It is not missing - it
 # is not applicable, and the distinction decides whether a pivot on program is meaningful:
@@ -601,7 +645,8 @@ _clients_pre = clients
 clients = stage("clients_ucp",
                 lambda: _clients_pre.join(ucp, "CLNT_NO", "left").withColumn(
                     "ucp_matched",
-                    F.when(F.col("AGE").isNotNull(), F.lit(True)).otherwise(F.lit(False))))
+                    F.when(F.col("AGE").isNotNull(), F.lit(True)).otherwise(F.lit(False))),
+                requires=STAGE_NEEDS + ["ucp_matched", "AGE", "PROF_TOT_ANNUAL"])
 
 # BUCKETS - one groupBy over a materialised file. The percentage denominator is the sum of the
 # buckets themselves, which is the mailed population by construction, so no second count is needed.
@@ -715,17 +760,8 @@ def apply_bands(df):
                          (F.col("prod_cnt") <= HP_PRODS))
 
 
-# A staged frame keys on path existence, not on schema. Re-pulling [6] or [8] widens `clients` but
-# leaves the OLD banded parquet on HDFS, so stage() would happily reuse a frame with no contact_band
-# in it and L10 would die on a missing column - the exact failure the age_band bug already cost a
-# run. Compare what clients HAS against what banded HAS, and force the rebuild here instead.
-_want = set(clients.columns)
-if landed("banded") and not _want.issubset(set(spark.read.parquet(BASE + "banded").columns)):
-    _new = sorted(_want - set(spark.read.parquet(BASE + "banded").columns))
-    print("  staged 'banded' predates", _new, "- rebuilding it rather than reusing a stale schema.")
-    STAGE_REBUILD = set(STAGE_REBUILD) | {"banded", "cards_send"}
-
-banded = stage("banded", lambda: apply_bands(clients))
+banded = stage("banded", lambda: apply_bands(clients),
+               requires=STAGE_NEEDS + ["age_band", "tenure_band", "prod_band", "prof_quintile"])
 matched = banded.filter(F.col("ucp_matched")).cache()
 
 # Two counts, one pass. _n_matched is defined here and not inside the M0 gate because the summary at
@@ -830,7 +866,8 @@ assert not _missing, "banded is missing " + str(_missing) + " - available: " + s
 
 cards_send = stage("cards_send",
                    lambda: (senders_cards_raw.join(banded.select(*_CARDS_CARRY), "CLNT_NO", "inner")
-                            .filter(F.col("ucp_matched"))))
+                            .filter(F.col("ucp_matched"))),
+                   requires=_CARDS_CARRY + ["mne"])
 
 
 def _side(df, label):
@@ -916,8 +953,8 @@ T("L9 - LEAVERS vs STAYERS, PER CARDS CAMPAIGN | same comparison as L7, inside e
 #   (b) if so, does the age/tenure signal SURVIVE inside a contact band?
 # If the ratios flatten toward 1.00 once contact is held fixed, contact was the story. If they hold
 # inside every band, contact is not the explanation and L7 stands on its own.
-if not HAVE_CONTACT:
-    print("L10 skipped - senders_base has no contact columns. Re-run [1b] and [6].")
+if "contact_band" not in matched.columns:
+    print("L10 skipped - matched has no contact columns. Re-run [1b] and [6].")
 else:
     l10a = (matched.groupBy("bucket").agg(
         F.count("*").alias("clients"),
@@ -965,8 +1002,8 @@ else:
 # An unsubscribe from someone who never opened an email is list hygiene. An unsubscribe from someone
 # who opened and clicked is a client telling you something. They are not the same loss and they must
 # not share a number. This splits the leaver population by what they did before leaving.
-if not HAVE_CONTACT:
-    print("L11 skipped - senders_base has no engagement columns. Re-run [1b] and [6].")
+if "engagement" not in matched.columns:
+    print("L11 skipped - matched has no engagement columns. Re-run [1b] and [6].")
 else:
     l11 = (matched.groupBy("engagement", "bucket").agg(
         F.count("*").alias("clients"),
@@ -1003,8 +1040,8 @@ _ao_profile = (matched.filter(F.col("bucket") == "already_out").groupBy("age_ban
 T("L12a - already_out by age | these clients are in the mailed population but were never reachable; "
   "they are excluded from the stayer pool on purpose", _ao_profile)
 
-if not HAVE_PRIOR_DETAIL:
-    print("L12b/c skipped - prior_unsubs has no date or mnemonic. Re-run [1b] and [8].")
+if "days_since_prior_unsub" not in matched.columns:
+    print("L12b/c skipped - matched has no prior-unsub date. Re-run [1b] and [8].")
 else:
     l12b = (matched.filter(F.col("bucket") == "already_out")
             .withColumn("lag_band",
@@ -1017,7 +1054,8 @@ else:
                 F.count("*").alias("clients"),
                 F.expr("percentile_approx(days_since_prior_unsub, 0.5)").alias("median_days"),
                 F.round(F.avg("n_send_events"), 2).alias("mean_sends_after_unsub")
-                if HAVE_CONTACT else F.lit(None).alias("mean_sends_after_unsub"))
+                if "n_send_events" in matched.columns
+                else F.lit(None).cast("double").alias("mean_sends_after_unsub"))
             .orderBy("median_days"))
     T("L12b - HOW LONG after the unsubscribe were they mailed | a suppression list that works has "
       "almost nobody past 30 days; a latency problem and a consent gap look different here", l12b)
