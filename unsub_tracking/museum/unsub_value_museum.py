@@ -27,6 +27,28 @@
 # ENGINE SPLIT: EDW (teradatasql) for vendor feedback; HDFS/Spark for UCP. There is no EDW
 #   client-attribute table - the split is unavoidable, not a preference.
 #
+# ============================ HOW TO RUN THIS FILE ============================
+#
+#   ANALYSIS ONLY (the normal case)   run [1], then [9] onward.
+#   FRESH PULL (rarely)               run [1], [1b], then [2]..[8], then [9] onward.
+#
+# [1] holds imports, constants and helpers. It prompts for nothing, opens no connection and starts no
+# Spark job. [1b] is the ONLY cell that asks for a password, and nothing below [8] needs it. So the
+# analysis half runs from a cold kernel without re-pulling anything - it reads the landed parquet
+# from HDFS and nothing else.
+#
+# There is no duplicated helper block: [1] is shared, and it is free. The dependency that used to
+# force a re-pull was the EDW connection sitting inside the setup cell; it now sits alone in [1b].
+#
+# Two flags at the top of [1] decide how much work a run does:
+#   PROVEN = True        skip the validation layer - readback counts, coverage, null profiles,
+#                        orphan joins. Those answers are in RESULTS_CATALOG.md. Set False only when
+#                        a window, an anchor or a pull changes.
+#   STAGE_REBUILD = set()  reuse the staged frames on HDFS (ucp_spine, clients_ucp, banded,
+#                        cards_send). Name one to rebuild it; STAGE_ALL for all four.
+#
+# Neither flag changes a measured number. They decide whether work already done is done again.
+#
 # OUTPUT CONTRACT
 #   DURABLE : client_spine, summary (parquet), summary_csv - all on HDFS.
 #   SCRATCH : the five raw EDW landings. They exist only so a kernel death mid-pull costs nothing.
@@ -36,14 +58,11 @@
 #
 # Date: 2026-07-27.
 
-# %% [1] SETUP - bootstrap, EDW connect, land()/landed(), T(), norm_clnt.
-get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
-
-import getpass
+# %% [1] SETUP - constants and helpers. NO EDW, NO password, NO Spark job. Run this always: it is
+# the only cell the analysis half needs from above it, and it costs nothing.
 import hashlib
 import re
 import pandas as pd
-import teradatasql
 from IPython.display import display, Markdown
 from pyspark.sql import functions as F, Window
 
@@ -78,28 +97,6 @@ WIN_MONTHS = [("m2026_03", "2026-03-01", "2026-04-01", "2026-02-01", "2026-05-01
 # they involve cards but are reported inside async, out of the cards package.
 CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
 CARDS_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(CARDS_MNES))
-
-username = input("Enter your username: ")
-password = getpass.getpass("Enter your password: ")
-
-TD_HOST = "Teradata-dns-sysa.fg.rbc.com"
-EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
-
-
-def edw_pd(sql, chunksize=1_000_000):
-    import time
-    parts, n, t0 = [], 0, time.time()
-    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
-        parts.append(c); n += len(c)
-        print("  ...", n, "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
-
-# PROOF, not prints: round-trip the connection and show what the SERVER returned.
-_cur = EDW.cursor()
-_cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
-print("EDW round-trip (teradatasql) returned:", _cur.fetchall())
-_cur.close()
 
 BASE = "hdfs:///user/427966379/unsub_value_museum/"
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
@@ -249,6 +246,36 @@ except Exception as e:
                        "exist. Fix before pulling. Underlying error: " + str(e)[:300])
 print("GATE PASSED - spark live, HDFS reachable, UCP anchor partition", UCP_ANCHOR, "readable.")
 
+# %% [1b] EDW CONNECTION - the ONLY cell that asks for a password, and the only thing standing
+# between a cold kernel and the analysis. SKIP IT to run analysis only: nothing from [9] down
+# touches EDW. land() calls edw_pd, but Python resolves that name when land() RUNS, not when it is
+# defined, so [1] is happy without this cell as long as you are not pulling.
+get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+import getpass
+import teradatasql
+
+username = input("Enter your username: ")
+password = getpass.getpass("Enter your password: ")
+
+TD_HOST = "Teradata-dns-sysa.fg.rbc.com"
+EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
+
+
+def edw_pd(sql, chunksize=1_000_000):
+    import time
+    parts, n, t0 = [], 0, time.time()
+    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
+        parts.append(c); n += len(c)
+        print("  ...", n, "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+# PROOF, not prints: round-trip the connection and show what the SERVER returned.
+_cur = EDW.cursor()
+_cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
+print("EDW round-trip (teradatasql) returned:", _cur.fetchall())
+_cur.close()
+
 # %% [3] SIZE PROBE - event-only COUNT(*), no join, no DISTINCT. Gated on landed() so a completed
 # reservoir costs nothing on a whole-file rerun.
 _unlanded = [m for m in WIN_MONTHS if not landed("unsubs_3m/" + m[0])]
@@ -302,19 +329,39 @@ WHERE m.load_tm >= DATE '2026-02-01' AND m.load_tm < DATE '2026-07-01'
 GROUP BY 1
 """ % (WIN_START, WIN_END))
 
-# %% [6] PULL - TIER 2: the mailed population, bank-wide. DISTINCT CLNT_NO only - one narrow column.
-# Monthly so a kill costs one month. This is the baseline every comparison in this file rests on.
+# %% [6] PULL - TIER 2: the mailed population, bank-wide. Now carries CONTACT VOLUME and ENGAGEMENT.
+#
+# This used to be SELECT DISTINCT m.CLNT_NO - one column, deliberately narrow to survive spool. That
+# DISTINCT is what made contact volume unanswerable: it threw away the count of the thing it was
+# counting. Two of the three open questions from the exploration deck died on this line.
+#
+# Same scan, wider: disposition_cd goes from 1 to (1,2,3) and the client row carries counts instead
+# of just existence. Still one row per client per month - the GROUP BY is server-side, so what
+# crosses the wire is 10.6M x 7 narrow integers instead of 10.6M x 1.
+#   1 = sent   2 = opened   3 = clicked
+# ONE COUNT(DISTINCT) only; [5] already runs one over this window without spooling.
+#
+# MONTHLY, so a client mailed in March and April appears TWICE. [9] sums them - it must not DISTINCT
+# them, or the volume collapses back to presence and we are where we started.
 _SENDBASE_SQL = """
-SELECT DISTINCT m.CLNT_NO
+SELECT m.CLNT_NO,
+       SUM(CASE WHEN ek.disposition_cd = 1 THEN 1 ELSE 0 END) AS n_send_events,
+       COUNT(DISTINCT CASE WHEN ek.disposition_cd = 1 THEN ek.TREATMENT_ID END) AS n_treatments,
+       SUM(CASE WHEN ek.disposition_cd = 2 THEN 1 ELSE 0 END) AS n_opens,
+       SUM(CASE WHEN ek.disposition_cd = 3 THEN 1 ELSE 0 END) AS n_clicks,
+       MAX(CASE WHEN ek.disposition_cd = 2 THEN 1 ELSE 0 END) AS opened,
+       MAX(CASE WHEN ek.disposition_cd = 3 THEN 1 ELSE 0 END) AS clicked
 FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
+    WHERE disposition_cd IN (1, 2, 3)
       AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
 WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+GROUP BY m.CLNT_NO
+HAVING SUM(CASE WHEN ek.disposition_cd = 1 THEN 1 ELSE 0 END) > 0
 """
 for _name, _ds, _de, _ls, _le in WIN_MONTHS:
     land("senders_base/" + _name, _SENDBASE_SQL % (_ds, _de, _ls, _le))
@@ -337,12 +384,24 @@ WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
 for _name, _ds, _de, _ls, _le in WIN_MONTHS:
     land("senders_cards/" + _name, _SENDCARDS_SQL % (_ds, _de, CARDS_SQL_LIST, _ls, _le))
 
-# %% [8] PULL - prior unsubscribers. Needed to keep the stayer pool honest: a client who opted out
-# last year and still got mail is not someone who "chose to stay".
+# %% [8] PULL - prior unsubscribers. Keeps the stayer pool honest: a client who opted out last year
+# and still got mail is not someone who "chose to stay".
+#
+# Now carries WHEN they left and WHICH campaign they left through. DISTINCT CLNT_NO answered "is this
+# client already out" and nothing else - it could not say how long ago or through whom, which is the
+# whole of the third open question. Same scan, two more aggregates, still one row per client.
 land("prior_unsubs", """
-SELECT DISTINCT m.CLNT_NO
+SELECT m.CLNT_NO,
+       MAX(CAST(ek.disposition_dt_tm AS DATE)) AS last_prior_unsub_dt,
+       MIN(CAST(ek.disposition_dt_tm AS DATE)) AS first_prior_unsub_dt,
+       COUNT(*) AS n_prior_unsub_events,
+       -- argmax in one pass: a fixed-format date sorts lexically as it sorts chronologically, so
+       -- MAX over date||mne returns the LAST unsub's mnemonic at positions 11-13. MAX(SUBSTR(mne))
+       -- alone would return whichever mnemonic sorts highest, which is nobody's exit route.
+       SUBSTR(MAX(CAST(CAST(ek.disposition_dt_tm AS DATE FORMAT 'YYYY-MM-DD') AS CHAR(10))
+                  || SUBSTR(ek.TREATMENT_ID, 8, 3)), 11, 3) AS last_prior_unsub_mne
 FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_dt_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 4
       AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
@@ -350,6 +409,7 @@ FROM (
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
 WHERE m.load_tm >= DATE '2023-12-01' AND m.load_tm < DATE '2026-04-01'
+GROUP BY m.CLNT_NO
 """ % (PRIOR_FLOOR, WIN_START))
 
 # %% [9] READBACK - normalise CLNT_NO everywhere, prove every landing is present and non-empty.
@@ -358,10 +418,37 @@ def _rd(path):
 
 
 unsubs_raw = _rd("unsubs_3m/*")
-senders_all_raw = _rd("senders_base/*").select("CLNT_NO").distinct()
 senders_cards_raw = _rd("senders_cards/*").select("CLNT_NO", "mne").distinct()
-prior_raw = _rd("prior_unsubs").select("CLNT_NO").distinct()
 senders_mne = spark.read.parquet(BASE + "senders_by_mne")
+
+# senders_base is MONTHLY, so a client mailed in March and April has two rows. It used to be
+# .distinct() on one column, which was correct for presence and destroys a count. SUM across months
+# instead - March's 4 sends plus April's 3 is a client contacted 7 times, not a client contacted.
+# MAX for the flags: opened once in any month is opened.
+_sb = _rd("senders_base/*")
+HAVE_CONTACT = "n_send_events" in _sb.columns
+if HAVE_CONTACT:
+    senders_all_raw = (_sb.groupBy("CLNT_NO").agg(
+        F.sum("n_send_events").cast("int").alias("n_send_events"),
+        F.sum("n_treatments").cast("int").alias("n_treatments"),
+        F.sum("n_opens").cast("int").alias("n_opens"),
+        F.sum("n_clicks").cast("int").alias("n_clicks"),
+        F.max("opened").cast("int").alias("opened"),
+        F.max("clicked").cast("int").alias("clicked")))
+else:
+    print("!! CONTACT VOLUME / ENGAGEMENT UNAVAILABLE - senders_base has only", _sb.columns)
+    print("   That landing predates cell [6]'s rewrite. Re-run [1b] and [6] to get them.")
+    print("   Everything else runs; L10 and L11 will skip.")
+    senders_all_raw = _sb.select("CLNT_NO").distinct()
+
+# prior_unsubs: one row per client either way, so no aggregation - but the date and mnemonic only
+# exist if [8] has been re-run since its rewrite.
+prior_raw = _rd("prior_unsubs")
+HAVE_PRIOR_DETAIL = "last_prior_unsub_dt" in prior_raw.columns
+if not HAVE_PRIOR_DETAIL:
+    print("!! ALREADY-OUT DETAIL UNAVAILABLE - prior_unsubs has only", prior_raw.columns)
+    print("   Re-run [1b] and [8] for the unsub date and mnemonic. L12 will skip.")
+    prior_raw = prior_raw.select("CLNT_NO").distinct()
 
 # 9 actions, four of them distinct() shuffles over 10M rows, to re-confirm counts already written to
 # RESULTS_CATALOG.md. landed() already proved every path is readable and non-empty at pull time.
@@ -464,7 +551,9 @@ leaver_last = (add_mne_program(unsubs_raw, tid_col="TREATMENT_ID")
                .withColumn("_rn", F.row_number().over(_w)).filter(F.col("_rn") == 1).drop("_rn")
                .select("CLNT_NO", "TREATMENT_ID", "mne", "program", "unsub_tm"))
 
-mailed = senders_all_raw.select("CLNT_NO")
+# senders_all_raw now carries the contact and engagement columns, so `mailed` carries them too and
+# they ride into every table below on the client row - no second join, no second scan.
+mailed = senders_all_raw
 clients = (mailed
            .join(leaver_last, "CLNT_NO", "left")
            .join(prior_raw.withColumn("_prior", F.lit(1)), "CLNT_NO", "left")
@@ -473,6 +562,25 @@ clients = (mailed
                         .when(F.col("_prior") == 1, F.lit("already_out"))
                         .otherwise(F.lit("stayer")))
            .drop("_prior"))
+
+if HAVE_CONTACT:
+    # Bands, not raw counts: L7's ratios have to be re-cut INSIDE a band, and a band needs enough
+    # clients to hold the comparison. Cut points are OURS - edit here and nowhere else.
+    clients = (clients
+               .withColumn("contact_band",
+                           F.when(F.col("n_send_events") <= 1, "1")
+                            .when(F.col("n_send_events") <= 3, "2-3")
+                            .when(F.col("n_send_events") <= 6, "4-6")
+                            .when(F.col("n_send_events") <= 12, "7-12").otherwise("13+"))
+               .withColumn("engagement",
+                           F.when(F.col("clicked") == 1, "clicked")
+                            .when(F.col("opened") == 1, "opened_not_clicked")
+                            .otherwise("never_opened")))
+
+if HAVE_PRIOR_DETAIL:
+    clients = clients.withColumn(
+        "days_since_prior_unsub",
+        F.datediff(F.to_date(F.lit(WIN_START)), F.to_date(F.col("last_prior_unsub_dt"))))
 
 # mne/program come from the client's OWN unsubscribe event, so only leavers have one. Left as NULL
 # they render as a single blank row in a pivot, which reads as missing data. It is not missing - it
@@ -606,6 +714,16 @@ def apply_bands(df):
                          (F.col("AGE") < HP_AGE) & (F.col("TENURE_RBC_YEARS") <= HP_TENURE) &
                          (F.col("prod_cnt") <= HP_PRODS))
 
+
+# A staged frame keys on path existence, not on schema. Re-pulling [6] or [8] widens `clients` but
+# leaves the OLD banded parquet on HDFS, so stage() would happily reuse a frame with no contact_band
+# in it and L10 would die on a missing column - the exact failure the age_band bug already cost a
+# run. Compare what clients HAS against what banded HAS, and force the rebuild here instead.
+_want = set(clients.columns)
+if landed("banded") and not _want.issubset(set(spark.read.parquet(BASE + "banded").columns)):
+    _new = sorted(_want - set(spark.read.parquet(BASE + "banded").columns))
+    print("  staged 'banded' predates", _new, "- rebuilding it rather than reusing a stale schema.")
+    STAGE_REBUILD = set(STAGE_REBUILD) | {"banded", "cards_send"}
 
 banded = stage("banded", lambda: apply_bands(clients))
 matched = banded.filter(F.col("ucp_matched")).cache()
@@ -787,6 +905,131 @@ T("L9 - LEAVERS vs STAYERS, PER CARDS CAMPAIGN | same comparison as L7, inside e
   "matched clients only | ratio > 1 = over-represented among that campaign's leavers | top 40 rows "
   "shown, the CSV has all of them", l9.filter(F.col("stayers_n") > 50).limit(40))
 
+# %% [20d] L10 - CONTACT VOLUME. The confound under the headline.
+#
+# L7 says the young and the new leave more: age <25 at 1.33, tenure 0-2 at 1.25. That reading assumes
+# the two groups were mailed the same way. If young and new clients simply receive more email, those
+# ratios are a contact-intensity artifact wearing an age label.
+#
+# Two blocks, and the second only matters if the first says yes:
+#   (a) were leavers mailed harder than stayers?
+#   (b) if so, does the age/tenure signal SURVIVE inside a contact band?
+# If the ratios flatten toward 1.00 once contact is held fixed, contact was the story. If they hold
+# inside every band, contact is not the explanation and L7 stands on its own.
+if not HAVE_CONTACT:
+    print("L10 skipped - senders_base has no contact columns. Re-run [1b] and [6].")
+else:
+    l10a = (matched.groupBy("bucket").agg(
+        F.count("*").alias("clients"),
+        F.round(F.avg("n_send_events"), 2).alias("mean_sends"),
+        F.expr("percentile_approx(n_send_events, 0.5)").alias("median_sends"),
+        F.expr("percentile_approx(n_send_events, 0.9)").alias("p90_sends"),
+        F.round(F.avg("n_treatments"), 2).alias("mean_distinct_campaigns")))
+    T("L10a - CONTACT VOLUME by bucket | matched clients | if leavers sit well above stayers, every "
+      "ratio in L7 is partly a contact effect", l10a)
+
+    # the L7 ratios, re-cut inside each contact band
+    _lv10 = (matched.filter(F.col("bucket") == "leaver").groupBy("contact_band")
+             .agg(F.count("*").alias("_lv")))
+    _st10 = (matched.filter(F.col("bucket") == "stayer").groupBy("contact_band")
+             .agg(F.count("*").alias("_st")))
+    _parts10 = []
+    for _d in ["age_band", "tenure_band"]:
+        _a = (matched.filter(F.col("bucket") == "leaver")
+              .groupBy("contact_band", F.col(_d).alias("segment_value"))
+              .agg(F.count("*").alias("leavers_n")))
+        _b = (matched.filter(F.col("bucket") == "stayer")
+              .groupBy("contact_band", F.col(_d).alias("segment_value"))
+              .agg(F.count("*").alias("stayers_n")))
+        _parts10.append(_a.join(_b, ["contact_band", "segment_value"], "outer")
+                        .withColumn("segment_dim", F.lit(_d)))
+    l10b = _parts10[0]
+    for _p in _parts10[1:]:
+        l10b = l10b.unionByName(_p)
+    l10b = (l10b.join(_lv10, "contact_band", "left").join(_st10, "contact_band", "left")
+            .withColumn("leavers_n", F.coalesce(F.col("leavers_n"), F.lit(0)))
+            .withColumn("stayers_n", F.coalesce(F.col("stayers_n"), F.lit(0)))
+            .withColumn("pct_leavers", F.round(100.0 * F.col("leavers_n") / F.col("_lv"), 2))
+            .withColumn("pct_stayers", F.round(100.0 * F.col("stayers_n") / F.col("_st"), 2))
+            .withColumn("ratio", F.when(F.col("pct_stayers") > 0,
+                                        F.round(F.col("pct_leavers") / F.col("pct_stayers"), 2)))
+            .select("contact_band", "segment_dim", "segment_value", "pct_leavers", "pct_stayers",
+                    "ratio", "leavers_n", "stayers_n")
+            .orderBy("segment_dim", "contact_band", F.desc("ratio")))
+    T("L10b - THE L7 RATIOS, HELD AT CONSTANT CONTACT | compare a segment's ratio ACROSS bands. "
+      "Flat across bands means contact is not the explanation; collapsing toward 1.00 means it is",
+      l10b.filter(F.col("stayers_n") > 500))
+
+# %% [20e] L11 - ENGAGEMENT. Losing the listeners, or keeping the deaf?
+#
+# An unsubscribe from someone who never opened an email is list hygiene. An unsubscribe from someone
+# who opened and clicked is a client telling you something. They are not the same loss and they must
+# not share a number. This splits the leaver population by what they did before leaving.
+if not HAVE_CONTACT:
+    print("L11 skipped - senders_base has no engagement columns. Re-run [1b] and [6].")
+else:
+    l11 = (matched.groupBy("engagement", "bucket").agg(
+        F.count("*").alias("clients"),
+        F.expr("percentile_approx(AGE, 0.5)").alias("median_age"),
+        F.expr("percentile_approx(TENURE_RBC_YEARS, 0.5)").alias("median_tenure"),
+        F.expr("percentile_approx(prod_cnt, 0.5)").alias("median_prod"),
+        F.expr("percentile_approx(PROF_TOT_ANNUAL, 0.5)").alias("median_prof"),
+        F.round(100.0 * F.avg(F.when(F.col("prof_quintile") == "5", 1.0).otherwise(0.0)), 1)
+        .alias("pct_top_prof_quintile")))
+    _tot11 = matched.groupBy("bucket").agg(F.count("*").alias("_n"))
+    l11 = (l11.join(_tot11, "bucket", "left")
+           .withColumn("pct_of_bucket", F.round(100.0 * F.col("clients") / F.col("_n"), 2))
+           .drop("_n").orderBy("bucket", "engagement"))
+    T("L11 - ENGAGEMENT before leaving | compare the LEAVER rows against the STAYER rows at the same "
+      "engagement level, and compare 'clicked' leavers against 'never_opened' leavers - if the "
+      "engaged leaver is worth more, that is the expensive segment", l11)
+
+    _eng_ratio = (l11.filter(F.col("bucket").isin("leaver", "stayer"))
+                  .groupBy("engagement")
+                  .pivot("bucket", ["leaver", "stayer"]).agg(F.first("pct_of_bucket"))
+                  .withColumn("ratio", F.when(F.col("stayer") > 0,
+                                              F.round(F.col("leaver") / F.col("stayer"), 2)))
+                  .orderBy(F.desc("ratio")))
+    T("L11b - engagement mix, leavers vs stayers | ratio > 1 = over-represented among LEAVERS",
+      _eng_ratio)
+
+# %% [20f] L12 - THE ALREADY-OUT POPULATION. 427,079 clients, 6.8x the leaver count, never analysed.
+#
+# Mailed inside the window despite having unsubscribed BEFORE it. Three questions the earlier version
+# could not answer because prior_unsubs was one bare column: who are they, which campaigns mailed
+# them, and how long after their unsubscribe.
+_ao_profile = (matched.filter(F.col("bucket") == "already_out").groupBy("age_band")
+               .agg(F.count("*").alias("clients")).orderBy("age_band"))
+T("L12a - already_out by age | these clients are in the mailed population but were never reachable; "
+  "they are excluded from the stayer pool on purpose", _ao_profile)
+
+if not HAVE_PRIOR_DETAIL:
+    print("L12b/c skipped - prior_unsubs has no date or mnemonic. Re-run [1b] and [8].")
+else:
+    l12b = (matched.filter(F.col("bucket") == "already_out")
+            .withColumn("lag_band",
+                        F.when(F.col("days_since_prior_unsub") <= 30, "0-30 days")
+                         .when(F.col("days_since_prior_unsub") <= 90, "31-90 days")
+                         .when(F.col("days_since_prior_unsub") <= 180, "91-180 days")
+                         .when(F.col("days_since_prior_unsub") <= 365, "181-365 days")
+                         .otherwise("over a year"))
+            .groupBy("lag_band").agg(
+                F.count("*").alias("clients"),
+                F.expr("percentile_approx(days_since_prior_unsub, 0.5)").alias("median_days"),
+                F.round(F.avg("n_send_events"), 2).alias("mean_sends_after_unsub")
+                if HAVE_CONTACT else F.lit(None).alias("mean_sends_after_unsub"))
+            .orderBy("median_days"))
+    T("L12b - HOW LONG after the unsubscribe were they mailed | a suppression list that works has "
+      "almost nobody past 30 days; a latency problem and a consent gap look different here", l12b)
+
+    l12c = (matched.filter(F.col("bucket") == "already_out")
+            .groupBy(F.col("last_prior_unsub_mne").alias("left_via_mne"))
+            .agg(F.count("*").alias("clients_mailed_after_unsub"),
+                 F.expr("percentile_approx(days_since_prior_unsub, 0.5)").alias("median_days_after"))
+            .orderBy(F.desc("clients_mailed_after_unsub")))
+    T("L12c - WHICH campaign they left through, before being mailed again | this names where the "
+      "suppression is not holding", l12c.limit(25))
+
 # %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
 # MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN
 # a campaign. This is the file to open if the question is "which campaign loses which kind of client".
@@ -858,10 +1101,19 @@ for _nm in ["cube_csv", "csv_l1_where_by_mne", "csv_l6_campaign_summary",
 
 # %% [22] SAVE - client_spine. THE durable artifact: every table above re-derives from it without
 # touching EDW or UCP again.
-client_spine = banded.select("CLNT_NO", "bucket", "mne", "program", "TREATMENT_ID", "unsub_tm",
-                             "ucp_matched", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT",
-                             "B_TOT_CNT", "C_TOT_CNT", "PROF_TOT_ANNUAL", "prod_cnt", "prod_band",
-                             "tibc_mix", "tenure_band", "age_band", "prof_quintile", "high_potential")
+_SPINE_CORE = ["CLNT_NO", "bucket", "mne", "program", "TREATMENT_ID", "unsub_tm",
+               "ucp_matched", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT",
+               "B_TOT_CNT", "C_TOT_CNT", "PROF_TOT_ANNUAL", "prod_cnt", "prod_band",
+               "tibc_mix", "tenure_band", "age_band", "prof_quintile", "high_potential"]
+# contact, engagement and already-out detail ride along when the pull carried them, so every table
+# above can be re-derived from this one file without going back to EDW.
+_SPINE_EXTRA = [c for c in ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened",
+                            "clicked", "contact_band", "engagement", "last_prior_unsub_dt",
+                            "last_prior_unsub_mne", "n_prior_unsub_events",
+                            "days_since_prior_unsub"] if c in banded.columns]
+client_spine = banded.select(*(_SPINE_CORE + _SPINE_EXTRA))
+print("client_spine carries", len(_SPINE_CORE), "core columns +", len(_SPINE_EXTRA), "extra:",
+      _SPINE_EXTRA or "(none - pull predates contact/engagement)")
 _n_cs = client_spine.count()
 client_spine.write.mode("overwrite").parquet(BASE + "client_spine")
 assert spark.read.parquet(BASE + "client_spine").count() == _n_cs, "client_spine readback mismatch"
