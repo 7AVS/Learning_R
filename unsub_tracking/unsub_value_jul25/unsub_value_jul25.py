@@ -77,25 +77,36 @@ CACHE  = OUT + "cache/"
 REPULL = False   # flip True to force a fresh pull regardless of what is landed
 
 def cached(name, sql_text, puller):
+    """The SQL hash rides INSIDE the data parquet as a column - there is no separate manifest.
+    The side-file version failed on read with Py4JJavaError at collectToPython and re-pulled from
+    Teradata every run (2026-07-29). One path, one read: if the data is readable so is its key.
+    The readback assert below means a bad write fails HERE, loudly, not silently on the next run."""
     import hashlib, re as _re, datetime as _dt
     key  = hashlib.md5(_re.sub(r"\s+", " ", sql_text).strip().upper().encode()).hexdigest()
-    path, meta = CACHE + name, CACHE + "meta/" + name
+    path = CACHE + name
     if not REPULL:
         try:
-            old = spark.read.parquet(meta).collect()[0]
-            if old["sql_md5"] == key:
-                out = spark.read.parquet(path).toPandas()
-                print("CACHE HIT   %-12s %s rows (landed %s)" % (name, f"{len(out):,}", old["landed_at"]))
+            df  = spark.read.parquet(path)
+            hdr = df.select("_sql_md5", "_landed_at").limit(1).collect()
+            if hdr and hdr[0]["_sql_md5"] == key:
+                out = df.drop("_sql_md5", "_landed_at").toPandas()
+                print("CACHE HIT   %-12s %s rows (landed %s)" % (name, f"{len(out):,}", hdr[0]["_landed_at"]))
                 return out
-            print("CACHE STALE %-12s SQL changed since %s - re-pulling" % (name, old["landed_at"]))
+            print("CACHE STALE %-12s SQL changed since %s - re-pulling"
+                  % (name, hdr[0]["_landed_at"] if hdr else "?"))
         except Exception as ex:
-            _first = (str(ex).splitlines() or [""])[0][:120]
+            _first = (str(ex).splitlines() or [""])[0][:140]
             print("CACHE MISS  %-12s - pulling from Teradata (%s: %s)" % (name, type(ex).__name__, _first))
     out = puller()
-    spark.createDataFrame(out).write.mode("overwrite").parquet(path)
-    spark.createDataFrame([(name, key, _dt.datetime.now().isoformat(), len(out))],
-                          ["name", "sql_md5", "landed_at", "rows"]).write.mode("overwrite").parquet(meta)
-    print("LANDED      %-12s %s rows -> %s" % (name, f"{len(out):,}", path))
+    (spark.createDataFrame(out)
+          .withColumn("_sql_md5",   F.lit(key))
+          .withColumn("_landed_at", F.lit(_dt.datetime.now().isoformat()))
+          .write.mode("overwrite").parquet(path))
+    _back = spark.read.parquet(path)
+    _n, _k = _back.count(), _back.select("_sql_md5").limit(1).collect()[0]["_sql_md5"]
+    assert _n == len(out), "cache readback row mismatch: wrote %d, read %d" % (len(out), _n)
+    assert _k == key,      "cache readback key mismatch - the next run would re-pull"
+    print("LANDED      %-12s %s rows -> %s (readback confirms rows AND key)" % (name, f"{len(out):,}", path))
     return out
 
 def key_sp(col):
