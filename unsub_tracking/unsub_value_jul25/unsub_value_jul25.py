@@ -22,11 +22,10 @@
 # =============================================================================
 #
 # CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
-#   [0] [1]            setup, connection, helpers
-#   [2] [2b] [2c]      THE PULL - Teradata. Run once. ~25 min.
-#   [3] .. [11]        THE ANALYSIS - Spark/UCP only. Re-run as often as you like.
+#   TO PULL      run  [0] [1] [1b] [2] [2b] [2c]     ~25 min, writes to HDFS pull/
+#   TO ANALYSE   run  [1] then [3] .. [11]           no Teradata, no password, seconds
 #
-# raw, mne and spread stay in the kernel after [2c], so re-running [3] onward never re-pulls.
+# [3] reads the pull back from HDFS, so it does NOT need [2] to have run in this kernel.
 # =============================================================================
 
 # %% [0] Bootstrap - teradatasql from artifactory; run ONCE per kernel
@@ -46,15 +45,12 @@ warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
 if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
 
-username = input("Enter your username: ")
-password = getpass.getpass("Enter your password: ")
-EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=username, password=password, logmech="LDAP")
-
 spark.sparkContext.setLogLevel("ERROR")
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 UCP_BASE  = "/prod/sz/tsz/00172/data/ucp4/"
 OUT       = "hdfs:///user/427966379/unsub_value_jul25/"
+PULL_OUT  = OUT + "pull/"
 BASELINE  = "2025-07-31"
 FOLLOWUP  = "2026-06-30"
 
@@ -63,24 +59,6 @@ def log(step, label, source, filt, clients, rows, note=""):
     _LOG.append((step, label, source, filt, clients, rows, note))
     print("[%02d] %-34s clients=%-12s rows=%-12s %s" % (step, label, f"{clients:,}" if isinstance(clients,int) else clients,
                                                         f"{rows:,}" if isinstance(rows,int) else rows, note))
-
-def edw_pd(sql, chunksize=1_000_000):
-    parts, n, t0 = [], 0, time.time()
-    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
-        parts.append(c); n += len(c)
-        print("   ...", f"{n:,}", "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
-def key_pd(sr, label=""):
-    """EDW CLNT_NO -> canonical string key. Two traps: pandas float64 renders 1.56314759E8 and joins to
-    nothing, and a NULL CLNT_NO makes .astype(int64) raise IntCastingNaNError. Nulls become NaN here and
-    are dropped by the caller, which reports how many."""
-    n = pd.to_numeric(sr, errors="coerce")
-    bad = int(n.isna().sum())
-    if bad:
-        print("   key_pd(%s): %s of %s CLNT_NO are null or non-numeric - these rows are dropped"
-              % (label, f"{bad:,}", f"{len(n):,}"))
-    return n.round(0).astype("Int64").astype("string")
 
 def key_sp(col):
     """UCP CLNT_NO -> same canonical form: trimmed, leading zeros stripped."""
@@ -102,11 +80,42 @@ def ucp(anchor, fields):
         out = out.withColumn("_r", F.row_number().over(w)).filter("_r = 1").drop("_r")
     return out.cache()
 
+def land(pdf, name):
+    """Cell [2] writes here. Cell [3] reads from here. That is the split - HDFS, not kernel memory."""
+    path = PULL_OUT + name
+    spark.createDataFrame(pdf).coalesce(8).write.mode("overwrite").option("header", True).csv(path)
+    n = spark.read.option("header", True).csv(path).count()
+    assert n == len(pdf), "%s readback mismatch: wrote %d read %d" % (name, len(pdf), n)
+    print("LANDED %-12s %s rows -> %s" % (name, f"{len(pdf):,}", path))
+
 def save(sdf, name):
     path = OUT + name
     sdf.coalesce(1).write.mode("overwrite").option("header", True).csv(path)
     n = spark.read.option("header", True).csv(path).count()
     print("SAVED %-18s -> %s  (%d rows, readback confirms)" % (name, path, n))
+
+# %% [1b] EDW CONNECTION - only needed for the pull. SKIP THIS CELL to run analysis only.
+username = input("Enter your username: ")
+password = getpass.getpass("Enter your password: ")
+EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=username, password=password, logmech="LDAP")
+
+def edw_pd(sql, chunksize=1_000_000):
+    parts, n, t0 = [], 0, time.time()
+    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
+        parts.append(c); n += len(c)
+        print("   ...", f"{n:,}", "rows pulled,", int(time.time() - t0), "s elapsed", flush=True)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+def key_pd(sr, label=""):
+    """EDW CLNT_NO -> canonical string key. Two traps: pandas float64 renders 1.56314759E8 and joins to
+    nothing, and a NULL CLNT_NO makes .astype(int64) raise IntCastingNaNError. Nulls become NaN here and
+    are dropped by the caller, which reports how many."""
+    n = pd.to_numeric(sr, errors="coerce")
+    bad = int(n.isna().sum())
+    if bad:
+        print("   key_pd(%s): %s of %s CLNT_NO are null or non-numeric - these rows are dropped"
+              % (label, f"{bad:,}", f"{len(n):,}"))
+    return n.round(0).astype("Int64").astype("string")
 
 cur = EDW.cursor(); cur.execute("SELECT USER, CURRENT_TIMESTAMP")
 print("EDW round-trip returned:", cur.fetchall()); cur.close()
@@ -154,6 +163,8 @@ pdf         = raw[raw["mailed"] == 1].copy()
 n_all       = len(pdf)
 n_uns       = int(pdf["unsubbed"].sum())
 
+land(raw, "cohort_raw")
+
 log(1, "send or unsub event, Jul 2025", "VENDOR_FEEDBACK", "disposition_cd IN (1,4)", n_raw, n_raw, "10 bites")
 log(2, "mailed in Jul 2025", "VENDOR_FEEDBACK", "mailed = 1", n_all, n_all, "THE UNIVERSE")
 log(3, "of those, unsubscribed Jul 2025", "VENDOR_FEEDBACK", "unsubbed = 1", n_uns, n_uns, "treatment group")
@@ -184,10 +195,7 @@ def _pull_mne():
     return out[["clnt_key", "unsub_mne"]]
 
 mne = _pull_mne()
-pdf = pdf.merge(mne[["clnt_key", "unsub_mne"]], on="clnt_key", how="left")
-pdf["unsub_mne"] = pdf["unsub_mne"].fillna("")
-assert len(pdf) == n_all, "mnemonic merge changed the row count: %d -> %d" % (n_all, len(pdf))
-print("mnemonic attached to", f"{int((pdf['unsub_mne'] != '').sum()):,}", "of", f"{n_uns:,}", "unsubscribers")
+land(mne, "unsub_mne")
 
 # %% [2c] DIAG - how many mnemonics does one client touch in the window?
 # Two things ride on this. (a) If an unsubscribe carries ONE treatment id, then a client who left via VRE
@@ -232,13 +240,25 @@ print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign 
 print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
 print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
 
-# %% [3] Hand to Spark in-session. Nothing is written to disk here.
-cohort = (spark.createDataFrame(pdf[["clnt_key", "unsubbed", "unsub_mne"]])
-               .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub"))
-               .dropDuplicates(["clnt_key"]).cache())
+# %% [3] READ THE PULL FROM HDFS. This cell and everything below it run STANDALONE -
+# cell [2] does not need to have run in this kernel. Skip [0]-[2c] entirely if the pull is already landed.
+_c = spark.read.option("header", True).csv(PULL_OUT + "cohort_raw")
+_m = spark.read.option("header", True).csv(PULL_OUT + "unsub_mne")
+cohort = (_c.withColumn("mailed",   F.col("mailed").cast("int"))
+            .withColumn("unsubbed", F.col("unsubbed").cast("int"))
+            .filter("mailed = 1")
+            .join(_m, "clnt_key", "left")
+            .withColumn("unsub_mne", F.coalesce(F.col("unsub_mne"), F.lit("")))
+            .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub"))
+            .dropDuplicates(["clnt_key"]).cache())
 n_cohort = cohort.count()
-assert n_cohort == n_all, "cohort lost rows crossing to Spark: %d -> %d" % (n_all, n_cohort)
-print("cohort in Spark:", f"{n_cohort:,}", "clients |", cohort.filter("unsubbed = 1").count(), "unsubscribed")
+n_uns    = cohort.filter("unsubbed = 1").count()
+_LOG = []
+log(1, "mailed in Jul 2025",              "pull/cohort_raw", "mailed = 1",   n_cohort, n_cohort, "THE UNIVERSE")
+log(2, "of those, unsubscribed Jul 2025", "pull/cohort_raw", "unsubbed = 1", n_uns,    n_uns,    "treatment group")
+log(3, "of those, did not unsubscribe",   "pull/cohort_raw", "unsubbed = 0", n_cohort - n_uns, n_cohort - n_uns, "control group")
+print("mnemonic attached to", f'{cohort.filter("unsub_mne <> char(39)char(39)").count():,}' if False else
+      f'{cohort.filter(F.col("unsub_mne") != "").count():,}', "of", f"{n_uns:,}", "unsubscribers")
 
 # %% [4] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
 # DEPTH is ACTV_PROD_CNT (how many). BREADTH is T/I/B/C (which lines of business). They are
