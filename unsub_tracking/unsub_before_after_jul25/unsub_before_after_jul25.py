@@ -45,7 +45,7 @@
 # =============================================================================
 #
 # CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
-#   TO ANALYSE   run  [A1] .. [A13]                      <- START HERE. Self-contained.
+#   TO ANALYSE   run  [A1] .. [A11]                      <- START HERE. Self-contained.
 #   TO PULL      run  [0] [1] [1b] [2] [2b] [2c] [2d]    only when you need fresh data. ~25 min.
 #
 # A1 detects whether the cache carries the C1/C2 columns and whether prior_unsub landed, and says so
@@ -343,7 +343,7 @@ if "pdf" in dir():
 else:
     print("       (run [2] in this kernel for the cohort overlap, or just run [A13])")
 
-# % [A1] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A10.
+# %% [A1] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A11.
 # Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
 import pandas as pd
 from pyspark.sql import functions as F, Window as W
@@ -469,16 +469,15 @@ log(3, "of those, did not unsubscribe",   "pull/cohort_raw", "unsubbed = 0", n_c
 print("mnemonic attached to", f'{cohort.filter("unsub_mne <> char(39)char(39)").count():,}' if False else
       f'{cohort.filter(F.col("unsub_mne") != "").count():,}', "of", f"{n_uns:,}", "unsubscribers")
 
-# % [A2] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
-# DEPTH is ACTV_PROD_CNT (how many). BREADTH is T/I/B/C (which lines of business). They are
-# different measures, not substitutes: 8 products in one category is not 4 across four.
-UF   = ["PROF_TOT_ANNUAL", "TENURE_RBC_YEARS", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
+# %% [A2] UCP at both anchors. PROOF: the join must not be zero - that is the known CLNT_NO failure mode.
+# PROFITABILITY ONLY. Age, tenure, product depth and T/I/B/C breadth belong to
+# museum/unsub_value_museum.py, which profiles WHO unsubscribes. This file measures WHAT CHANGES
+# on one scale - PROF_TOT_ANNUAL between two anchors - and nothing else.
+UF   = ["PROF_TOT_ANNUAL"]
 base = ucp(BASELINE, UF)
-foll = ucp(FOLLOWUP, ["PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"])
-_REN = {"in_ucp": "in_ucp_followup", "PROF_TOT_ANNUAL": "PROF_FOLLOWUP"}   # everything else gets _F
-for _c in ["in_ucp", "PROF_TOT_ANNUAL", "ACTV_PROD_CNT", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]:
-    foll = foll.withColumnRenamed(_c, _REN.get(_c, _c + "_F"))
-assert "PROF_FOLLOWUP" in foll.columns and "ACTV_PROD_CNT_F" in foll.columns, foll.columns
+foll = (ucp(FOLLOWUP, UF)
+          .withColumnRenamed("in_ucp", "in_ucp_followup")
+          .withColumnRenamed("PROF_TOT_ANNUAL", "PROF_FOLLOWUP"))
 
 b = cohort.join(base.withColumnRenamed("in_ucp", "in_ucp_baseline"), "clnt_key", "left")
 n_row  = b.filter("in_ucp_baseline = 1").count()
@@ -491,7 +490,7 @@ log(5, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n
 log(6, "no UCP row at all at %s" % BASELINE, "ucp4", "-", n_cohort - n_row, n_cohort - n_row,
     "outside UCP personal - check CLNT_TYP")
 
-# % [A3] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
+# %% [A3] Baseline deciles, cut across BOTH groups together so the bands mean the same thing on each side.
 # ntile MUST run over non-null rows only. asc_nulls_last still ranks the nulls, so they land in the top
 # tiles and eat them: the first run put 630,531 nulls into decile 10, leaving it 104,609 real clients
 # against ~733,000 in every other decile - the top 1.5% of the distribution wearing a "decile 10" label.
@@ -503,7 +502,7 @@ _dec = _nn.withColumn("dec", F.ntile(10).over(W.orderBy(F.col("PROF_TOT_ANNUAL")
 # line 5 above already draws that distinction in words ("a UCP row with no profitability is NOT the
 # same as no client") and this line then collapsed it under the name of only one of them.
 #
-# It showed up in 06_relationship, which filters to in_ucp_baseline = 1: 267 clients appeared under
+# It showed up as a bucket mismatch: clients appeared under
 # "no_baseline_ucp" in a table where every row provably HAS a baseline UCP row. Same numbers, wrong
 # name. Split, so the label says which one.
 b = (b.join(_dec, "clnt_key", "left")
@@ -522,13 +521,12 @@ display(b.filter(F.col("baseline_prof_decile").isin(*NON_DECILE))
          .groupBy("baseline_prof_decile", "grp").count()
          .orderBy("baseline_prof_decile", "grp").toPandas())
 print("no_ucp_row        = not in UCP personal at all at", BASELINE, "- no attributes exist.")
-print("ucp_row_null_prof = IS a UCP client, profitability is null. Depth and breadth ARE measurable")
-print("                    for these, which is why they appear in 06_relationship.")
+print("ucp_row_null_prof = IS a UCP client, but has no profitability figure at this anchor.")
 # STILL WITH US = has a UCP row at follow-up. NOT "has a non-null profitability" - a client can hold a
 # row with a null PROF_TOT_ANNUAL and is plainly still a client. Testing the value inflates attrition.
 panel = (b.join(foll, "clnt_key", "left")
            .withColumn("present_followup", F.coalesce(F.col("in_ucp_followup"), F.lit(0)))
-           .withColumn("prod_delta", F.col("ACTV_PROD_CNT_F") - F.col("ACTV_PROD_CNT"))).cache()
+           ).cache()
 n_present = panel.filter("present_followup = 1").count()
 n_pf      = panel.filter(F.col("PROF_FOLLOWUP").isNotNull()).count()
 log(7, "has a UCP row at %s" % FOLLOWUP, "ucp4", "left join on clnt_key", n_present, n_present,
@@ -538,47 +536,24 @@ log(8, "of those, PROF_TOT_ANNUAL is null", "ucp4", "row present, value null", n
 display(panel.groupBy("grp").agg(F.count("*").alias("clients"),
         F.sum("present_followup").alias("present_followup")).toPandas())
 
-# % [A4] BREADTH. n_cats = how many of Transaction / Investment / Borrow / Credit carry a non-zero count.
-# Depth and breadth move independently - a client can shed products without leaving a line of business,
-# or leave one entirely while the total barely moves. Both are needed to read "deepened the relationship".
-def _cats(cols):
-    return sum([F.when(F.coalesce(F.col(c), F.lit(0)) > 0, 1).otherwise(0) for c in cols])
-_B = ["T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
-panel = (panel
-    .withColumn("n_cats_base", _cats(_B))
-    .withColumn("n_cats_foll", _cats([c + "_F" for c in _B]))
-    .withColumn("cats_delta",  F.col("n_cats_foll") - F.col("n_cats_base"))
-    .withColumn("lost_a_category", F.when(F.col("cats_delta") < 0, 1).otherwise(0))
-    .withColumn("exited_cards", F.when((F.coalesce(F.col("C_TOT_CNT"), F.lit(0)) > 0) &
-                                       (F.coalesce(F.col("C_TOT_CNT_F"), F.lit(0)) == 0), 1).otherwise(0))
-    .cache())
-display(panel.filter("present_followup = 1 AND in_ucp_baseline = 1")
-             .groupBy("grp").agg(F.count("*").alias("clients"),
-                                 F.round(F.avg("n_cats_base"), 3).alias("mean_cats_baseline"),
-                                 F.round(F.avg("n_cats_foll"), 3).alias("mean_cats_followup"),
-                                 F.round(100.0 * F.avg("lost_a_category"), 2).alias("pct_lost_a_category"),
-                                 F.round(100.0 * F.avg("exited_cards"), 2).alias("pct_exited_cards")).toPandas())
-
-# % [A5] 01_cohort.csv - the audit trail
+# %% [A4] 01_cohort.csv - the audit trail
 c01 = spark.createDataFrame(pd.DataFrame(_LOG, columns=["step_no","step_label","source","filter_applied",
                                                         "clients_remaining","rows_remaining","note"]))
 save(c01, "01_cohort")
 
-# % [A6] 02_balance.csv - were the two groups comparable at baseline
+# %% [A5] 02_balance.csv - were the two groups comparable at baseline
 _bal = (panel.groupBy("grp").agg(
             F.count("*").alias("clients"),
             F.sum(F.when(F.col("PROF_TOT_ANNUAL").isNull(), 1).otherwise(0)).alias("missing_baseline_ucp"),
             q("PROF_TOT_ANNUAL", 0.25).alias("p25_prof_baseline"),
             q("PROF_TOT_ANNUAL", 0.50).alias("median_prof_baseline"),
-            q("PROF_TOT_ANNUAL", 0.75).alias("p75_prof_baseline"),
-            q("TENURE_RBC_YEARS", 0.50).alias("median_tenure_years"),
-            q("ACTV_PROD_CNT",   0.50).alias("median_active_products")).toPandas().set_index("grp"))
+            q("PROF_TOT_ANNUAL", 0.75).alias("p75_prof_baseline")).toPandas().set_index("grp"))
 _rows = [(m, float(_bal.loc["unsubscribed", m]), float(_bal.loc["mailed_not_unsub", m]),
           float(_bal.loc["unsubscribed", m]) - float(_bal.loc["mailed_not_unsub", m])) for m in _bal.columns]
 c02 = spark.createDataFrame(pd.DataFrame(_rows, columns=["metric","unsub","control","difference"]))
 save(c02, "02_balance"); display(c02.toPandas())
 
-# % [A7] 03_attrition.csv - OUTCOME 1. Nobody dropped. Counts beside the rate.
+# %% [A6] 03_attrition.csv - OUTCOME 1. Nobody dropped. Counts beside the rate.
 _att = (panel.groupBy("baseline_prof_decile", "grp")
              .agg(F.count("*").alias("clients_at_baseline"),
                   F.sum("present_followup").alias("clients_present_jun2026"))
@@ -594,7 +569,7 @@ _all = (panel.groupBy("grp").agg(F.count("*").alias("clients_at_baseline"),
 c03 = _att.unionByName(_all.select(_att.columns)).orderBy("baseline_prof_decile", "grp")
 save(c03, "03_attrition"); display(c03.toPandas())
 
-# % [A8] 04_profit.csv - OUTCOME 2. Among clients present in BOTH partitions.
+# %% [A7] 04_profit.csv - OUTCOME 2. Among clients present in BOTH partitions.
 both = panel.filter("present_followup = 1 AND PROF_TOT_ANNUAL IS NOT NULL") \
             .withColumn("delta", F.col("PROF_FOLLOWUP") - F.col("PROF_TOT_ANNUAL"))
 def prof(gcols):
@@ -618,7 +593,7 @@ c04 = (_p.join(_ctl, "baseline_prof_decile", "left")
          .drop("_c").orderBy("baseline_prof_decile", "grp"))
 save(c04, "04_profit"); display(c04.toPandas())
 
-# % [A9] 05_by_mne.csv - every mnemonic ships; n_sufficient is a flag, not a filter.
+# %% [A8] 05_by_mne.csv - every mnemonic ships; n_sufficient is a flag, not a filter.
 _ctl_all = float(_p.filter("grp = 'mailed_not_unsub' AND baseline_prof_decile = 'ALL'")
                    .select("median_delta").collect()[0][0] or 0.0)
 c05 = (panel.filter("unsubbed = 1")
@@ -635,34 +610,7 @@ c05 = (panel.filter("unsubbed = 1")
             .orderBy(F.col("clients_unsub_jul2025").desc()))
 save(c05, "05_by_mne"); display(c05.toPandas())   # full table - the CSV has the same 107 rows
 
-# % [A10] 06_relationship.csv - DEPTH and BREADTH side by side, the pair that answers "did they deepen
-# or shrink the relationship". Depth alone cannot tell 8 cards in one category from 4 products across
-# four; breadth alone cannot tell how much sits inside each. Neither is a substitute for the other.
-def rel(gcols):
-    return (panel.filter("present_followup = 1 AND in_ucp_baseline = 1").groupBy(*gcols).agg(
-        F.count("*").alias("clients_both_partitions"),
-        q("ACTV_PROD_CNT",   0.50).alias("median_depth_baseline"),
-        q("ACTV_PROD_CNT_F", 0.50).alias("median_depth_followup"),
-        F.round(F.avg("prod_delta"), 3).alias("mean_depth_delta"),
-        F.round(F.avg("n_cats_base"), 3).alias("mean_breadth_baseline"),
-        F.round(F.avg("n_cats_foll"), 3).alias("mean_breadth_followup"),
-        F.round(F.avg("cats_delta"), 4).alias("mean_breadth_delta"),
-        F.round(100.0 * F.avg("lost_a_category"), 2).alias("pct_lost_a_category"),
-        F.round(100.0 * F.avg("exited_cards"), 2).alias("pct_exited_cards")))
-_r  = rel(["baseline_prof_decile", "grp"])
-_ra = rel(["grp"]).withColumn("baseline_prof_decile", F.lit("ALL")).select(_r.columns)
-_r  = _r.unionByName(_ra)
-_rc = _r.filter("grp = 'mailed_not_unsub'").select("baseline_prof_decile",
-        F.col("mean_breadth_delta").alias("_b"), F.col("mean_depth_delta").alias("_d"))
-c06 = (_r.join(_rc, "baseline_prof_decile", "left")
-         .withColumn("breadth_delta_vs_control", F.when(F.col("grp") == "unsubscribed",
-                     F.round(F.col("mean_breadth_delta") - F.col("_b"), 4)))
-         .withColumn("depth_delta_vs_control", F.when(F.col("grp") == "unsubscribed",
-                     F.round(F.col("mean_depth_delta") - F.col("_d"), 3)))
-         .drop("_b", "_d").orderBy("baseline_prof_decile", "grp"))
-save(c06, "06_relationship"); display(c06.toPandas())
-
-# % [A11] 07_contact.csv - C1, CONTACT VOLUME. The check that can overturn the headline.
+# %% [A9] 07_contact.csv - C1, CONTACT VOLUME. The check that can overturn the headline.
 #
 # Two questions, in order, and the second only matters if the first says yes:
 #   (a) Were unsubscribers mailed harder than controls? -> the top block.
@@ -707,7 +655,7 @@ else:
     print("READ THIS AS: if delta_vs_control is flat across bands, contact volume is NOT the "
           "explanation. If it shrinks toward 0 as the band widens, it is.")
 
-# % [A12] 08_engagement.csv - C2, ENGAGEMENT. "Losing the listeners, keeping the deaf."
+# %% [A10] 08_engagement.csv - C2, ENGAGEMENT. "Losing the listeners, keeping the deaf."
 #
 # An unsubscribe from someone who never opened an email is a list-hygiene event. An unsubscribe from
 # someone who opened and clicked is a client telling you something. They are not the same loss and
@@ -748,11 +696,11 @@ else:
     print("READ THIS AS: compare the 'clicked' unsubscriber row against 'never_opened'. If the "
           "engaged leaver is worth more and attrites harder, that is the expensive segment.")
 
-# % [A13] 09_already_out.csv - C3, THE CLIENTS WHO NEVER CHOSE TO STAY.
+# %% [A11] 09_already_out.csv - C3, THE CLIENTS WHO NEVER CHOSE TO STAY.
 #
 # Mailed in Jul 2025 despite unsubscribing before it. They are in the control group labelled "did not
 # unsubscribe", which is false - they had already left and were mailed anyway. Every delta_vs_control
-# in 04_profit and 06_relationship carries them.
+# in 04_profit carries them.
 #
 # This cell measures the contamination; it does NOT silently re-cut the estimates. If the control
 # group is materially contaminated, that is a decision about the design and it is Andre's to make -
@@ -789,5 +737,5 @@ else:
     save(c09b, "09b_already_out_by_mne"); display(c09b.limit(25).toPandas())
 
 print("\nCSVs under", OUT, "- each is a folder holding one part-*.csv")
-print("  01_cohort  02_balance  03_attrition  04_profit  05_by_mne  06_relationship")
+print("  01_cohort  02_balance  03_attrition  04_profit  05_by_mne")
 print("  07_contact (C1)  08_engagement (C2)  09_already_out + 09b_by_mne (C3)")
