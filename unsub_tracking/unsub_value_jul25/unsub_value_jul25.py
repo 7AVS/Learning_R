@@ -25,10 +25,15 @@
 get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
 
 # %% [1] Connections + helpers
-import getpass, time
+import getpass, time, warnings
 import pandas as pd
 import teradatasql
 from pyspark.sql import functions as F, Window as W
+
+# pandas only certifies SQLAlchemy connections for read_sql. A raw teradatasql connection works - the
+# repo has pulled hundreds of millions of rows through it - but pandas warns once per chunk. Same
+# suppression as cpc_reservoir_extract.py.
+warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
 
 if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
