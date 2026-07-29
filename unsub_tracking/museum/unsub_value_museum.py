@@ -418,15 +418,39 @@ assert int(_bucket_counts["count"].sum()) == _n_mailed, (
 print("already_out = mailed despite an unsub before the window (the leak). Kept OUT of the stayer",
       "pool: they were not reachable, so counting them as having 'chosen to stay' would be false.")
 
+# %% [13b] STAGE - the reason a rerun used to cost as much as a first run.
+#
+# The Teradata pulls skip on a rerun (SQL md5 manifest). Nothing else did. .cache() lives in executor
+# memory, so a kernel restart or an evicted executor threw it away and every downstream .count()
+# recomputed the 15M-row UCP join from parquet. Ten diagnostics x one shuffle each.
+#
+# stage() lands a frame on HDFS and reads it back. On the next run the frame is already there, so the
+# build closure never executes and every table below reads a materialized file instead of a plan.
+# Set STAGE_REBUILD = True to force a rebuild after changing anything upstream of a staged frame.
+STAGE_REBUILD = False
+
+
+def stage(name, build):
+    if not STAGE_REBUILD and landed(name):
+        df = spark.read.parquet(BASE + name)
+        print("  stage", name, "- REUSED,", df.count(), "rows (build skipped)")
+        return df
+    build().write.mode("overwrite").parquet(BASE + name)
+    df = spark.read.parquet(BASE + name)
+    print("  stage", name, "- BUILT,", df.count(), "rows ->", BASE + name)
+    return df
+
+
 # %% [14] JOIN UCP. Clients ACQUIRED during Mar-May cannot exist in the 2026-02-28 snapshot and will
 # be unmatched - that is a real limit of a single pre-window anchor, counted in M0, never hidden.
 _before = clients.count()
-clients = clients.join(ucp, "CLNT_NO", "left").withColumn(
+_joined = clients.join(ucp, "CLNT_NO", "left").withColumn(
     "ucp_matched", F.when(F.col("AGE").isNotNull(), F.lit(True)).otherwise(F.lit(False)))
+clients = stage("clients_ucp", lambda: _joined)
 _after = clients.count()
 assert _after == _before, ("UCP join fanned out: " + str(_before) + " -> " + str(_after) +
-                           " - UCP is not unique per client at this anchor")
-clients = clients.cache()
+                           " - UCP is not unique per client at this anchor. If this fires after an "
+                           "upstream edit, set STAGE_REBUILD = True and rerun.")
 
 # %% [15] M0 - COVERAGE & NULLS. Prints BEFORE any finding.
 m0a = (clients.groupBy("bucket")
@@ -505,7 +529,7 @@ def apply_bands(df):
                          (F.col("prod_cnt") <= HP_PRODS))
 
 
-banded = apply_bands(clients).cache()
+banded = stage("banded", lambda: apply_bands(clients))
 matched = banded.filter(F.col("ucp_matched")).cache()
 print("banded:", banded.count(), "clients |", matched.count(), "matched (all band stats below use "
       "the MATCHED denominator - unmatched clients have no bands and must not dilute a percentage)")
@@ -600,8 +624,9 @@ _CARDS_CARRY = ["CLNT_NO", "bucket", "ucp_matched", "AGE", "TENURE_RBC_YEARS", "
 _missing = [c for c in _CARDS_CARRY if c not in banded.columns]
 assert not _missing, "banded is missing " + str(_missing) + " - available: " + str(banded.columns)
 
-cards_send = (senders_cards_raw.join(banded.select(*_CARDS_CARRY), "CLNT_NO", "inner")
-              .filter(F.col("ucp_matched")))
+cards_send = stage("cards_send",
+                   lambda: (senders_cards_raw.join(banded.select(*_CARDS_CARRY), "CLNT_NO", "inner")
+                            .filter(F.col("ucp_matched"))))
 
 
 def _side(df, label):
