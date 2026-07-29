@@ -22,10 +22,11 @@
 # =============================================================================
 #
 # CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
-#   TO ANALYSE   run  [3] .. [11]                    <- START HERE. Self-contained. Seconds.
+#   TO ANALYSE   run  [A1] .. [A10]                  <- START HERE. Self-contained.
 #   TO PULL      run  [0] [1] [1b] [2] [2b] [2c]     only when you need fresh data. ~25 min.
 #
-# [3] defines everything it needs and reads the cohort back from HDFS. Nothing above [3] is required.
+# [A1] defines everything it needs and reads the cohort back from HDFS. Delete everything above it
+# if you only ever want to run the analysis.
 # =============================================================================
 
 # %% [0] Bootstrap - teradatasql from artifactory; run ONCE per kernel
@@ -240,7 +241,7 @@ print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign 
 print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
 print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
 
-# %% [3] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then [4] to [11].
+# %% [3] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A10.
 # Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
 import pandas as pd
 from pyspark.sql import functions as F, Window as W
