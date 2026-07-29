@@ -19,11 +19,33 @@
 # 2. Counts always ship next to any rate, so every rate can be recomputed from this file.
 # 3. Two UCP partitions, fixed, shared by every client. Per-client anchoring fans out and kills YARN.
 # 4. PROF_TOT_ANNUAL's definition (current-year vs lifetime) is NOT documented. Deltas are directional.
+# 5. NOT CAUSAL. Treatment is self-selected: people unsubscribe BECAUSE they are disengaging. Decile
+#    stratification removes baseline skew and regression to the mean; it does not remove that. Every
+#    delta_vs_control in this file is an association, and must be reported as one.
+#
+# ===================== THE THREE CONFOUND CHECKS (added 2026-07-29) ==========
+# Every finding above rests on the assumption that the two groups differ in that they unsubscribed
+# and in nothing else that matters. These three test that assumption, and the first one can overturn
+# the headline on its own.
+#
+# C1  CONTACT VOLUME.  Were unsubscribers simply mailed harder? If so the divergence is a
+#     contact-intensity effect wearing an unsubscribe label. -> 07_contact.csv, and the DiD is
+#     re-cut by contact band so you can see whether the gap survives inside a band.
+# C2  ENGAGEMENT.      Did they open and click before leaving? "Losing the listeners, keeping the
+#     deaf" - an engaged leaver is a different loss from a dormant one. -> 08_engagement.csv
+# C3  ALREADY OUT.     Clients mailed in Jul 2025 despite unsubscribing BEFORE it. They never chose
+#     to stay, so they do not belong in the control group. -> 09_already_out.csv
+#
+# C1 and C2 cost NOTHING extra to pull: cell [2] already scans EVENT x MASTER over this window, and
+# they are additional aggregates on that same scan. C3 needs its own scan - a different date range.
 # =============================================================================
 #
 # CELL LAYOUT - the pull and the analysis are already separate cells in this one notebook:
-#   TO ANALYSE   run  [A1] .. [A10]                  <- START HERE. Self-contained.
-#   TO PULL      run  [0] [1] [1b] [2] [2b] [2c]     only when you need fresh data. ~25 min.
+#   TO ANALYSE   run  [A1] .. [A13]                      <- START HERE. Self-contained.
+#   TO PULL      run  [0] [1] [1b] [2] [2b] [2c] [2d]    only when you need fresh data. ~25 min.
+#
+# A1 detects whether the cache carries the C1/C2 columns and whether prior_unsub landed, and says so
+# at the top. A11-A13 skip cleanly if it does not; A1-A10 never depend on them.
 #
 # [A1] defines everything it needs and reads the cohort back from HDFS. Delete everything above it
 # if you only ever want to run the analysis.
@@ -126,19 +148,32 @@ print("EDW round-trip returned:", cur.fetchall()); cur.close()
 # EVENT x MASTER join three times - once per CTE, then again for the outer LEFT JOIN - and carried a
 # DISTINCT and a window function on top. This version joins ONCE, derives both flags with conditional
 # aggregation, and splits on CLNT_NO MOD 10 so each bite holds a tenth of the spool. Restartable per bite.
+#
+# C1 and C2 ride on this scan. disposition_cd widens from (1,4) to (1,2,3,4) and six aggregates are
+# added; the join, the window and the bites are untouched. One COUNT(DISTINCT) only - [2c] already
+# runs one over the same window without spooling, so the cost class is proven. The rest are SUMs.
+#   1 = sent   2 = opened   3 = clicked   4 = unsubscribed
 COHORT_TMPL = """
 SELECT m.CLNT_NO,
        MAX(CASE WHEN e.disposition_cd = 1 THEN 1 ELSE 0 END) AS mailed,
-       MAX(CASE WHEN e.disposition_cd = 4 THEN 1 ELSE 0 END) AS unsubbed
+       MAX(CASE WHEN e.disposition_cd = 4 THEN 1 ELSE 0 END) AS unsubbed,
+       SUM(CASE WHEN e.disposition_cd = 1 THEN 1 ELSE 0 END) AS n_send_events,
+       COUNT(DISTINCT CASE WHEN e.disposition_cd = 1 THEN e.TREATMENT_ID END) AS n_treatments,
+       SUM(CASE WHEN e.disposition_cd = 2 THEN 1 ELSE 0 END) AS n_opens,
+       SUM(CASE WHEN e.disposition_cd = 3 THEN 1 ELSE 0 END) AS n_clicks,
+       MAX(CASE WHEN e.disposition_cd = 2 THEN 1 ELSE 0 END) AS opened,
+       MAX(CASE WHEN e.disposition_cd = 3 THEN 1 ELSE 0 END) AS clicked
 FROM DTZV01.VENDOR_FEEDBACK_EVENT e
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-WHERE e.disposition_cd IN (1, 4)
+WHERE e.disposition_cd IN (1, 2, 3, 4)
   AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
   AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
   AND ABS(m.CLNT_NO) MOD 10 = %d
 GROUP BY m.CLNT_NO
 """
+COHORT_COLS = ["mailed", "unsubbed", "n_send_events", "n_treatments", "n_opens", "n_clicks",
+               "opened", "clicked"]
 def _pull_cohort():
     bites = []
     for i in range(10):
@@ -152,9 +187,9 @@ def _pull_cohort():
     if len(out) < n0:
         print("   dropped %s rows with a null CLNT_NO" % f"{n0 - len(out):,}")
     out["clnt_key"] = out["clnt_key"].astype(str)
-    out["mailed"]   = out["mailed"].astype("int32")
-    out["unsubbed"] = out["unsubbed"].astype("int32")
-    return out[["clnt_key", "mailed", "unsubbed"]]
+    for _col in COHORT_COLS:
+        out[_col] = pd.to_numeric(out[_col], errors="coerce").fillna(0).astype("int32")
+    return out[["clnt_key"] + COHORT_COLS]
 
 raw = _pull_cohort()
 
@@ -173,6 +208,15 @@ log(4, "of those, did not unsubscribe", "VENDOR_FEEDBACK", "unsubbed = 0", n_all
 log(5, "unsubscribed but no Jul send", "VENDOR_FEEDBACK", "unsubbed=1 AND mailed=0", n_unsub_any - n_uns,
     n_unsub_any - n_uns, "excluded - left the universe undefined for them")
 display(pdf.head(5))
+
+# C1/C2 first look, straight off the pull - before any UCP join can be blamed for it. If the two
+# n_send_events means are far apart, the DiD downstream is measuring contact intensity as much as
+# unsubscribing, and 07_contact.csv is the table that decides it.
+print("\nC1/C2 at the pull:")
+display(pdf.groupby(pdf["unsubbed"].map({1: "unsubscribed", 0: "mailed_not_unsub"}))
+        .agg(clients=("clnt_key", "size"), mean_sends=("n_send_events", "mean"),
+             mean_treatments=("n_treatments", "mean"), pct_opened=("opened", "mean"),
+             pct_clicked=("clicked", "mean")).round(3))
 
 # %% [2b] Triggering mnemonic, unsubscribers only. Small population, so a window function is affordable here.
 MNE_SQL = """
@@ -241,6 +285,60 @@ print("\nIf 'unsub' is ~100%% at 1 mnemonic, a client who left via one campaign 
 print("others - decide whether they are a stayer there or a separate 'unsubscribed_elsewhere' bucket.")
 print("The mailed row's client-mne pairs is the row count the client x mne pull has to carry.")
 
+# %% [2d] C3 - PRIOR UNSUBSCRIBERS. Clients who unsubscribed BEFORE July 2025 and were mailed in it
+# anyway. This is the only one of the three that needs its own scan: a different date range, so it
+# cannot ride on [2]. Floored at 2024-01-01 per the repo's data floor - an 18-month look-back is
+# enough to separate "left recently and was mailed anyway" from "left years ago".
+#
+# Why it matters to the estimator and not just to compliance: a client who opted out in March 2025
+# and got mail in July 2025 is sitting in the CONTROL group labelled "chose not to unsubscribe".
+# They chose nothing. They were already gone. Leaving them in makes the control look worse than it
+# is, which biases every delta_vs_control in the optimistic direction.
+PRIOR_SQL = """
+SELECT m.CLNT_NO,
+       MAX(CAST(e.disposition_dt_tm AS DATE)) AS last_prior_unsub_dt,
+       COUNT(*) AS n_prior_unsub_events
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 4
+  AND e.disposition_dt_tm >= DATE '2024-01-01' AND e.disposition_dt_tm < DATE '2025-07-01'
+  AND m.load_tm >= DATE '2023-12-01' AND m.load_tm < DATE '2025-08-01'
+  AND ABS(m.CLNT_NO) MOD 5 = %d
+GROUP BY m.CLNT_NO
+"""
+
+
+def _pull_prior():
+    bites = []
+    for i in range(5):
+        print("prior bite %d/5" % (i + 1), flush=True)
+        bites.append(edw_pd(PRIOR_SQL % i))
+    out = pd.concat(bites, ignore_index=True)
+    out["clnt_key"] = key_pd(out["CLNT_NO"], "prior")
+    out = out[out["clnt_key"].notna()].copy()
+    out["clnt_key"] = out["clnt_key"].astype(str)
+    out["last_prior_unsub_dt"] = pd.to_datetime(out["last_prior_unsub_dt"]).dt.strftime("%Y-%m-%d")
+    out["n_prior_unsub_events"] = pd.to_numeric(out["n_prior_unsub_events"],
+                                                errors="coerce").fillna(0).astype("int32")
+    return out[["clnt_key", "last_prior_unsub_dt", "n_prior_unsub_events"]]
+
+
+prior = _pull_prior()
+land(prior, "prior_unsub")
+print("\nprior_unsub: %s clients unsubscribed between 2024-01-01 and 2025-07-01." % f"{len(prior):,}")
+
+# The overlap with the cohort is the actual finding, but it needs [2] in the same kernel. This cell
+# has to stand alone - the whole point of the pull/analysis split - so it reports only if [2] ran.
+# The full version, off HDFS and independent of kernel state, is [A13].
+if "pdf" in dir():
+    _ov = pdf.merge(prior[["clnt_key"]], on="clnt_key", how="inner")
+    print("C3: %s of %s mailed clients (%.2f%%) had ALREADY unsubscribed before Jul 2025 and were "
+          "mailed anyway." % (f"{len(_ov):,}", f"{len(pdf):,}", 100.0 * len(_ov) / len(pdf)))
+    print("    Of those, %s sit in the CONTROL group." % f"{int((_ov['unsubbed'] == 0).sum()):,}")
+else:
+    print("       (run [2] in this kernel for the cohort overlap, or just run [A13])")
+
 # % [A1] ANALYSIS STARTS HERE. SELF-CONTAINED - run this cell first, then A2 to A10.
 # Nothing above this line is needed. No imports from [1], no EDW, no password, no pip.
 import pandas as pd
@@ -303,13 +401,61 @@ def _read(name):
 
 _c = _read("cohort_raw")
 _m = _read("unsub_mne")
+
+# The three confound checks need columns cell [2] only started pulling on 2026-07-29. A cache landed
+# before that read back fine and then fails 200 lines down inside a groupBy. Decide it HERE, name the
+# missing columns, and let the analysis run without them rather than die at A11.
+_C12_COLS = ["n_send_events", "n_treatments", "n_opens", "n_clicks", "opened", "clicked"]
+_missing12 = [c for c in _C12_COLS if c not in _c.columns]
+HAVE_C12 = not _missing12
+if not HAVE_C12:
+    print("!! C1/C2 UNAVAILABLE - cohort_raw is missing", _missing12)
+    print("   That cache predates the contact/engagement columns. Re-run cell [2] to get them.")
+    print("   A1-A10 run normally; A11 and A12 will skip.")
+
+try:
+    _pr = _read("prior_unsub").select("clnt_key",
+                                      F.col("last_prior_unsub_dt"),
+                                      F.col("n_prior_unsub_events").cast("int"))
+    HAVE_C3 = True
+except Exception:
+    _pr, HAVE_C3 = None, False
+    print("!! C3 UNAVAILABLE - no prior_unsub landing. Run cell [2d]. A13 will skip.")
+
 cohort = (_c.withColumn("mailed",   F.col("mailed").cast("int"))
-            .withColumn("unsubbed", F.col("unsubbed").cast("int"))
-            .filter("mailed = 1")
+            .withColumn("unsubbed", F.col("unsubbed").cast("int")))
+for _col in (_C12_COLS if HAVE_C12 else []):
+    cohort = cohort.withColumn(_col, F.coalesce(F.col(_col).cast("int"), F.lit(0)))
+
+cohort = (cohort.filter("mailed = 1")
             .join(_m, "clnt_key", "left")
             .withColumn("unsub_mne", F.coalesce(F.col("unsub_mne"), F.lit("")))
-            .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub"))
-            .dropDuplicates(["clnt_key"]).cache())
+            .withColumn("grp", F.when(F.col("unsubbed") == 1, "unsubscribed").otherwise("mailed_not_unsub")))
+
+if HAVE_C3:
+    cohort = (cohort.join(_pr, "clnt_key", "left")
+              .withColumn("already_out",
+                          F.when(F.col("last_prior_unsub_dt").isNotNull(), 1).otherwise(0))
+              # _read gives CSV, so the date arrives as a string - datediff on it returns null
+              .withColumn("days_since_prior_unsub",
+                          F.datediff(F.to_date(F.lit("2025-07-01")),
+                                     F.to_date(F.col("last_prior_unsub_dt")))))
+else:
+    cohort = cohort.withColumn("already_out", F.lit(0))
+
+if HAVE_C12:
+    # Contact bands, not raw counts: the DiD has to be re-cut INSIDE a band, and a band needs enough
+    # clients to hold a decile split. Cut points are ours - edit here and nowhere else.
+    cohort = cohort.withColumn(
+        "contact_band",
+        F.when(F.col("n_send_events") <= 1, "1")
+         .when(F.col("n_send_events") <= 3, "2-3")
+         .when(F.col("n_send_events") <= 6, "4-6")
+         .when(F.col("n_send_events") <= 12, "7-12").otherwise("13+"))
+    cohort = cohort.withColumn("engaged", F.when((F.col("opened") == 1) | (F.col("clicked") == 1),
+                                                 1).otherwise(0))
+
+cohort = cohort.dropDuplicates(["clnt_key"]).cache()
 n_cohort = cohort.count()
 n_uns    = cohort.filter("unsubbed = 1").count()
 _LOG = []
@@ -493,4 +639,132 @@ c06 = (_r.join(_rc, "baseline_prof_decile", "left")
          .drop("_b", "_d").orderBy("baseline_prof_decile", "grp"))
 save(c06, "06_relationship"); display(c06.toPandas())
 
-print("\nAll six CSVs under", OUT, "- each is a folder holding one part-*.csv")
+# % [A11] 07_contact.csv - C1, CONTACT VOLUME. The check that can overturn the headline.
+#
+# Two questions, in order, and the second only matters if the first says yes:
+#   (a) Were unsubscribers mailed harder than controls? -> the top block.
+#   (b) If they were, does the profitability gap SURVIVE inside a contact band? -> the bottom block.
+# If delta_vs_control collapses toward zero once contact is held fixed, the finding was contact
+# intensity all along. If it holds inside every band, contact is not the explanation and the
+# unsubscribe signal stands on its own.
+if not HAVE_C12:
+    print("A11 skipped - C1/C2 columns are not in this cache. Re-run cell [2].")
+else:
+    _ct = (panel.groupBy("grp").agg(
+        F.count("*").alias("clients"),
+        F.round(F.avg("n_send_events"), 3).alias("mean_send_events"),
+        q("n_send_events", 0.50).alias("median_send_events"),
+        q("n_send_events", 0.90).alias("p90_send_events"),
+        F.round(F.avg("n_treatments"), 3).alias("mean_distinct_treatments")))
+    display(_ct.toPandas())
+
+    # the DiD, re-cut by contact band instead of by decile
+    _cb = both.groupBy("contact_band", "grp").agg(
+        F.count("*").alias("clients_both_partitions"),
+        q("PROF_TOT_ANNUAL", 0.50).alias("median_prof_baseline"),
+        q("delta", 0.50).alias("median_delta"))
+    _cba = (both.groupBy("grp").agg(
+        F.count("*").alias("clients_both_partitions"),
+        q("PROF_TOT_ANNUAL", 0.50).alias("median_prof_baseline"),
+        q("delta", 0.50).alias("median_delta"))
+        .withColumn("contact_band", F.lit("ALL")).select(_cb.columns))
+    _cb = _cb.unionByName(_cba)
+    _cbc = _cb.filter("grp = 'mailed_not_unsub'").select("contact_band",
+                                                         F.col("median_delta").alias("_c"))
+    # attrition rides along - a contact band that loses clients outright matters as much as one that
+    # loses dollars, and 03_attrition cannot show it because it is cut by decile.
+    _cbat = (panel.groupBy("contact_band", "grp")
+             .agg(F.round(100.0 * F.avg("present_followup"), 2).alias("pct_present_jun2026")))
+    c07 = (_cb.join(_cbc, "contact_band", "left")
+             .join(_cbat, ["contact_band", "grp"], "left")
+             .withColumn("delta_vs_control", F.when(F.col("grp") == "unsubscribed",
+                                                    F.round(F.col("median_delta") - F.col("_c"), 2)))
+             .drop("_c").orderBy("contact_band", "grp"))
+    save(c07, "07_contact"); display(c07.toPandas())
+    print("READ THIS AS: if delta_vs_control is flat across bands, contact volume is NOT the "
+          "explanation. If it shrinks toward 0 as the band widens, it is.")
+
+# % [A12] 08_engagement.csv - C2, ENGAGEMENT. "Losing the listeners, keeping the deaf."
+#
+# An unsubscribe from someone who never opened an email is a list-hygiene event. An unsubscribe from
+# someone who opened and clicked is a client telling you something. They are not the same loss and
+# should not share a number. This splits every outcome by whether the client engaged before leaving.
+if not HAVE_C12:
+    print("A12 skipped - C1/C2 columns are not in this cache. Re-run cell [2].")
+else:
+    _eng = (panel.groupBy("grp").agg(
+        F.count("*").alias("clients"),
+        F.round(100.0 * F.avg("opened"), 2).alias("pct_opened"),
+        F.round(100.0 * F.avg("clicked"), 2).alias("pct_clicked"),
+        F.round(100.0 * F.avg("engaged"), 2).alias("pct_engaged"),
+        F.round(F.avg("n_opens"), 3).alias("mean_opens"),
+        F.round(F.avg("n_clicks"), 3).alias("mean_clicks")))
+    display(_eng.toPandas())
+
+    _e = (panel.withColumn("engagement",
+                           F.when(F.col("clicked") == 1, "clicked")
+                            .when(F.col("opened") == 1, "opened_not_clicked")
+                            .otherwise("never_opened"))
+          .groupBy("engagement", "grp").agg(
+              F.count("*").alias("clients"),
+              F.round(100.0 * F.avg("present_followup"), 2).alias("pct_present_jun2026"),
+              q("PROF_TOT_ANNUAL", 0.50).alias("median_prof_baseline")))
+    _ed = (both.withColumn("engagement",
+                           F.when(F.col("clicked") == 1, "clicked")
+                            .when(F.col("opened") == 1, "opened_not_clicked")
+                            .otherwise("never_opened"))
+           .groupBy("engagement", "grp").agg(q("delta", 0.50).alias("median_delta")))
+    _edc = (_ed.filter("grp = 'mailed_not_unsub'")
+            .select("engagement", F.col("median_delta").alias("_c")))
+    c08 = (_e.join(_ed, ["engagement", "grp"], "left")
+             .join(_edc, "engagement", "left")
+             .withColumn("delta_vs_control", F.when(F.col("grp") == "unsubscribed",
+                                                    F.round(F.col("median_delta") - F.col("_c"), 2)))
+             .drop("_c").orderBy("engagement", "grp"))
+    save(c08, "08_engagement"); display(c08.toPandas())
+    print("READ THIS AS: compare the 'clicked' unsubscriber row against 'never_opened'. If the "
+          "engaged leaver is worth more and attrites harder, that is the expensive segment.")
+
+# % [A13] 09_already_out.csv - C3, THE CLIENTS WHO NEVER CHOSE TO STAY.
+#
+# Mailed in Jul 2025 despite unsubscribing before it. They are in the control group labelled "did not
+# unsubscribe", which is false - they had already left and were mailed anyway. Every delta_vs_control
+# in 04_profit and 06_relationship carries them.
+#
+# This cell measures the contamination; it does NOT silently re-cut the estimates. If the control
+# group is materially contaminated, that is a decision about the design and it is Andre's to make -
+# the honest fix is to exclude them and re-run, not to patch a number in place.
+if not HAVE_C3:
+    print("A13 skipped - no prior_unsub landing. Run cell [2d].")
+else:
+    _ao = (panel.groupBy("grp", "already_out").agg(
+        F.count("*").alias("clients"),
+        F.round(100.0 * F.avg("present_followup"), 2).alias("pct_present_jun2026"),
+        q("PROF_TOT_ANNUAL", 0.50).alias("median_prof_baseline"),
+        q("days_since_prior_unsub", 0.50).alias("median_days_since_prior_unsub")))
+    _aod = (both.groupBy("grp", "already_out").agg(q("delta", 0.50).alias("median_delta")))
+    c09 = _ao.join(_aod, ["grp", "already_out"], "left").orderBy("grp", "already_out")
+    save(c09, "09_already_out"); display(c09.toPandas())
+
+    _n_ctl = panel.filter("grp = 'mailed_not_unsub'").count()
+    _n_ctl_out = panel.filter("grp = 'mailed_not_unsub' AND already_out = 1").count()
+    _pct = 100.0 * _n_ctl_out / _n_ctl if _n_ctl else 0.0
+    print("\nCONTROL GROUP CONTAMINATION: %s of %s controls (%.2f%%) had already unsubscribed "
+          "before Jul 2025." % (f"{_n_ctl_out:,}", f"{_n_ctl:,}", _pct))
+    print("VERDICT:", "material - exclude them and re-run before quoting any delta_vs_control."
+          if _pct >= 1.0 else
+          "immaterial at this size - the estimates stand, but state the number.")
+
+    # per-mnemonic: WHICH programmes mailed people who had already opted out
+    c09b = (panel.filter("already_out = 1")
+            .withColumn("mne", F.when(F.trim(F.col("unsub_mne")) == "", F.lit("(untagged)"))
+                        .otherwise(F.col("unsub_mne")))
+            .groupBy(F.col("mne").alias("prior_unsub_mne"))
+            .agg(F.count("*").alias("clients_mailed_after_unsub"),
+                 q("days_since_prior_unsub", 0.50).alias("median_days_after_unsub"))
+            .orderBy(F.col("clients_mailed_after_unsub").desc()))
+    save(c09b, "09b_already_out_by_mne"); display(c09b.limit(25).toPandas())
+
+print("\nCSVs under", OUT, "- each is a folder holding one part-*.csv")
+print("  01_cohort  02_balance  03_attrition  04_profit  05_by_mne  06_relationship")
+print("  07_contact (C1)  08_engagement (C2)  09_already_out + 09b_by_mne (C3)")
