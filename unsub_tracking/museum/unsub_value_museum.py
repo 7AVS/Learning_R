@@ -408,6 +408,15 @@ clients = (mailed
                         .otherwise(F.lit("stayer")))
            .drop("_prior"))
 
+# mne/program come from the client's OWN unsubscribe event, so only leavers have one. Left as NULL
+# they render as a single blank row in a pivot, which reads as missing data. It is not missing - it
+# is not applicable, and the distinction decides whether a pivot on program is meaningful:
+# in the MAIN cube, program slices the 62,658 leavers ONLY. Every stayer and already_out client
+# collapses into NO_UNSUB_EVENT. Per-campaign leaver-vs-stayer needs cards_cube, not this one.
+clients = (clients
+           .withColumn("mne", F.coalesce(F.col("mne"), F.lit("NO_UNSUB_EVENT")))
+           .withColumn("program", F.coalesce(F.col("program"), F.lit("NO_UNSUB_EVENT"))))
+
 _n_mailed = mailed.count()
 _bucket_counts = clients.groupBy("bucket").count().toPandas()
 _bucket_counts["pct_of_mailed"] = (100.0 * _bucket_counts["count"] / _n_mailed).round(2)
@@ -462,7 +471,7 @@ T("M0a - UCP match rate by bucket | anchor " + UCP_ANCHOR, m0a)
 
 T("M0b - unmatched clients by MNE (leavers only - the only bucket carrying an MNE). SBB and other "
   "business-banking programs matched 0% on 2026-07-27: personal UCP cannot contain business clients",
-  (clients.filter((~F.col("ucp_matched")) & F.col("mne").isNotNull())
+  (clients.filter((~F.col("ucp_matched")) & (F.col("bucket") == "leaver"))
    .groupBy("mne", "program").count().orderBy(F.desc("count")).limit(15)))
 
 _n_matched = clients.filter(F.col("ucp_matched")).count()
