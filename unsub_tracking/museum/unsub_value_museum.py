@@ -410,21 +410,33 @@ GROUP BY 1
 # already carries TREATMENT_ID and the timestamp. Joining MASTER here would buy nothing but the
 # client number, which cadence does not use. One table, one scan, ~200 rows back.
 #
-# TREATMENT_ID = TACTIC_ID = MNE + julian date, UNIQUE PER DEPLOYMENT WAVE. So COUNT(DISTINCT
-# TREATMENT_ID) per MNE IS the number of waves that campaign ran in the window, and that number
-# over the window length is the cadence the brief asks for. 13 waves over 92 days = weekly.
-land("cadence_by_mne", """
-SELECT SUBSTR(TREATMENT_ID, 8, 3) AS mne,
-       COUNT(DISTINCT TREATMENT_ID)                  AS n_deployments,
-       COUNT(DISTINCT CAST(disposition_dt_tm AS DATE)) AS send_days,
-       MIN(CAST(disposition_dt_tm AS DATE))          AS first_send_dt,
-       MAX(CAST(disposition_dt_tm AS DATE))          AS last_send_dt,
-       COUNT(*)                                      AS send_events
-FROM DTZV01.VENDOR_FEEDBACK_EVENT
-WHERE disposition_cd = 1
-  AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
-GROUP BY 1
-""" % (WIN_START, WIN_END))
+# TREATMENT_ID = TACTIC_ID = MNE + julian date, UNIQUE PER DEPLOYMENT WAVE. So the count of distinct
+# TREATMENT_IDs per MNE IS the number of waves that campaign ran, and that over the window length is
+# the cadence the brief asks for. 13 waves over 92 days = weekly.
+#
+# v1 OF THIS CELL HUNG AND WAS KILLED (2026-07-29). It asked for COUNT(DISTINCT TREATMENT_ID) and
+# COUNT(DISTINCT date) in ONE GROUP BY over three months of sends. Teradata runs a separate
+# redistribution pass per DISTINCT inside an aggregate; two of them over ~143M rows does not finish.
+# Cell [6] carries a comment saying exactly this about exactly this window. It was written anyway.
+#
+# v2 does NO aggregation server-side. It pulls the DEPLOYMENT CALENDAR - one row per
+# (mne, wave, send date) - and counts in pandas. That is one hash-DISTINCT producing a few thousand
+# rows: ~200 mnemonics x ~13 waves x 1-3 send days each. A DISTINCT with a small result is one pass;
+# it is the grouped COUNT(DISTINCT) that costs, not the scan. No join to MASTER either - cadence is
+# a property of the TREATMENT_ID and MASTER holds nothing cadence uses.
+PULL_CADENCE = True                 # set False to skip - only brief item 1a depends on it
+if PULL_CADENCE:
+    land("cadence_calendar", """
+    SELECT DISTINCT
+           SUBSTR(TREATMENT_ID, 8, 3)     AS mne,
+           TREATMENT_ID                   AS treatment_id,
+           CAST(disposition_dt_tm AS DATE) AS send_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+    """ % (WIN_START, WIN_END))
+else:
+    print("cadence_calendar SKIPPED (PULL_CADENCE = False) - brief 1a will be blank.")
 
 # %% [6] PULL - TIER 2: the mailed population, bank-wide. Now carries CONTACT VOLUME and ENGAGEMENT.
 #
@@ -519,6 +531,11 @@ for _name, _ds, _de, _ls, _le in WIN_MONTHS:
 #
 # already_out clients fall wherever the modulo puts them: they are neither leaver nor stayer here,
 # and [9] flags any that arrive so the weighting cannot silently mis-scale them.
+# TWO BRANCHES UNIONed, NOT ONE BRANCH WITH AN "OR". `... WHERE MOD(...) = 0 OR x IN (subquery)` is
+# a Teradata trap: an OR whose sides need different access paths can defeat the index on both and
+# fall back to a product join. UNION lets each branch keep its own plan - the modulo branch is a
+# cheap residual filter, the unsub branch is a join to a small distinct set - and UNION (not UNION
+# ALL) dedupes the leavers that also satisfy the modulo. Same shape as [7], which runs fine.
 SAMPLE_MOD = 10                     # 1-in-10 stayers. Set to 1 for a census (expect ~99M pairs).
 _SENDWIDE_SQL = """
 SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
@@ -526,23 +543,38 @@ FROM (
     SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+      AND disposition_dt_tm >= DATE '%(ds)s' AND disposition_dt_tm < DATE '%(de)s'
 ) ek
 INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
   ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
-  AND ( MOD(m.CLNT_NO, %d) = 0
-        OR m.consumer_id_hashed IN (
-              SELECT DISTINCT consumer_id_hashed
-              FROM DTZV01.VENDOR_FEEDBACK_EVENT
-              WHERE disposition_cd = 4
-                AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s') )
+WHERE m.load_tm >= DATE '%(ls)s' AND m.load_tm < DATE '%(le)s'
+  AND MOD(m.CLNT_NO, %(mod)d) = 0
+
+UNION
+
+SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '%(ds)s' AND disposition_dt_tm < DATE '%(de)s'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+INNER JOIN (
+    SELECT DISTINCT consumer_id_hashed
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 4
+      AND disposition_dt_tm >= DATE '%(ws)s' AND disposition_dt_tm < DATE '%(we)s'
+) u ON u.consumer_id_hashed = m.consumer_id_hashed
+WHERE m.load_tm >= DATE '%(ls)s' AND m.load_tm < DATE '%(le)s'
 """
 PULL_WIDE = True                    # set False to skip - everything else still runs
 if PULL_WIDE:
     for _name, _ds, _de, _ls, _le in WIN_MONTHS:
         land("senders_wide/" + _name,
-             _SENDWIDE_SQL % (_ds, _de, _ls, _le, SAMPLE_MOD, WIN_START, WIN_END))
+             _SENDWIDE_SQL % {"ds": _ds, "de": _de, "ls": _ls, "le": _le,
+                              "mod": SAMPLE_MOD, "ws": WIN_START, "we": WIN_END})
 else:
     print("senders_wide SKIPPED (PULL_WIDE = False) - bank-wide 3b/3c will not be available.")
 
@@ -631,9 +663,20 @@ if not HAVE_PRIOR_DETAIL:
 
 # Cadence and the wide pairing are both OPTIONAL landings: everything that existed before them still
 # runs without them, and the cells that need them skip loudly rather than fail.
-HAVE_CADENCE = landed("cadence_by_mne")
-cadence_mne = spark.read.parquet(BASE + "cadence_by_mne") if HAVE_CADENCE else None
-if not HAVE_CADENCE:
+# The counting that hung Teradata happens HERE instead, on a few thousand rows. countDistinct over
+# a frame this size is free; it was only ever expensive because it ran inside a GROUP BY over the
+# raw event table.
+HAVE_CADENCE = landed("cadence_calendar")
+if HAVE_CADENCE:
+    _cal = spark.read.parquet(BASE + "cadence_calendar")
+    cadence_mne = _cal.groupBy("mne").agg(
+        F.countDistinct("treatment_id").alias("n_deployments"),
+        F.countDistinct("send_dt").alias("send_days"),
+        F.min("send_dt").alias("first_send_dt"),
+        F.max("send_dt").alias("last_send_dt"))
+    print("cadence: calendar has", _cal.count(), "(mne, wave, day) rows")
+else:
+    cadence_mne = None
     print("!! CADENCE UNAVAILABLE - run [5b]. Brief 1a (weekly/bi-weekly/monthly) will be blank.")
 
 # EVERY month, not just the first. A pull that died after March would leave HAVE_WIDE True on a
