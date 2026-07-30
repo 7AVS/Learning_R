@@ -189,6 +189,28 @@ of leaving, and not a headcount.</p>
   among leavers at 0.91 — the opposite of the "shallow relationship, quick exit" premise.
 </div>
 
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-freq"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>These five rows are derived, not read off a table.</strong> L10b reports
+        leavers/stayers per (contact band × age band); age band partitions the population exactly
+        once, so summing its six rows inside a band rebuilds that band’s totals.</p>
+      <p><strong>The check that makes it safe:</strong> the five bands sum to 62,658 leavers and
+        9,072,977 stayers — L7’s matched totals to the digit. A double count would not reconcile.</p>
+      <p><strong>Survivorship is an interpretation, not a measurement.</strong> This is a single
+        quarter with no view of what happened before it. A client on 13+ emails may be tolerant, or
+        may simply be newly enrolled in many programs. Distinguishing them needs a longer window.</p>
+      <p><strong>Bands are ours:</strong> 1 / 2–3 / 4–6 / 7–12 / 13+, set in cell [13]. The shape of
+        the curve depends on where those cuts fall.</p>
+    </div>
+  </details>
+</div>
+
 <h3 style="font-size:15.5px;margin:26px 0 4px">Could the gap just be that we email young clients more?</h3>
 
 <p class="sub">Same ratio, recalculated separately inside five groups sorted by how many emails the
@@ -202,6 +224,34 @@ explanation. Bars collapsing toward 1.00 = it is.</strong></p>
   every contact band and never approach 1.00 — the age effect is real. But tenure 0–2 collapses from
   1.54 at one send to <strong>1.04 at 4–6 sends</strong>, and tenure 20+ rises to 0.96 over the same
   range. Much of the "new clients leave more" signal is how we mail new clients, not how they behave.
+</div>
+
+<h3 style="font-size:15.5px;margin:26px 0 4px">Frequency: does more email mean more unsubscribes?</h3>
+<p class="sub"><strong>Brief item 3b.</strong> Every client sorted by how many emails they received in
+the quarter, then the unsubscribe rate of each group — leavers ÷ (leavers + stayers).</p>
+
+<div class="chart" id="c-freq"></div>
+
+<div class="callout">
+  <strong>It rises, then it falls. The rate peaks at 7–12 emails (0.887%) and drops to 0.526% for the
+  clients who got 13 or more — below the 2–3 group.</strong> More email does not simply mean more
+  unsubscribing. The single-email group is lowest of all at 0.394%, so the first few emails do carry
+  real risk; but past a dozen, the rate goes the other way.
+</div>
+
+<p class="q"><strong>The most likely reason is survivorship, and it matters for contact policy.</strong>
+A client still receiving 13+ emails a quarter has already had a dozen chances to leave and did not —
+they are self-selected as tolerant. The people who would have unsubscribed at high volume already did
+so, at 4–12 emails, and left the group. That would mean the 13+ number is not permission to mail
+harder; it is what is left after the sensitive clients have gone.</p>
+
+<div class="callout warn">
+  <strong>NO CARDS VIEW YET — this is bank-wide, and no cadence data exists at all.</strong> Two
+  frequency gaps remain against the brief. <strong>Item 3b per campaign</strong> — does PCQ's curve
+  peak where the bank's does? — is cell <code>[20h] H2</code>, written, never run, no pull needed.
+  <strong>Item 3a, send cadence</strong> — whether a campaign mails weekly, bi-weekly or monthly — has
+  no data at all: cell <code>[5b]</code> hung on its first attempt, was rewritten to pull a deployment
+  calendar instead, and has not been re-run. That one does need an EDW connection.
 </div>
 
 <div class="callout warn">
@@ -975,6 +1025,19 @@ points and the high-potential thresholds are our parameters, not standards.</p>
   // RUN_2026-07-29_full.md §7. Only AUH and CRV were transcribed from the screenshots; PCL, PCQ and
   // PCD sit in csv_l9_per_campaign_ratios (111 rows) on HDFS and have never been fetched. Two
   // campaigns is not "cards" - it is two campaigns - and the page says so rather than implying five.
+  // FREQUENCY, brief item 3b. DERIVED, not transcribed: L10b reports leavers/stayers per
+  // (contact_band x age_band), and age_band partitions the population exactly once, so summing the
+  // six age rows inside a band rebuilds that band's totals without double counting.
+  // PROOF the derivation is clean: the five bands sum to 62,658 leavers and 9,072,977 stayers, which
+  // are L7's matched totals to the digit. If that had not reconciled, this array would not exist.
+  // [band, unsub_rate_pct, leavers, stayers]
+  var FREQ = [
+    ["1 email", 0.394, 4597, 1161168],
+    ["2–3 emails", 0.786, 13987, 1764894],
+    ["4–6 emails", 0.791, 15095, 1892979],
+    ["7–12 emails", 0.887, 15847, 1771150],
+    ["13+ emails", 0.526, 13132, 2482786]
+  ];
   var CARDS1 = [
     ["Age <25 · BANK", "age_band", 1.33, 9055, 985394],
     ["Age <25 · AUH", "age_band", 1.29, 98, 27644],
@@ -1114,8 +1177,11 @@ points and the high-potential thresholds are our parameters, not standards.</p>
       var track = el("div", "track");
       var bar = el("div", "bar plain");
       bar.style.width = (acc(r) / max * 100) + "%";
-      tip(bar, r[0] + ": " + lab(r) + " per 1,000 exposed — " + fmt(r[2])
-               + " leavers of " + fmt(r[1]) + " mailed");
+      tip(bar, r.length === 4 && typeof r[1] === "number" && r[1] < 100
+               ? r[0] + ": " + lab(r) + " unsubscribed — " + fmt(r[2]) + " leavers of "
+                 + fmt(r[2] + r[3]) + " clients"
+               : r[0] + ": " + lab(r) + " per 1,000 exposed — " + fmt(r[2])
+                 + " leavers of " + fmt(r[1]) + " mailed");
       track.appendChild(bar);
       row.appendChild(track);
       row.appendChild(el("div", "val", lab(r)));
@@ -1169,6 +1235,9 @@ points and the high-potential thresholds are our parameters, not standards.</p>
   divergingChart(document.getElementById("c-contact"), CONTACT, 0.70);
   divergingChart(document.getElementById("c-engage"), ENGAGE);
   divergingChart(document.getElementById("c-cards1"), CARDS1, 0.70);
+  barChart(document.getElementById("c-freq"), FREQ,
+           function (r) { return r[1]; },
+           function (r) { return r[1].toFixed(3) + "%"; });
   divergingChart(document.getElementById("c-cards2"), CARDS2);
   barChart(document.getElementById("c-rate"), CARDS,
            function (r) { return r[3]; }, function (r) { return r[3].toFixed(2); });
@@ -1221,6 +1290,11 @@ points and the high-potential thresholds are our parameters, not standards.</p>
     }));
 
   table(document.getElementById("t-contact"), ratioHead, CONTACT.map(ratioRow));
+  table(document.getElementById("t-freq"),
+    ["Emails received", "Clients", "Leavers", "Stayers", "Unsub rate"],
+    FREQ.map(function (r) {
+      return [r[0], fmt(r[2] + r[3]), fmt(r[2]), fmt(r[3]), r[1].toFixed(3) + "%"];
+    }));
   table(document.getElementById("t-engage"),
     ["Engagement", "Leavers", "% of leavers", "Stayers", "% of stayers", "Ratio", "Unsub rate*"],
     [["Clicked", 9989, 15.94, 956499, 10.54, 1.51],
