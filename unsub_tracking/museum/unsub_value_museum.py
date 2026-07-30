@@ -1126,6 +1126,12 @@ T("L7 - LEAVERS vs STAYERS, bank-wide | matched clients only (leavers n = " + st
 _CARDS_CARRY = ["CLNT_NO", "bucket", "ucp_matched", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
                 "PROF_TOT_ANNUAL", "age_band", "tenure_band", "prod_band", "tibc_mix",
                 "prof_quintile", "high_potential", BAND_STAMP]
+# contact_band and engagement ride along so the CARDS ANGLE cell [20h] can repeat L10b and L11 per
+# campaign. Without them cards_send can answer "who leaves PCQ" but not "does PCQ's age skew survive
+# a contact control" - which is the question anyone will ask the moment the bank-wide chart is shown.
+# Adding a name here is enough: stage() compares `requires` against the landed columns, so the frame
+# rebuilds itself. Analysis-only - no EDW, no new pull.
+_CARDS_CARRY += [c for c in ["contact_band", "engagement"] if c in banded.columns]
 _missing = [c for c in _CARDS_CARRY if c not in banded.columns]
 assert not _missing, "banded is missing " + str(_missing) + " - available: " + str(banded.columns)
 
@@ -1169,7 +1175,9 @@ T("L8 - CARDS campaigns: LEAVERS vs that campaign's OWN mailed base | matched cl
 # main cube: there, stayers carry no MNE (only leavers do), so per-campaign leaver-vs-stayer has to
 # be built from cards_send, which is client x MNE with the bucket attached. Cards only - that is the
 # tier that pulled client x MNE.
-_CARD_DIMS = ["age_band", "tenure_band", "prod_band", "prof_quintile", "high_potential"]
+# tibc_mix was already on cards_send and simply never asked for here - brief item 4a wants depth of
+# relationship PER CAMPAIGN, and this is the line that was denying it. Free: no rebuild, no new column.
+_CARD_DIMS = ["age_band", "tenure_band", "prod_band", "tibc_mix", "prof_quintile", "high_potential"]
 
 _l9_parts = []
 for _d in _CARD_DIMS:
@@ -1448,6 +1456,102 @@ else:
                        F.col("mne_b").isin(*sorted(CARDS_MNES)))
       .filter(F.col("leavers_raw") >= MIN_PAIR_LEAVERS)
       .orderBy(F.desc("lift_vs_worse_solo")).limit(25))
+
+# %% [20h] THE CARDS ANGLE - every bank-wide finding above, repeated inside each cards campaign.
+#
+# WHY. Every chart in sections 1, 3 and 6 of the exploration page is bank-wide, and the first
+# question in any Cards room is "fine, but what about us". Answering "we did not cut it that way" is
+# not an answer when the data is already at client x campaign grain. cards_send has the bucket, the
+# bands, and now contact_band and engagement, so all three repeat with a groupBy.
+#
+# WHAT IT CANNOT DO. cards_send is CARDS ONLY - that is the tier that pulled client x MNE. These
+# tables compare a cards campaign against ITS OWN mailed base, never against another campaign's, and
+# never against the bank. A client mailed by three cards campaigns is in three rows: read down a
+# column, never across.
+#
+# THE DENOMINATOR IS THE CAMPAIGN, NOT THE BANK. Every percentage below divides by that campaign's
+# own leavers or its own stayers, so a small campaign is not compared against a bank-sized base.
+_H_DIMS = [d for d in ["age_band", "tenure_band", "prod_band", "tibc_mix"] if d in cards_send.columns]
+
+
+def _cards_ratio(df, extra_keys, dims):
+    """leaver-vs-stayer ratio inside (mne x extra_keys), long format. One row per dim value."""
+    _keys = ["mne"] + extra_keys
+    _den = (df.filter(F.col("bucket").isin("leaver", "stayer")).groupBy(*(_keys + ["bucket"]))
+            .agg(F.count("*").alias("_n")))
+    _dlv = (_den.filter(F.col("bucket") == "leaver").drop("bucket")
+            .withColumnRenamed("_n", "_lv"))
+    _dst = (_den.filter(F.col("bucket") == "stayer").drop("bucket")
+            .withColumnRenamed("_n", "_st"))
+    _parts = []
+    for _d in dims:
+        _g = (df.filter(F.col("bucket").isin("leaver", "stayer"))
+              .groupBy(*(_keys + ["bucket", F.col(_d).cast("string").alias("segment_value")]))
+              .agg(F.count("*").alias("_c")).withColumn("segment_dim", F.lit(_d)))
+        _lv = (_g.filter(F.col("bucket") == "leaver").drop("bucket")
+               .withColumnRenamed("_c", "leavers_n"))
+        _st = (_g.filter(F.col("bucket") == "stayer").drop("bucket")
+               .withColumnRenamed("_c", "stayers_n"))
+        _parts.append(_lv.join(_st, _keys + ["segment_dim", "segment_value"], "outer"))
+    _u = _parts[0]
+    for _p in _parts[1:]:
+        _u = _u.unionByName(_p)
+    return (_u.join(_dlv, _keys, "left").join(_dst, _keys, "left")
+            .withColumn("leavers_n", F.coalesce(F.col("leavers_n"), F.lit(0)))
+            .withColumn("stayers_n", F.coalesce(F.col("stayers_n"), F.lit(0)))
+            .withColumn("pct_leavers", F.round(100.0 * F.col("leavers_n") / F.col("_lv"), 2))
+            .withColumn("pct_stayers", F.round(100.0 * F.col("stayers_n") / F.col("_st"), 2))
+            .withColumn("ratio", F.when(F.col("pct_stayers") > 0,
+                                        F.round(F.col("pct_leavers") / F.col("pct_stayers"), 2)))
+            .drop("_lv", "_st"))
+
+
+# H1 - the L7/L9 view, which already existed, now WITH tibc_mix. Brief item 4a per campaign.
+h1 = _cards_ratio(cards_send, [], _H_DIMS)
+T("H1 - CARDS: leaver vs stayer INSIDE each campaign, all dims incl. TIBC | ratio > 1 = "
+  "over-represented among that campaign's leavers | each campaign against ITS OWN base",
+  h1.filter(F.col("stayers_n") > 200).orderBy("mne", "segment_dim", F.desc("ratio")))
+
+# H2 - the L10b contact control, per campaign. THE question the bank-wide chart invites.
+if "contact_band" in cards_send.columns:
+    h2 = _cards_ratio(cards_send, ["contact_band"], [d for d in _H_DIMS if d != "tibc_mix"])
+    T("H2 - CARDS: the same ratios HELD AT CONSTANT CONTACT | compare a segment ACROSS bands within "
+      "one campaign. Flat = contact is not the explanation for that campaign; collapsing toward "
+      "1.00 = it is | rows with fewer than 200 stayers hidden",
+      h2.filter(F.col("stayers_n") > 200)
+      .orderBy("mne", "segment_dim", "contact_band", F.desc("ratio")))
+else:
+    h2 = None
+    print("H2 skipped - cards_send has no contact_band. Set STAGE_REBUILD = {'cards_send'} and "
+          "re-run [20] so the frame picks it up.")
+
+# H3 - engagement, per campaign. Does "we lose the listeners" hold inside a cards campaign?
+if "engagement" in cards_send.columns:
+    _e_tot = (cards_send.filter(F.col("bucket").isin("leaver", "stayer"))
+              .groupBy("mne", "bucket").agg(F.count("*").alias("_n")))
+    h3 = (cards_send.filter(F.col("bucket").isin("leaver", "stayer"))
+          .groupBy("mne", "bucket", "engagement").agg(F.count("*").alias("clients"))
+          .join(_e_tot, ["mne", "bucket"], "left")
+          .withColumn("pct_of_bucket", F.round(100.0 * F.col("clients") / F.col("_n"), 2))
+          .drop("_n").orderBy("mne", "bucket", F.desc("clients")))
+    T("H3 - CARDS: engagement mix of leavers vs stayers, per campaign | bank-wide the clickers are "
+      "over-represented among leavers at 1.51x and the never-openers under-represented at 0.43x - "
+      "this is whether that holds campaign by campaign", h3)
+else:
+    h3 = None
+    print("H3 skipped - cards_send has no engagement column. Same fix as H2.")
+
+# H4 - the already_out leak, per campaign. NOTE the definition: this is the campaign that MAILED
+# them after they had gone, which is NOT the campaign they left through (that is L12c). A campaign
+# can be blameless for the unsubscribe and still be the one breaching the suppression list.
+_h4_tot = cards_send.groupBy("mne").agg(F.count("*").alias("mailed_clients"))
+h4 = (cards_send.groupBy("mne", "bucket").agg(F.count("*").alias("clients"))
+      .join(_h4_tot, "mne", "left")
+      .withColumn("pct_of_mailed", F.round(100.0 * F.col("clients") / F.col("mailed_clients"), 2))
+      .orderBy("mne", "bucket"))
+T("H4 - CARDS: the three populations inside each campaign's own mailed base | already_out here = "
+  "clients THIS campaign mailed after they had already opted out, which is a different question "
+  "from which campaign they left through (that is L12c)", h4)
 
 # %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
 # MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN

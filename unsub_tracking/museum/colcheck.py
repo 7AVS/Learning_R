@@ -266,7 +266,7 @@ def run():
         "MAX_MNE_PER_CLIENT": 25, "MIN_PAIR_LEAVERS": 30, "PULL_WIDE": True,
     }
 
-    for cid in ["17", "18", "19", "20", "20b", "20d", "20e", "20f", "20g", "20c", "21", "21b", "22", "23"]:
+    for cid in ["17", "18", "19", "20", "20b", "20d", "20e", "20f", "20g", "20h", "20c", "21", "21b", "22", "23"]:
         if cid not in by_id:
             print("!! cell [%s] not found" % cid)
             continue
