@@ -651,6 +651,11 @@ That points at contact policy being a volume question more than a sequencing one
         small, not proven to be nothing.</p>
       <p><strong>Two row types excluded:</strong> solo rates above 500/1,000 (small-campaign
         sampling artefact) and mne <code>1</code> / blank (unmapped). 19 of 25 rows survive.</p>
+      <p><strong>A third should be excluded and is not yet: FSA.</strong> It sits in the bank-wide
+        pair table at lift 1.49, and it is a <em>regulatory</em> campaign — an Advantage Account fee
+        notification clients cannot opt out of. Its solo rate is not a marketing unsubscribe rate, so
+        any pair containing it compares two different things. Not wrong arithmetic, a category error.
+        <strong>The cards pairs are unaffected</strong> — no regulatory mnemonic appears in them.</p>
     </div>
   </details>
   <details>
@@ -809,12 +814,13 @@ opened. Not a finding about leavers — a finding about the suppression list.</p
   427,079 is <strong>the size of a question, not the size of a breach.</strong>
 </div>
 
-<p class="q"><strong>What we know so far.</strong> The known regulatory mnemonics are
-<strong>FXR, OTC, VMF and VOA</strong>, and <em>none of them appears in the top 25 below</em> —
-VRE, VME and VRG lead it, and VMB is a different mnemonic from VMF. But that table names the campaign
-each client <em>left through</em>, not the campaigns that mailed them <em>afterwards</em>, and it is
-the second set the regulatory question turns on. That breakdown does not exist yet — it is cell
-<code>[20i]</code>, written and not run.</p>
+<p class="q"><strong>What we know so far.</strong> There are <strong>22</strong> regulatory
+mnemonics, from an <code>ACTION_TYPE = Regulatory</code> pivot — a governed list, not a recollection.
+<em>None of them appears in the top 25 below</em>, and none is among the bank's 25 biggest senders
+either. That points at the leak being genuinely marketing. It is not proof: the table below names the
+campaign each client <em>left through</em>, not the campaigns that mailed them <em>afterwards</em>,
+and the regulatory question turns on the second. That breakdown is cell <code>[20i]</code>, written,
+not run.</p>
 
 <p class="q"><strong>It concentrates around one campaign — but be careful what that means.</strong>
 237,653 of these clients (56.9%) last unsubscribed <em>through</em> a <strong>VRE</strong> email, and

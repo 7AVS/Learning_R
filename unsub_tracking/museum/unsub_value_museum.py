@@ -128,9 +128,38 @@ CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
 # TREATMENT_ID, which rules out pure transactional mail and nothing else. A campaign can itself be
 # regulatory, which is exactly what this list is.
 #
-# TREAT AS INCOMPLETE. Four mnemonics from memory, not a governed source. Any campaign absent from
-# this set is ASSUMED marketing, and that assumption overstates the leak. It does not understate it.
-REGULATORY_MNES = frozenset({"FXR", "OTC", "VMF", "VOA"})
+# SOURCE, 2026-07-30: a pivot over the send data filtered on ACTION_TYPE = 'Regulatory'. 22 mnemonics.
+# This SUPERSEDES the four-from-memory list of the same day (FXR/OTC/VMF/VOA), which was a subset -
+# all four are here, plus eighteen more, so the earlier version understated regulatory volume by a
+# long way and would have overstated the leak.
+#
+# ACTION_TYPE IS THE REAL ANSWER AND THIS LIST IS A SNAPSHOT OF IT. A hardcoded set goes stale the
+# moment a campaign is added or reclassified. If ACTION_TYPE can be reached from the send tables,
+# join to it instead of using this - see the open question in RUN_2026-07-30_REGULATORY.md.
+REGULATORY_MNES = frozenset({
+    "AFD",  # Auto Finance new loan confirmation                        PFP
+    "BPU",  # Business Client Profile Update                            BFS
+    "BUK",  # Unclaimed certified cheques notification                  BFS
+    "CFR",  # Client Focused Reform                                     PSI
+    "EOE",  # Interac E-Transfer                                        BFS
+    "FNE",  # Transfer out investment notification                      PSI
+    "FSA",  # Advantage Account Fee Charge Notification                 EDB
+    "FSO",  # Financial Stress Outreach                                 PFP
+    "FXR",  # FX Private Banking Remediation                            CPS
+    "GAF",  # RBC Group Advantage fund merger update email              PSI
+    "HFC",  # RCL Healthcare Financial Check-up                         PFP
+    "HPN",  # HomeProtector Notification                                INS
+    "IOO",  # Investment Offer Qualification Reminder                   PSI
+    "NST",  # Annual NSF rebate notification                            EDB
+    "OTC",  # Regulatory notification on changes to program's T&Cs      CPS
+    "PUK",  # Unclaimed certified cheques notification                  PFP
+    "ROP",  # HomeProtector ROP Email                                   INS
+    "TWI",  # TFSA Digital Open Welcome Interest                        PSI
+    "VMF",  # Credit card clients who earned on merchant offer stmts    CPS
+    "VOA",  # Avion Rewards Program (formerly RBC Rewards) - Personal   CPS
+    "ZDC",  # Regulatory Documents Compliance                           PSI
+    "ZHX",  # Mutual Fund Closure Outcome Review                        PSI
+})
 REG_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(REGULATORY_MNES))
 
 # SAMPLE_MOD lives HERE, not in [7b] where it is used to build the pull.
