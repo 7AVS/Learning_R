@@ -128,7 +128,7 @@ during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage b
 
 <hr>
 
-<h2>1. Leaving is about age and tenure — not value</h2>
+<h2>1. Leaving is about age — not value, and only partly tenure</h2>
 <p class="sub">Each bar compares a segment's share of <em>leavers</em> against its share of
 <em>stayers</em>. 1.00 means the segment leaves at exactly the rate it appears in the base.</p>
 
@@ -146,14 +146,31 @@ during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage b
   among leavers at 0.91 — the opposite of the "shallow relationship, quick exit" premise.
 </div>
 
-<p class="q"><strong>The question this raises for the room:</strong> a 0.66% unsub rate is not a
-retention problem, but a 1.33× skew toward under-25s is a <em>future</em> retention problem. Do we
-treat email tolerance as an age effect that clients grow out of, or a cohort effect that arrives with them?</p>
+<h3 style="font-size:15.5px;margin:26px 0 4px">The obvious objection: are young clients just mailed more?</h3>
+<p class="sub">If under-25s simply receive more email, "1.33" is a mailing artefact wearing an age
+label. Same ratio, re-cut inside five fixed contact bands. A flat line across bands means contact is
+not the explanation; a collapse toward 1.00 means it is.</p>
+
+<div class="chart" id="c-contact"></div>
+
+<div class="callout">
+  <strong>Age survives. Tenure largely does not.</strong> Under-25s stay between 1.25 and 1.63 in
+  every contact band and never approach 1.00 — the age effect is real. But tenure 0–2 collapses from
+  1.54 at one send to <strong>1.04 at 4–6 sends</strong>, and tenure 20+ rises to 0.96 over the same
+  range. Much of the "new clients leave more" signal is how we mail new clients, not how they behave.
+</div>
+
+<p class="q"><strong>These two findings are no longer equal.</strong> "The young leave more" is
+robust to the one confound that could kill it. "The new leave more" is partly a targeting artefact
+and should not be stated with the same confidence. <strong>The question this raises for the room:</strong>
+is email tolerance an age effect clients grow out of, or a cohort effect that arrives with them?</p>
 
 <div class="dd">
   <details>
     <summary>Show the data</summary>
     <div class="scroll"><table id="t-ratios"></table></div>
+    <p class="sqlnote">Below: the same ratios re-cut inside each contact band (L10b).</p>
+    <div class="scroll"><table id="t-contact"></table></div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -268,7 +285,68 @@ ORDER BY prof_quintile;
 
 <hr>
 
-<h2>3. Cards campaigns: how many we lose per thousand mailed</h2>
+<h2>3. We lose the listeners, not the deaf</h2>
+<p class="sub">Every client classified by what they did with our email before the window closed:
+clicked, opened without clicking, or never opened. Ratio compares each group's share of leavers
+against its share of stayers.</p>
+
+<div class="chart" id="c-engage"></div>
+
+<div class="callout">
+  <strong>Clients who click are over-represented among leavers at 1.51×. Clients who never open are
+  under-represented at 0.43×.</strong> People who stopped reading do not unsubscribe — they just stop
+  reading. An unsubscribe is an engaged client taking an action, not a disengaged one finally snapping.
+</div>
+
+<p class="q"><strong>The larger number is the one nobody counts.</strong> 2,073,020 stayers — 22.85%
+of the stayer pool — did not open a single email in three months. That silent population is roughly
+30× the size of everyone who explicitly unsubscribed. We report the 69,535 and not the 2 million.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-engage"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">Engagement is measured, not assumed — from the client's own sends in the window.</p>
+<pre><code>-- §3  ENGAGEMENT BEFORE LEAVING.  Museum cell [20e], "L11".
+-- disposition_cd on VENDOR_FEEDBACK_EVENT:  1 = sent   2 = opened   3 = clicked   4 = unsubscribed
+-- Engagement is classified from the SAME window as the outcome, per client, across all campaigns.
+WITH eng AS (
+    SELECT m.CLNT_NO,
+           MAX(CASE WHEN e.disposition_cd = 2 THEN 1 ELSE 0 END) AS opened,
+           MAX(CASE WHEN e.disposition_cd = 3 THEN 1 ELSE 0 END) AS clicked
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd IN (1,2,3)
+      AND  e.disposition_dt_tm &gt;= DATE '2026-03-01' AND e.disposition_dt_tm &lt; DATE '2026-06-01'
+    GROUP BY m.CLNT_NO
+)
+SELECT s.bucket,
+       CASE WHEN g.clicked = 1 THEN 'clicked'
+            WHEN g.opened  = 1 THEN 'opened_not_clicked'
+            ELSE                    'never_opened' END        AS engagement,
+       COUNT(*)                                               AS clients,
+       100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY s.bucket) AS pct_of_bucket
+FROM   client_spine s JOIN eng g ON g.CLNT_NO = s.CLNT_NO
+WHERE  s.ucp_matched = TRUE
+GROUP BY s.bucket, 2;
+-- ratio = leaver pct_of_bucket / stayer pct_of_bucket.
+
+-- WHY "never_opened" IS NOT THE SAME AS "did not receive". Apple Mail Privacy Protection fires the
+-- open pixel without a human, which INFLATES opens. A zero-open client is therefore a strong signal,
+-- not a weak one: they did not open even by accident. The 0.43 ratio is if anything understated.
+--
+-- click_without_open is EXPECTED and is not a data error - image blocking kills the open pixel while
+-- the click still registers. That is why 'clicked' is tested before 'opened'.</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>4. Cards campaigns: how many we lose per thousand mailed</h2>
 <p class="sub">Clients each campaign emailed who then unsubscribed <em>from anything</em>, per 1,000
 mailed. Volume differs by 5× across these campaigns, so read the rate, not the count.</p>
 
@@ -335,9 +413,74 @@ GROUP BY 1;
   </details>
 </div>
 
+<h3 style="font-size:15.5px;margin:26px 0 4px">Do campaigns spike unsubscribes when they run together?</h3>
+<p class="sub">For every pair of campaigns, the unsubscribe rate among clients mailed by
+<em>both</em>, against the rate of the worse-performing campaign on its own. Above 1.00 means the
+combination loses clients faster than either campaign does alone.</p>
+
+<div class="chart" id="c-pairs2"></div>
+
+<div class="callout">
+  <strong>No. The largest lift across every cards pair is 1.43, and it sits on 152 leavers.</strong>
+  The pairs with real statistical weight show nothing: <strong>PCL + QCF, at 919,295 clients and
+  7,385 leavers, lifts by 1.03.</strong> PAL + PCL, 349,804 clients, also 1.03. Lift falls as sample
+  size rises — the signature of noise, not of an interaction.
+</div>
+
+<p class="q"><strong>Campaigns cause unsubscribes roughly additively.</strong> Being on two lists
+makes you more likely to leave because you get more email, not because the combination irritates in
+some way the individual campaigns do not. That is a cleaner answer than a spike would have been:
+it means contact policy is a volume question, not a sequencing question.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-pairs2"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">The sampling and the weighting are the parts worth challenging here.</p>
+<pre><code>-- §4b  CAMPAIGN CO-OCCURRENCE.  Museum cell [20g], "L13".  Basis: BANK_WIDE_SAMPLED.
+--
+-- THE POPULATION IS STRATIFIED, NOT RANDOM. Leavers are rare (70,425) and are taken WHOLE - no
+-- sampling on the thing being measured. Stayers are 10.1M and only provide a baseline, so 1 in 10:
+--      WHERE MOD(CLNT_NO, 10) = 0                    -- stayer sample
+--         OR client has an unsubscribe in the window -- every leaver, unsampled
+-- Weight 1 for a leaver, 10 for a sampled non-leaver. Weighting the leaver side too would inflate
+-- the numerator and hand back the sampling rate as if it were a finding.
+WITH pairs AS (
+    SELECT a.CLNT_NO, a.mne AS mne_a, b.mne AS mne_b, s.bucket
+    FROM   senders_wide a
+    JOIN   senders_wide b ON b.CLNT_NO = a.CLNT_NO AND a.mne &lt; b.mne   -- a &lt; b = each pair once
+    JOIN   client_spine  s ON s.CLNT_NO = a.CLNT_NO
+)
+SELECT mne_a, mne_b,
+       SUM(CASE WHEN bucket = 'leaver' THEN 1 ELSE 10 END)  AS clients_est,
+       SUM(CASE WHEN bucket = 'leaver' THEN 1 ELSE 0  END)  AS leavers_raw,
+       1000.0 * SUM(CASE WHEN bucket='leaver' THEN 1 ELSE 0 END)
+              / SUM(CASE WHEN bucket='leaver' THEN 1 ELSE 10 END) AS unsub_per_1000_est
+FROM   pairs
+GROUP BY mne_a, mne_b;
+-- lift_vs_worse_solo = pair rate / GREATEST(solo rate of a, solo rate of b).
+-- Compared against the WORSE of the two, not the average: a pair that only beats the weaker
+-- campaign has told you which one is worse, not that the combination did anything.
+
+-- KNOWN DEFECT IN THIS RUN, and why two rows are excluded from the chart above.
+-- For a campaign small enough that the 1-in-10 sample returns no stayers, clients_est collapses to
+-- the leaver count and the rate goes to 1000 per 1000. ACK shows a solo rate of 735.99 per 1,000 on
+-- 54 clients; PIE shows 659.86. MIN_PAIR_LEAVERS = 30 does not catch these because it filters on
+-- LEAVERS, not on estimated clients. Fix pending: floor clients_est at 500 and drop any row where
+-- leavers_raw / clients_est > 0.5. Nothing above 1.43 survives that filter, so the verdict is
+-- unchanged - but the rows must not reach a slide.
+--
+-- ALSO EXCLUDED: mne values "1" and blank. The bare digit is unexplained; the blank is the DEFAULT
+-- stream arriving unmapped in the version that produced this run. Neither is quotable as a campaign.</code></pre>
+  </details>
+</div>
+
 <hr>
 
-<h2>4. Does a campaign lose single-product clients, or just mail them?</h2>
+<h2>5. Does a campaign lose single-product clients, or just mail them?</h2>
 <p class="sub">The fairness test. For each cards campaign: the share of single-product clients among
 everyone it <em>mailed</em>, against their share among the clients it <em>lost</em>.</p>
 
@@ -400,7 +543,7 @@ ORDER BY mailed_clients DESC;
 
 <hr>
 
-<h2>5. The number nobody asked about: 427,079</h2>
+<h2>6. The number nobody asked about: 427,079</h2>
 <p class="sub">Clients emailed in Mar–May who had <em>already unsubscribed</em> before the window
 opened. Not a finding about leavers — a finding about the suppression list.</p>
 
@@ -411,10 +554,86 @@ opened. Not a finding about leavers — a finding about the suppression list.</p
   false, and counting them in a rate denominator would deflate every number by ~4%.
 </div>
 
-<p class="q"><strong>Open question for the room:</strong> is this suppression-list latency, a
-scope mismatch between a vendor-level unsubscribe and a campaign-level send list, or a consent
-model that never had one-click unsubscribes wired into it? The three have different owners and
-different fixes, and nothing in this dataset separates them.</p>
+<p class="sub" style="margin-top:20px">How long after opting out were they mailed:</p>
+<div class="chart" id="c-lag"></div>
+
+<div class="callout warn">
+  <strong>This is not a latency problem. 181,182 of them — 43.4% — were mailed more than a year after
+  unsubscribing, and received 6.74 emails each on average.</strong> Only 5.8% fall in the 0–30 day
+  window where a suppression lag would live. For the largest group the suppression is not late, it is
+  not being applied.
+</div>
+
+<p class="q"><strong>It concentrates in one campaign.</strong> 237,653 of these clients — 56.9% —
+unsubscribed via <strong>VRE</strong>, and were mailed again at a median of <strong>417 days</strong>
+later. Cards campaigns are a small share: PCQ 8,612, PCL 5,062, PCD 1,956. That skew is the strongest
+lead in this dataset for where to look first, and it points outside Cards.</p>
+
+<p class="q"><strong>Open question for the room:</strong> is a VRE unsubscribe writing to a
+suppression list that other campaigns never read, or is it not writing at all? Those have different
+owners and different fixes, and nothing in this dataset separates them.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-buckets"></table></div>
+    <div class="scroll"><table id="t-lag"></table></div>
+    <div class="scroll"><table id="t-leak"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">Three mutually exclusive buckets. The definition of the third is the finding.</p>
+<pre><code>-- §6  THE ALREADY-OUT POPULATION.  Museum cells [13] and [20f], "L12".
+-- Buckets are mutually exclusive and exhaustive over everyone mailed in the window.
+WITH mailed AS (        -- every client sent at least one email, Mar-May 2026
+    SELECT DISTINCT m.CLNT_NO
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 1
+      AND  e.disposition_dt_tm &gt;= DATE '2026-03-01' AND e.disposition_dt_tm &lt; DATE '2026-06-01'
+),
+unsub_in AS (           -- unsubscribed DURING the window
+    SELECT DISTINCT m.CLNT_NO FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 4
+      AND  e.disposition_dt_tm &gt;= DATE '2026-03-01' AND e.disposition_dt_tm &lt; DATE '2026-06-01'
+),
+unsub_before AS (       -- unsubscribed BEFORE it. Floor 2024-01-01: house rule, no scan below 2024.
+    SELECT m.CLNT_NO,
+           MAX(CAST(e.disposition_dt_tm AS DATE)) AS last_prior_unsub_dt,
+           -- argmax in one pass: a fixed-format date sorts lexically as it sorts chronologically,
+           -- so MAX(date || mne) carries the LAST unsub's mnemonic at positions 11-13.
+           SUBSTR(MAX(CAST(CAST(e.disposition_dt_tm AS DATE FORMAT 'YYYY-MM-DD') AS CHAR(10))
+                      || SUBSTR(e.TREATMENT_ID, 8, 3)), 11, 3) AS last_prior_unsub_mne
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 4
+      AND  e.disposition_dt_tm &gt;= DATE '2024-01-01' AND e.disposition_dt_tm &lt; DATE '2026-03-01'
+    GROUP BY m.CLNT_NO
+)
+SELECT CASE WHEN i.CLNT_NO IS NOT NULL THEN 'leaver'        -- mailed AND left in window
+            WHEN b.CLNT_NO IS NOT NULL THEN 'already_out'   -- mailed, but had left BEFORE it
+            ELSE                            'stayer'        -- mailed, no unsub at all
+       END                                          AS bucket,
+       b.last_prior_unsub_mne                       AS left_via_mne,
+       DATE '2026-03-01' - b.last_prior_unsub_dt    AS days_since_unsub,
+       COUNT(*)                                     AS clients
+FROM      mailed     m
+LEFT JOIN unsub_in     i ON i.CLNT_NO = m.CLNT_NO
+LEFT JOIN unsub_before b ON b.CLNT_NO = m.CLNT_NO
+GROUP BY 1, 2, 3;
+
+-- ORDER MATTERS. A client who left before the window AND again inside it is a LEAVER, not
+-- already_out - the CASE tests unsub_in first. Reversing those two lines moves ~53,000 clients.
+--
+-- FLOOR CAVEAT. unsub_before starts at 2024-01-01, so "over a year" is bounded at ~26 months.
+-- A client who opted out in 2022 and is still being mailed does not appear here at all: this
+-- number is a FLOOR on the leak, not an estimate of it.</code></pre>
+  </details>
+</div>
 
 <div class="dd">
   <details>
@@ -470,22 +689,28 @@ GROUP BY 1;
 <h2>What I'd test next</h2>
 <p class="sub">Three things, each answerable, each with what it costs.</p>
 <ol class="q" style="line-height:1.9;padding-left:20px">
-  <li><strong>Hold contact volume fixed and re-cut §1.</strong> If under-25s simply receive more
-    email, the 1.33 is a mailing artefact wearing an age label. Already written as cell [20d]; costs
-    one analysis run, no new pull.</li>
-  <li><strong>Split leavers by engagement before they left.</strong> An unsubscribe from someone who
-    never opened is list hygiene; one from a clicker is a message. Written as cell [20e]; same run.</li>
-  <li><strong>Ask whether pairs of campaigns lose clients faster than either alone.</strong> Needs the
-    bank-wide client × campaign pairing — one EDW pull, leavers whole plus a 1-in-10 stayer sample,
-    roughly 10M rows.</li>
+  <li><strong>Take the VRE leak to whoever owns that suppression list.</strong> 237,653 clients — 57%
+    of the whole leak — left via one campaign and were mailed again at a median of 417 days. This is
+    not an analysis question any more, it is an owner question. Costs a meeting, not a query.</li>
+  <li><strong>Size the silent population properly.</strong> 2,073,020 stayers opened nothing in three
+    months, 30× the explicit unsub count. We have the data to profile them and do not report them at
+    all. One analysis run, no new pull.</li>
+  <li><strong>Re-run L13 with the sampling guard.</strong> Solo rates above 500 per 1,000 are a
+    small-campaign artefact of the 1-in-10 stayer sample, and the <code>1</code> / blank mnemonics
+    are unmapped. Neither changes the verdict — the fix is so the table can be shown at all.</li>
 </ol>
 
-<p class="note" style="margin-top:32px">Source: <code>unsub_value_museum.py</code>, run 2026-07-29
-08:29, window 2026-03-01 to 2026-06-01, bank-wide, UCP anchor 2026-02-28. All percentages use the
-UCP-matched denominator (90.1% of mailed). Campaign rates on this page are <strong>exposure</strong>
-(mailed by X, unsubscribed from anything), not attribution — see §3. <code>PROF_TOT_ANNUAL</code> is
-current-year contribution, not lifetime value. Band cut points and the high-potential thresholds are
-our parameters, not standards. Every number traces to <code>museum/RUN_2026-07-29_full.md</code>.</p>
+<p class="note" style="margin-top:32px">Source: <code>unsub_value_museum.py</code>. §1 (ratios), §2,
+§4, §5 from run 2026-07-29 08:29 (<code>museum/RUN_2026-07-29_full.md</code>). §1 contact control,
+§3, §4b and §6 from run 2026-07-30 07:20 (<code>museum/RUN_2026-07-30_L10_L13.md</code>). Window
+2026-03-01 to 2026-06-01, bank-wide, UCP anchor 2026-02-28. All percentages use the UCP-matched
+denominator (90.1% of mailed). Campaign rates in §4 are <strong>exposure</strong> (mailed by X,
+unsubscribed from anything), not attribution — the two differ by 4.6× on AUH; see the §4 logic block.
+§4b is a <strong>stratified sample</strong>: every leaver, 1-in-10 stayers, weighted — client counts
+there are estimates, leaver counts are real. <code>PROF_TOT_ANNUAL</code> is current-year
+contribution, not lifetime value. The suppression-lag floor is 2024-01-01, so "over a year" is
+bounded at ~26 months and the leak figure is a <strong>floor, not an estimate</strong>. Band cut
+points and the high-potential thresholds are our parameters, not standards.</p>
 
 </div>
 
@@ -530,6 +755,64 @@ our parameters, not standards. Every number traces to <code>museum/RUN_2026-07-2
     ["stayer", 10109527, 95.32, 9072977, 89.7],
     ["already_out", 427079, 4.03, 417877, 97.8],
     ["leaver", 69535, 0.66, 62658, 90.1]
+  ];
+  // L10b - the same ratio re-cut inside a fixed contact band. RUN_2026-07-30_L10_L13.md §1.
+  var CONTACT = [
+    ["Age <25 · 1 send", "age_band", 1.63, 646, 100007],
+    ["Age <25 · 2–3", "age_band", 1.35, 1913, 178816],
+    ["Age <25 · 4–6", "age_band", 1.27, 2264, 222892],
+    ["Age <25 · 7–12", "age_band", 1.25, 2314, 206114],
+    ["Age <25 · 13+", "age_band", 1.31, 1918, 277565],
+    ["Tenure 0–2 · 1 send", "tenure_band", 1.54, 1326, 216888],
+    ["Tenure 0–2 · 2–3", "tenure_band", 1.26, 4199, 422178],
+    ["Tenure 0–2 · 4–6", "tenure_band", 1.04, 3950, 476648],
+    ["Tenure 0–2 · 7–12", "tenure_band", 1.12, 3267, 327302],
+    ["Tenure 0–2 · 13+", "tenure_band", 1.44, 2451, 322000]
+  ];
+  // L11b mix ratios, with the L11 client counts behind them.
+  var ENGAGE = [
+    ["Clicked", "engagement", 1.51, 9989, 956499],
+    ["Opened, not clicked", "engagement", 1.11, 46489, 6043458],
+    ["Never opened", "engagement", 0.43, 6180, 2073020]
+  ];
+  // L12b - lag between unsubscribing and being mailed again. [band, clients, median_days, mean_sends]
+  var LAG = [
+    ["0–30 days", 24334, 16, 2.92],
+    ["31–90 days", 42448, 61, 3.34],
+    ["91–180 days", 65988, 138, 3.34],
+    ["181–365 days", 103925, 251, 3.95],
+    ["Over a year", 181182, 528, 6.74]
+  ];
+  // L12c - campaign the client left through, before being mailed again. Top 10 of 25.
+  var LEAK = [
+    ["VRE", 237653, 417], ["VME", 40010, 159], ["VRG", 27706, 160], ["PCQ", 8612, 218],
+    ["TAO", 6378, 179], ["ZEN", 6229, 341], ["RFT", 6106, 199], ["ERI", 6090, 290],
+    ["PPQ", 5568, 180], ["PCL", 5062, 179], ["PCD", 1956, 223]
+  ];
+  // L13b cards pairs. [a, b, clients_est, leavers_raw, per1000, worse_solo, lift]
+  // FILTERED, and the filter is stated on the page: rows with mne "1" or blank are dropped (the
+  // digit is unexplained, the blank is DEFAULT arriving unmapped), and ACK|PCL is dropped because
+  // ACK's solo rate of 735.99 per 1,000 is a sampling artefact, not a rate. 19 of 25 rows survive.
+  var PAIRS2 = [
+    ["PCL", "PDN", 13612, 152, 11.17, 7.79, 1.43],
+    ["KDN", "PCL", 8384, 114, 13.60, 10.33, 1.32],
+    ["CRV", "KFI", 11459, 129, 11.26, 8.60, 1.31],
+    ["KFI", "PCL", 53725, 545, 10.14, 7.87, 1.29],
+    ["PCD", "PDN", 9529, 89, 9.34, 7.24, 1.29],
+    ["KPF", "PCL", 5008, 48, 9.58, 7.79, 1.23],
+    ["CRV", "MYD", 6940, 70, 10.09, 8.91, 1.13],
+    ["KFI", "PCD", 42284, 374, 8.84, 7.87, 1.12],
+    ["PCD", "RPB", 4160, 30, 7.21, 6.60, 1.09],
+    ["PCD", "URW", 5459, 39, 7.14, 6.60, 1.08],
+    ["KFI", "PCQ", 29731, 251, 8.44, 7.87, 1.07],
+    ["PCL", "VTC", 3835, 35, 9.13, 8.55, 1.07],
+    ["MYD", "PCL", 32738, 308, 9.41, 8.91, 1.06],
+    ["KVM", "PCL", 46953, 433, 9.22, 8.84, 1.04],
+    ["CRV", "KVM", 9427, 87, 9.23, 8.84, 1.04],
+    ["PCL", "QCF", 919295, 7385, 8.03, 7.79, 1.03],
+    ["CRV", "PAL", 64764, 574, 8.86, 8.60, 1.03],
+    ["PAL", "PCL", 349804, 2814, 8.04, 7.79, 1.03],
+    ["KDN", "PCD", 7307, 77, 10.54, 10.33, 1.02]
   ];
 
   function el(t, c, x) {
@@ -625,9 +908,23 @@ our parameters, not standards. Every number traces to <code>museum/RUN_2026-07-2
   // charts
   divergingChart(document.getElementById("c-ratios"), RATIOS);
   divergingChart(document.getElementById("c-prof"), PROF);
+  divergingChart(document.getElementById("c-contact"), CONTACT);
+  divergingChart(document.getElementById("c-engage"), ENGAGE);
   barChart(document.getElementById("c-rate"), CARDS,
            function (r) { return r[3]; }, function (r) { return r[3].toFixed(2); });
   pairChart(document.getElementById("c-pairs"), CARDS);
+
+  // co-occurrence: same diverging component, centred on 1.00 lift. Chart shows the top 12 by lift;
+  // ALL 19 surviving rows are in the table below it - the cap is on the chart, not on the data.
+  divergingChart(document.getElementById("c-pairs2"),
+    PAIRS2.slice(0, 12).map(function (r) {
+      return [r[0] + " + " + r[1], "pair", r[6], r[3], r[2] - r[3]];
+    }));
+
+  // lag: plain magnitude bars, clients per band
+  barChart(document.getElementById("c-lag"), LAG,
+           function (r) { return r[1]; },
+           function (r) { return fmt(r[1]); });
 
   // per-section data tables - built from the SAME arrays the charts use, so they cannot disagree
   var ratioHead = ["Segment", "Dimension", "Ratio", "Leavers", "Stayers", "Unsub rate*"];
@@ -659,26 +956,72 @@ our parameters, not standards. Every number traces to <code>museum/RUN_2026-07-2
       return [r[0], fmt(r[1]), r[2].toFixed(2) + "%", fmt(r[3]), r[4].toFixed(1) + "%"];
     }));
 
+  table(document.getElementById("t-contact"), ratioHead, CONTACT.map(ratioRow));
+  table(document.getElementById("t-engage"),
+    ["Engagement", "Leavers", "% of leavers", "Stayers", "% of stayers", "Ratio", "Unsub rate*"],
+    [["Clicked", 9989, 15.94, 956499, 10.54, 1.51],
+     ["Opened, not clicked", 46489, 74.19, 6043458, 66.61, 1.11],
+     ["Never opened", 6180, 9.86, 2073020, 22.85, 0.43]].map(function (r) {
+      return [r[0], fmt(r[1]), r[2].toFixed(2) + "%", fmt(r[3]), r[4].toFixed(2) + "%",
+              r[5].toFixed(2) + "×", (100 * r[1] / (r[1] + r[3])).toFixed(3) + "%"];
+    }));
+
+  table(document.getElementById("t-lag"),
+    ["Lag after unsubscribing", "Clients", "% of already_out", "Median days", "Mean sends after"],
+    LAG.map(function (r) {
+      return [r[0], fmt(r[1]), (100 * r[1] / 417877).toFixed(1) + "%", fmt(r[2]), r[3].toFixed(2)];
+    }));
+
+  table(document.getElementById("t-leak"),
+    ["Left via campaign", "Clients mailed after unsub", "% of leak", "Median days after"],
+    LEAK.map(function (r) {
+      return [r[0], fmt(r[1]), (100 * r[1] / 417877).toFixed(1) + "%", fmt(r[2])];
+    }));
+
+  table(document.getElementById("t-pairs2"),
+    ["Pair", "Clients (est)", "Leavers", "Pair rate /1k", "Worse solo /1k", "Lift"],
+    PAIRS2.map(function (r) {
+      return [r[0] + " + " + r[1], fmt(r[2]), fmt(r[3]), r[4].toFixed(2),
+              r[5].toFixed(2), r[6].toFixed(2) + "×"];
+    }));
+
   // the master table - every row on the page, one place
   var all = [];
-  RATIOS.concat(PROF).forEach(function (r) {
-    all.push(["§1–2 segments", r[1], r[0], fmt(r[3]), fmt(r[4]),
-              r[2].toFixed(2) + "×", (100 * r[3] / (r[3] + r[4])).toFixed(3) + "%"]);
-  });
+  function push(sec, r) {
+    all.push([sec, r[1], r[0], fmt(r[3]), fmt(r[4]), r[2].toFixed(2) + "×",
+              (100 * r[3] / (r[3] + r[4])).toFixed(3) + "%"]);
+  }
+  RATIOS.forEach(function (r) { push("§1 segments", r); });
+  CONTACT.forEach(function (r) { push("§1 contact-controlled", r); });
+  PROF.forEach(function (r) { push("§2 profitability", r); });
+  ENGAGE.forEach(function (r) { push("§3 engagement", r); });
   CARDS.forEach(function (r) {
-    all.push(["§3–4 campaigns", "mne (exposure)", r[0], fmt(r[2]), fmt(r[1] - r[2]),
+    all.push(["§4–5 campaigns", "mne (exposure)", r[0], fmt(r[2]), fmt(r[1] - r[2]),
               r[3].toFixed(2) + " /1k", (100 * r[2] / r[1]).toFixed(3) + "%"]);
   });
+  PAIRS2.forEach(function (r) {
+    all.push(["§4b co-occurrence", "campaign pair", r[0] + " + " + r[1], fmt(r[3]),
+              fmt(r[2] - r[3]), r[6].toFixed(2) + "× lift",
+              (100 * r[3] / r[2]).toFixed(3) + "%"]);
+  });
   BUCKETS.forEach(function (r) {
-    all.push(["§5 populations", "bucket", r[0], fmt(r[1]), "—",
+    all.push(["§6 populations", "bucket", r[0], fmt(r[1]), "—",
               r[2].toFixed(2) + "% of mailed", "—"]);
+  });
+  LAG.forEach(function (r) {
+    all.push(["§6 suppression lag", "lag_band", r[0], fmt(r[1]), "—",
+              fmt(r[2]) + " median days", r[3].toFixed(2) + " sends"]);
+  });
+  LEAK.forEach(function (r) {
+    all.push(["§6 leak by campaign", "left_via_mne", r[0], fmt(r[1]), "—",
+              fmt(r[2]) + " median days", "—"]);
   });
   table(document.getElementById("t-all"),
     ["Section", "Dimension", "Value", "Leavers / n", "Stayers / rest", "Headline stat", "Unsub rate*"],
     all);
 
   // one footnote, appended to every table that shows the starred column
-  ["t-ratios", "t-prof", "t-cards", "t-all"].forEach(function (id) {
+  ["t-ratios", "t-contact", "t-prof", "t-engage", "t-cards", "t-all"].forEach(function (id) {
     var host = document.getElementById(id);
     if (!host) return;
     var p = el("p", "note", "* leavers ÷ (leavers + stayers). already_out is excluded from "
