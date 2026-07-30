@@ -388,8 +388,15 @@ else:
 # %% [2e] PROBE - seconds, and it decides whether [2f] is worth running at all.
 # DLY_FULL_PORTFOLIO's history depth is undocumented anywhere in the repo. If dt_record_ext does not
 # reach 2025-07-01 there is no baseline anchor for a cards trajectory, and [2f] should not be run.
+#
+# Overflow note (2026-07-29): the first version used COUNT(*), which returns INTEGER in Teradata and
+# caps at 2,147,483,647. DFP is a DAILY full-portfolio snapshot, so a 12-month window is the whole card
+# portfolio times ~365 - tens of billions of rows. The counter overflowed mid-computation (error 2616)
+# and took the whole statement down, including the MIN/MAX that the probe actually needs.
+# SUM(CAST(1 AS BIGINT)) accumulates in BIGINT and counts the same rows. Same scan, same answer, no cap.
 display(edw_pd("""
-SELECT MIN(dt_record_ext) AS earliest, MAX(dt_record_ext) AS latest, COUNT(*) AS rows_in_window
+SELECT MIN(dt_record_ext) AS earliest, MAX(dt_record_ext) AS latest,
+       SUM(CAST(1 AS BIGINT)) AS rows_in_window
 FROM D3CV12A.DLY_FULL_PORTFOLIO
 WHERE dt_record_ext >= DATE '2025-07-01' AND dt_record_ext < DATE '2026-07-01'
 """))
