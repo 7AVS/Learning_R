@@ -736,6 +736,12 @@ def add_mne_program(df, tid_col=None, mne_col=None):
 
 senders_mne = add_mne_program(senders_mne, mne_col="mne")
 senders_cards_raw = add_mne_program(senders_cards_raw, mne_col="mne")
+# senders_wide goes through the SAME derivation or it is not on the same side of any join: a blank
+# mnemonic stays blank here and becomes DEFAULT everywhere else, so those rows would silently fail
+# to match senders_mne and drop out of every rate. This cell's whole premise is one rule for
+# everyone; a frame added later is not exempt from it.
+if senders_wide_raw is not None:
+    senders_wide_raw = add_mne_program(senders_wide_raw, mne_col="mne")
 
 # %% [11] UCP SCHEMA PROBE - hard gate. Nothing downstream assumes a column name.
 _REQUESTED = ["CLNT_NO", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT",
@@ -1565,7 +1571,15 @@ def _seg_rows(df, scope_type, scope_col, basis, weight):
 _seg_parts = [_seg_rows(matched, "BANK", None, "CENSUS", 1),
               _seg_rows(cards_send, "CAMPAIGN", "mne", "CARDS_CENSUS", 1)]
 if HAVE_WIDE:
-    _wide_banded = (senders_wide_raw.join(banded.filter(F.col("ucp_matched")), "CLNT_NO", "inner"))
+    # DROP banded's mne/program before this join. Both sides carry mne and they mean DIFFERENT
+    # things: senders_wide's mne is the campaign that MAILED the client, banded's is the campaign
+    # the client UNSUBSCRIBED THROUGH (NO_UNSUB_EVENT for everyone else). Keeping both makes the
+    # name ambiguous and groupBy("mne") cannot resolve it. The mailing campaign is the one a
+    # CAMPAIGN scope means, so banded's copy goes. cards_send never hit this only because
+    # _CARDS_CARRY happens not to list mne.
+    _wide_banded = (senders_wide_raw
+                    .join(banded.filter(F.col("ucp_matched")).drop("mne", "program"),
+                          "CLNT_NO", "inner"))
     _seg_parts.append(_seg_rows(_wide_banded, "CAMPAIGN", "mne", "BANK_WIDE_SAMPLED", SAMPLE_MOD))
 
 unsub_segments = _seg_parts[0]
