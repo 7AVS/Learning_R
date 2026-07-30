@@ -154,8 +154,10 @@ print("EDW round-trip returned:", cur.fetchall()); cur.close()
 # aggregation, and splits on CLNT_NO MOD 10 so each bite holds a tenth of the spool. Restartable per bite.
 #
 # C1 and C2 ride on this scan. disposition_cd widens from (1,4) to (1,2,3,4) and six aggregates are
-# added; the join, the window and the bites are untouched. One COUNT(DISTINCT) only - [2c] already
-# runs one over the same window without spooling, so the cost class is proven. The rest are SUMs.
+# added; the join, the window and the bites are untouched. One COUNT(DISTINCT) only, the rest are SUMs.
+# (An earlier version of this note said [2c] proved that COUNT(DISTINCT) is safe unbitten over this
+# window. It does not - [2c] blew spool on 2026-07-29 and is now bitten too. The bites are what makes
+# the COUNT(DISTINCT) affordable here, not the aggregate being cheap.)
 #   1 = sent   2 = opened   3 = clicked   4 = unsubscribed
 COHORT_TMPL = """
 SELECT m.CLNT_NO,
@@ -251,31 +253,49 @@ land(mne, "unsub_mne")
 # but was also mailed by PCL is a "stayer" under PCL - which is only defensible if unsubscribes really are
 # programme-scoped, still an open question. If it carries several, they are a leaver everywhere and there
 # is no third category to invent. (b) mean n_mne on the mailed side x 7.35M sizes the client x mne pull.
-MNE_SPREAD_SQL = """
-SELECT 'unsub  (disp 4)' AS which, n_mne, COUNT(*) AS clients FROM (
+#
+# Spool note (2026-07-29): the first version was ONE statement - two COUNT(DISTINCT SUBSTR(...)) GROUP BY
+# CLNT_NO passes over the July window, UNION ALL'd, with an ORDER BY on top. It blew spool on the disp=1
+# half: that side is the whole mailed universe, scanned unbitten, while [2] needs 10 bites to survive the
+# same window. Now bitten on CLNT_NO MOD 10 exactly like [2], one disposition per statement, and the two
+# halves stitched in pandas instead of by UNION ALL (which also drops the ORDER BY sort spool and the
+# Teradata UNION-ALL string-truncation trap).
+# Why the bites do not change the answer: MOD partitions on CLNT_NO, so every client falls in exactly one
+# bite and their DISTINCT mnemonic count is complete inside that bite. Summing the n_mne -> clients
+# histogram across bites is identical to counting it in one pass. Both halves are bitten the same way, so
+# a NULL CLNT_NO is excluded from both rows rather than from only one - the two rows stay comparable.
+SPREAD_TMPL = """
+SELECT n_mne, COUNT(*) AS clients FROM (
   SELECT m.CLNT_NO, COUNT(DISTINCT SUBSTR(m.TREATMENT_ID, 8, 3)) AS n_mne
   FROM DTZV01.VENDOR_FEEDBACK_EVENT e
   INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
     ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-  WHERE e.disposition_cd = 4
+  WHERE e.disposition_cd = %d
     AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
     AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
-  GROUP BY m.CLNT_NO) x GROUP BY 1, 2
-UNION ALL
-SELECT 'mailed (disp 1)', n_mne, COUNT(*) FROM (
-  SELECT m.CLNT_NO, COUNT(DISTINCT SUBSTR(m.TREATMENT_ID, 8, 3)) AS n_mne
-  FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-  INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-    ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
-  WHERE e.disposition_cd = 1
-    AND e.disposition_dt_tm >= DATE '2025-07-01' AND e.disposition_dt_tm < DATE '2025-08-01'
-    AND m.load_tm >= DATE '2025-06-01' AND m.load_tm < DATE '2025-09-01'
-  GROUP BY m.CLNT_NO) y GROUP BY 1, 2
-ORDER BY 1, 2
+    AND ABS(m.CLNT_NO) MOD 10 = %d
+  GROUP BY m.CLNT_NO) x
+GROUP BY n_mne
 """
-spread = edw_pd(MNE_SPREAD_SQL)
-spread["clients"] = spread["clients"].astype("int64")
-spread["n_mne"]   = spread["n_mne"].astype("int64")
+
+def _pull_spread(disp, which):
+    bites = []
+    for i in range(10):
+        print("spread %s bite %d/10" % (which.strip(), i + 1), flush=True)
+        b = edw_pd(SPREAD_TMPL % (disp, i))
+        if len(b):
+            bites.append(b)
+    assert bites, "spread %s returned zero rows in all 10 bites - investigate before continuing" % which
+    out = pd.concat(bites, ignore_index=True)
+    out["n_mne"]   = pd.to_numeric(out["n_mne"]).astype("int64")
+    out["clients"] = pd.to_numeric(out["clients"]).astype("int64")
+    out = out.groupby("n_mne", as_index=False)["clients"].sum()
+    out.insert(0, "which", which)
+    return out
+
+spread = (pd.concat([_pull_spread(4, "unsub  (disp 4)"), _pull_spread(1, "mailed (disp 1)")],
+                    ignore_index=True)
+            .sort_values(["which", "n_mne"], ignore_index=True))
 display(spread)
 
 for _w in spread["which"].unique():
