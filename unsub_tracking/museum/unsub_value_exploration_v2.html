@@ -53,6 +53,9 @@ hr{border:0;border-top:1px solid var(--border);margin:40px 0}
 .bar.pos{left:50%;border-radius:0 4px 4px 0;background:var(--over)}
 .bar.neg{right:50%;border-radius:4px 0 0 4px;background:var(--under)}
 .bar.plain{left:0;border-radius:0 4px 4px 0;background:var(--series-1)}
+/* a pinned bar is drawn at the axis limit, so its LENGTH is not its value. Hatched so nobody
+   compares two clipped bars by eye and concludes they are equal. */
+.bar.clip{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.55) 0 3px,transparent 3px 7px)}
 .val{font-size:13px;text-align:right;color:var(--text-secondary)}
 .grp{margin:10px 0}
 .pair{display:grid;gap:3px;margin-top:3px}
@@ -111,15 +114,38 @@ is a real comparison rather than two different clocks.</p>
 
 <div class="tiles">
   <div class="tile"><div class="n">10,606,141</div><div class="l">clients emailed, Mar–May</div></div>
-  <div class="tile"><div class="n">69,535</div><div class="l">unsubscribed &nbsp;·&nbsp; 0.66%</div></div>
-  <div class="tile"><div class="n">427,079</div><div class="l">emailed despite already opting out</div></div>
-  <div class="tile"><div class="n">4,335</div><div class="l">of the leavers came via a cards email</div></div>
+  <div class="tile"><div class="n">69,535</div><div class="l">unsubscribed &nbsp;·&nbsp; <strong>0.68%</strong>
+    of those who could<br><span style="opacity:.75">0.66% of everyone mailed</span></div></div>
+  <div class="tile"><div class="n">427,079</div><div class="l">mailed after opting out &nbsp;·&nbsp;
+    <strong>read §6 before quoting</strong><br><span style="opacity:.75">only 15,630 via cards; a floor, not a total</span></div></div>
+  <div class="tile"><div class="n">4,335</div><div class="l">unsubscribes that carry a <em>cards</em>
+    treatment ID<br><span style="opacity:.75">attribution, not exposure — see §4</span></div></div>
 </div>
 
-<p class="note">UCP match rate 89.7–90.1% across all three groups; worst field 0.01% null. Unmatched
-clients are overwhelmingly business programs (SBB: 2,274 leavers, 0 matched) and clients acquired
-during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage below uses the
-<em>matched</em> denominator.</p>
+<p class="note"><strong>Two numbers in that second tile, and the difference matters.</strong> 0.66% divides
+by everyone mailed. 0.68% divides by everyone who was <em>able</em> to unsubscribe — which excludes the
+427,079 who had already opted out and so were never at risk of doing it again. <strong>0.68% is the one
+to quote</strong>, and it is the rule every table on this page follows.</p>
+
+<p class="note">UCP match rate: <strong>89.7% of stayers, 90.1% of leavers, 97.8% of the already-out
+group</strong>; worst field 0.01% null. Unmatched clients are overwhelmingly business programs
+(SBB: 2,274 leavers, 0 matched) and clients acquired during the window, who cannot exist in a
+2026-02-28 snapshot. Every percentage below uses the <em>matched</em> denominator.</p>
+
+<p class="note"><strong>Words this page uses that are worth pinning down before you start.</strong>
+<em>UCP</em> — the bank's client profile table, where age, tenure, product counts and profitability
+come from; "UCP-matched" means we found that client in it.
+<em>Ratio</em> — one group's share of the leavers divided by its share of the stayers. Never a
+headcount, never a chance of leaving.
+<em>Quintile</em> — the population sorted by a value and cut into five equal-sized groups.
+<em>Denominator</em> — whatever a percentage is divided by; it changes section to section and is
+named each time.
+<em>Artefact</em> — a pattern produced by how we mailed or measured rather than by the clients.
+<em>Solo rate</em> — a campaign's unsubscribe rate when measured on its own.
+<em>Exposure vs attribution</em> — two different ways to count a campaign's unsubscribes; §4 explains
+it and they differ by 4.6× on the same campaign.
+Three-letter codes (PCQ, PCL, CRV, AUH, PCD, VRE…) are campaign mnemonics; the cards five are
+PCQ, PCL, PCD, AUH and CRV.</p>
 
 <details>
   <summary>Show every number on this page, in one table</summary>
@@ -130,7 +156,9 @@ during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage b
 
 <h2>1. Leaving is about age — not value, and only partly tenure</h2>
 <p class="sub">Each bar compares a segment's share of <em>leavers</em> against its share of
-<em>stayers</em>. 1.00 means the segment leaves at exactly the rate it appears in the base.</p>
+<em>stayers</em>. <strong>1.00 means the segment is exactly as common among the people who left as it
+is among the people who stayed.</strong> It is a comparison of two group compositions — not a chance
+of leaving, and not a headcount.</p>
 
 <div class="legend">
   <span><span class="swatch" style="background:var(--over)"></span>over-represented among leavers</span>
@@ -254,10 +282,15 @@ relative to who we can actually reach.</p>
 <div class="chart" id="c-prof"></div>
 
 <div class="callout">
-  <strong>Quintiles 1 through 4 sit between 1.00 and 1.06 — statistically indistinguishable.</strong>
-  Only the top quintile deviates, at 0.84, and it deviates <em>protectively</em>: our most profitable
-  clients leave <em>less</em>. There is no value-loss story in this data.
+  <strong>Quintiles 1 through 4 all sit between 1.00 and 1.06 — a spread too small to act on.</strong>
+  Only the top quintile moves, at 0.84, and it moves <em>protectively</em>: our most profitable
+  clients leave <em>less</em>. Nothing here supports a story about losing our best clients — but read
+  the caveat below before treating that as settled, because this chart is not independent of §1.
 </div>
+
+<p class="note"><strong>No significance test was run on this page.</strong> "Too small to act on" is
+a judgement from the size of the gap and the size of the groups, not the output of a test. If this
+number is going to carry a decision, the interval should be computed first.</p>
 
 <p class="q"><strong>Caveat that matters:</strong> the profitability field is
 <code>PROF_TOT_ANNUAL</code> — current-year contribution, not lifetime value. It rises mechanically
@@ -320,9 +353,17 @@ against its share of stayers.</p>
 
 <div class="callout">
   <strong>Clients who click are over-represented among leavers at 1.51×. Clients who never open are
-  under-represented at 0.43×.</strong> People who stopped reading do not unsubscribe — they just stop
-  reading. An unsubscribe is an engaged client taking an action, not a disengaged one finally snapping.
+  under-represented at 0.43×.</strong> People who stopped reading <em>rarely</em> unsubscribe — 9.86%
+  of leavers came from that group, against 74.19% from openers. They do still leave: 6,180 of them
+  did. The pattern is that unsubscribing tends to be something an attentive client does, not the
+  final act of someone who had already tuned out.
 </div>
+
+<p class="note">Two limits on that reading. <strong>Clicks are trustworthy, opens are not:</strong>
+Apple Mail Privacy Protection fires the open pixel without a human, so the "opened" group is
+inflated. That makes the never-opened group <em>smaller</em> than reality and the 0.43× if anything
+understated. And this is a correlation between behaviour and outcome — the page cannot see intent,
+so "attentive" is a description of what these clients did, not a claim about why they left.</p>
 
 <p class="q"><strong>The larger number is the one nobody counts.</strong> 2,073,020 stayers — 22.85%
 of the stayer pool — did not open a single email in three months. That silent population is roughly
@@ -386,9 +427,19 @@ mailed. Volume differs by 5× across these campaigns, so read the rate, not the 
   Neither may be called "the unsub rate" without saying which one it is.
 </div>
 
-<p class="q">CRV and PCL sit highest on exposure, AUH lowest by some distance. On <em>attribution</em>
-the order changes — PCQ is worst at 2.79 per 1,000 and AUH still best at 0.58. A campaign can rank
-badly on exposure simply by mailing people who are also on many other lists.</p>
+<p class="q"><strong>The ranking is not the same on the two measures, so the measure has to be
+chosen before the ranking is quoted.</strong> On exposure: CRV 8.64, PCL 7.90, PCD 6.63, PCQ 6.07,
+AUH 2.68 per 1,000. On attribution: <strong>PCQ 2.79, PCL 1.17, PCD 1.06, AUH 0.58</strong> — PCQ
+moves from fourth-best to worst. Both sets are in the table below. CRV has no attributed figure:
+it did not make L6's top-25-by-senders cut, so it was never captured, and the blank stays a blank.</p>
+
+<p class="q"><strong>Which one should you use?</strong> Ask what the number is for.
+<em>Attribution</em> answers "is this campaign's email prompting people to opt out" — it is the
+campaign's own doing, and it is what belongs in a campaign post-mortem or a creative review.
+<em>Exposure</em> answers "how much unsubscribe risk sits on the population this campaign touches" —
+it is inflated by clients being on many other lists, which is why heavy senders look worse on it,
+and it is the right lens for contact policy. A campaign can rank badly on exposure purely by mailing
+people everyone else also mails.</p>
 
 <div class="dd">
   <details>
@@ -447,16 +498,37 @@ combination loses clients faster than either campaign does alone.</p>
 <div class="chart" id="c-pairs2"></div>
 
 <div class="callout">
-  <strong>No. The largest lift across every cards pair is 1.43, and it sits on 152 leavers.</strong>
-  The pairs with real statistical weight show nothing: <strong>PCL + QCF, at 919,295 clients and
-  7,385 leavers, lifts by 1.03.</strong> PAL + PCL, 349,804 clients, also 1.03. Lift falls as sample
-  size rises — the signature of noise, not of an interaction.
+  <strong>No. The largest lift across every cards pair is 1.43, and it sits on just 152 leavers.</strong>
+  The pairs big enough to trust show nothing: <strong>PCL + QCF, at roughly 919,000 clients and
+  7,385 leavers, lifts by 1.03.</strong> PAL + PCL, roughly 350,000 clients, also 1.03.
 </div>
 
-<p class="q"><strong>Campaigns cause unsubscribes roughly additively.</strong> Being on two lists
-makes you more likely to leave because you get more email, not because the combination irritates in
-some way the individual campaigns do not. That is a cleaner answer than a spike would have been:
-it means contact policy is a volume question, not a sequencing question.</p>
+<p class="note"><strong>Why the big pairs are the ones to believe, in plain terms.</strong> A pair
+with only 152 leavers moves a lot on very little: twenty unsubscribes more or fewer, which is
+ordinary week-to-week variation, swings its number by a third. A pair with 7,385 leavers barely
+moves for the same twenty. So small pairs scatter widely around 1.00 by chance alone while large
+pairs settle close to it — and <strong>that is exactly the pattern here: the lifts shrink as the
+pairs get bigger.</strong> If combining campaigns genuinely did something, the effect should have
+held up in the large pairs rather than fading out of them.</p>
+
+<p class="note"><strong>Two things this section cannot tell you.</strong> First, the client counts
+here are <em>estimates</em> — every leaver is counted for real, but stayers come from a 1-in-10
+sample scaled back up, so "919,000" means "about 919,000" while "7,385 leavers" is exact. Second,
+no confidence interval was computed, so <strong>whether PCL + PDN's 1.43 is genuinely different from
+1.00 has not been tested</strong> — it is flagged as small rather than proven to be nothing.</p>
+
+<p class="q"><strong>The data is consistent with campaigns adding up rather than compounding.</strong>
+Being on two lists appears to raise your chance of leaving through the simple fact of more email,
+rather than through the combination irritating in some way the campaigns do not manage separately.
+That points at contact policy being a volume question more than a sequencing one.</p>
+
+<div class="callout warn">
+  <strong>This is not a licence to mail more.</strong> "No spike when campaigns combine" means there
+  is no <em>extra</em> penalty for the combination — it does not mean the extra email is free. Every
+  additional send still carries its own unsubscribe risk, and §1 showed volume matters. Read this as
+  "adding a list costs you roughly what that list's email always costs", not as "adding a list is
+  cheap."
+</div>
 
 <div class="dd">
   <details>
@@ -496,8 +568,12 @@ GROUP BY mne_a, mne_b;
 -- the leaver count and the rate goes to 1000 per 1000. ACK shows a solo rate of 735.99 per 1,000 on
 -- 54 clients; PIE shows 659.86. MIN_PAIR_LEAVERS = 30 does not catch these because it filters on
 -- LEAVERS, not on estimated clients. Fix pending: floor clients_est at 500 and drop any row where
--- leavers_raw / clients_est > 0.5. Nothing above 1.43 survives that filter, so the verdict is
--- unchanged - but the rows must not reach a slide.
+-- leavers_raw / clients_est > 0.5.
+--
+-- The verdict does not change, and that is CHECKED rather than assumed: across the 19 cards rows
+-- charted above, the smallest clients_est is 3,835 (all clear the 500 floor) and the highest
+-- leavers/clients ratio is 152/13,612 = 1.1% (all clear the 50% guard). So the filter removes
+-- nothing that is on this page. It removes rows that were already excluded by hand.
 --
 -- ALSO EXCLUDED: mne values "1" and blank. The bare digit is unexplained; the blank is the DEFAULT
 -- stream arriving unmapped in the version that produced this run. Neither is quotable as a campaign.</code></pre>
@@ -525,9 +601,18 @@ everyone it <em>mailed</em>, against their share among the clients it <em>lost</
 </div>
 
 <p class="q"><strong>Why single-product matters:</strong> for a client holding one product, email is
-often the only live channel. The gap column — not the raw share — is the campaign's own contribution.
-On that measure PCQ (+6.9pp) and AUH (+5.8pp) lose depth-poor clients faster than they mail them;
-PCL (−1.8pp) and CRV (−1.4pp) do the reverse.</p>
+often the only live channel. The gap column — not the raw share — is what is left after targeting is
+accounted for. On that measure PCQ (+6.9pp) and AUH (+5.8pp) lose depth-poor clients faster than they
+mail them; PCL (−1.8pp) and CRV (−1.4pp) do the reverse.</p>
+
+<div class="callout warn">
+  <strong>Do not read the gap as a proven campaign effect.</strong> §1 showed that a segment gap can
+  survive a contact-volume control (age) or largely dissolve under it (tenure) — and this section has
+  <em>not</em> had that control applied. A campaign's +6.9pp could still come from its clients being
+  mailed harder by <em>other</em> campaigns, which is precisely the confound §1 spent two charts on.
+  Treat these gaps as a lead worth testing, not as a campaign's proven contribution. The test is cell
+  <code>[20h] H2</code>, which re-cuts these inside contact bands and has not been run.
+</div>
 
 <div class="dd">
   <details>
@@ -589,16 +674,28 @@ opened. Not a finding about leavers — a finding about the suppression list.</p
 <div class="chart" id="c-lag"></div>
 
 <div class="callout warn">
-  <strong>This is not a latency problem. 181,182 of them — 43.4% — were mailed more than a year after
-  unsubscribing, and received 6.74 emails each on average.</strong> Only 5.8% fall in the 0–30 day
-  window where a suppression lag would live. For the largest group the suppression is not late, it is
-  not being applied.
+  <strong>The suppression list is not slow to catch these people. 181,182 of them — 43.4% — were
+  mailed more than a year after unsubscribing, and received 6.74 emails each on average.</strong>
+  Only 5.8% fall in the 0–30 day window where a processing delay would live. Whatever is happening,
+  a lag does not explain it — <strong>but this data cannot say whether the opt-out is failing to be
+  written, or failing to be read. Those are different faults with different owners.</strong>
 </div>
 
-<p class="q"><strong>It concentrates in one campaign.</strong> 237,653 of these clients — 56.9% —
-unsubscribed via <strong>VRE</strong>, and were mailed again at a median of <strong>417 days</strong>
-later. Cards campaigns are a small share: PCQ 8,612, PCL 5,062, PCD 1,956. That skew is the strongest
-lead in this dataset for where to look first, and it points outside Cards.</p>
+<p class="note"><strong>This is a floor, not a total.</strong> The lookback starts 2024-01-01, so
+"over a year" is capped at about 26 months and anyone who opted out before 2024 and is still being
+mailed does not appear here at all. The real number is larger by an unknown amount.</p>
+
+<p class="q"><strong>It concentrates around one campaign — but be careful what that means.</strong>
+237,653 of these clients (56.9%) last unsubscribed <em>through</em> a <strong>VRE</strong> email, and
+were mailed again a median of <strong>417 days</strong> later. Cards is a small share: PCQ 8,612,
+PCL 5,062, PCD 1,956 — <strong>15,630 in total, 3.7% of the leak.</strong></p>
+
+<p class="q"><strong>"Left through VRE" is not "VRE is at fault."</strong> The campaign a client
+unsubscribed through and the campaign that mailed them afterwards are two different things, and this
+table only shows the first. VRE may be recording the opt-out perfectly while other campaigns fail to
+read it — in which case naming VRE would point the investigation at the wrong team. What the skew
+does establish is that this is overwhelmingly not a Cards problem, and that VRE's unsubscribers are
+the population to trace first.</p>
 
 <p class="q"><strong>Open question for the room:</strong> is a VRE unsubscribe writing to a
 suppression list that other campaigns never read, or is it not writing at all? Those have different
@@ -760,7 +857,9 @@ points and the high-potential thresholds are our parameters, not standards.</p>
     ["Tenure 6–10", "tenure_band", 1.04, 10840, 1503188],
     ["Tenure 11–20", "tenure_band", 0.92, 12679, 1998810],
     ["Tenure 20+", "tenure_band", 0.82, 15831, 2784904],
-    ["High potential", "high_potential", 1.15, 6192, 780986],
+    // Labelled as composite IN THE BAR ITSELF. Drawn at the same weight as the others it reads as a
+    // fifth independent lever, and a reviewer stacked it with age and tenure exactly as predicted.
+    ["High potential ⟵ composite of the 3 above", "high_potential", 1.15, 6192, 780986],
     ["3–4 products", "prod_band", 1.13, 20275, 2595559],
     ["2 products", "prod_band", 0.97, 10319, 1543681],
     ["5+ products", "prod_band", 0.96, 20591, 3107514],
@@ -774,13 +873,17 @@ points and the high-potential thresholds are our parameters, not standards.</p>
     ["Quintile 5 (top)", "prof_quintile", 0.84, 11067, 1896902]
   ];
   // [mne, mailed, leavers_exposed, per1000_exposed, mailed%1prod, lost%1prod, delta_pp,
-  //  mailed%high-pot, lost%high-pot]
+  //  mailed%high-pot, lost%high-pot, unsubs_ATTRIBUTED, per1000_ATTRIBUTED]
+  // The last two are from L6 (RUN_2026-07-29_full.md §4) and were quoted in prose but shown in no
+  // table until 2026-07-30 - all three reviewers flagged that they could not check them.
+  // CRV is null on both: it did not reach L6's top-25-by-senders cut, so no attributed figure was
+  // captured. A blank is honest; carrying the exposure number across would not be.
   var CARDS = [
-    ["CRV", 189474, 1638, 8.64, 7.0, 5.6, -1.4, 2.3, 3.7],
-    ["PCL", 1004155, 7928, 7.90, 10.3, 8.5, -1.8, 1.9, 2.8],
-    ["PCD", 660662, 4383, 6.63, 3.9, 4.2, 0.3, 2.1, 2.8],
-    ["PCQ", 675097, 4097, 6.07, 36.8, 43.7, 6.9, 14.7, 18.2],
-    ["AUH", 555974, 1491, 2.68, 17.9, 23.7, 5.8, 3.5, 5.4]
+    ["CRV", 189474, 1638, 8.64, 7.0, 5.6, -1.4, 2.3, 3.7, null, null],
+    ["PCL", 1004155, 7928, 7.90, 10.3, 8.5, -1.8, 1.9, 2.8, 1177, 1.17],
+    ["PCD", 660662, 4383, 6.63, 3.9, 4.2, 0.3, 2.1, 2.8, 698, 1.06],
+    ["PCQ", 675097, 4097, 6.07, 36.8, 43.7, 6.9, 14.7, 18.2, 1884, 2.79],
+    ["AUH", 555974, 1491, 2.68, 17.9, 23.7, 5.8, 3.5, 5.4, 323, 0.58]
   ];
   var BUCKETS = [
     ["stayer", 10109527, 95.32, 9072977, 89.7],
@@ -861,22 +964,34 @@ points and the high-potential thresholds are our parameters, not standards.</p>
     node.setAttribute("tabindex", "0");
   }
 
-  function divergingChart(host, rows) {
-    var MAXDEV = 0.40;                       // shows 0.60 - 1.40; outside that is pinned at the edge
+  // maxdev defaults to 0.40 (shows 0.60-1.40). A single 3.0 would flatten every other bar to
+  // invisibility, so the axis is deliberately narrow and outliers are PINNED at the edge.
+  //
+  // Pinning is a lie unless it is marked. Before 2026-07-30 the contact chart pinned 1.44, 1.54 and
+  // 1.63 to the identical length, so the strongest number on the page drew the same as the weakest
+  // of the three - two reviewers independently misread which contact band had the biggest effect.
+  // Pinned bars now carry a hatch, a "»" in the value label, and say so in the tooltip. The contact
+  // chart also gets a wider axis, because its whole point is comparing magnitudes across bands.
+  function divergingChart(host, rows, maxdev) {
+    var MAXDEV = maxdev || 0.40;
     rows.forEach(function (r) {
       var label = r[0], ratio = r[2], lv = r[3], st = r[4];
+      var raw = ratio - 1;
+      var clipped = Math.abs(raw) > MAXDEV;
+      var dev = Math.max(-MAXDEV, Math.min(MAXDEV, raw));
       var row = el("div", "row");
       row.appendChild(el("div", "cat", label));
       var track = el("div", "track");
       track.appendChild(el("div", "axis"));
-      var dev = Math.max(-MAXDEV, Math.min(MAXDEV, ratio - 1));
-      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg"));
+      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg") + (clipped ? " clip" : ""));
       bar.style.width = (Math.abs(dev) / MAXDEV * 50) + "%";
       tip(bar, label + ": ratio " + ratio.toFixed(2) + ", " + fmt(lv) + " leavers vs "
-               + fmt(st) + " stayers");
+               + fmt(st) + " stayers"
+               + (clipped ? " — BAR IS CLIPPED at the axis limit; read the number, not the length"
+                          : ""));
       track.appendChild(bar);
       row.appendChild(track);
-      row.appendChild(el("div", "val", ratio.toFixed(2) + "×"));
+      row.appendChild(el("div", "val", (clipped ? "» " : "") + ratio.toFixed(2) + "×"));
       host.appendChild(row);
     });
   }
@@ -939,7 +1054,9 @@ points and the high-potential thresholds are our parameters, not standards.</p>
   // charts
   divergingChart(document.getElementById("c-ratios"), RATIOS);
   divergingChart(document.getElementById("c-prof"), PROF);
-  divergingChart(document.getElementById("c-contact"), CONTACT);
+  // wider axis here on purpose: this chart exists to compare magnitudes ACROSS bands, and at 0.40
+  // the three largest values (1.44, 1.54, 1.63) all pinned to the same length.
+  divergingChart(document.getElementById("c-contact"), CONTACT, 0.70);
   divergingChart(document.getElementById("c-engage"), ENGAGE);
   barChart(document.getElementById("c-rate"), CARDS,
            function (r) { return r[3]; }, function (r) { return r[3].toFixed(2); });
@@ -967,10 +1084,14 @@ points and the high-potential thresholds are our parameters, not standards.</p>
   table(document.getElementById("t-prof"), ratioHead, PROF.map(ratioRow));
 
   table(document.getElementById("t-cards"),
-    ["Campaign", "Mailed", "Leavers (exposed)", "Per 1,000", "Unsub rate*"],
+    ["Campaign", "Mailed", "EXPOSED leavers", "Exposed /1k", "Exposed rate*",
+     "ATTRIBUTED unsubs", "Attributed /1k", "Exposed ÷ attributed"],
     CARDS.map(function (r) {
       return [r[0], fmt(r[1]), fmt(r[2]), r[3].toFixed(2),
-              (100 * r[2] / r[1]).toFixed(3) + "%"];
+              (100 * r[2] / r[1]).toFixed(3) + "%",
+              r[9] === null ? "not captured" : fmt(r[9]),
+              r[10] === null ? "—" : r[10].toFixed(2),
+              r[9] === null ? "—" : (r[2] / r[9]).toFixed(1) + "×"];
     }));
 
   table(document.getElementById("t-pairs"),
