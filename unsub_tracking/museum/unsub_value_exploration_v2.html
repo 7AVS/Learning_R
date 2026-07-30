@@ -1,0 +1,690 @@
+<meta charset="utf-8">
+<title>Who unsubscribes from RBC email?</title>
+<style>
+.viz-root{
+  color-scheme:light;
+  --surface-1:#fcfcfb; --surface-2:#f4f4f1; --surface-3:#eeeeea; --border:#dededa;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#7a7975;
+  --over:#eb6834; --series-2:#eb6834; --under:#2a78d6; --series-1:#2a78d6;
+  --neutral:#b9b8b3; --grid:#e6e6e2;
+  background:var(--surface-1); color:var(--text-primary);
+  font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+  max-width:1040px; margin:0 auto; padding:32px 24px 64px;
+  font-variant-numeric:tabular-nums;
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])) .viz-root{
+    color-scheme:dark;
+    --surface-1:#1a1a19; --surface-2:#232322; --surface-3:#2b2b29; --border:#3a3a38;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#918f86;
+    --over:#d95926; --series-2:#d95926; --under:#3987e5; --series-1:#3987e5;
+    --neutral:#5a5955; --grid:#2e2e2c;
+  }
+}
+:root[data-theme="dark"] .viz-root{
+  color-scheme:dark;
+  --surface-1:#1a1a19; --surface-2:#232322; --surface-3:#2b2b29; --border:#3a3a38;
+  --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#918f86;
+  --over:#d95926; --series-2:#d95926; --under:#3987e5; --series-1:#3987e5;
+  --neutral:#5a5955; --grid:#2e2e2c;
+}
+.viz-root *{box-sizing:border-box}
+.kicker{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 10px}
+h1{font-size:26px;line-height:1.25;letter-spacing:-.01em;margin:0 0 10px}
+h2{font-size:19px;line-height:1.3;margin:0 0 6px}
+.sub{color:var(--text-secondary);margin:0 0 16px}
+.note{font-size:12.5px;color:var(--text-muted);line-height:1.5}
+.q{font-size:13.5px;color:var(--text-secondary);line-height:1.6}
+hr{border:0;border-top:1px solid var(--border);margin:40px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px;margin:18px 0}
+.tile{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.tile .n{font-size:27px;font-weight:620;line-height:1.1}
+.tile .l{font-size:12.5px;color:var(--text-muted);margin-top:4px}
+.callout{background:var(--surface-2);border-left:3px solid var(--series-1);border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0}
+.callout.warn{border-left-color:var(--series-2)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--text-muted);margin:10px 0 14px}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.chart{margin:8px 0 4px}
+.row{display:grid;grid-template-columns:minmax(108px,max-content) 1fr 62px;align-items:center;gap:10px;padding:2px 0}
+.cat{font-size:13px;color:var(--text-secondary);white-space:nowrap}
+.track{position:relative;height:22px}
+.axis{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--grid);left:50%}
+.bar{position:absolute;top:4px;height:14px;outline:none}
+.bar.pos{left:50%;border-radius:0 4px 4px 0;background:var(--over)}
+.bar.neg{right:50%;border-radius:4px 0 0 4px;background:var(--under)}
+.bar.plain{left:0;border-radius:0 4px 4px 0;background:var(--series-1)}
+.val{font-size:13px;text-align:right;color:var(--text-secondary)}
+.grp{margin:10px 0}
+.pair{display:grid;gap:3px;margin-top:3px}
+.pairline{display:grid;grid-template-columns:1fr 62px;align-items:center;gap:10px}
+.minitrack{position:relative;height:11px}
+.minibar{position:absolute;left:0;top:0;height:11px;border-radius:0 3px 3px 0}
+/* CSS tooltip - spec section 7 item 1. Native title has a 1s delay and is invisible on touch. */
+.bar,.minibar{cursor:default}
+.bar[data-tip]:hover::after,.bar[data-tip]:focus::after,
+.minibar[data-tip]:hover::after,.minibar[data-tip]:focus::after{
+  content:attr(data-tip);position:absolute;left:0;bottom:calc(100% + 6px);z-index:20;
+  background:var(--text-primary);color:var(--surface-1);font-size:12px;line-height:1.35;
+  padding:6px 9px;border-radius:6px;white-space:nowrap;pointer-events:none;
+}
+.bar:focus-visible,.minibar:focus-visible{box-shadow:0 0 0 2px var(--surface-1),0 0 0 4px var(--under)}
+details{margin:10px 0;border:1px solid var(--border);border-radius:8px;background:var(--surface-2)}
+details>summary{cursor:pointer;padding:9px 14px;font-size:13px;color:var(--text-secondary);list-style:none;user-select:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸ ";color:var(--text-muted)}
+details[open]>summary::before{content:"▾ "}
+details[open]>summary{border-bottom:1px solid var(--border)}
+.dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.dd details{margin:0}
+.scroll{overflow-x:auto;padding:4px 14px 14px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{border-bottom:1px solid var(--border);padding:6px 10px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--text-muted);font-weight:600}
+pre{margin:0;padding:12px 14px;overflow-x:auto;background:var(--surface-3);border-radius:0 0 7px 7px}
+code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-primary);white-space:pre}
+.sqlnote{padding:10px 14px 0;font-size:12px;color:var(--text-muted);line-height:1.5}
+@media (max-width:640px){
+  .row{grid-template-columns:1fr 62px}
+  .row .cat{grid-column:1/-1;white-space:normal}
+  .dd{grid-template-columns:1fr}
+}
+@media print{
+  .viz-root{color-scheme:light;--surface-1:#fff;--surface-2:#f4f4f1;--surface-3:#eee;
+            --text-primary:#000;--text-secondary:#333;--text-muted:#555;
+            --over:#c04a1e;--under:#1d5ea8;--series-1:#1d5ea8;--series-2:#c04a1e;
+            max-width:none;padding:0}
+  details{break-inside:avoid}
+  details>div,details>pre{display:block !important}
+  .row,.grp,.tile{break-inside:avoid}
+}
+</style>
+
+<div class="viz-root">
+
+<p class="kicker">Cards pod · exploration draft · not for circulation</p>
+<h1>Who unsubscribes from RBC email?</h1>
+<p class="sub">Every client the bank emailed in <strong>March–May 2026</strong>, split into those who
+unsubscribed, those who stayed, and those who were emailed despite having already opted out. Client
+attributes read from one UCP snapshot at 2026-02-28 — pre-treatment for everyone, so leaver-vs-stayer
+is a real comparison rather than two different clocks.</p>
+
+<div class="tiles">
+  <div class="tile"><div class="n">10,606,141</div><div class="l">clients emailed, Mar–May</div></div>
+  <div class="tile"><div class="n">69,535</div><div class="l">unsubscribed &nbsp;·&nbsp; 0.66%</div></div>
+  <div class="tile"><div class="n">427,079</div><div class="l">emailed despite already opting out</div></div>
+  <div class="tile"><div class="n">4,335</div><div class="l">of the leavers came via a cards email</div></div>
+</div>
+
+<p class="note">UCP match rate 89.7–90.1% across all three groups; worst field 0.01% null. Unmatched
+clients are overwhelmingly business programs (SBB: 2,274 leavers, 0 matched) and clients acquired
+during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage below uses the
+<em>matched</em> denominator.</p>
+
+<details>
+  <summary>Show every number on this page, in one table</summary>
+  <div class="scroll"><table id="t-all"></table></div>
+</details>
+
+<hr>
+
+<h2>1. Leaving is about age and tenure — not value</h2>
+<p class="sub">Each bar compares a segment's share of <em>leavers</em> against its share of
+<em>stayers</em>. 1.00 means the segment leaves at exactly the rate it appears in the base.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--over)"></span>over-represented among leavers</span>
+  <span><span class="swatch" style="background:var(--under)"></span>under-represented</span>
+  <span><span class="swatch" style="background:var(--neutral)"></span>1.00 = identical to stayers</span>
+</div>
+
+<div class="chart" id="c-ratios"></div>
+
+<div class="callout">
+  <strong>Under-25s leave at 1.33× their share of the base; clients of 20+ years at 0.82×.</strong>
+  Product depth barely moves the needle (0.91–1.13), and single-product clients are <em>under</em>-represented
+  among leavers at 0.91 — the opposite of the "shallow relationship, quick exit" premise.
+</div>
+
+<p class="q"><strong>The question this raises for the room:</strong> a 0.66% unsub rate is not a
+retention problem, but a 1.33× skew toward under-25s is a <em>future</em> retention problem. Do we
+treat email tolerance as an age effect that clients grow out of, or a cohort effect that arrives with them?</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-ratios"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">The notebook does this in Spark. Written as SQL so it can be read and argued with.</p>
+<pre><code>-- §1  LEAVER vs STAYER, bank-wide.  Museum cell [19], "L7".
+-- One row per (dimension, value). ratio > 1 = over-represented among leavers.
+WITH pop AS (
+    SELECT CLNT_NO, bucket, age_band, tenure_band, prod_band, prof_quintile, high_potential
+    FROM   client_spine
+    WHERE  ucp_matched = TRUE          -- unmatched have no bands and must not dilute a %
+),
+denom AS (
+    SELECT SUM(CASE WHEN bucket = 'leaver' THEN 1 ELSE 0 END) AS n_leavers,
+           SUM(CASE WHEN bucket = 'stayer' THEN 1 ELSE 0 END) AS n_stayers
+    FROM   pop                          -- already_out is in NEITHER: see §5
+),
+long AS (                               -- unpivot: one row per client per dimension
+    SELECT bucket, 'age_band'       AS segment_dim, age_band       AS segment_value FROM pop
+    UNION ALL
+    SELECT bucket, 'tenure_band',      tenure_band      FROM pop
+    UNION ALL
+    SELECT bucket, 'prod_band',        prod_band        FROM pop
+    UNION ALL
+    SELECT bucket, 'prof_quintile',    prof_quintile    FROM pop
+    UNION ALL
+    SELECT bucket, 'high_potential',   CAST(high_potential AS VARCHAR) FROM pop
+)
+SELECT  l.segment_dim,
+        l.segment_value,
+        SUM(CASE WHEN l.bucket = 'leaver' THEN 1 ELSE 0 END)              AS leavers_n,
+        SUM(CASE WHEN l.bucket = 'stayer' THEN 1 ELSE 0 END)              AS stayers_n,
+        100.0 * SUM(CASE WHEN l.bucket='leaver' THEN 1 ELSE 0 END) / d.n_leavers AS pct_leavers,
+        100.0 * SUM(CASE WHEN l.bucket='stayer' THEN 1 ELSE 0 END) / d.n_stayers AS pct_stayers,
+        (100.0 * SUM(CASE WHEN l.bucket='leaver' THEN 1 ELSE 0 END) / d.n_leavers)
+      / (100.0 * SUM(CASE WHEN l.bucket='stayer' THEN 1 ELSE 0 END) / d.n_stayers) AS ratio
+FROM    long l CROSS JOIN denom d
+WHERE   l.bucket IN ('leaver','stayer')
+GROUP BY l.segment_dim, l.segment_value, d.n_leavers, d.n_stayers
+ORDER BY l.segment_dim, ratio DESC;
+
+-- BAND DEFINITIONS - our choice, not a standard. Edit in cell [16] and nowhere else.
+--   age_band     &lt;25 / 25-34 / 35-44 / 45-54 / 55-64 / 65+
+--   tenure_band  0-2 / 3-5 / 6-10 / 11-20 / 20+     (TENURE_RBC_YEARS)
+--   prod_band    0 / 1 / 2 / 3-4 / 5+               (T_TOT_CNT+I_TOT_CNT+B_TOT_CNT+C_TOT_CNT)
+--   high_pot     AGE &lt; 35 AND TENURE &lt;= 5 AND prod_cnt &lt;= 2</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>2. Value is flat — which kills the "we're losing our best clients" story</h2>
+<p class="sub">Profitability quintiles, cut on the whole mailed base, so "top quintile" means valuable
+relative to who we can actually reach.</p>
+
+<div class="chart" id="c-prof"></div>
+
+<div class="callout">
+  <strong>Quintiles 1 through 4 sit between 1.00 and 1.06 — statistically indistinguishable.</strong>
+  Only the top quintile deviates, at 0.84, and it deviates <em>protectively</em>: our most profitable
+  clients leave <em>less</em>. There is no value-loss story in this data.
+</div>
+
+<p class="q"><strong>Caveat that matters:</strong> the profitability field is
+<code>PROF_TOT_ANNUAL</code> — current-year contribution, not lifetime value. It rises mechanically
+with tenure (median $19 at 0–2 years, $805 at 20+), so "low value" and "young" are substantially the
+same variable. This section and §1 are not independent findings; they are one finding seen twice.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-prof"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">Same shape as §1. What is worth arguing about is the cut points, not the query.</p>
+<pre><code>-- §2  PROFITABILITY QUINTILES.  Museum cells [16] + [19].
+-- Cut points come from the MAILED BASE, not from leavers, so "top quintile" is defined
+-- relative to the reachable population rather than relative to the people who left.
+WITH cuts AS (
+    SELECT APPROX_PERCENTILE(PROF_TOT_ANNUAL, 0.20) AS p20,
+           APPROX_PERCENTILE(PROF_TOT_ANNUAL, 0.40) AS p40,
+           APPROX_PERCENTILE(PROF_TOT_ANNUAL, 0.60) AS p60,
+           APPROX_PERCENTILE(PROF_TOT_ANNUAL, 0.80) AS p80
+    FROM   client_spine
+    WHERE  ucp_matched = TRUE AND PROF_TOT_ANNUAL IS NOT NULL
+),
+q AS (
+    SELECT s.bucket,
+           CASE WHEN s.PROF_TOT_ANNUAL IS NULL   THEN 'unknown'
+                WHEN s.PROF_TOT_ANNUAL &lt;= c.p20  THEN '1'
+                WHEN s.PROF_TOT_ANNUAL &lt;= c.p40  THEN '2'
+                WHEN s.PROF_TOT_ANNUAL &lt;= c.p60  THEN '3'
+                WHEN s.PROF_TOT_ANNUAL &lt;= c.p80  THEN '4'
+                ELSE '5' END AS prof_quintile
+    FROM   client_spine s CROSS JOIN cuts c
+    WHERE  s.ucp_matched = TRUE
+)
+SELECT prof_quintile,
+       SUM(CASE WHEN bucket='leaver' THEN 1 ELSE 0 END) AS leavers_n,
+       SUM(CASE WHEN bucket='stayer' THEN 1 ELSE 0 END) AS stayers_n
+FROM   q
+WHERE  bucket IN ('leaver','stayer')
+GROUP BY prof_quintile
+ORDER BY prof_quintile;
+-- ratio = (leavers_n / total_leavers) / (stayers_n / total_stayers), as in §1.
+
+-- OBSERVED CUT POINTS, run 2026-07-29:  p20 = -166.72   p40 = -2.37   p60 = 372.71   p80 = 1,473.07
+-- Read that p40 again: the MEDIAN mailed client is break-even. 40% of the base is at or below zero.
+-- Any sentence containing "high-value clients" has to survive that fact first.</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>3. Cards campaigns: how many we lose per thousand mailed</h2>
+<p class="sub">Clients each campaign emailed who then unsubscribed <em>from anything</em>, per 1,000
+mailed. Volume differs by 5× across these campaigns, so read the rate, not the count.</p>
+
+<div class="chart" id="c-rate"></div>
+
+<div class="callout warn">
+  <strong>This is an EXPOSURE rate, and it is not the same number as the campaign summary in the notebook.</strong>
+  Here, a leaver is a client that campaign mailed who unsubscribed from <em>any</em> email. The
+  notebook's L6 counts only unsubscribes carrying <em>that campaign's</em> treatment ID — attribution,
+  not exposure. For AUH the two differ by 4.6× (1,491 exposed vs 323 attributed). Both are correct.
+  Neither may be called "the unsub rate" without saying which one it is.
+</div>
+
+<p class="q">CRV and PCL sit highest on exposure, AUH lowest by some distance. On <em>attribution</em>
+the order changes — PCQ is worst at 2.79 per 1,000 and AUH still best at 0.58. A campaign can rank
+badly on exposure simply by mailing people who are also on many other lists.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-cards"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">Both definitions, side by side. This is the query to point at when someone
+      says two slides disagree.</p>
+<pre><code>-- §3  TWO DIFFERENT RATES THAT LOOK LIKE ONE.  Museum cells [18] (L6) and [20b] (L9).
+
+-- (a) EXPOSURE  - the number ON THIS PAGE.
+--     "How many clients that CRV mailed went on to unsubscribe from anything?"
+SELECT  cs.mne,
+        COUNT(*)                                                   AS mailed_clients,
+        SUM(CASE WHEN cs.bucket = 'leaver' THEN 1 ELSE 0 END)      AS leavers_exposed,
+        1000.0 * SUM(CASE WHEN cs.bucket = 'leaver' THEN 1 ELSE 0 END) / COUNT(*)
+                                                                   AS exposed_per_1000
+FROM    senders_cards cs                 -- one row per (client, cards campaign)
+WHERE   cs.ucp_matched = TRUE
+GROUP BY cs.mne;
+
+-- (b) ATTRIBUTION - the number in the notebook's L6 and in the campaign CSV.
+--     "How many unsubscribes came THROUGH a CRV email?"
+--     The unsub event carries the TREATMENT_ID of the send it was triggered from.
+SELECT  SUBSTR(e.TREATMENT_ID, 8, 3)      AS mne,      -- positions 8-10 = campaign mnemonic
+        COUNT(DISTINCT m.CLNT_NO)         AS unsubs_attributed
+FROM    DTZV01.VENDOR_FEEDBACK_EVENT e
+JOIN    DTZV01.VENDOR_FEEDBACK_MASTER m
+       ON  m.consumer_id_hashed = e.consumer_id_hashed
+       AND m.TREATMENT_ID       = e.TREATMENT_ID
+WHERE   e.disposition_cd = 4                           -- 4 = unsubscribed
+  AND   e.disposition_dt_tm &gt;= DATE '2026-03-01'
+  AND   e.disposition_dt_tm &lt;  DATE '2026-06-01'
+GROUP BY 1;
+
+-- WHY THEY DIVERGE. TREATMENT_ID = TACTIC_ID = mnemonic + julian date, unique per deployment
+-- wave. A client on nine lists who unsubscribes once is ATTRIBUTED to exactly one campaign but
+-- is EXPOSED in all nine. Heavy senders inherit exposure blame they did not necessarily earn.
+--
+-- TO GET A RATE FROM THIS PAGE'S TABLE:  leavers / (leavers + stayers).
+-- NOT leavers / mailed. `mailed` includes the already_out population (§5), who had already gone
+-- and were never at risk of leaving again - they belong in neither numerator nor denominator.
+
+-- OVERLAPPING DENOMINATORS: a client mailed by PCQ, PCL and CRV appears in three rows above.
+-- Read DOWN a column. The rows do not sum to the bank total and must never be added.</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>4. Does a campaign lose single-product clients, or just mail them?</h2>
+<p class="sub">The fairness test. For each cards campaign: the share of single-product clients among
+everyone it <em>mailed</em>, against their share among the clients it <em>lost</em>.</p>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--series-1)"></span>share of clients mailed</span>
+  <span><span class="swatch" style="background:var(--series-2)"></span>share of clients lost</span>
+</div>
+
+<div class="chart" id="c-pairs"></div>
+
+<div class="callout">
+  <strong>43.7% of PCQ's leavers hold one product, which looks alarming until you see PCQ mails
+  single-product clients at 36.8%.</strong> A +6.9pp gap is real but it is a fraction of the raw
+  number. Most of what looks like "PCQ loses shallow clients" is "PCQ is an acquisition campaign and
+  mails shallow clients."
+</div>
+
+<p class="q"><strong>Why single-product matters:</strong> for a client holding one product, email is
+often the only live channel. The gap column — not the raw share — is the campaign's own contribution.
+On that measure PCQ (+6.9pp) and AUH (+5.8pp) lose depth-poor clients faster than they mail them;
+PCL (−1.8pp) and CRV (−1.4pp) do the reverse.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-pairs"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">The delta is the whole point. Either share alone is a targeting artefact.</p>
+<pre><code>-- §4  TARGETING vs LOSS.  Museum cell [20], "L8".
+-- The same statistic computed on two populations that share a denominator definition, so the
+-- DIFFERENCE isolates the campaign's own effect from who the campaign chose to mail.
+SELECT  mne,
+        COUNT(*)                                                          AS mailed_clients,
+        SUM(CASE WHEN bucket = 'leaver' THEN 1 ELSE 0 END)                AS leaver_clients,
+
+        100.0 * AVG(CASE WHEN prod_band = '1' THEN 1.0 ELSE 0.0 END)      AS mailed_pct_1prod,
+
+        100.0 * SUM(CASE WHEN bucket='leaver' AND prod_band='1' THEN 1 ELSE 0 END)
+              / NULLIF(SUM(CASE WHEN bucket='leaver' THEN 1 ELSE 0 END),0) AS leaver_pct_1prod,
+
+        (100.0 * SUM(CASE WHEN bucket='leaver' AND prod_band='1' THEN 1 ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN bucket='leaver' THEN 1 ELSE 0 END),0))
+      - (100.0 * AVG(CASE WHEN prod_band='1' THEN 1.0 ELSE 0.0 END))       AS delta_pp
+FROM    senders_cards
+WHERE   ucp_matched = TRUE
+GROUP BY mne
+ORDER BY mailed_clients DESC;
+
+-- HOW TO READ delta_pp
+--   > 0  the campaign loses single-product clients FASTER than it mails them  -> campaign effect
+--   ~ 0  the loss mirrors the targeting                                       -> no campaign effect
+--   &lt; 0  it loses them SLOWER than it mails them
+--
+-- The raw leaver share on its own says almost nothing: an acquisition campaign mails shallow
+-- clients by design, so of course its leavers are shallow. Only the gap is the campaign's doing.</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>5. The number nobody asked about: 427,079</h2>
+<p class="sub">Clients emailed in Mar–May who had <em>already unsubscribed</em> before the window
+opened. Not a finding about leavers — a finding about the suppression list.</p>
+
+<div class="callout warn">
+  <strong>427,079 clients — 4.03% of everyone mailed, and 6.1× the number who unsubscribed during the
+  window — received email after opting out.</strong> They are excluded from the stayer pool
+  throughout this page: they were not reachable, so counting them as having "chosen to stay" would be
+  false, and counting them in a rate denominator would deflate every number by ~4%.
+</div>
+
+<p class="q"><strong>Open question for the room:</strong> is this suppression-list latency, a
+scope mismatch between a vendor-level unsubscribe and a campaign-level send list, or a consent
+model that never had one-click unsubscribes wired into it? The three have different owners and
+different fixes, and nothing in this dataset separates them.</p>
+
+<div class="dd">
+  <details>
+    <summary>Show the data</summary>
+    <div class="scroll"><table id="t-buckets"></table></div>
+  </details>
+  <details>
+    <summary>Show the logic (SQL)</summary>
+    <p class="sqlnote">Three mutually exclusive buckets. The definition of the third is the finding.</p>
+<pre><code>-- §5  THE THREE POPULATIONS.  Museum cell [13].
+-- Mutually exclusive and exhaustive over everyone mailed in the window.
+WITH mailed AS (        -- every client sent at least one email, Mar-May 2026
+    SELECT DISTINCT m.CLNT_NO
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 1
+      AND  e.disposition_dt_tm &gt;= DATE '2026-03-01' AND e.disposition_dt_tm &lt; DATE '2026-06-01'
+),
+unsub_in AS (           -- unsubscribed DURING the window
+    SELECT DISTINCT m.CLNT_NO
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 4
+      AND  e.disposition_dt_tm &gt;= DATE '2026-03-01' AND e.disposition_dt_tm &lt; DATE '2026-06-01'
+),
+unsub_before AS (       -- unsubscribed BEFORE it, floor 2024-01-01 (house rule: no scan below 2024)
+    SELECT DISTINCT m.CLNT_NO
+    FROM   DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN   DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+    WHERE  e.disposition_cd = 4
+      AND  e.disposition_dt_tm &gt;= DATE '2024-01-01' AND e.disposition_dt_tm &lt; DATE '2026-03-01'
+)
+SELECT CASE WHEN i.CLNT_NO IS NOT NULL THEN 'leaver'        -- mailed AND left in window
+            WHEN b.CLNT_NO IS NOT NULL THEN 'already_out'   -- mailed, but had left BEFORE it
+            ELSE                            'stayer'        -- mailed, no unsub at all
+       END        AS bucket,
+       COUNT(*)   AS clients
+FROM      mailed     m
+LEFT JOIN unsub_in     i ON i.CLNT_NO = m.CLNT_NO
+LEFT JOIN unsub_before b ON b.CLNT_NO = m.CLNT_NO
+GROUP BY 1;
+
+-- ORDER MATTERS. A client who left before the window AND again inside it is a LEAVER, not
+-- already_out - the CASE tests unsub_in first. Reversing those two lines moves ~53,000 clients.</code></pre>
+  </details>
+</div>
+
+<hr>
+
+<h2>What I'd test next</h2>
+<p class="sub">Three things, each answerable, each with what it costs.</p>
+<ol class="q" style="line-height:1.9;padding-left:20px">
+  <li><strong>Hold contact volume fixed and re-cut §1.</strong> If under-25s simply receive more
+    email, the 1.33 is a mailing artefact wearing an age label. Already written as cell [20d]; costs
+    one analysis run, no new pull.</li>
+  <li><strong>Split leavers by engagement before they left.</strong> An unsubscribe from someone who
+    never opened is list hygiene; one from a clicker is a message. Written as cell [20e]; same run.</li>
+  <li><strong>Ask whether pairs of campaigns lose clients faster than either alone.</strong> Needs the
+    bank-wide client × campaign pairing — one EDW pull, leavers whole plus a 1-in-10 stayer sample,
+    roughly 10M rows.</li>
+</ol>
+
+<p class="note" style="margin-top:32px">Source: <code>unsub_value_museum.py</code>, run 2026-07-29
+08:29, window 2026-03-01 to 2026-06-01, bank-wide, UCP anchor 2026-02-28. All percentages use the
+UCP-matched denominator (90.1% of mailed). Campaign rates on this page are <strong>exposure</strong>
+(mailed by X, unsubscribed from anything), not attribution — see §3. <code>PROF_TOT_ANNUAL</code> is
+current-year contribution, not lifetime value. Band cut points and the high-potential thresholds are
+our parameters, not standards. Every number traces to <code>museum/RUN_2026-07-29_full.md</code>.</p>
+
+</div>
+
+<script>
+(function () {
+  // Numbers pasted from museum/RUN_2026-07-29_full.md. Never retyped from a screenshot.
+  var RATIOS = [   // [label, dim, ratio, leavers, stayers]
+    ["Age <25", "age_band", 1.33, 9055, 985394],
+    ["Age 25–34", "age_band", 1.27, 15174, 1727684],
+    ["Age 35–44", "age_band", 0.95, 11958, 1822176],
+    ["Age 65+", "age_band", 0.88, 9696, 1588020],
+    ["Age 55–64", "age_band", 0.87, 8370, 1388933],
+    ["Age 45–54", "age_band", 0.78, 8405, 1560770],
+    ["Tenure 0–2", "tenure_band", 1.25, 15193, 1765016],
+    ["Tenure 3–5", "tenure_band", 1.15, 8115, 1021059],
+    ["Tenure 6–10", "tenure_band", 1.04, 10840, 1503188],
+    ["Tenure 11–20", "tenure_band", 0.92, 12679, 1998810],
+    ["Tenure 20+", "tenure_band", 0.82, 15831, 2784904],
+    ["High potential", "high_potential", 1.15, 6192, 780986],
+    ["3–4 products", "prod_band", 1.13, 20275, 2595559],
+    ["2 products", "prod_band", 0.97, 10319, 1543681],
+    ["5+ products", "prod_band", 0.96, 20591, 3107514],
+    ["1 product", "prod_band", 0.91, 11446, 1822813]
+  ];
+  var PROF = [
+    ["Quintile 1 (low)", "prof_quintile", 1.06, 13106, 1793182],
+    ["Quintile 2", "prof_quintile", 1.05, 13081, 1805105],
+    ["Quintile 3", "prof_quintile", 1.06, 13081, 1787679],
+    ["Quintile 4", "prof_quintile", 1.00, 12309, 1788862],
+    ["Quintile 5 (top)", "prof_quintile", 0.84, 11067, 1896902]
+  ];
+  // [mne, mailed, leavers_exposed, per1000_exposed, mailed%1prod, lost%1prod, delta_pp,
+  //  mailed%high-pot, lost%high-pot]
+  var CARDS = [
+    ["CRV", 189474, 1638, 8.64, 7.0, 5.6, -1.4, 2.3, 3.7],
+    ["PCL", 1004155, 7928, 7.90, 10.3, 8.5, -1.8, 1.9, 2.8],
+    ["PCD", 660662, 4383, 6.63, 3.9, 4.2, 0.3, 2.1, 2.8],
+    ["PCQ", 675097, 4097, 6.07, 36.8, 43.7, 6.9, 14.7, 18.2],
+    ["AUH", 555974, 1491, 2.68, 17.9, 23.7, 5.8, 3.5, 5.4]
+  ];
+  var BUCKETS = [
+    ["stayer", 10109527, 95.32, 9072977, 89.7],
+    ["already_out", 427079, 4.03, 417877, 97.8],
+    ["leaver", 69535, 0.66, 62658, 90.1]
+  ];
+
+  function el(t, c, x) {
+    var n = document.createElement(t);
+    if (c) n.className = c;
+    if (x !== undefined) n.textContent = x;
+    return n;
+  }
+  function fmt(n) { return n.toLocaleString("en-CA"); }
+
+  function tip(node, text) {                 // CSS tooltip + screen-reader label + keyboard reach
+    node.setAttribute("data-tip", text);
+    node.setAttribute("role", "img");
+    node.setAttribute("aria-label", text);
+    node.setAttribute("tabindex", "0");
+  }
+
+  function divergingChart(host, rows) {
+    var MAXDEV = 0.40;                       // shows 0.60 - 1.40; outside that is pinned at the edge
+    rows.forEach(function (r) {
+      var label = r[0], ratio = r[2], lv = r[3], st = r[4];
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", label));
+      var track = el("div", "track");
+      track.appendChild(el("div", "axis"));
+      var dev = Math.max(-MAXDEV, Math.min(MAXDEV, ratio - 1));
+      var bar = el("div", "bar " + (dev >= 0 ? "pos" : "neg"));
+      bar.style.width = (Math.abs(dev) / MAXDEV * 50) + "%";
+      tip(bar, label + ": ratio " + ratio.toFixed(2) + ", " + fmt(lv) + " leavers vs "
+               + fmt(st) + " stayers");
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "val", ratio.toFixed(2) + "×"));
+      host.appendChild(row);
+    });
+  }
+
+  function barChart(host, rows, acc, lab) {
+    var max = Math.max.apply(null, rows.map(acc));
+    rows.forEach(function (r) {
+      var row = el("div", "row");
+      row.appendChild(el("div", "cat", r[0]));
+      var track = el("div", "track");
+      var bar = el("div", "bar plain");
+      bar.style.width = (acc(r) / max * 100) + "%";
+      tip(bar, r[0] + ": " + lab(r) + " per 1,000 exposed — " + fmt(r[2])
+               + " leavers of " + fmt(r[1]) + " mailed");
+      track.appendChild(bar);
+      row.appendChild(track);
+      row.appendChild(el("div", "val", lab(r)));
+      host.appendChild(row);
+    });
+  }
+
+  function pairChart(host, rows) {
+    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r[4], r[5]); }));
+    rows.forEach(function (r) {
+      var g = el("div", "grp");
+      var lab = el("div", "cat", r[0] + "   " + (r[6] > 0 ? "+" : "") + r[6].toFixed(1) + "pp");
+      lab.style.color = r[6] > 0 ? "var(--over)" : "var(--text-secondary)";
+      g.appendChild(lab);
+      var pair = el("div", "pair");
+      [[r[4], "var(--series-1)", "mailed"], [r[5], "var(--series-2)", "lost"]].forEach(function (p) {
+        var line = el("div", "pairline");
+        var mt = el("div", "minitrack");
+        var mb = el("div", "minibar");
+        mb.style.width = (p[0] / max * 100) + "%";
+        mb.style.background = p[1];
+        tip(mb, r[0] + " — " + p[2] + ": " + p[0].toFixed(1) + "% single-product");
+        mt.appendChild(mb);
+        line.appendChild(mt);
+        line.appendChild(el("div", "val", p[0].toFixed(1) + "%"));
+        pair.appendChild(line);
+      });
+      g.appendChild(pair);
+      host.appendChild(g);
+    });
+  }
+
+  function table(host, head, rows) {
+    var thead = el("thead"), tr = el("tr");
+    head.forEach(function (h) { tr.appendChild(el("th", null, h)); });
+    thead.appendChild(tr); host.appendChild(thead);
+    var tb = el("tbody");
+    rows.forEach(function (r) {
+      var t = el("tr");
+      r.forEach(function (c) { t.appendChild(el("td", null, c)); });
+      tb.appendChild(t);
+    });
+    host.appendChild(tb);
+  }
+
+  // charts
+  divergingChart(document.getElementById("c-ratios"), RATIOS);
+  divergingChart(document.getElementById("c-prof"), PROF);
+  barChart(document.getElementById("c-rate"), CARDS,
+           function (r) { return r[3]; }, function (r) { return r[3].toFixed(2); });
+  pairChart(document.getElementById("c-pairs"), CARDS);
+
+  // per-section data tables - built from the SAME arrays the charts use, so they cannot disagree
+  var ratioHead = ["Segment", "Dimension", "Ratio", "Leavers", "Stayers", "Unsub rate*"];
+  function ratioRow(r) {
+    return [r[0], r[1], r[2].toFixed(2) + "×", fmt(r[3]), fmt(r[4]),
+            (100 * r[3] / (r[3] + r[4])).toFixed(3) + "%"];
+  }
+  table(document.getElementById("t-ratios"), ratioHead, RATIOS.map(ratioRow));
+  table(document.getElementById("t-prof"), ratioHead, PROF.map(ratioRow));
+
+  table(document.getElementById("t-cards"),
+    ["Campaign", "Mailed", "Leavers (exposed)", "Per 1,000", "Unsub rate*"],
+    CARDS.map(function (r) {
+      return [r[0], fmt(r[1]), fmt(r[2]), r[3].toFixed(2),
+              (100 * r[2] / r[1]).toFixed(3) + "%"];
+    }));
+
+  table(document.getElementById("t-pairs"),
+    ["Campaign", "Mailed % 1-prod", "Lost % 1-prod", "Delta", "Mailed % high-pot", "Lost % high-pot"],
+    CARDS.map(function (r) {
+      return [r[0], r[4].toFixed(1) + "%", r[5].toFixed(1) + "%",
+              (r[6] > 0 ? "+" : "") + r[6].toFixed(1) + "pp",
+              r[7].toFixed(1) + "%", r[8].toFixed(1) + "%"];
+    }));
+
+  table(document.getElementById("t-buckets"),
+    ["Bucket", "Clients", "% of mailed", "UCP matched", "Match %"],
+    BUCKETS.map(function (r) {
+      return [r[0], fmt(r[1]), r[2].toFixed(2) + "%", fmt(r[3]), r[4].toFixed(1) + "%"];
+    }));
+
+  // the master table - every row on the page, one place
+  var all = [];
+  RATIOS.concat(PROF).forEach(function (r) {
+    all.push(["§1–2 segments", r[1], r[0], fmt(r[3]), fmt(r[4]),
+              r[2].toFixed(2) + "×", (100 * r[3] / (r[3] + r[4])).toFixed(3) + "%"]);
+  });
+  CARDS.forEach(function (r) {
+    all.push(["§3–4 campaigns", "mne (exposure)", r[0], fmt(r[2]), fmt(r[1] - r[2]),
+              r[3].toFixed(2) + " /1k", (100 * r[2] / r[1]).toFixed(3) + "%"]);
+  });
+  BUCKETS.forEach(function (r) {
+    all.push(["§5 populations", "bucket", r[0], fmt(r[1]), "—",
+              r[2].toFixed(2) + "% of mailed", "—"]);
+  });
+  table(document.getElementById("t-all"),
+    ["Section", "Dimension", "Value", "Leavers / n", "Stayers / rest", "Headline stat", "Unsub rate*"],
+    all);
+
+  // one footnote, appended to every table that shows the starred column
+  ["t-ratios", "t-prof", "t-cards", "t-all"].forEach(function (id) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var p = el("p", "note", "* leavers ÷ (leavers + stayers). already_out is excluded from "
+                          + "both terms — those clients had already left and were never at risk.");
+    p.style.padding = "8px 10px 0";
+    host.parentNode.appendChild(p);
+  });
+})();
+</script>
