@@ -204,8 +204,30 @@ explanation. Bars collapsing toward 1.00 = it is.</strong></p>
   range. Much of the "new clients leave more" signal is how we mail new clients, not how they behave.
 </div>
 
+<div class="callout warn">
+  <strong>NO CARDS VIEW YET — the contact control has not been cut per campaign.</strong> The contact-band control above is bank-wide only. The per-campaign cut is written as cell <code>[20h] H2</code> in
+  <code>unsub_value_museum.py</code> and has never been run. It needs no new data pull: the frame it
+  reads is built from parquet already on HDFS. Until it runs, <strong>do not assume the bank-wide
+  pattern holds inside a cards campaign</strong> — §1 shows two cards campaigns disagreeing with the
+  bank and with each other on product depth.
+</div>
+
+<h3 style="font-size:15.5px;margin:26px 0 4px">Cards view — and Cards is not the bank</h3>
+<p class="sub">The same ratios computed <em>inside</em> a cards campaign, against that campaign's own
+mailed base. Bank-wide bar shown against AUH and CRV for each segment.</p>
+
+<div class="chart" id="c-cards1"></div>
+
+<div class="callout">
+  <strong>Cards loses high-potential clients far harder than the bank does — CRV 1.62 and AUH 1.54
+  against 1.15 bank-wide.</strong> And the two campaigns point in opposite directions on product
+  depth: AUH over-loses single-product clients at 1.32 while CRV <em>under</em>-loses them at 0.78.
+  A bank-wide product finding of 0.91 conceals both.
+</div>
+
 <p class="q"><strong>The question for the room:</strong> is email tolerance an age effect clients
-grow out of, or a cohort effect that arrives with them?</p>
+grow out of, or a cohort effect that arrives with them? And why do two cards campaigns disagree so
+sharply about single-product clients?</p>
 
 <div class="dd">
   <details>
@@ -217,6 +239,16 @@ grow out of, or a cohort effect that arrives with them?</p>
   <details>
     <summary>Caveats</summary>
     <div class="bodytext">
+      <p><strong>The cards view is TWO campaigns, not five.</strong> Only AUH and CRV were
+        transcribed from the run screenshots. PCL, PCQ and PCD are in
+        <code>csv_l9_per_campaign_ratios</code> (111 rows) on HDFS and have never been fetched.
+        Do not read AUH and CRV as representative of cards.</p>
+      <p><strong>CRV’s tenure rows are missing</strong> from the transcription — only tenure 3–5 was
+        captured. That is why the cards panel compares age, products and high-potential rather
+        than tenure.</p>
+      <p><strong>Each campaign is measured against its OWN mailed base</strong>, never the bank’s.
+        A client mailed by three cards campaigns sits in three campaigns’ numbers, so the rows do
+        not sum and must not be added.</p>
       <p><strong>1.33 says nothing about email volume.</strong> It says under-25s are 1.33× as common
         among leavers as among stayers. That is all. Volume is a candidate <em>explanation</em> for
         the gap, never something the gap measures.</p>
@@ -296,6 +328,17 @@ relative to who we can actually reach.</p>
 </div>
 
 
+
+<h3 style="font-size:15.5px;margin:26px 0 4px">Cards view</h3>
+<p class="sub">Profitability quintiles inside AUH and CRV, against their own mailed bases.</p>
+
+<div class="chart" id="c-cards2"></div>
+
+<div class="callout">
+  <strong>The flat-value finding holds inside cards, and the top-quintile protection is stronger:
+  CRV 0.78 and AUH 0.84 against 0.84 bank-wide.</strong> Quintiles 1 to 4 stay within 1.05–1.21 in
+  both campaigns. Neither cards campaign is losing its most profitable clients.
+</div>
 
 <p class="q"><strong>Read with §1, not beside it:</strong> current-year profit rises mechanically
 with tenure, so this chart and the age chart are largely one finding seen twice. Caveats tab.</p>
@@ -380,6 +423,15 @@ against its share of stayers.</p>
 <p class="q"><strong>The larger number is the one nobody counts.</strong> 2,073,020 stayers — 22.85%
 of the stayer pool — did not open a single email in three months. That silent population is roughly
 30× the size of everyone who explicitly unsubscribed. We report the 69,535 and not the 2 million.</p>
+
+<div class="callout warn">
+  <strong>NO CARDS VIEW YET — engagement has not been split per campaign.</strong> The bank-wide chart above is all that exists for this
+  section. The per-campaign cut is written as cell <code>[20h] H3</code> in
+  <code>unsub_value_museum.py</code> and has never been run. It needs no new data pull: the frame it
+  reads is built from parquet already on HDFS. Until it runs, <strong>do not assume the bank-wide
+  pattern holds inside a cards campaign</strong> — §1 shows two cards campaigns disagreeing with the
+  bank and with each other on product depth.
+</div>
 
 <div class="dd">
   <details>
@@ -919,6 +971,35 @@ points and the high-potential thresholds are our parameters, not standards.</p>
     ["already_out", 427079, 4.03, 417877, 97.8],
     ["leaver", 69535, 0.66, 62658, 90.1]
   ];
+  // L9 - the SAME ratios computed inside a cards campaign, against that campaign's own mailed base.
+  // RUN_2026-07-29_full.md §7. Only AUH and CRV were transcribed from the screenshots; PCL, PCQ and
+  // PCD sit in csv_l9_per_campaign_ratios (111 rows) on HDFS and have never been fetched. Two
+  // campaigns is not "cards" - it is two campaigns - and the page says so rather than implying five.
+  var CARDS1 = [
+    ["Age <25 · BANK", "age_band", 1.33, 9055, 985394],
+    ["Age <25 · AUH", "age_band", 1.29, 98, 27644],
+    ["Age <25 · CRV", "age_band", 1.42, 241, 18421],
+    ["Age 45–54 · BANK", "age_band", 0.78, 8405, 1560770],
+    ["Age 45–54 · AUH", "age_band", 0.78, 233, 108943],
+    ["Age 45–54 · CRV", "age_band", 0.68, 212, 33672],
+    ["1 product · BANK", "prod_band", 0.91, 11446, 1822813],
+    ["1 product · AUH", "prod_band", 1.32, 354, 97824],
+    ["1 product · CRV", "prod_band", 0.78, 91, 12733],
+    ["High potential · BANK", "high_potential", 1.15, 6192, 780986],
+    ["High potential · AUH", "high_potential", 1.54, 80, 19001],
+    ["High potential · CRV", "high_potential", 1.62, 61, 4102]
+  ];
+  var CARDS2 = [
+    ["Quintile 5 top · BANK", "prof_quintile", 0.84, 11067, 1896902],
+    ["Quintile 5 top · AUH", "prof_quintile", 0.84, 314, 136187],
+    ["Quintile 5 top · CRV", "prof_quintile", 0.78, 323, 44754],
+    ["Quintile 2 · BANK", "prof_quintile", 1.05, 13081, 1805105],
+    ["Quintile 2 · AUH", "prof_quintile", 1.21, 260, 78233],
+    ["Quintile 2 · CRV", "prof_quintile", 1.21, 229, 20501],
+    ["Quintile 1 low · BANK", "prof_quintile", 1.06, 13106, 1793182],
+    ["Quintile 1 low · AUH", "prof_quintile", 1.09, 374, 124964],
+    ["Quintile 1 low · CRV", "prof_quintile", 1.09, 466, 46480]
+  ];
   // L10b - the same ratio re-cut inside a fixed contact band. RUN_2026-07-30_L10_L13.md §1.
   var CONTACT = [
     ["Age <25 · 1 send", "age_band", 1.63, 646, 100007],
@@ -1087,6 +1168,8 @@ points and the high-potential thresholds are our parameters, not standards.</p>
   // the three largest values (1.44, 1.54, 1.63) all pinned to the same length.
   divergingChart(document.getElementById("c-contact"), CONTACT, 0.70);
   divergingChart(document.getElementById("c-engage"), ENGAGE);
+  divergingChart(document.getElementById("c-cards1"), CARDS1, 0.70);
+  divergingChart(document.getElementById("c-cards2"), CARDS2);
   barChart(document.getElementById("c-rate"), CARDS,
            function (r) { return r[3]; }, function (r) { return r[3].toFixed(2); });
   pairChart(document.getElementById("c-pairs"), CARDS);
