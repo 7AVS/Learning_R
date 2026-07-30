@@ -1275,7 +1275,7 @@ else:
       "Flat across bands means contact is not the explanation; collapsing toward 1.00 means it is",
       l10b.filter(F.col("stayers_n") > 500))
 
-# %% [20e] L11 - ENGAGEMENT. Losing the listeners, or keeping the deaf?
+# %% [20e] L11 - ENGAGEMENT. Do we lose the people who were still reading?
 #
 # An unsubscribe from someone who never opened an email is list hygiene. An unsubscribe from someone
 # who opened and clicked is a client telling you something. They are not the same loss and they must
