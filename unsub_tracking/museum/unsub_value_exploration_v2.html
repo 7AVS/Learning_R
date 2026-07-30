@@ -77,7 +77,10 @@ details>summary::-webkit-details-marker{display:none}
 details>summary::before{content:"▸ ";color:var(--text-muted)}
 details[open]>summary::before{content:"▾ "}
 details[open]>summary{border-bottom:1px solid var(--border)}
-.dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.dd{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}
+.dd .bodytext{padding:2px 14px 14px;font-size:13.5px;line-height:1.6;color:var(--text-secondary)}
+.dd .bodytext p{margin:10px 0}
+.dd .bodytext p:first-child{margin-top:6px}
 .dd details{margin:0}
 .scroll{overflow-x:auto;padding:4px 14px 14px}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
@@ -117,40 +120,52 @@ is a real comparison rather than two different clocks.</p>
   <div class="tile"><div class="n">69,535</div><div class="l">unsubscribed &nbsp;·&nbsp; <strong>0.68%</strong>
     of those who could<br><span style="opacity:.75">0.66% of everyone mailed</span></div></div>
   <div class="tile"><div class="n">427,079</div><div class="l">mailed after opting out &nbsp;·&nbsp;
-    <strong>read §6 before quoting</strong><br><span style="opacity:.75">only 15,630 via cards; a floor, not a total</span></div></div>
+    <strong>NOT yet a breach count</strong><br><span style="opacity:.75">some sends may be regulatory — see §6</span></div></div>
   <div class="tile"><div class="n">4,335</div><div class="l">unsubscribes that carry a <em>cards</em>
     treatment ID<br><span style="opacity:.75">attribution, not exposure — see §4</span></div></div>
 </div>
 
-<p class="note"><strong>Two numbers in that second tile, and the difference matters.</strong> 0.66% divides
-by everyone mailed. 0.68% divides by everyone who was <em>able</em> to unsubscribe — which excludes the
-427,079 who had already opted out and so were never at risk of doing it again. <strong>0.68% is the one
-to quote</strong>, and it is the rule every table on this page follows.</p>
-
-<p class="note">UCP match rate: <strong>89.7% of stayers, 90.1% of leavers, 97.8% of the already-out
-group</strong>; worst field 0.01% null. Unmatched clients are overwhelmingly business programs
-(SBB: 2,274 leavers, 0 matched) and clients acquired during the window, who cannot exist in a
-2026-02-28 snapshot. Every percentage below uses the <em>matched</em> denominator.</p>
-
-<p class="note"><strong>Words this page uses that are worth pinning down before you start.</strong>
-<em>UCP</em> — the bank's client profile table, where age, tenure, product counts and profitability
-come from; "UCP-matched" means we found that client in it.
-<em>Ratio</em> — one group's share of the leavers divided by its share of the stayers. Never a
-headcount, never a chance of leaving.
-<em>Quintile</em> — the population sorted by a value and cut into five equal-sized groups.
-<em>Denominator</em> — whatever a percentage is divided by; it changes section to section and is
-named each time.
-<em>Artefact</em> — a pattern produced by how we mailed or measured rather than by the clients.
-<em>Solo rate</em> — a campaign's unsubscribe rate when measured on its own.
-<em>Exposure vs attribution</em> — two different ways to count a campaign's unsubscribes; §4 explains
-it and they differ by 4.6× on the same campaign.
-Three-letter codes (PCQ, PCL, CRV, AUH, PCD, VRE…) are campaign mnemonics; the cards five are
-PCQ, PCL, PCD, AUH and CRV.</p>
-
+<div class="dd">
 <details>
-  <summary>Show every number on this page, in one table</summary>
+  <summary>Words &amp; denominators</summary>
+  <div class="bodytext">
+    <p><strong>Ratio</strong> — one group's share of the leavers divided by its share of the stayers.
+      1.00 = equally common in both. Never a headcount, never a chance of leaving.</p>
+    <p><strong>UCP</strong> — the bank's client profile table: age, tenure, product counts,
+      profitability. "UCP-matched" = we found that client in it.</p>
+    <p><strong>Quintile</strong> — the population sorted by a value, cut into five equal-sized groups.</p>
+    <p><strong>Denominator</strong> — whatever a percentage divides by. It changes by section and is
+      named each time.</p>
+    <p><strong>Artefact</strong> — a pattern produced by how we mailed or measured, not by the clients.</p>
+    <p><strong>Solo rate</strong> — a campaign's unsubscribe rate measured on its own.</p>
+    <p><strong>Exposure vs attribution</strong> — two ways to count a campaign's unsubscribes. §4;
+      they differ 4.6× on the same campaign.</p>
+    <p><strong>Three-letter codes</strong> are campaign mnemonics. The cards five: PCQ, PCL, PCD,
+      AUH, CRV.</p>
+  </div>
+</details>
+<details>
+  <summary>Caveats that govern every number</summary>
+  <div class="bodytext">
+    <p><strong>Which unsub rate.</strong> 0.66% divides by everyone mailed. 0.68% divides by everyone
+      who was <em>able</em> to unsubscribe — excluding the 427,079 already opted out, who were never
+      at risk of leaving again. <strong>0.68% is the one to quote</strong>, and every table here
+      follows that rule.</p>
+    <p><strong>UCP match rate</strong> is 89.7% of stayers, 90.1% of leavers, <strong>97.8% of the
+      already-out group</strong> — not one band. Worst field 0.01% null.</p>
+    <p><strong>Who goes unmatched:</strong> business programs (SBB: 2,274 leavers, 0 matched) and
+      clients acquired during the window, who cannot exist in a 2026-02-28 snapshot. Every percentage
+      uses the matched denominator.</p>
+    <p><strong>No significance test was run anywhere on this page.</strong> Phrases like "too small to
+      act on" are judgements from group sizes, not test output. Compute the interval before any of
+      these numbers carries a decision.</p>
+  </div>
+</details>
+<details>
+  <summary>Every number on this page, one table</summary>
   <div class="scroll"><table id="t-all"></table></div>
 </details>
+</div>
 
 <hr>
 
@@ -166,14 +181,6 @@ of leaving, and not a headcount.</p>
   <span><span class="swatch" style="background:var(--neutral)"></span>1.00 = identical to stayers</span>
 </div>
 
-<p class="note" style="margin-bottom:12px"><strong>"High potential" is our label, not a bank
-standard.</strong> It means <strong>under 35 AND 5 years' tenure or less AND 2 products or
-fewer</strong> — a young, new, shallow client with room to grow. We chose those three thresholds;
-nothing in the data or the warehouse defines them. <strong>Read its 1.15 with care: it is built from
-the same three variables charted above it, so it is not independent evidence.</strong> It is the age
-and tenure bars restated as one composite, and it moves less than either of them because the product
-condition pulls the other way.</p>
-
 <div class="chart" id="c-ratios"></div>
 
 <div class="callout">
@@ -184,26 +191,9 @@ condition pulls the other way.</p>
 
 <h3 style="font-size:15.5px;margin:26px 0 4px">Could the gap just be that we email young clients more?</h3>
 
-<p class="sub"><strong>First, what 1.33 does and does not say.</strong> It says under-25s are 1.33
-times as common among the people who left as they are among the people who stayed. That is all. It
-carries no information about how much email anyone received — volume is not an input to it.</p>
-
-<p class="sub"><strong>Why volume is still worth ruling out.</strong> Every email is another chance
-to unsubscribe. If we happen to mail young clients harder than everyone else, they would end up
-over-represented among leavers <em>even if being young changed nothing about how a person reacts to
-email</em>. The gap would be real, and the explanation would be our mailing behaviour rather than
-anything about the client. Age would be along for the ride.</p>
-
-<p class="sub"><strong>How the chart below separates the two.</strong> Every client is sorted into
-one of five groups by how many emails they actually received — 1, 2–3, 4–6, 7–12, or 13+. Then the
-same leaver-vs-stayer ratio is calculated <em>separately inside each group</em>. Within a group
-everyone got a comparable amount of email, so volume can no longer be what makes one client
-different from another there.</p>
-
-<p class="sub"><strong>Then read it like this.</strong> If volume was the cause, the gap should
-shrink toward 1.00 once you are comparing like with like — the young and the old inside the same
-group receive the same amount, so they should behave the same. If instead the gap holds up inside
-every group, volume was not what produced it.</p>
+<p class="sub">Same ratio, recalculated separately inside five groups sorted by how many emails the
+client actually received. <strong>Bars staying long across all five bands = volume is not the
+explanation. Bars collapsing toward 1.00 = it is.</strong></p>
 
 <div class="chart" id="c-contact"></div>
 
@@ -214,10 +204,8 @@ every group, volume was not what produced it.</p>
   range. Much of the "new clients leave more" signal is how we mail new clients, not how they behave.
 </div>
 
-<p class="q"><strong>These two findings are no longer equal.</strong> "The young leave more" is
-robust to the one confound that could kill it. "The new leave more" is partly a targeting artefact
-and should not be stated with the same confidence. <strong>The question this raises for the room:</strong>
-is email tolerance an age effect clients grow out of, or a cohort effect that arrives with them?</p>
+<p class="q"><strong>The question for the room:</strong> is email tolerance an age effect clients
+grow out of, or a cohort effect that arrives with them?</p>
 
 <div class="dd">
   <details>
@@ -225,6 +213,25 @@ is email tolerance an age effect clients grow out of, or a cohort effect that ar
     <div class="scroll"><table id="t-ratios"></table></div>
     <p class="sqlnote">Below: the same ratios re-cut inside each contact band (L10b).</p>
     <div class="scroll"><table id="t-contact"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>1.33 says nothing about email volume.</strong> It says under-25s are 1.33× as common
+        among leavers as among stayers. That is all. Volume is a candidate <em>explanation</em> for
+        the gap, never something the gap measures.</p>
+      <p><strong>Why volume had to be ruled out.</strong> Every email is another chance to
+        unsubscribe. If we mail young clients harder, they end up over-represented among leavers even
+        if being young changed nothing — the gap would be real and the cause would be us.</p>
+      <p><strong>The two findings are not equal.</strong> Age survives the control in all five bands.
+        Tenure collapses to 1.04 at 4–6 sends — much of "the new leave more" is how we mail the new.
+        Do not state them with the same confidence.</p>
+      <p><strong>"High potential" is our label, not a bank standard:</strong> under 35 AND tenure ≤ 5
+        AND ≤ 2 products. It is built from the same three variables charted beside it, so its 1.15 is
+        <em>not independent evidence</em> — it is the age and tenure bars restated as a composite.</p>
+      <p><strong>Clipped bars.</strong> Any bar marked » is drawn at the axis limit, so its length is
+        not its value. Read the number.</p>
+    </div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -288,19 +295,28 @@ relative to who we can actually reach.</p>
   the caveat below before treating that as settled, because this chart is not independent of §1.
 </div>
 
-<p class="note"><strong>No significance test was run on this page.</strong> "Too small to act on" is
-a judgement from the size of the gap and the size of the groups, not the output of a test. If this
-number is going to carry a decision, the interval should be computed first.</p>
 
-<p class="q"><strong>Caveat that matters:</strong> the profitability field is
-<code>PROF_TOT_ANNUAL</code> — current-year contribution, not lifetime value. It rises mechanically
-with tenure (median $19 at 0–2 years, $805 at 20+), so "low value" and "young" are substantially the
-same variable. This section and §1 are not independent findings; they are one finding seen twice.</p>
+
+<p class="q"><strong>Read with §1, not beside it:</strong> current-year profit rises mechanically
+with tenure, so this chart and the age chart are largely one finding seen twice. Caveats tab.</p>
 
 <div class="dd">
   <details>
     <summary>Show the data</summary>
     <div class="scroll"><table id="t-prof"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>This is not independent of §1.</strong> PROF_TOT_ANNUAL is current-year contribution,
+        not lifetime value, and it rises mechanically with tenure — median $19 at 0–2 years, $805 at
+        20+. "Low value" and "young" are substantially the same variable, so this chart is largely §1
+        seen again.</p>
+      <p><strong>40% of the mailed base is at or below break-even.</strong> The p40 cut is −$2.37. Any
+        sentence containing "high-value clients" has to survive that first.</p>
+      <p><strong>No significance test was run.</strong> "Too small to act on" is a judgement from
+        group sizes, not test output.</p>
+    </div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -359,11 +375,7 @@ against its share of stayers.</p>
   final act of someone who had already tuned out.
 </div>
 
-<p class="note">Two limits on that reading. <strong>Clicks are trustworthy, opens are not:</strong>
-Apple Mail Privacy Protection fires the open pixel without a human, so the "opened" group is
-inflated. That makes the never-opened group <em>smaller</em> than reality and the 0.43× if anything
-understated. And this is a correlation between behaviour and outcome — the page cannot see intent,
-so "attentive" is a description of what these clients did, not a claim about why they left.</p>
+
 
 <p class="q"><strong>The larger number is the one nobody counts.</strong> 2,073,020 stayers — 22.85%
 of the stayer pool — did not open a single email in three months. That silent population is roughly
@@ -373,6 +385,18 @@ of the stayer pool — did not open a single email in three months. That silent 
   <details>
     <summary>Show the data</summary>
     <div class="scroll"><table id="t-engage"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>Clicks are trustworthy, opens are not.</strong> Apple Mail Privacy Protection fires
+        the open pixel without a human, so "opened" is inflated and "never opened" is smaller than
+        reality. That makes the 0.43× if anything understated, not overstated.</p>
+      <p><strong>Rarely, not never.</strong> 6,180 never-openers did unsubscribe — 9.86% of leavers.
+        The claim is a tendency, not an absolute.</p>
+      <p><strong>Behaviour, not intent.</strong> The page sees opens and clicks. "Attentive" describes
+        what these clients did, not why they left.</p>
+    </div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -433,13 +457,9 @@ AUH 2.68 per 1,000. On attribution: <strong>PCQ 2.79, PCL 1.17, PCD 1.06, AUH 0.
 moves from fourth-best to worst. Both sets are in the table below. CRV has no attributed figure:
 it did not make L6's top-25-by-senders cut, so it was never captured, and the blank stays a blank.</p>
 
-<p class="q"><strong>Which one should you use?</strong> Ask what the number is for.
-<em>Attribution</em> answers "is this campaign's email prompting people to opt out" — it is the
-campaign's own doing, and it is what belongs in a campaign post-mortem or a creative review.
-<em>Exposure</em> answers "how much unsubscribe risk sits on the population this campaign touches" —
-it is inflated by clients being on many other lists, which is why heavy senders look worse on it,
-and it is the right lens for contact policy. A campaign can rank badly on exposure purely by mailing
-people everyone else also mails.</p>
+<p class="q"><strong>Which to quote:</strong> <em>attribution</em> for a campaign post-mortem — it
+is the campaign's own doing. <em>Exposure</em> for contact policy — it is the risk sitting on the
+population that campaign touches. Caveats tab.</p>
 
 <div class="dd">
   <details>
@@ -503,37 +523,33 @@ combination loses clients faster than either campaign does alone.</p>
   7,385 leavers, lifts by 1.03.</strong> PAL + PCL, roughly 350,000 clients, also 1.03.
 </div>
 
-<p class="note"><strong>Why the big pairs are the ones to believe, in plain terms.</strong> A pair
-with only 152 leavers moves a lot on very little: twenty unsubscribes more or fewer, which is
-ordinary week-to-week variation, swings its number by a third. A pair with 7,385 leavers barely
-moves for the same twenty. So small pairs scatter widely around 1.00 by chance alone while large
-pairs settle close to it — and <strong>that is exactly the pattern here: the lifts shrink as the
-pairs get bigger.</strong> If combining campaigns genuinely did something, the effect should have
-held up in the large pairs rather than fading out of them.</p>
-
-<p class="note"><strong>Two things this section cannot tell you.</strong> First, the client counts
-here are <em>estimates</em> — every leaver is counted for real, but stayers come from a 1-in-10
-sample scaled back up, so "919,000" means "about 919,000" while "7,385 leavers" is exact. Second,
-no confidence interval was computed, so <strong>whether PCL + PDN's 1.43 is genuinely different from
-1.00 has not been tested</strong> — it is flagged as small rather than proven to be nothing.</p>
-
 <p class="q"><strong>The data is consistent with campaigns adding up rather than compounding.</strong>
 Being on two lists appears to raise your chance of leaving through the simple fact of more email,
 rather than through the combination irritating in some way the campaigns do not manage separately.
 That points at contact policy being a volume question more than a sequencing one.</p>
 
-<div class="callout warn">
-  <strong>This is not a licence to mail more.</strong> "No spike when campaigns combine" means there
-  is no <em>extra</em> penalty for the combination — it does not mean the extra email is free. Every
-  additional send still carries its own unsubscribe risk, and §1 showed volume matters. Read this as
-  "adding a list costs you roughly what that list's email always costs", not as "adding a list is
-  cheap."
-</div>
-
 <div class="dd">
   <details>
     <summary>Show the data</summary>
     <div class="scroll"><table id="t-pairs2"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>NOT a licence to mail more.</strong> "No spike when campaigns combine" means no
+        <em>extra</em> penalty for combining. The extra email is not free — every send carries its
+        own risk, and §1 showed volume matters.</p>
+      <p><strong>Why the big pairs are the believable ones.</strong> A pair with 152 leavers swings
+        a third on twenty unsubscribes either way — ordinary variation. A pair with 7,385 barely
+        moves for the same twenty. Small pairs scatter around 1.00 by chance; large ones settle on
+        it. The lifts here shrink as pairs grow, which is that pattern.</p>
+      <p><strong>Client counts are estimates.</strong> Every leaver is real and unsampled; stayers
+        are a 1-in-10 sample scaled up. "919,000" means about 919,000. "7,385 leavers" is exact.</p>
+      <p><strong>1.43 has not been tested against 1.00.</strong> No interval computed — flagged as
+        small, not proven to be nothing.</p>
+      <p><strong>Two row types excluded:</strong> solo rates above 500/1,000 (small-campaign
+        sampling artefact) and mne <code>1</code> / blank (unmapped). 19 of 25 rows survive.</p>
+    </div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -605,15 +621,6 @@ often the only live channel. The gap column — not the raw share — is what is
 accounted for. On that measure PCQ (+6.9pp) and AUH (+5.8pp) lose depth-poor clients faster than they
 mail them; PCL (−1.8pp) and CRV (−1.4pp) do the reverse.</p>
 
-<div class="callout warn">
-  <strong>Do not read the gap as a proven campaign effect.</strong> §1 showed that a segment gap can
-  survive a contact-volume control (age) or largely dissolve under it (tenure) — and this section has
-  <em>not</em> had that control applied. A campaign's +6.9pp could still come from its clients being
-  mailed harder by <em>other</em> campaigns, which is precisely the confound §1 spent two charts on.
-  Treat these gaps as a lead worth testing, not as a campaign's proven contribution. The test is cell
-  <code>[20h] H2</code>, which re-cuts these inside contact bands and has not been run.
-</div>
-
 <div class="dd">
   <details>
     <summary>Show the data</summary>
@@ -623,6 +630,18 @@ mail them; PCL (−1.8pp) and CRV (−1.4pp) do the reverse.</p>
       products or fewer is close to being a single-product client — so treat them as one signal read
       two ways, not as two independent confirmations.</p>
     <div class="scroll"><table id="t-pairs"></table></div>
+  </details>
+  <details>
+    <summary>Caveats</summary>
+    <div class="bodytext">
+      <p><strong>The gap is a lead, not a proven campaign effect.</strong> §1 showed a segment gap
+        can survive a contact-volume control (age) or dissolve under it (tenure). This section has
+        <em>not</em> had that control applied — PCQ's +6.9pp could still come from its clients
+        being mailed harder by other campaigns.</p>
+      <p>The test is cell <code>[20h] H2</code>, which re-cuts these inside contact bands. Not run.</p>
+      <p><strong>high-pot moves with single-product by construction</strong> (≤2 products is nearly
+        the same population as 1), so the two column pairs are one signal read twice.</p>
+    </div>
   </details>
   <details>
     <summary>Show the logic (SQL)</summary>
@@ -674,16 +693,26 @@ opened. Not a finding about leavers — a finding about the suppression list.</p
 <div class="chart" id="c-lag"></div>
 
 <div class="callout warn">
-  <strong>The suppression list is not slow to catch these people. 181,182 of them — 43.4% — were
-  mailed more than a year after unsubscribing, and received 6.74 emails each on average.</strong>
-  Only 5.8% fall in the 0–30 day window where a processing delay would live. Whatever is happening,
-  a lag does not explain it — <strong>but this data cannot say whether the opt-out is failing to be
-  written, or failing to be read. Those are different faults with different owners.</strong>
+  <strong>Whatever this is, a processing delay does not explain it. 181,182 clients — 43.4% — were
+  mailed more than a year after unsubscribing, 6.74 emails each on average.</strong> Only 5.8% sit in
+  the 0–30 day window where a suppression lag would live.
 </div>
 
-<p class="note"><strong>This is a floor, not a total.</strong> The lookback starts 2024-01-01, so
-"over a year" is capped at about 26 months and anyone who opted out before 2024 and is still being
-mailed does not appear here at all. The real number is larger by an unknown amount.</p>
+<div class="callout warn">
+  <strong>DO NOT call this a suppression failure yet — some of these sends are allowed to be
+  here.</strong> An unsubscribe withdraws <em>marketing</em> consent. Regulatory and servicing mail
+  bypasses it by design and is <em>supposed</em> to reach an opted-out client. Every send here
+  carries a campaign mnemonic, which rules out pure transactional mail — but <strong>a campaign can
+  itself be regulatory</strong>, so the mnemonic does not settle it. Until the sends are split,
+  427,079 is <strong>the size of a question, not the size of a breach.</strong>
+</div>
+
+<p class="q"><strong>What we know so far.</strong> The known regulatory mnemonics are
+<strong>FXR, OTC, VMF and VOA</strong>, and <em>none of them appears in the top 25 below</em> —
+VRE, VME and VRG lead it, and VMB is a different mnemonic from VMF. But that table names the campaign
+each client <em>left through</em>, not the campaigns that mailed them <em>afterwards</em>, and it is
+the second set the regulatory question turns on. That breakdown does not exist yet — it is cell
+<code>[20i]</code>, written and not run.</p>
 
 <p class="q"><strong>It concentrates around one campaign — but be careful what that means.</strong>
 237,653 of these clients (56.9%) last unsubscribed <em>through</em> a <strong>VRE</strong> email, and

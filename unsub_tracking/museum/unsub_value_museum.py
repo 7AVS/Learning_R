@@ -114,6 +114,24 @@ WIN_MONTHS = [("m2026_03", "2026-03-01", "2026-04-01", "2026-02-01", "2026-05-01
 # archaeology/email_active_mnes.md. CTU and O2P are deliberately EXCLUDED per Andre 2026-07-26 -
 # they involve cards but are reported inside async, out of the cards package.
 CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
+
+# REGULATORY_MNES - Andre, 2026-07-30. Campaigns that carry regulatory or servicing content.
+#
+# WHY THIS EXISTS AND WHY IT IS LOAD-BEARING. An unsubscribe withdraws MARKETING consent. Regulatory
+# and servicing mail bypasses that by design and is SUPPOSED to reach an opted-out client. So a send
+# to an already_out client is only evidence of a suppression failure if the send was marketing.
+#
+# The 427,079 already_out headline was written before this was known and framed the whole population
+# as a leak. It is not one until these mnemonics are removed from it.
+#
+# Carrying a mnemonic does NOT make a send marketing - every send in VENDOR_FEEDBACK has a
+# TREATMENT_ID, which rules out pure transactional mail and nothing else. A campaign can itself be
+# regulatory, which is exactly what this list is.
+#
+# TREAT AS INCOMPLETE. Four mnemonics from memory, not a governed source. Any campaign absent from
+# this set is ASSUMED marketing, and that assumption overstates the leak. It does not understate it.
+REGULATORY_MNES = frozenset({"FXR", "OTC", "VMF", "VOA"})
+REG_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(REGULATORY_MNES))
 CARDS_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(CARDS_MNES))
 
 BASE = "hdfs:///user/427966379/unsub_value_museum/"
@@ -1552,6 +1570,62 @@ h4 = (cards_send.groupBy("mne", "bucket").agg(F.count("*").alias("clients"))
 T("H4 - CARDS: the three populations inside each campaign's own mailed base | already_out here = "
   "clients THIS campaign mailed after they had already opted out, which is a different question "
   "from which campaign they left through (that is L12c)", h4)
+
+# %% [20i] IS THE 427,079 A LEAK, OR IS IT REGULATORY MAIL? The question that decides whether §6 of
+# the exploration page is a finding or an artefact.
+#
+# THE PROBLEM WITH L12c. It reports the campaign each client unsubscribed THROUGH. The regulatory
+# question is about the campaigns that mailed them AFTERWARDS, and those are a different set. A
+# client can leave via a marketing campaign and then legitimately receive regulatory mail; that is
+# not a suppression failure, it is the system working. L12c cannot tell them apart and neither could
+# anything else on the page until now.
+#
+# senders_wide is client x mne bank-wide and is already landed, so the post-unsub sends can simply be
+# joined to the already_out population and split by mnemonic. No new pull.
+#
+# SAMPLING. senders_wide holds every LEAVER but only 1-in-SAMPLE_MOD of everyone else, and
+# already_out clients are neither - they arrive only if the modulo picked them. So the counts here
+# are a ~1-in-SAMPLE_MOD sample of the already_out population and the SHARES are what to read, not
+# the absolute numbers. The share is what the question needs anyway.
+if not HAVE_WIDE:
+    print("[20i] skipped - senders_wide not landed. Run [7b]. Until this runs, the 427,079 cannot be "
+          "called a suppression failure: regulatory mail legitimately reaches opted-out clients.")
+else:
+    _ao = banded.filter(F.col("bucket") == "already_out").select("CLNT_NO")
+    _ao_sends = senders_wide_raw.join(_ao, "CLNT_NO", "inner")
+    _n_ao_sampled = _ao_sends.select("CLNT_NO").distinct().count()
+    print("already_out clients present in senders_wide (sampled):", _n_ao_sampled)
+
+    i1 = (_ao_sends.groupBy("mne").agg(F.countDistinct("CLNT_NO").alias("already_out_clients_mailed"))
+          .withColumn("is_regulatory",
+                      F.col("mne").isin(*sorted(REGULATORY_MNES)))
+          .withColumn("pct_of_sampled_already_out",
+                      F.round(100.0 * F.col("already_out_clients_mailed") / F.lit(_n_ao_sampled), 2))
+          .orderBy(F.desc("already_out_clients_mailed")))
+    T("I1 - WHICH CAMPAIGNS MAILED THE ALREADY-OUT, top 30 | is_regulatory = true means the send was "
+      "legitimate and belongs OUT of any leak number | shares are of the sampled already_out "
+      "population, not of 427,079", i1.limit(30))
+
+    # THE HEADLINE SPLIT. One client can be mailed by both kinds, so the two groups OVERLAP and the
+    # percentages do not sum to 100 - a client reached only by regulatory mail is the innocent case,
+    # a client reached by any marketing send is not, and the third group is both.
+    _reg = (_ao_sends.filter(F.col("mne").isin(*sorted(REGULATORY_MNES)))
+            .select("CLNT_NO").distinct().withColumn("_reg", F.lit(1)))
+    _mkt = (_ao_sends.filter(~F.col("mne").isin(*sorted(REGULATORY_MNES)))
+            .select("CLNT_NO").distinct().withColumn("_mkt", F.lit(1)))
+    i2 = (_ao_sends.select("CLNT_NO").distinct()
+          .join(_reg, "CLNT_NO", "left").join(_mkt, "CLNT_NO", "left")
+          .withColumn("reached_by",
+                      F.when(F.col("_mkt").isNull(), F.lit("regulatory only - NOT a leak"))
+                       .when(F.col("_reg").isNull(), F.lit("marketing only - leak"))
+                       .otherwise(F.lit("both - leak, plus legitimate mail")))
+          .groupBy("reached_by").agg(F.count("*").alias("clients"))
+          .withColumn("pct", F.round(100.0 * F.col("clients") / F.lit(_n_ao_sampled), 2))
+          .orderBy(F.desc("clients")))
+    T("I2 - THE SPLIT THAT DECIDES §6 | 'regulatory only' clients were never wrongly mailed and must "
+      "come OUT of the 427,079 | anything else is a real suppression failure", i2)
+    print("REGULATORY_MNES used:", sorted(REGULATORY_MNES), "- treat as INCOMPLETE. Every campaign "
+          "not on that list is assumed marketing, which OVERSTATES the leak, never understates it.")
 
 # %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
 # MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN

@@ -257,7 +257,7 @@ def run():
         "SAMPLE_MOD": 10, "CARDS_MNES": frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"}),
         "BASE": "/x/", "WIN_START": "2026-03-01", "WIN_END": "2026-06-01",
         "PROF_CUTS": [0, 1, 2, 3], "HP_AGE": 35, "HP_TENURE": 5, "HP_PRODS": 2,
-        "PROVEN": True, "UCP_ANCHOR": "2026-02-28", "PULL_CADENCE": True, "SAMPLE_MOD2": 10, "RUN_CLEANUP": False, "BAND_VERSION": 3, "BAND_STAMP": "band_v3", "_n_lv": 1, "_n_st": 1,
+        "PROVEN": True, "REGULATORY_MNES": frozenset({"FXR","OTC","VMF","VOA"}), "UCP_ANCHOR": "2026-02-28", "PULL_CADENCE": True, "SAMPLE_MOD2": 10, "RUN_CLEANUP": False, "BAND_VERSION": 3, "BAND_STAMP": "band_v3", "_n_lv": 1, "_n_st": 1,
         "_WIN_DAYS": 92, "_bucket_counts": __import__("pandas").DataFrame({"bucket": ["leaver", "stayer", "already_out"], "count": [1, 2, 3]}), "_n_mailed": 1, "_n_matched": 1,
         # seeded frame removed - built by the cells
         # seeded frame removed - built by the cells
@@ -266,7 +266,7 @@ def run():
         "MAX_MNE_PER_CLIENT": 25, "MIN_PAIR_LEAVERS": 30, "PULL_WIDE": True,
     }
 
-    for cid in ["17", "18", "19", "20", "20b", "20d", "20e", "20f", "20g", "20h", "20c", "21", "21b", "22", "23"]:
+    for cid in ["17", "18", "19", "20", "20b", "20d", "20e", "20f", "20g", "20h", "20i", "20c", "21", "21b", "22", "23"]:
         if cid not in by_id:
             print("!! cell [%s] not found" % cid)
             continue
