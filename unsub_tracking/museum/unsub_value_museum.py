@@ -132,6 +132,17 @@ CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
 # this set is ASSUMED marketing, and that assumption overstates the leak. It does not understate it.
 REGULATORY_MNES = frozenset({"FXR", "OTC", "VMF", "VOA"})
 REG_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(REGULATORY_MNES))
+
+# SAMPLE_MOD lives HERE, not in [7b] where it is used to build the pull.
+#
+# It is read by [20g] and referenced by [20i], which are ANALYSIS cells. Left in the pull cell, a
+# cold kernel that ran "[1] then [9] onward" - the documented normal path, the one that never opens
+# an EDW connection - would reach L13 and die on NameError: SAMPLE_MOD. The pull cell is the one
+# cell the analysis half is designed never to need.
+#
+# A constant consumed by analysis belongs with the analysis constants even if only the pull writes
+# with it.
+SAMPLE_MOD = 10                     # 1-in-10 stayers in senders_wide. Set to 1 for a census.
 CARDS_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(CARDS_MNES))
 
 BASE = "hdfs:///user/427966379/unsub_value_museum/"
@@ -554,7 +565,6 @@ for _name, _ds, _de, _ls, _le in WIN_MONTHS:
 # fall back to a product join. UNION lets each branch keep its own plan - the modulo branch is a
 # cheap residual filter, the unsub branch is a join to a small distinct set - and UNION (not UNION
 # ALL) dedupes the leavers that also satisfy the modulo. Same shape as [7], which runs fine.
-SAMPLE_MOD = 10                     # 1-in-10 stayers. Set to 1 for a census (expect ~99M pairs).
 _SENDWIDE_SQL = """
 SELECT DISTINCT m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
 FROM (
