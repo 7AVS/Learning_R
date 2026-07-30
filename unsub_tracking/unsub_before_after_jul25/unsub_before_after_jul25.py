@@ -278,24 +278,46 @@ SELECT n_mne, COUNT(*) AS clients FROM (
 GROUP BY n_mne
 """
 
+# Runtime note (2026-07-30): the census version ran all 10 bites per disposition - 20 statements at
+# ~141s each, ~47 minutes, for a DIAGNOSTIC that feeds nothing downstream. The bites do not prune:
+# ABS(CLNT_NO) MOD 10 cannot use an index, so every bite re-scans the whole EVENT x MASTER join and
+# discards 90% of it. Biting buys spool safety at 10x the scan cost. [2] needs that trade. This cell
+# does not - it is asking the SHAPE of a distribution over millions of clients, and one bite is a
+# 1-in-10 random sample of clients (MOD on an account-ish id is arbitrary w.r.t. mnemonic count).
+# At these volumes the sampling error on "% of clients at exactly 1 mnemonic" is far below the
+# precision anyone reads it to.
+#
+# SPREAD_BITES = 1  -> ~5 min, counts scaled by 10, output labelled an estimate.
+# SPREAD_BITES = 10 -> the old census, ~47 min, scale factor 1. Only worth it if a number from this
+#                      cell is going into a document. It never has.
+SPREAD_BITES = 1
+
 def _pull_spread(disp, which):
     bites = []
-    for i in range(10):
-        print("spread %s bite %d/10" % (which.strip(), i + 1), flush=True)
+    for i in range(SPREAD_BITES):
+        print("spread %s bite %d/%d" % (which.strip(), i + 1, SPREAD_BITES), flush=True)
         b = edw_pd(SPREAD_TMPL % (disp, i))
         if len(b):
             bites.append(b)
-    assert bites, "spread %s returned zero rows in all 10 bites - investigate before continuing" % which
+    assert bites, "spread %s returned zero rows in %d bites - investigate before continuing" % (
+        which, SPREAD_BITES)
     out = pd.concat(bites, ignore_index=True)
     out["n_mne"]   = pd.to_numeric(out["n_mne"]).astype("int64")
     out["clients"] = pd.to_numeric(out["clients"]).astype("int64")
     out = out.groupby("n_mne", as_index=False)["clients"].sum()
+    # scale the sample back to population. Percentages and the mean are unaffected by the scaling -
+    # only the absolute client counts are, and those are the numbers nobody quotes from here.
+    if SPREAD_BITES < 10:
+        out["clients"] = out["clients"] * (10 // SPREAD_BITES)
     out.insert(0, "which", which)
     return out
 
 spread = (pd.concat([_pull_spread(4, "unsub  (disp 4)"), _pull_spread(1, "mailed (disp 1)")],
                     ignore_index=True)
             .sort_values(["which", "n_mne"], ignore_index=True))
+if SPREAD_BITES < 10:
+    print("ESTIMATE - %d of 10 bites, client counts scaled x%d. Percentages and mean n_mne are "
+          "unbiased; absolute counts carry sampling error." % (SPREAD_BITES, 10 // SPREAD_BITES))
 display(spread)
 
 for _w in spread["which"].unique():
