@@ -117,6 +117,10 @@ DROP_CLIENT_GRAIN = False     # Cell [9]. Delete base_v2 + ucp_enriched once the
                               # Leave False until the cubes are checked - deleting means any
                               # new cut needs a fresh Teradata pull.
 
+LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite is ~9.5M rows and
+                              # serializes to just over Spark's 128 MB RPC ceiling; this keeps
+                              # each payload near 20 MB. Lower it if the limit is still hit.
+
 N_BITES = 10   # MOD(CLNT_NO, N_BITES) - one independent Teradata pull per bite, each landed and
                # checked before running, so a killed run resumes at the next un-landed bite.
 
@@ -256,6 +260,37 @@ def _tag_mne_client_side(sdf):
             .withColumn("is_regulatory", F.when(mne_u.isin(sorted(REGULATORY_MNES)), F.lit(1)).otherwise(F.lit(0))))
 
 
+from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType
+
+BASE_SPARK_SCHEMA = StructType(
+    [StructField("clnt_no", LongType(), True),
+     StructField("mne", StringType(), True),
+     StructField("n_sends", LongType(), True)]
+    + [StructField("n_sends_%dm" % _w, LongType(), True) for _w in FREQ_WINDOWS]
+    + [StructField("first_send_dt", DateType(), True),
+       StructField("last_send_dt", DateType(), True),
+       StructField("unsub_flag", IntegerType(), True),
+       StructField("unsub_dt", DateType(), True)])
+
+
+def _prep_for_spark(pdf):
+    """Force pandas dtypes to match BASE_SPARK_SCHEMA exactly. Without this, a chunk that happens
+    to hold only nulls in unsub_dt infers as a different type and the parts stop reading as one
+    table. Also guards the float64 client-id trap: pandas renders large float ids in scientific
+    notation, which silently zero-matches any downstream join."""
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    pdf["mne"] = pdf["mne"].astype(str)
+    for _c in ["n_sends"] + ["n_sends_%dm" % _w for _w in FREQ_WINDOWS]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
+    pdf["unsub_flag"] = pd.to_numeric(pdf["unsub_flag"], errors="coerce").fillna(0).astype("int32")
+    for _c in ["first_send_dt", "last_send_dt", "unsub_dt"]:
+        pdf[_c] = pd.to_datetime(pdf[_c], errors="coerce").dt.date
+        pdf[_c] = pdf[_c].where(pdf[_c].notna(), None)
+    return pdf[[f.name for f in BASE_SPARK_SCHEMA.fields]]
+
+
 def land_bite(bite):
     """One bite = one CLNT_NO-mod slice, independently resumable. Skips if already landed - this
     is what makes a killed 10-bite run safe to just rerun top to bottom."""
@@ -295,8 +330,20 @@ def land_bite(bite):
 
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite) + " - investigate before proceeding"
-    sdf = _tag_mne_client_side(spark.createDataFrame(pdf))
-    sdf.write.mode("overwrite").parquet(BASE + name)
+
+    # createDataFrame ships the whole frame through Spark's RPC layer, and a full bite lands within
+    # a percent of spark.rpc.message.maxSize (128 MB) - bite 0 squeaked under, bite 1 did not.
+    # Write in chunks so no single payload approaches the limit. The schema is explicit rather than
+    # inferred, because a chunk where unsub_dt happens to be all-null would infer a different type
+    # and the parts would no longer read back as one table.
+    pdf = _prep_for_spark(pdf)
+    _first = True
+    for _s in range(0, len(pdf), LAND_CHUNK_ROWS):
+        _part = pdf.iloc[_s:_s + LAND_CHUNK_ROWS]
+        _sdf = _tag_mne_client_side(spark.createDataFrame(_part, schema=BASE_SPARK_SCHEMA))
+        _sdf.write.mode("overwrite" if _first else "append").parquet(BASE + name)
+        _first = False
+        print("   ...", name, "chunk", _s, "-", _s + len(_part), "written", flush=True)
     nback = spark.read.parquet(BASE + name).count()
     assert nback == len(pdf), name + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
     print(name, ": landed", len(pdf), "rows (bank-wide, all mnemonics), HDFS readback confirms", nback)
