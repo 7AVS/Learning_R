@@ -1097,3 +1097,40 @@ AND (TREATMT_END_DT >= WIN_FLOOR OR TREATMT_END_DT IS NULL)
 Q23 measures the difference; Q24 names whatever is still unmatched under it. Do not scope the
 analysis until one of the two tests explains the residual, and quote the final excluded-volume
 percentage wherever campaign counts are reported.
+
+## 20.15 SCOPE RULE (decided 2026-07-31) — shape test, send-date anchor, no tactic whitelist
+
+**`DTZV01.TACTIC_EVNT_IP_AR_H60M` is NOT a bank-wide campaign registry.** `preflight5.sql` Q24:
+
+| TREATMENT_ID | sends | in tactic table? |
+|---|---|---|
+| DEFAULT | 13,215,751 | no (junk) |
+| CABVRSN1 | 5,155,879 | no (junk) |
+| 2021342KFI | 4,451,621 | **no** |
+| 2026084QCF | 3,967,358 | **no** — dated inside the window |
+| 2026085QCF | 3,348,443 | **no** — dated inside the window |
+| 2018319KVM | 3,080,273 | no |
+| 2025270ERI | 2,952,301 | **no** — dated inside the window |
+
+Whitelisting against it removes real programs. Andre's read: those are ODS-deployed campaigns
+living in a different template. Active-during-window instead of started-during-window barely
+helped — 14.3% → 13.4% unmatched.
+
+**THE RULE:**
+
+1. **Scope by SHAPE only.** 10 chars, first 7 numeric, last 3 the mnemonic:
+   ```sql
+   AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+   AND SUBSTR(TRIM(TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
+   ```
+   Excludes the 29 non-conforming ids (~6% of volume, 18.4M of it DEFAULT + CABVRSN1). **No year
+   range** — it was wrong in both directions, discarding live ids and keeping residue.
+
+2. **Anchor every date on `disposition_dt_tm`, never on the Julian day in the id.** The Julian day
+   records when the ID was minted, not when the email went out — `2018319KVM` was still sending in
+   2026, eight years apart. Only the send date is a fact about the client. This is what makes the
+   year range unnecessary: vintage stops mattering once the id is read for its mnemonic alone.
+
+3. **Group by MNE, not by full TACTIC_ID.** Cost, stated: two waves of one mnemonic in a month
+   collapse into one row. The brief asks for unsubs by campaign, not by wave. Per-wave questions
+   would need the tactic table back — and it is incomplete, so that is a separate problem.

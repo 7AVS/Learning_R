@@ -174,27 +174,30 @@ import datetime
 
 # ---- Analysis window ----
 WIN_FLOOR = "2025-08-01"   # event window opens here
-TACTIC_ID_ONLY = False  # SUPERSEDED - do not re-enable, and do not retune the year range.
-                        # A string-shape test was the wrong instrument: a 2020 floor discarded
-                        # 2018319KVM, a live 2018-vintage id carrying 3,080,273 sends, and any
-                        # wider floor is equally arbitrary. Scope must come from the deployments
-                        # actually run in the window (DTZV01.TACTIC_EVNT_IP_AR_H60M), not from
-                        # parsing an id. Blocked on preflight5 Q19/Q20 proving TREATMENT_ID =
-                        # TACTIC_ID - asserted everywhere in this folder, never verified
-                        # (UNSUB_TRACKING_KNOWLEDGE.md:283).
-                        # ORIGINAL COMMENT: Keep ONLY properly formed tactic ids:
-                        # YYYY + Julian day + 3-char program, e.g. 2024313BBP -> SUBSTR(x,8,3)
-                        # = BBP. Year range is 2015-2030, not 2020: Q17 showed 2018319KVM (3,080,273 sends,
-                        # 1,119,884 clients) is a live 2018-vintage tactic id, and a 2020 floor
-                        # threw it away. Everything else (DEFAULT, CABVRSN1, vendor codes) is
-                        # excluded outright. Those ids are not campaigns, SUBSTR(x,8,3) on them
-                        # yields a meaningless MNE, and because they are not date-bound a whole
-                        # year of email collapses onto one key - which is what produced the
-                        # 3,029,598 pairs Q12 showed sending "30+ days apart".
+# ---- Campaign id scope. Shape only, no vintage test, no tactic-table whitelist. ----
+# Decided 2026-07-31 after preflight5. Three things settled it:
+#   1. DTZV01.TACTIC_EVNT_IP_AR_H60M is NOT a bank-wide whitelist. 2026084QCF and 2026085QCF are
+#      correctly formed, dated inside the window, carry 7,315,801 sends between them, and have no
+#      row in it. Same for 2025270ERI and 2021342KFI. Likely ODS-deployed campaigns. Whitelisting
+#      against that table would delete real programs.
+#   2. A YEAR RANGE is the wrong instrument in both directions - it discarded live ids and kept
+#      residue - and it is unnecessary once the anchor changes.
+#   3. The Julian day in an id records when the ID WAS MINTED, not when the email went out.
+#      2018319KVM was still sending in 2026, eight years apart. Only the send date is a fact about
+#      the client, so EVERY date in this pipeline is anchored on disposition_dt_tm and the id is
+#      read for its mnemonic alone.
+#
+# What remains is a pure shape test: 10 chars, first 7 numeric, last 3 the mnemonic. That excludes
+# DEFAULT, CABVRSN1, COI, ESPTVER2 and the rest of the 29 non-conforming ids (~6% of send volume,
+# 18.4M of it DEFAULT and CABVRSN1 alone) and keeps every real campaign regardless of vintage.
+#
+# Cost, stated: two waves of the same mnemonic in one month collapse into one row. The brief asks
+# for unsubs by campaign, not by wave, so nothing is lost here - but per-wave questions would need
+# the tactic table back.
+TACTIC_ID_SHAPE_ONLY = True
 TACTIC_ID_SQL = """
           AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
-          AND SUBSTR(TRIM(TREATMENT_ID), 1, 4) BETWEEN '2015' AND '2030'
-          AND SUBSTR(TRIM(TREATMENT_ID), 5, 3) BETWEEN '001' AND '366'""" if TACTIC_ID_ONLY else ""
+          AND SUBSTR(TRIM(TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'""" if TACTIC_ID_SHAPE_ONLY else ""
 
 WIN_CEIL  = "2026-08-01"   # HARD ceiling. Without it each statement runs floor-to-its-own-clock,
                            # and the pulls run minutes or days apart because resume is a feature -
