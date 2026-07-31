@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>spotlight.py — ETL lineage</title>
+<style>
+:root{
+  --bg:#f7f8fa; --panel:#fff; --ink:#12161c; --muted:#5b6672; --line:#dfe3e8;
+  --src:#8a6d3b; --srcbg:#fdf6e3;
+  --td:#0b5fa5;  --tdbg:#eaf3fb;
+  --land:#6b4fa8; --landbg:#f2edfb;
+  --spark:#0f7a5a; --sparkbg:#e9f7f1;
+  --cube:#b0334a; --cubebg:#fdeef1;
+  --ship:#334155; --shipbg:#eef1f5;
+  --warn:#b3261e; --warnbg:#fdecea;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+header{padding:22px 28px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:21px;letter-spacing:-.01em}
+h1 small{font-weight:400;color:var(--muted);font-size:14px;margin-left:10px}
+.banner{margin:12px 0 0;padding:10px 14px;background:var(--warnbg);border-left:4px solid var(--warn);
+  border-radius:4px;font-size:13.5px}
+.banner b{color:var(--warn)}
+.wrap{padding:20px 28px 60px;max-width:2200px}
+h2{font-size:16px;margin:34px 0 10px;letter-spacing:-.01em}
+h2 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:8px}
+
+/* ---- diagram ---- */
+.scroller{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+#canvas{position:relative;display:flex;gap:34px;padding:20px 22px 26px;min-width:1750px;align-items:flex-start}
+#wires{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.col{display:flex;flex-direction:column;gap:12px;width:228px;flex:0 0 228px;position:relative;z-index:1}
+.colhead{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  font-weight:700;padding-bottom:6px;border-bottom:2px solid var(--line);margin-bottom:4px}
+.colhead em{display:block;text-transform:none;letter-spacing:0;font-style:normal;font-weight:400;
+  font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.35}
+
+.node{background:var(--panel);border:1.5px solid var(--line);border-radius:7px;padding:9px 11px;
+  cursor:pointer;transition:.14s;position:relative}
+.node:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,0,0,.09)}
+.node .t{font-weight:650;font-size:13px;line-height:1.3;font-family:ui-monospace,Consolas,monospace}
+.node .s{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.35}
+.node .steps{margin-top:7px;padding-top:6px;border-top:1px dashed var(--line);font-size:11px;
+  color:var(--muted);font-family:ui-monospace,Consolas,monospace;line-height:1.6}
+.badge{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  padding:1.5px 5px;border-radius:3px;margin:6px 4px 0 0}
+.k-src{border-color:var(--src);background:var(--srcbg)} .k-src .t{color:var(--src)}
+.k-td{border-color:var(--td);background:var(--tdbg)} .k-td .t{color:var(--td)}
+.k-land{border-color:var(--land);background:var(--landbg)} .k-land .t{color:var(--land)}
+.k-spark{border-color:var(--spark);background:var(--sparkbg)} .k-spark .t{color:var(--spark)}
+.k-cube{border-color:var(--cube);background:var(--cubebg)} .k-cube .t{color:var(--cube)}
+.k-ship{border-color:var(--ship);background:var(--shipbg)} .k-ship .t{color:var(--ship)}
+.k-cfg{border-style:dashed;border-color:var(--muted);background:#fafbfc}
+.b-warn{background:var(--warnbg);color:var(--warn)}
+.b-off{background:#e9ecef;color:#6b7580}
+.b-guard{background:#e9f7f1;color:var(--spark)}
+.node.sel{box-shadow:0 0 0 3px rgba(11,95,165,.30);transform:translateY(-1px)}
+.node.dim{opacity:.22}
+path.wire{fill:none;stroke:#b9c2cc;stroke-width:1.6}
+path.wire.dash{stroke-dasharray:5 4;stroke:#c9ced6}
+path.wire.hot{stroke:#0b5fa5;stroke-width:2.6}
+path.wire.dim{opacity:.12}
+
+/* ---- detail panel ---- */
+.detail{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;min-height:96px}
+.detail h3{margin:0 0 4px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
+.detail .meta{font-size:12px;color:var(--muted);margin-bottom:10px}
+.detail p{margin:0 0 9px;font-size:13.5px}
+.detail ul{margin:6px 0;padding-left:18px;font-size:13px}
+.detail li{margin-bottom:4px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:#eef1f4;padding:1px 5px;border-radius:3px}
+.hint{color:var(--muted);font-size:13px}
+
+/* ---- tables ---- */
+table{border-collapse:collapse;width:100%;font-size:12.5px;background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th{text-align:left;background:#eef1f4;padding:8px 10px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid #edf0f3;vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.mono,th.mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.tblscroll{overflow-x:auto;border-radius:8px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:10px}
+summary{cursor:pointer;font-weight:600;font-size:13.5px}
+pre{background:#12161c;color:#e6edf3;padding:14px;border-radius:6px;overflow-x:auto;font-size:11.5px;line-height:1.55}
+.gotcha{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--warn);
+  border-radius:6px;padding:11px 14px;margin-bottom:8px;font-size:13.5px}
+.gotcha b{display:block;margin-bottom:3px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 0;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1.5px solid}
+</style>
+</head>
+<body>
+<header>
+  <h1>spotlight.py — ETL lineage <small>Anatomy of an Unsub · 9 cells · 3 Teradata pulls → 7 cubes</small></h1>
+  <div class="banner"><b>SMOKE = True</b> (line 254). A full run right now pulls <b>bite 0 of 10</b> only — every absolute count in every output is ~1/10 of reality. Flip <code>SMOKE=False</code> and rerun before any number leaves this file.</div>
+</header>
+
+<div class="wrap">
+
+<h2>Pipeline DAG <span>click any box to trace its inputs and outputs</span></h2>
+<div class="scroller">
+  <div id="canvas"><svg id="wires"></svg></div>
+</div>
+<div class="legend">
+  <span><i style="border-color:var(--src);background:var(--srcbg)"></i>source table</span>
+  <span><i style="border-color:var(--td);background:var(--tdbg)"></i>Teradata pull</span>
+  <span><i style="border-color:var(--land);background:var(--landbg)"></i>HDFS landing</span>
+  <span><i style="border-color:var(--spark);background:var(--sparkbg)"></i>Spark derive</span>
+  <span><i style="border-color:var(--cube);background:var(--cubebg)"></i>cube / deliverable</span>
+  <span><i style="border-color:var(--ship);background:var(--shipbg)"></i>delivery</span>
+  <span>— solid = data flow · dashed = config / gated</span>
+</div>
+
+<div class="detail" id="detail"><span class="hint">Click a node above. Its logic, grain, hardcoded constants and every join predicate that touches it appear here.</span></div>
+
+<h2>Every edge, with the predicate verbatim <span>the "how the connections work" table</span></h2>
+<div class="tblscroll"><table id="edgetbl">
+  <thead><tr><th>From</th><th>To</th><th>Op</th><th class="mono">Join key / filter — verbatim from code</th><th>Line</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<h2>Node inventory <span>grain = one row per WHAT</span></h2>
+<div class="tblscroll"><table id="nodetbl">
+  <thead><tr><th>ID</th><th>Node</th><th>Kind</th><th>Engine</th><th>Grain</th><th>Lines</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<h2>Gotchas a diagram can't show</h2>
+<div id="gotchas"></div>
+
+<h2>Same DAG as Mermaid <span>paste into Confluence, GitHub, or any Mermaid renderer</span></h2>
+<details>
+  <summary>Show Mermaid source</summary>
+  <pre id="mermaid"></pre>
+</details>
+
+</div>
+
+<script>
+const NODES = [
+/* stage, id, title, sub, kind, steps[], badges[], engine, lines, grain, why[], consts[] */
+{st:0,id:"cfg",t:"Cell [0] config",s:"every literal defined once",k:"cfg",engine:"—",lines:"170–386",
+ grain:"scalars & code lists",
+ why:["Single source of truth for the run: window dates, MNE lists, band edges, HDFS paths, schema version, run switches.",
+      "<code>FREQ_CUTOFFS</code> is computed once at Cell [0] run time (line 278) so every bite in a run shares the same trailing-3m/6m anchor."],
+ consts:["<code>WIN_FLOOR='2025-08-01'</code> (176), <code>WIN_CEIL='2026-08-01'</code> (202) — ceiling is hand-maintained, move it forward each sprint",
+      "<code>MASTER_FLOOR='2025-05-01'</code> (206) — 3-month load-lag margin; load_tm is a LOAD stamp, not a send date",
+      "<code>CARDS_MNES</code> 12 codes (220) · <code>REGULATORY_MNES</code> 22 codes (226) — regulatory list is stale, transcribed from a museum pivot",
+      "<code>N_BITES=10</code>, <code>SMOKE=True</code> (236–254) · band edges <code>AGE/TENURE/EMAILS_*</code> (284–294) marked first-cut, unverified"]},
+
+{st:0,id:"s1",t:"VENDOR_FEEDBACK_EVENT",s:"DTZV01 · every email disposition event",k:"src",engine:"Teradata",lines:"570, 689, 804",
+ grain:"one row per delivery/disposition event (raw)",
+ why:["The event fact. <code>disposition_cd=1</code> = delivered/send, <code>disposition_cd=4</code> = unsubscribe.",
+      "Never scanned unfiltered — every pull applies the window + tactic-id shape filter at source."],
+ consts:["400M+ rows unfiltered — the reason all three pulls aggregate server-side"]},
+
+{st:0,id:"s2",t:"VENDOR_FEEDBACK_MASTER",s:"DTZV01 · hashed id → CLNT_NO",k:"src",engine:"Teradata",lines:"592, 709, 825",
+ grain:"(consumer_id_hashed, TREATMENT_ID) → CLNT_NO — NOT 1:1 (~1.123 rows/key)",
+ why:["The identity bridge. EVENT only carries a hashed consumer id; MASTER resolves it to CLNT_NO.",
+      "Because the grain is not 1:1, every pull joins to a <code>SELECT DISTINCT</code> subquery — joining raw would inflate counts ~11%."],
+ consts:["<code>load_tm &gt;= DATE '2025-05-01'</code> — zero margin would undercount ~28.5% of unsubs that lag their send by &gt;30 days (209)"]},
+
+{st:0,id:"s3",t:"UCP ucp4",s:"HDFS parquet · path-partitioned by MONTH_END_DATE",k:"src",engine:"Spark",lines:"971, 975",
+ grain:"one row per CLNT_NO per snapshot month (personal only after filter)",
+ why:["Client attributes: AGE, TENURE_RBC_YEARS, product counts T/I/B/C_TOT_CNT.",
+      "Read as a <b>single fixed month-end snapshot</b> (<code>_ucp_anchor_date</code> = last closed month, line 969) applied to the whole window."],
+ consts:["Snapshot is <b>not time-varying</b> — bands describe the client <i>now</i>, not at time of send or unsub (104–110)"]},
+
+{st:1,id:"A",t:"Pull A — client grain",s:"bank-wide, one row per client",k:"td",engine:"Teradata",lines:"554–638",
+ steps:["ek → dedup to (client, treatment, disposition, DAY)","joined → INNER JOIN MASTER-DISTINCT","GROUP BY clnt_no"],
+ grain:"one row per clnt_no, bank-wide (per bite)",
+ why:["The backbone pull. Produces per-client counts: n_campaigns_all/branded/cards/regulatory, n_emails_all/3m/6m/promo_6m/regulatory_6m/cards/cards_6m, unsub_flag, unsub_dt, first/last_send_dt.",
+      "<code>ek</code> collapses same-day retries with <code>MIN(disposition_dt_tm)</code> and <code>GROUP BY 1,2,3,CAST(disposition_dt_tm AS DATE)</code> — removes retry noise without deleting genuine re-sends."],
+ consts:["Bite filter <code>MOD(ABS(CLNT_NO), N_BITES)=bite</code> sits <b>inside</b> the MASTER DISTINCT subquery — that placement is the v4→v5 spool fix (Teradata 2646)",
+      "~15M clients at full scale"]},
+
+{st:1,id:"B",t:"Pull B — mne × cohort",s:"bank-wide campaign trend",k:"td",engine:"Teradata",lines:"673–751",
+ steps:["ek (same as A)","joined (same as A)","client_mne → GROUP BY clnt_no, mne","GROUP BY mne, cohort_month_num"],
+ grain:"one row per (mne, cohort_month) per bite",
+ why:["Campaign-level counts: clients_mailed, sends, unsub_clients, by entry cohort.",
+      "<code>cohort_month_num = YEAR(first_send_dt)*100 + MONTH(first_send_dt)</code> — this is an <b>entry cohort</b>, the month a client first appears in that campaign, not a calendar send-volume trend."],
+ consts:["The <code>n_sends &gt;= 1</code> filter was deliberately removed (716–719) — it silently dropped unsub-but-no-send rows and undercounted unsub_clients vs cube1",
+      "is_cards / is_regulatory / is_branded are tagged <b>client-side on landing</b> via <code>_tag_mne_client_side</code>, not in SQL"]},
+
+{st:1,id:"C",t:"Pull C — client × mne (cards)",s:"the only mne-filtered pull",k:"td",engine:"Teradata",lines:"788–856",
+ steps:["ek + SUBSTR(TREATMENT_ID,8,3) IN (cards)","joined","GROUP BY clnt_no, mne"],
+ grain:"one row per (clnt_no, mne), cards-only",
+ why:["The only surviving client×mne grain after the wire-cost redesign. Feeds cadence and cube1_profiling.",
+      "Cards-filtered <b>in SQL</b> (12 MNEs) — the one place a mnemonic filter is deliberate."],
+ consts:["~10M rows at full scale","Because this is the only client×mne source, <b>cube1_profiling is cards-only</b> while every other cube is bank-wide"]},
+
+{st:2,id:"v1",t:"clientagg_v6/",s:"HDFS parquet, one dir per bite",k:"land",engine:"HDFS",lines:"554–638",
+ grain:"one row per clnt_no, bank-wide",
+ why:["Landed output of Pull A. Read back by <code>read_clientagg()</code> as a union of all bite dirs."],
+ consts:["Guarded by a sibling <code>_ROWCOUNT</code> marker written only after all chunks land (446–470) — a killed session's short directory is not silently trusted",
+      "Resume check tests <b>path existence, not columns</b> (301–303): a schema change silently reuses stale parquet unless <code>SCHEMA_VERSION</code> is bumped"]},
+
+{st:2,id:"v2",t:"mne_agg_v6/",s:"HDFS parquet + client-side tags",k:"land",engine:"HDFS",lines:"673–751",
+ grain:"one row per (mne, cohort_month) per bite",
+ why:["Landed Pull B, with is_cards / is_regulatory / is_branded attached at write time.",
+      "Downstream must <b>SUM across bites</b>, not just union — bites partition clients disjointly by <code>MOD(ABS(CLNT_NO),10)</code>."],
+ consts:["~3,000 rows"]},
+
+{st:2,id:"v3",t:"cards_pair_v6/",s:"HDFS parquet, cards-only",k:"land",engine:"HDFS",lines:"788–856",
+ grain:"one row per (clnt_no, mne), cards-only",
+ why:["Landed Pull C. Feeds cadence, the UCP-match-by-mne QA output, and cube1_profiling."],
+ consts:["~10M rows"]},
+
+{st:3,id:"d1",t:"mne_agg",s:"union of all Pull B bites",k:"spark",engine:"Spark",lines:"874, 920",
+ grain:"(mne, cohort_month, bite) partial rows",
+ why:["<code>read_mneagg()</code> — union across bites. Every consumer re-aggregates with <code>sum()</code> to recombine the bite partitions."]},
+
+{st:3,id:"cad",t:"cadence_by_mne",s:"median gap between sends",k:"spark",engine:"Spark",lines:"887–896",
+ grain:"one row per mne (12, cards-only)",
+ why:["<code>approx_gap_days = datediff(last_send_dt, first_send_dt) / (n_sends - 1)</code> per client×mne where n_sends ≥ 2, then <code>percentile_approx(...,0.5)</code> per mne.",
+      "Moved out of SQL into Spark in the v4→v5 redesign."],
+ consts:["Non-cards MNEs get NULL, not 0 (885–886) — cards-only source"]},
+
+{st:3,id:"d6",t:"base_ids",s:"distinct client universe",k:"spark",engine:"Spark",lines:"985–987",
+ grain:"one row per clnt_no (distinct, ~15M)",
+ why:["Distinct CLNT_NO from clientagg, cast <code>decimal(18,0) → long</code> before the UCP join.",
+      "That cast is the join-key discipline: float-typed ids render in scientific notation on string cast and silently match nothing."]},
+
+{st:3,id:"d5",t:"ucp_sel → banded",s:"Personal only, bands derived",k:"spark",engine:"Spark",lines:"975–1052",
+ grain:"one row per CLNT_NO (matched UCP only)",
+ why:["Filters <code>trim(CLNT_TYP)=='Personal'</code>, then derives <code>age_band</code>, <code>tenure_band</code> and <code>prod_cat_cnt</code>.",
+      "<code>prod_cat_cnt</code> = <b>count of nonzero</b> T/I/B/C_TOT_CNT — deliberately a category count, not a sum of accounts (1048)."],
+ consts:["<code>AGE_EDGES</code> / <code>TENURE_EDGES</code> (284–285) both flagged \"no house standard\""]},
+
+{st:4,id:"v5",t:"ucp_enriched_full",s:"the hub — every cube joins here",k:"land",engine:"HDFS",lines:"1057–1070",
+ grain:"one row per clnt_no, bank-wide (= base_ids row count)",
+ why:["<code>base_ids LEFT JOIN ucp_enriched</code> on clnt_no_long, misses coalesced to <code>\"no_ucp_match\"</code>.",
+      "Left-joined, not inner — non-matches stay in the population and get reported rather than silently dropped."],
+ consts:["Fan-out assert <code>_n_ucp == _left_n</code> (1076–1079) — a duplicate-CLNT_NO UCP snapshot would inflate every downstream cube"]},
+
+{st:4,id:"g1",t:"guard · match floor",s:"assert match% ≥ 70",k:"spark",engine:"Spark",lines:"996–1006",badges:["guard"],
+ grain:"scalar assertion",
+ why:["<code>base_ids INNER JOIN ucp_ids</code>, hard-fails below <code>UCP_MATCH_FLOOR = 70.0</code>.",
+      "Catches a broken join key — not ordinary attrition (UCP is personal-only, misses business clients and closed accounts)."]},
+
+{st:4,id:"g2",t:"guard · leaver bias",s:"STAYER vs LEAVER match rate",k:"spark",engine:"Spark",lines:"1011–1021",badges:["guard"],
+ grain:"2 rows (one per bucket)",
+ why:["If leavers match UCP at a materially different rate than stayers, every profiling cut is biased and <code>no_ucp_match</code> must be reported, not filtered."]},
+
+{st:5,id:"o4",t:"q_mne",s:"unsubs by campaign + cadence",k:"cube",engine:"Spark→pandas",lines:"876–905",
+ grain:"one row per mne, bank-wide",
+ why:["<code>sum()</code> across bites of clients_mailed / sends / unsub_clients, left-joined to cadence.",
+      "Print-only — small enough (one row per mnemonic) that it never gets a CSV; it still lands in the workbook."]},
+
+{st:5,id:"o5",t:"q_trend",s:"mne × cohort month",k:"cube",engine:"Spark→CSV",lines:"920–944",
+ grain:"one row per (mne, cohort_month)",
+ why:["Entry-cohort trend: the month a client first appears sent-to for that campaign. Not calendar send volume."]},
+
+{st:5,id:"o6",t:"ucp_match_by_mne",s:"QA · match rate per campaign",k:"cube",engine:"Spark→CSV",lines:"1107–1124",
+ grain:"one row per mne (12)",
+ why:["Cards-only surrogate for a bank-wide 250-MNE match-shape test that is no longer computable — only Pull C still carries client×mne rows."]},
+
+{st:5,id:"o7",t:"cube1_profiling",s:"mne × demographics — CARDS ONLY",k:"cube",engine:"Spark→CSV",lines:"1127–1157",badges:["cards"],
+ grain:"one row per (mne, age_band, tenure_band, prod_cat_cnt)",
+ why:["Stayers / leavers / clients_total plus mean tenure and median profitability per bucket.",
+      "Stayer-vs-leaver split via <code>sum(when(unsub_flag==0/1,...))</code> — columns, not rows."],
+ consts:["<code>is_cards=lit(1)</code>, <code>is_regulatory=lit(0)</code> (1143–1144) are literal constants for column-consistency with q_mne — <b>not</b> real dimensions",
+      "This is the <b>only cards-only cube</b>. Do not compare its totals to the bank-wide cubes."]},
+
+{st:5,id:"o8",t:"cube1_allclients",s:"demographics, bank-wide",k:"cube",engine:"Spark→CSV",lines:"1162–1187",
+ grain:"one row per (age_band, tenure_band, prod_cat_cnt)",
+ why:["Same demographic dims as cube1_profiling but with no mne dimension — exists to compensate for cube1_profiling's cards-only narrowing."]},
+
+{st:5,id:"o9",t:"cube2_frequency",s:"contact breadth × depth",k:"cube",engine:"Spark→CSV",lines:"1203–1239",
+ grain:"one row per (n_branded_campaigns, n_emails_3m, n_emails_6m, n_promo_6m, n_regulatory_6m, prod_cat_cnt) bucket combo",
+ why:["Answers whether unsub risk rises with contact volume, and whether it's campaign breadth or raw email count that drives it."],
+ consts:["Bucket edges (290–294) explicitly marked \"FIRST-CUT… unverified against the real bank-wide distribution\" — re-cut them once a real run lands"]},
+
+{st:5,id:"o10",t:"q_emails_all",s:"stayer vs leaver, 1 row",k:"cube",engine:"Spark→CSV",lines:"1244–1261",
+ grain:"1 row",
+ why:["Headline summary: total and median email volume for stayers vs leavers."]},
+
+{st:6,id:"o11",t:"spotlight_cubes.xlsx / .zip",s:"the download bundle — 7 sheets",k:"ship",engine:"pandas",lines:"1279–1318",
+ grain:"one sheet per cube",
+ why:["The only deliberate local-driver-disk write (296–297). Every cube's pandas frame → one workbook → zipped."],
+ consts:["Silent degrade: if <code>openpyxl</code> is missing or blocked it falls back to per-sheet CSVs with only a printed warning (1295–1310)",
+      "If the pod home dir is on overlay/tmpfs it does <b>not</b> survive a pod restart — only the HDFS CSVs are durable"]},
+
+{st:6,id:"o12",t:"client_extract",s:"gated OFF by default",k:"ship",engine:"Spark→parquet",lines:"1336–1369",badges:["off"],
+ grain:"one row per clnt_no",
+ why:["Ad-hoc client-grain parquet: clientagg + cards roll-up + UCP bands.",
+      "<code>WRITE_CLIENT_EXTRACT=False</code> (238) — by design nothing at client grain is meant to persist."]},
+
+{st:6,id:"o13",t:"Cell [9] cleanup",s:"gated OFF · deletes v1/v3/v5",k:"ship",engine:"hdfs dfs",lines:"1389–1417",badges:["off","warn"],
+ grain:"—",
+ why:["Deletes the client-grain intermediates <code>clientagg_v6</code>, <code>cards_pair_v6</code>, <code>ucp_enriched</code>.",
+      "Double-gated: <code>DROP_CLIENT_GRAIN</code> must be True <b>and</b> all four aggregate outputs must independently read back via <code>.limit(1).collect()</code> first."],
+ consts:["Uses <code>-skipTrash</code> — no undo if the guard ever gives a false positive"]}
+];
+
+const EDGES = [
+ ["cfg","A","config","every literal (window, MNE lists, bite count) injected into the SQL template","170–386",1],
+ ["cfg","B","config","same config block","170–386",1],
+ ["cfg","C","config","same config block","170–386",1],
+ ["s1","A","filter + dedup","disposition_cd IN (1, 4) AND disposition_dt_tm >= DATE '2025-08-01' AND disposition_dt_tm < DATE '2026-08-01' + tactic-id shape; GROUP BY 1,2,3,CAST(disposition_dt_tm AS DATE)","570–575",0],
+ ["s2","A","dedup + join","SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO WHERE load_tm >= DATE '2025-05-01' AND CLNT_NO IS NOT NULL AND MOD(ABS(CLNT_NO),10)=bite  →  m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID","591–597",0],
+ ["s1","B","filter + dedup","identical to Pull A's ek block","687–694",0],
+ ["s2","B","dedup + join","identical MASTER DISTINCT subquery and join keys","708–714",0],
+ ["s1","C","filter + dedup","… AND SUBSTR(TREATMENT_ID, 8, 3) IN (12 cards MNEs) — the one deliberate mne filter in SQL","805–809",0],
+ ["s2","C","dedup + join","identical MASTER DISTINCT subquery and join keys","824–830",0],
+ ["A","v1","write","_write_chunks → parquet append, per bite, then _ROWCOUNT marker","630",0],
+ ["B","v2","write + tag","_write_chunks(tag_fn=_tag_mne_client_side) — is_cards/is_regulatory/is_branded computed client-side","742",0],
+ ["C","v3","write","_write_chunks (no tag_fn — flags constant for a cards-only pull)","847",0],
+ ["v2","d1","union read","read_mneagg() — spark.read.parquet(MNEAGG_DIR + '*')","874, 920",0],
+ ["v3","cad","filter + derive","filter(n_sends >= 2).withColumn('approx_gap_days', datediff(last_send_dt, first_send_dt)/(n_sends-1))","888–892",0],
+ ["v1","d6","read + cast + dedup","read_clientagg().withColumn('clnt_no_long', cast decimal(18,0) → long).select('clnt_no_long').distinct()","985–987",0],
+ ["s3","d5","filter","path = UCP_BASE + 'MONTH_END_DATE=' + last-closed-month ; filter(trim(CLNT_TYP) == 'Personal')","971–983",0],
+ ["d1","o4","aggregate","groupBy('mne','is_cards','is_regulatory','is_branded').agg(sum(clients_mailed), sum(sends), sum(unsub_clients)) — sums ACROSS bites","876–881",0],
+ ["cad","o4","join","q_mne.join(cadence_by_mne, 'mne', 'left')","900",0],
+ ["d1","o5","aggregate","groupBy('mne','is_cards','is_regulatory','cohort_month_num').agg(sum × 3)","922–935",0],
+ ["d6","v5","join","base_ids.join(ucp_enriched, 'clnt_no_long', 'left') ; misses coalesced to 'no_ucp_match'","1057–1064",0],
+ ["d5","v5","join","right side of the same left join","1057–1064",0],
+ ["d6","g1","join + assert","base_ids.join(_ucp_ids,'clnt_no_long','inner') ; ASSERT match_pct >= UCP_MATCH_FLOOR (70.0)","996–1006",1],
+ ["v1","g2","join + aggregate","_bucket_ids.join(_ucp_ids.withColumn('in_ucp',1),'clnt_no_long','left').groupBy('bucket')  [LEAVER vs STAYER]","1011–1021",1],
+ ["v3","o6","join + aggregate","cards_pair.select('clnt_no','mne').distinct().join(ucp_ids_for_match,'clnt_no','left').groupBy('mne')","1107–1122",0],
+ ["v5","o6","filter + dedup","filter(age_band != 'no_ucp_match').select('clnt_no').distinct()","1107",0],
+ ["v3","o7","join","cards_pair.join(ucp_enriched_full, 'clnt_no', 'left')","1127",0],
+ ["v5","o7","join","right side of the same left join","1127",0],
+ ["v1","o8","join","clientagg.select('clnt_no','unsub_flag').join(ucp_enriched_full, 'clnt_no', 'left')","1162–1163",0],
+ ["v5","o8","join","right side of the same left join","1163",0],
+ ["v1","o9","read + band","read_clientagg() then _band() on n_branded_campaigns, n_emails_3m/6m, n_promo_6m, n_regulatory_6m","1203–1214",0],
+ ["v5","o9","join","join(ucp_enriched_full.select('clnt_no','prod_cat_cnt'), 'clnt_no', 'left')","1215",0],
+ ["v1","o10","aggregate","clientagg.agg(...) — stayer/leaver email volume + median","1244–1253",0],
+ ["o4","o11","collect","_sheets['q_mne'] → pd.ExcelWriter","1287",0],
+ ["o5","o11","collect","_sheets['q_trend']","1283–1318",0],
+ ["o6","o11","collect","_sheets['ucp_match_by_mne']","1283–1318",0],
+ ["o7","o11","collect","_sheets['cube1_profiling']","1283–1318",0],
+ ["o8","o11","collect","_sheets['cube1_allclients']","1283–1318",0],
+ ["o9","o11","collect","_sheets['cube2_frequency']","1283–1318",0],
+ ["o10","o11","collect","_sheets['q_emails_all']","1283–1318",0],
+ ["v1","o12","join","clientagg.join(_cards_roll,'clnt_no','left').join(ucp_enriched_full,'clnt_no','left')","1340–1352",1],
+ ["v3","o12","join","_cards_roll = cards_pair.groupBy('clnt_no').agg(max(1), concat_ws(mne set))","1340–1352",1],
+ ["v5","o12","join","third leg of the same chain","1352",1],
+ ["o7","o13","existence probe","spark.read.csv(path).limit(1).collect() on all 4 aggregate outputs BEFORE any delete","1400–1410",1],
+ ["o9","o13","existence probe","same guard","1400–1410",1]
+];
+
+const STAGES = [
+ ["1 · Sources","raw tables, read once"],
+ ["2 · Teradata extraction","3 bitten pulls, aggregated server-side"],
+ ["3 · Landing","HDFS parquet + _ROWCOUNT marker"],
+ ["4 · Spark derive","union bites, cadence, UCP prep"],
+ ["5 · Enrichment hub","client universe × UCP bands"],
+ ["6 · Cubes","the deliverables"],
+ ["7 · Delivery","download bundle · gated extras"]
+];
+
+const BADGE = {cards:['b-warn','cards only'],off:['b-off','off by default'],warn:['b-warn','destructive'],guard:['b-guard','guard']};
+const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
+
+/* ---------- render nodes ---------- */
+const canvas = document.getElementById('canvas');
+STAGES.forEach((st,i)=>{
+  const col = document.createElement('div'); col.className='col';
+  col.innerHTML = `<div class="colhead">${st[0]}<em>${st[1]}</em></div>`;
+  NODES.filter(n=>n.st===i).forEach(n=>{
+    const d = document.createElement('div');
+    d.className = 'node k-'+n.k; d.dataset.id = n.id;
+    let h = `<div class="t">${n.t}</div><div class="s">${n.s}</div>`;
+    if(n.steps) h += `<div class="steps">${n.steps.map(s=>'› '+s).join('<br>')}</div>`;
+    if(n.badges) h += n.badges.map(b=>`<span class="badge ${BADGE[b][0]}">${BADGE[b][1]}</span>`).join('');
+    d.innerHTML = h;
+    d.addEventListener('click', e=>{e.stopPropagation(); select(n.id);});
+    col.appendChild(d);
+  });
+  canvas.appendChild(col);
+});
+
+/* ---------- draw wires ---------- */
+const svg = document.getElementById('wires');
+function draw(){
+  const cb = canvas.getBoundingClientRect();
+  svg.setAttribute('width', canvas.scrollWidth);
+  svg.setAttribute('height', canvas.scrollHeight);
+  svg.innerHTML = '';
+  EDGES.forEach((e,i)=>{
+    const a = canvas.querySelector(`[data-id="${e[0]}"]`), b = canvas.querySelector(`[data-id="${e[1]}"]`);
+    if(!a||!b) return;
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const x1 = ra.right-cb.left, y1 = ra.top-cb.top+ra.height/2;
+    const x2 = rb.left-cb.left,  y2 = rb.top-cb.top+rb.height/2;
+    const dx = Math.max(28,(x2-x1)*0.5);
+    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
+    p.setAttribute('class','wire'+(e[5]?' dash':''));
+    p.dataset.from = e[0]; p.dataset.to = e[1];
+    svg.appendChild(p);
+  });
+}
+window.addEventListener('resize', draw);
+draw(); setTimeout(draw,120);
+
+/* ---------- selection ---------- */
+const detail = document.getElementById('detail');
+function select(id){
+  const n = byId[id];
+  const ins = EDGES.filter(e=>e[1]===id), outs = EDGES.filter(e=>e[0]===id);
+  const touched = new Set([id, ...ins.map(e=>e[0]), ...outs.map(e=>e[1])]);
+  canvas.querySelectorAll('.node').forEach(el=>{
+    el.classList.toggle('sel', el.dataset.id===id);
+    el.classList.toggle('dim', !touched.has(el.dataset.id));
+  });
+  svg.querySelectorAll('path').forEach(p=>{
+    const hot = p.dataset.from===id || p.dataset.to===id;
+    p.classList.toggle('hot', hot); p.classList.toggle('dim', !hot);
+  });
+  const edgeRow = e => `<li><code>${e[0]} → ${e[1]}</code> · <b>${e[2]}</b> — ${e[3].replace(/</g,'&lt;')} <span style="color:var(--muted)">(line ${e[4]})</span></li>`;
+  detail.innerHTML = `
+    <h3>${n.t} <span style="color:var(--muted);font-size:12px">[${n.id}]</span></h3>
+    <div class="meta">${n.engine} · lines ${n.lines} · grain: <b>${n.grain}</b></div>
+    ${n.why.map(w=>`<p>${w}</p>`).join('')}
+    ${n.consts?`<p style="margin-top:12px"><b>Constants &amp; hazards</b></p><ul>${n.consts.map(c=>`<li>${c}</li>`).join('')}</ul>`:''}
+    ${ins.length?`<p style="margin-top:12px"><b>Inputs (${ins.length})</b></p><ul>${ins.map(edgeRow).join('')}</ul>`:''}
+    ${outs.length?`<p style="margin-top:12px"><b>Outputs (${outs.length})</b></p><ul>${outs.map(edgeRow).join('')}</ul>`:''}`;
+  detail.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+document.body.addEventListener('click',()=>{
+  canvas.querySelectorAll('.node').forEach(el=>el.classList.remove('sel','dim'));
+  svg.querySelectorAll('path').forEach(p=>p.classList.remove('hot','dim'));
+});
+
+/* ---------- tables ---------- */
+document.querySelector('#edgetbl tbody').innerHTML = EDGES.map(e=>`<tr>
+  <td class="mono">${byId[e[0]].t}</td><td class="mono">${byId[e[1]].t}</td><td>${e[2]}</td>
+  <td class="mono">${e[3].replace(/</g,'&lt;')}</td><td class="mono">${e[4]}</td></tr>`).join('');
+document.querySelector('#nodetbl tbody').innerHTML = NODES.map(n=>`<tr>
+  <td class="mono">${n.id}</td><td class="mono">${n.t}</td><td>${n.k}</td><td>${n.engine}</td>
+  <td>${n.grain}</td><td class="mono">${n.lines}</td></tr>`).join('');
+
+/* ---------- gotchas ---------- */
+const GOTCHAS = [
+ ["SMOKE = True is the current setting (line 254)","A full Run All pulls bite 0 of 10 for all three Teradata pulls. Every absolute count in every output is ~1/10 of the true population. The <code>smoke_run</code> column and the <code>out_smoke/</code> path are the only markers — the numbers themselves look normal."],
+ ["WIN_CEIL is hand-maintained (lines 202–215)","\"Move WIN_CEIL forward by hand each sprint.\" Forget, and the window silently stops growing — new sends and unsubs are dropped from every pull with no error."],
+ ["Resume check tests paths, not columns (lines 301–303)","A landed bite is skipped on re-run if its <code>_ROWCOUNT</code> marker exists. Change the SELECT list without bumping <code>SCHEMA_VERSION</code> and you silently mix old and new schemas."],
+ ["cube1_profiling is cards-only; everything else is bank-wide","Direct consequence of the wire-cost redesign — Pull C is the only client×mne source and it is cards-filtered. Never compare cube1_profiling totals to cube1_allclients / cube2 / q_mne."],
+ ["REGULATORY_MNES (22 codes, lines 226–229) is a stale hardcoded list","Transcribed from a pivot in a museum markdown file. The file's own header flags it should be an ACTION_TYPE join instead — carried forward unchanged, open question."],
+ ["spotlight.py and spotlight2.py disagree on the per-list unsub question","spotlight.py's header (lines 118–122) still calls it unresolved whether <code>disposition_cd=4</code> is per-list or a global ESP opt-out. spotlight2.py's header (24–26) says it was resolved — per-list, ~97% of multi-treatment unsubscribers show distinct_ts == n_treatments. If the global reading were right, cube1_profiling's per-mne leaver tag would be misattributed. <b>One of the two headers is wrong and should be fixed.</b>"],
+ ["UCP is a single fixed month-end snapshot (lines 104–110)","age_band / tenure_band / prod_cat_cnt describe the client <i>today</i>, not at time of send or unsub. Any \"leavers were younger\" read is a present-tense correlation, not a state-at-treatment one."],
+ ["cube2 bucket edges are unverified (lines 290–294)","Explicitly \"FIRST-CUT… unverified against the real bank-wide distribution.\" Re-cut them after the first full run or the frequency story is shaped by arbitrary bins."],
+ ["Excel write degrades silently (lines 1295–1310)","Missing or blocked <code>openpyxl</code> → falls back to per-sheet CSVs with a printed warning, no exception. Expect one .xlsx, possibly get a folder."],
+ ["Cleanup uses -skipTrash (line 1416)","Double-gated and off by default, but there is no undo if the existence probe ever gives a false positive."]
+];
+document.getElementById('gotchas').innerHTML = GOTCHAS.map(g=>`<div class="gotcha"><b>${g[0]}</b>${g[1]}</div>`).join('');
+
+/* ---------- mermaid source ---------- */
+const MSHAPE = {src:['[(',')]'],td:['[[',']]'],land:['[',']'],spark:['(',')'],cube:['[',']'],ship:['([','])'],cfg:['{{','}}']};
+let m = 'flowchart LR\n';
+STAGES.forEach((st,i)=>{
+  m += `  subgraph S${i}["${st[0]}"]\n  direction TB\n`;
+  NODES.filter(n=>n.st===i).forEach(n=>{
+    const sh = MSHAPE[n.k]||['[',']'];
+    m += `    ${n.id}${sh[0]}"${n.t}"${sh[1]}\n`;
+  });
+  m += '  end\n';
+});
+EDGES.forEach(e=>{ m += `  ${e[0]} ${e[5]?'-.->':'-->'}|"${e[2]}"| ${e[1]}\n`; });
+m += '  classDef cards fill:#fdeef1,stroke:#b0334a\n  classDef off fill:#eef1f5,stroke:#334155,stroke-dasharray:4 3\n';
+m += '  class o7 cards\n  class o12,o13 off\n';
+document.getElementById('mermaid').textContent = m;
+</script>
+</body>
+</html>
