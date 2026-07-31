@@ -110,10 +110,21 @@ WIN_MONTHS = [("m2026_03", "2026-03-01", "2026-04-01", "2026-02-01", "2026-05-01
               ("m2026_04", "2026-04-01", "2026-05-01", "2026-03-01", "2026-06-01"),
               ("m2026_05", "2026-05-01", "2026-06-01", "2026-04-01", "2026-07-01")]
 
-# CARDS_MNES: sourced from UNSUB_TRACKING_KNOWLEDGE.md section 4 and cross-checked against
-# archaeology/email_active_mnes.md. CTU and O2P are deliberately EXCLUDED per Andre 2026-07-26 -
-# they involve cards but are reported inside async, out of the cards package.
-CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"})
+# CARDS_MNES: corrected by Andre 2026-07-31. MVP dropped (Borealis orchestration, not a cards
+# campaign); VBA VBU CRO CEC VIF MET added. Supersedes the 7-mne list taken from
+# UNSUB_TRACKING_KNOWLEDGE.md section 4 - every cards-vs-bank number computed before this date
+# used the old list and must be recomputed.
+# CTU and O2P remain deliberately EXCLUDED per Andre 2026-07-26 - they involve cards but are
+# reported inside async, out of the cards package.
+CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "CRV",
+                        "VBA", "VBU", "CRO", "CEC", "VIF", "MET"})
+
+# Same contract as BAND_VERSION, for the same reason: stage() compares column NAMES, and `program`
+# keeps its name when CARDS_MNES changes underneath it. Without a stamp, editing the set above and
+# forgetting STAGE_REBUILD reuses the OLD cards/non-cards split in silence. BUMP THIS on every edit
+# to CARDS_MNES.
+CARDS_VERSION = 2
+CARDS_STAMP = "cards_v" + str(CARDS_VERSION)
 
 # REGULATORY_MNES - Andre, 2026-07-30. Campaigns that carry regulatory or servicing content.
 #
@@ -905,7 +916,7 @@ if HAVE_PRIOR_DETAIL:
 # THE staleness contract. What the pull landed decides what every staged frame must carry, and
 # stage() rebuilds anything that does not. This list - not a diff between two staged frames - is
 # what makes the check work, because the pull is the only thing that knows what is actually there.
-STAGE_NEEDS = ["CLNT_NO", "bucket", "mne", "program"]
+STAGE_NEEDS = ["CLNT_NO", "bucket", "mne", "program", CARDS_STAMP]
 if HAVE_CONTACT:
     STAGE_NEEDS += ["n_send_events", "n_opens", "n_clicks", "opened", "clicked",
                     "contact_band", "engagement"]
@@ -922,7 +933,8 @@ print("stages must carry:", STAGE_NEEDS)
 # collapses into NO_UNSUB_EVENT. Per-campaign leaver-vs-stayer needs cards_cube, not this one.
 clients = (clients
            .withColumn("mne", F.coalesce(F.col("mne"), F.lit("NO_UNSUB_EVENT")))
-           .withColumn("program", F.coalesce(F.col("program"), F.lit("NO_UNSUB_EVENT"))))
+           .withColumn("program", F.coalesce(F.col("program"), F.lit("NO_UNSUB_EVENT")))
+           .withColumn(CARDS_STAMP, F.lit(CARDS_VERSION)))
 
 # %% [14] JOIN UCP. Clients ACQUIRED during Mar-May cannot exist in the 2026-02-28 snapshot and will
 # be unmatched - that is a real limit of a single pre-window anchor, counted in M0, never hidden.
