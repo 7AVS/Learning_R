@@ -509,31 +509,45 @@ print("Cell [4] done - ucp_enriched landed at", _ucp_path_out, "| grain: one row
 
 
 # %% [5] CUBE 1 - profiling cube (Fix 3). EXACT spec, nothing added:
-# Dims:    mne, is_cards, is_regulatory, bucket (STAYER/LEAVER), age_band, tenure_band,
-#          prod_cat_cnt (bare integer 0-4 as string, or no_ucp_match)
-# Measures: clients, mean_tenure_years, median_prof_annual (percentile_approx .5, NOT quintile)
-# Grain: one row per (clnt_no, mne) from base, so "bucket" is that ROW's own unsub_flag - see the
-# open-question note at the top of this file on what a per-mne LEAVER tag actually means.
-# No rate is computed here - Andre derives LEAVER / (STAYER+LEAVER) himself in the pivot.
+# Dims:    mne, is_cards, is_regulatory, age_band, tenure_band, prod_cat_cnt (bare integer 0-4 as
+#          string, or no_ucp_match)
+# Measures: stayers, leavers, clients_total, mean_tenure_stayers/leavers,
+#          median_prof_stayers/leavers (percentile_approx .5, NOT quintile)
+#
+# WIDE, not long (Andre, 2026-07-31). stayers and leavers are COLUMNS, not values of a "bucket"
+# dimension. In long format a cell with leavers but zero stayers has no STAYER row at all, so a
+# pivot silently divides by the wrong denominator. Wide guarantees both numbers on every row and
+# halves the row count. Rate stays out of the file - Andre derives leavers/(stayers+leavers).
+#
+# Grain: one row per (clnt_no, mne) from base, so a client counts as a leaver against the mne
+# their unsub_flag sits on - see the open-question note at the top of this file on what a per-mne
+# leaver tag actually means if disposition_cd=4 turns out to be a global opt-out.
 # ENGINE: PySpark (YARN).
 
 base = read_base()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
-cube1_src = (base
-             .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER"))
-             .join(ucp_enriched_full, "clnt_no", "left"))
+cube1_src = base.join(ucp_enriched_full, "clnt_no", "left")
+
+_stay = F.col("unsub_flag") == 0
+_leave = F.col("unsub_flag") == 1
 
 cube1 = (cube1_src
-         .groupBy("mne", "is_cards", "is_regulatory", "bucket", "age_band", "tenure_band", "prod_cat_cnt")
-         .agg(F.countDistinct("clnt_no").alias("clients"),
-              F.avg("tenure_years").alias("mean_tenure_years"),
-              F.expr("percentile_approx(prof_tot_annual, 0.5)").alias("median_prof_annual"))
-         .orderBy("mne", "bucket", "age_band", "tenure_band", "prod_cat_cnt"))
+         .groupBy("mne", "is_cards", "is_regulatory", "age_band", "tenure_band", "prod_cat_cnt")
+         .agg(F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
+              F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
+              F.count("*").alias("clients_total"),
+              F.avg(F.when(_stay, F.col("tenure_years"))).alias("mean_tenure_stayers"),
+              F.avg(F.when(_leave, F.col("tenure_years"))).alias("mean_tenure_leavers"),
+              F.expr("percentile_approx(CASE WHEN unsub_flag = 0 THEN prof_tot_annual END, 0.5)")
+               .alias("median_prof_stayers"),
+              F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN prof_tot_annual END, 0.5)")
+               .alias("median_prof_leavers"))
+         .orderBy("mne", "age_band", "tenure_band", "prod_cat_cnt"))
 
 cube1_pd = cube1.toPandas()
-print("CUBE 1 - profiling | grain: one row per (mne, is_cards, is_regulatory, bucket, age_band, "
-      "tenure_band, prod_cat_cnt) | %d rows" % len(cube1_pd))
+print("CUBE 1 - profiling | grain: one row per (mne, is_cards, is_regulatory, age_band, "
+      "tenure_band, prod_cat_cnt) | stayers and leavers are COLUMNS | %d rows" % len(cube1_pd))
 print(cube1_pd.head(30).to_string(index=False))
 
 _cube1_path = BASE + "out/cube1_profiling"
@@ -591,15 +605,18 @@ client_roll = (base.groupBy("clnt_no")
                .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
 
 cube2 = (client_roll
-         .groupBy("bucket", "n_branded_campaigns_bucket", "n_emails_3m_bucket", "n_emails_6m_bucket",
+         .groupBy("n_branded_campaigns_bucket", "n_emails_3m_bucket", "n_emails_6m_bucket",
                    "n_promo_emails_6m_bucket", "n_regulatory_emails_6m_bucket", "prod_cat_cnt")
-         .agg(F.count("*").alias("clients"))
-         .orderBy("bucket", "n_branded_campaigns_bucket", "n_emails_6m_bucket"))
+         .agg(F.sum(F.when(F.col("any_unsub") == 0, 1).otherwise(0)).alias("stayers"),
+              F.sum(F.when(F.col("any_unsub") == 1, 1).otherwise(0)).alias("leavers"),
+              F.count("*").alias("clients_total"))
+         .orderBy("n_branded_campaigns_bucket", "n_emails_6m_bucket"))
 
 cube2_pd = cube2.toPandas()
-print("CUBE 2 - contact frequency | grain: one row per (bucket, n_branded_campaigns_bucket, "
+print("CUBE 2 - contact frequency | grain: one row per (n_branded_campaigns_bucket, "
       "n_emails_3m_bucket, n_emails_6m_bucket, n_promo_emails_6m_bucket, "
-      "n_regulatory_emails_6m_bucket, prod_cat_cnt) | %d rows" % len(cube2_pd))
+      "n_regulatory_emails_6m_bucket, prod_cat_cnt) | stayers and leavers are COLUMNS "
+      "| %d rows" % len(cube2_pd))
 print(cube2_pd.head(30).to_string(index=False))
 
 _cube2_path = BASE + "out/cube2_frequency"
@@ -609,13 +626,19 @@ print("written to HDFS:", _cube2_path, "|", len(cube2_pd), "rows")
 # n_emails_all is on client_roll (used to build cube2) but not in cube2's own dims/measures list
 # per spec - land it separately as its own small summary so the stayer/leaver full-volume compare
 # Andre asked for ("that comparison is the entire point of this cube") is directly visible.
-q_emails_all = (client_roll.groupBy("bucket")
-                .agg(F.count("*").alias("clients"),
-                     F.sum("n_emails_all").alias("total_emails_all"),
-                     F.expr("percentile_approx(n_emails_all, 0.5)").alias("median_emails_all"))
-                .orderBy("bucket"))
+_s = F.col("any_unsub") == 0
+_l = F.col("any_unsub") == 1
+q_emails_all = client_roll.agg(
+    F.sum(F.when(_s, 1).otherwise(0)).alias("stayers"),
+    F.sum(F.when(_l, 1).otherwise(0)).alias("leavers"),
+    F.sum(F.when(_s, F.col("n_emails_all")).otherwise(0)).alias("total_emails_stayers"),
+    F.sum(F.when(_l, F.col("n_emails_all")).otherwise(0)).alias("total_emails_leavers"),
+    F.expr("percentile_approx(CASE WHEN any_unsub = 0 THEN n_emails_all END, 0.5)")
+     .alias("median_emails_stayers"),
+    F.expr("percentile_approx(CASE WHEN any_unsub = 1 THEN n_emails_all END, 0.5)")
+     .alias("median_emails_leavers"))
 q_emails_all_pd = q_emails_all.toPandas()
-print("\nn_emails_all summary, STAYER vs LEAVER | grain: one row per bucket | %d rows" % len(q_emails_all_pd))
+print("\nn_emails_all summary, stayers vs leavers side by side | 1 row | %d rows" % len(q_emails_all_pd))
 print(q_emails_all_pd.to_string(index=False))
 
 _emails_all_path = BASE + "out/q_emails_all_summary"
