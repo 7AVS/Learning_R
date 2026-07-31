@@ -644,3 +644,52 @@ print(q_emails_all_pd.to_string(index=False))
 _emails_all_path = BASE + "out/q_emails_all_summary"
 q_emails_all.coalesce(1).write.mode("overwrite").option("header", True).csv(_emails_all_path)
 print("written to HDFS:", _emails_all_path, "|", len(q_emails_all_pd), "rows")
+
+
+# %% [7] ONE FILE TO DOWNLOAD - collect every cube into a single Excel workbook on the POD's
+# local disk, so the manual HDFS -> shared-drive hop is one download instead of five.
+#
+# Why this works from the Spark kernel: df.write.csv("file:///...") writes on the EXECUTORS, which
+# are other machines, so the file lands nowhere visible. toPandas() pulls to the DRIVER, which IS
+# this pod. Every cube here is a few hundred rows, so collecting is safe.
+#
+# Nothing on HDFS is replaced - the parquet and CSV outputs above still stand. This is purely a
+# delivery convenience: one .xlsx, one sheet per cube, already in the format the pivot needs.
+# ENGINE: PySpark driver + pandas. No new EDW connection.
+
+import os
+
+LOCAL_OUT = os.path.join(os.path.expanduser("~"), "spotlight_out")
+os.makedirs(LOCAL_OUT, exist_ok=True)
+
+# Sheet names are capped at 31 chars by Excel; keep them short and stable.
+_sheets = {
+    "cube1_profiling": cube1_pd,
+    "cube2_frequency": cube2_pd,
+    "q_mne": q_mne_pd,
+    "q_trend": q_trend_pd,
+    "q_emails_all": q_emails_all_pd,
+}
+_sheets = {k: v for k, v in _sheets.items() if v is not None and len(v) > 0}
+
+_xlsx = os.path.join(LOCAL_OUT, "spotlight_cubes.xlsx")
+try:
+    with pd.ExcelWriter(_xlsx, engine="openpyxl") as _xl:
+        for _name, _df in _sheets.items():
+            _df.to_excel(_xl, sheet_name=_name[:31], index=False)
+    print("WROTE", _xlsx, "|", os.path.getsize(_xlsx), "bytes")
+    for _name, _df in _sheets.items():
+        print("   sheet %-20s %6d rows x %d cols" % (_name[:31], len(_df), len(_df.columns)))
+    print("\nDownload THIS ONE FILE from the pod, not the HDFS part-files.")
+except Exception as e:
+    # openpyxl missing or Excel write blocked - fall back to named CSVs in one folder, still a
+    # single directory to grab rather than five HDFS part-file hunts.
+    print("Excel write failed (%s: %s) - falling back to named CSVs." % (type(e).__name__, str(e)[:200]))
+    for _name, _df in _sheets.items():
+        _p = os.path.join(LOCAL_OUT, _name + ".csv")
+        _df.to_csv(_p, index=False)
+        print("   wrote", _p, "|", len(_df), "rows")
+
+print("\nLocal output dir:", LOCAL_OUT)
+print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT survive a pod "
+      "restart - the HDFS copies above are the durable ones.")
