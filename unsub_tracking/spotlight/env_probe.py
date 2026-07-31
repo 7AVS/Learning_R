@@ -140,3 +140,59 @@ Best case (P3 and P6 both OK, P7 empty): stay on ONE kernel, read HDFS for UCP, 
 pod with toPandas().to_csv(), download once at the end. That removes the kernel juggling and every
 intermediate manual step except the last hop.
 """)
+
+
+# %% [P10] EXPORT THE RAW PARQUET - measure, stage locally, zip to one file
+# Measured 2026-07-31: base_v2 104.5 M, ucp_enriched 14.4 M (the second column -du prints is the
+# 3x-replicated footprint, not the download size). All 10 bites lands around 1 GB - still trivial.
+#
+# Why bother: at ~120 MB the RAW GRAIN fits on a laptop, so the cubes stop being the deliverable.
+# Any new cut becomes a local duckdb query instead of a Spark rerun and another download round trip.
+# Works from any kernel - hdfs CLI was confirmed rc 0 in P4/P5, no Spark session needed.
+import subprocess
+
+HDFS_BASE = "/user/427966379/unsub_spotlight"
+LOCAL_PQ = "/home/jovyan/spotlight_out/parquet"
+DATASETS = ["base_v2", "ucp_enriched"]
+
+
+def sh(cmd):
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=1800)
+    print((r.stdout or "") + (r.stderr or ""), end="")
+    return r.returncode
+
+
+print("=== sizes on HDFS ===")
+for d in DATASETS:
+    sh("hdfs dfs -du -s -h %s/%s" % (HDFS_BASE, d))
+
+print("\n=== staging to pod local disk (home is a PVC, confirmed persistent in P8) ===")
+sh("mkdir -p %s" % LOCAL_PQ)
+for d in DATASETS:
+    if sh("hdfs dfs -get -f %s/%s %s/" % (HDFS_BASE, d, LOCAL_PQ)) != 0:
+        print("!! get failed for", d, "- stopping before the zip so a partial export is not shipped")
+        raise SystemExit(1)
+sh("du -sh %s/*" % LOCAL_PQ)
+
+print("\n=== one zip = one download ===")
+sh("cd /home/jovyan/spotlight_out && rm -f spotlight_parquet.zip && "
+   "zip -rq spotlight_parquet.zip parquet/ && ls -lh spotlight_parquet.zip")
+print(r"""
+Download /home/jovyan/spotlight_out/spotlight_parquet.zip via the Jupyter file browser.
+
+Point the browser's download location at the share so it lands there directly:
+  \maple.fg.rbc.com\data\Toronto\wrkgrp\wrkgrp16\Marketing Services & Transformation\
+  Marketing Analytics\Pod of Gold\Cards\Unsubs\out
+
+Then query it locally in VS Code - duckdb reads parquet off disk without loading it into RAM:
+
+  import duckdb
+  duckdb.sql(
+      "SELECT mne, SUM(unsub_flag) AS leavers, COUNT(*) AS clients "
+      "FROM 'parquet/base_v2/*/*.parquet' GROUP BY 1 ORDER BY 2 DESC"
+  ).df()
+
+Check the glob depth against the real layout - bites land as base_v2/bite_N/part-*.parquet, so
+'parquet/base_v2/*/*.parquet' is right for the bitten base, and 'parquet/ucp_enriched/*.parquet'
+for the single-level one.
+""")
