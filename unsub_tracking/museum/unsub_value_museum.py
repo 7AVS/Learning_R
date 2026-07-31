@@ -646,6 +646,102 @@ if PULL_WIDE:
 else:
     print("senders_wide SKIPPED (PULL_WIDE = False) - bank-wide 3b/3c will not be available.")
 
+# %% [7c] PULL - THE 12-MONTH LOOKBACK. Brief 3a/3b/3c, and the fix for "the window has no past".
+#
+# WHY IT IS HERE AND NOT IN A SEPARATE .sql FILE. Everything we present comes out of this notebook.
+# A second artifact that has to be run somewhere else, whose output has to be pasted back in, is a
+# second thing to keep in sync and a second thing to forget. This is the package.
+#
+# WHAT IT LANDS. One row per client x campaign x send x event type, for the 12 months BEFORE the
+# window opens. Deliberately NOT pre-aggregated: bands, cards/bank splits, the regulatory flag,
+# same-month overlap and pre-window engagement are all cuts of this one frame, computed in Spark.
+# Re-cutting any of them later costs ZERO pulls. That is the whole point of landing it at this grain.
+#
+# WHAT IT ANSWERS THAT NOTHING ELSE DID:
+#   3a  how often was this client mailed, over a year, not over three months
+#   3b  how many DIFFERENT campaigns touched them in that year
+#   3c  how many landed in the SAME month - breadth over a year is not concurrency
+#   and: did they engage with anything BEFORE the window. Classifying engagement off the
+#        unsubscribe email is circular - unsubscribing requires opening and clicking.
+#
+# SAMPLING. Leavers are a census. Stayers are 1-in-LOOKBACK_MOD. 50 is deliberately coarser than
+# SAMPLE_MOD=10: this frame is ~12x the rows of a single window month, and 50 is a MULTIPLE of 10, so
+# every client here is also in senders_wide and the two frames join without a mismatched base.
+# Weight the stayer side by LOOKBACK_MOD. Never weight the leaver side.
+LOOKBACK_MOD = 50                   # editable: 1-in-50 stayers. Must stay a multiple of SAMPLE_MOD.
+assert LOOKBACK_MOD % SAMPLE_MOD == 0, ("LOOKBACK_MOD must be a multiple of SAMPLE_MOD or the "
+                                        "lookback population is not a subset of senders_wide.")
+
+LB_MONTHS = []
+_lb_d = pd.Timestamp(WIN_START) - pd.DateOffset(months=12)
+while _lb_d < pd.Timestamp(WIN_START):
+    _lb_n = _lb_d + pd.DateOffset(months=1)
+    LB_MONTHS.append(("m" + _lb_d.strftime("%Y_%m"),
+                      _lb_d.strftime("%Y-%m-%d"), _lb_n.strftime("%Y-%m-%d"),
+                      (_lb_d - pd.DateOffset(months=1)).strftime("%Y-%m-%d"),
+                      (_lb_n + pd.DateOffset(months=1)).strftime("%Y-%m-%d")))
+    _lb_d = _lb_n
+print("lookback window:", LB_MONTHS[0][1], "->", LB_MONTHS[-1][2], "|", len(LB_MONTHS), "chunks")
+
+# Same two-branch UNION as [7b], same reason: an OR across a modulo and a subquery can defeat the
+# index on both sides and fall back to a product join. UNION (not UNION ALL) dedupes a leaver who
+# also satisfies the modulo. DISTINCT grain is what makes that dedupe correct - two aggregates
+# UNIONed would double-count those clients instead.
+_LOOKBACK_SQL = """
+SELECT DISTINCT m.CLNT_NO,
+       SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+       ek.TREATMENT_ID,
+       ek.disposition_cd,
+       EXTRACT(YEAR FROM ek.disposition_dt_tm) * 100
+         + EXTRACT(MONTH FROM ek.disposition_dt_tm) AS send_month
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd IN (1, 2, 3)
+      AND disposition_dt_tm >= DATE '%(ds)s' AND disposition_dt_tm < DATE '%(de)s'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '%(ls)s' AND m.load_tm < DATE '%(le)s'
+  AND MOD(m.CLNT_NO, %(mod)d) = 0
+
+UNION
+
+SELECT DISTINCT m.CLNT_NO,
+       SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+       ek.TREATMENT_ID,
+       ek.disposition_cd,
+       EXTRACT(YEAR FROM ek.disposition_dt_tm) * 100
+         + EXTRACT(MONTH FROM ek.disposition_dt_tm) AS send_month
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd IN (1, 2, 3)
+      AND disposition_dt_tm >= DATE '%(ds)s' AND disposition_dt_tm < DATE '%(de)s'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+INNER JOIN (
+    SELECT DISTINCT consumer_id_hashed
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 4
+      AND disposition_dt_tm >= DATE '%(ws)s' AND disposition_dt_tm < DATE '%(we)s'
+) u ON u.consumer_id_hashed = m.consumer_id_hashed
+WHERE m.load_tm >= DATE '%(ls)s' AND m.load_tm < DATE '%(le)s'
+"""
+# DEFAULT OFF, deliberately. Re-read the brief: 3b asks for "number of campaigns a client was
+# contacted by", not "in the prior 12 months" - the window data already answers it. The 12-month
+# version is the stronger answer, not the required one. 12 chunks is the single most expensive pull
+# in this file, so it does not run on the day we have to ship. Flip to True when there is time.
+PULL_LOOKBACK = False               # set True to pull the 12-month history (~12 chunks)
+if PULL_LOOKBACK:
+    for _name, _ds, _de, _ls, _le in LB_MONTHS:
+        land("lookback/" + _name,
+             _LOOKBACK_SQL % {"ds": _ds, "de": _de, "ls": _ls, "le": _le,
+                              "mod": LOOKBACK_MOD, "ws": WIN_START, "we": WIN_END})
+else:
+    print("lookback SKIPPED (PULL_LOOKBACK = False) - brief 3a/3b/3c have no 12-month history.")
+
 # %% [8] PULL - prior unsubscribers. Keeps the stayer pool honest: a client who opted out last year
 # and still got mail is not someone who "chose to stay".
 #
