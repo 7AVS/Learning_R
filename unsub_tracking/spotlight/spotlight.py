@@ -535,6 +535,9 @@ CLIENTAGG_SPARK_SCHEMA = StructType([
 def _prep_clientagg(pdf):
     pdf = pdf.copy()
     pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, ("clnt_no has %d null/unparseable values - the SQL filters "
+                          "CLNT_NO IS NOT NULL, so this means the filter is not firing" % _n_null)
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
     _int_cols = ["n_campaigns_all", "n_campaigns_branded", "n_campaigns_cards",
                  "n_campaigns_regulatory", "n_emails_all", "n_emails_3m", "n_emails_6m",
@@ -658,7 +661,10 @@ def _prep_mneagg(pdf):
     pdf = pdf.copy()
     pdf.columns = [c.lower() for c in pdf.columns]
     pdf["mne"] = pdf["mne"].astype(str)
-    pdf["cohort_month_num"] = pd.to_numeric(pdf["cohort_month_num"], errors="coerce").astype("int64")
+    # NULL when a (client, mne) carries an unsub but no in-window send - the population the
+    # old WHERE n_sends >= 1 filter hid. Sentinel 0 = "no send in window"; do not drop.
+    pdf["cohort_month_num"] = (pd.to_numeric(pdf["cohort_month_num"], errors="coerce")
+                                 .fillna(0).astype("int64"))
     for _c in ["clients_mailed", "sends", "unsub_clients"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
     return pdf[[f.name for f in MNEAGG_SPARK_SCHEMA.fields]]
@@ -766,6 +772,9 @@ CARDSPAIR_SPARK_SCHEMA = StructType([
 def _prep_cardspair(pdf):
     pdf = pdf.copy()
     pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, ("clnt_no has %d null/unparseable values - the SQL filters "
+                          "CLNT_NO IS NOT NULL, so this means the filter is not firing" % _n_null)
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
     pdf["mne"] = pdf["mne"].astype(str)
     pdf["n_sends"] = pd.to_numeric(pdf["n_sends"], errors="coerce").fillna(0).astype("int64")
