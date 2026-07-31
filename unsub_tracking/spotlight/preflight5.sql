@@ -101,3 +101,58 @@ SELECT COUNT(DISTINCT TACTIC_ID)                  AS deployments_in_window,
 FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
 WHERE TREATMT_STRT_DT >= DATE '2025-08-01'
   AND TREATMT_STRT_DT <  DATE '2026-08-01';
+
+
+-- =========================================================================================
+-- Q23. Is the whitelist too strict? Q20 left 44,446,410 sends (14.3%) unmatched across 743 ids,
+-- and only 29 of those are junk - the other 714 are properly formed tactic ids.
+--
+-- Likely cause: filtering on TREATMT_STRT_DT inside the window excludes a deployment that
+-- launched BEFORE it and kept mailing through it. The correct test is "active during the window",
+-- not "started during the window":
+--     TREATMT_STRT_DT <  WIN_CEIL
+--     AND (TREATMT_END_DT >= WIN_FLOOR OR TREATMT_END_DT IS NULL)
+--
+-- Compare against Q20. If unmatched volume drops sharply, use the overlap test as the whitelist.
+-- If it barely moves, the 714 are residue like 2018319KVM and the strict test was right.
+-- =========================================================================================
+SELECT CASE WHEN t.TACTIC_ID IS NOT NULL THEN 'matches a deployment ACTIVE in window'
+            ELSE 'NO matching deployment' END AS status,
+       COUNT(*)          AS distinct_ids,
+       SUM(e.send_rows)  AS send_rows
+FROM (SELECT TREATMENT_ID, COUNT(*) AS send_rows
+      FROM DTZV01.VENDOR_FEEDBACK_EVENT
+      WHERE disposition_cd = 1
+        AND disposition_dt_tm >= DATE '2025-08-01'
+        AND disposition_dt_tm <  DATE '2026-08-01'
+      GROUP BY 1) e
+LEFT JOIN (SELECT DISTINCT TACTIC_ID
+           FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+           WHERE TREATMT_STRT_DT < DATE '2026-08-01'
+             AND (TREATMT_END_DT >= DATE '2025-08-01' OR TREATMT_END_DT IS NULL)) t
+  ON t.TACTIC_ID = e.TREATMENT_ID
+GROUP BY 1;
+
+
+-- =========================================================================================
+-- Q24. Name what is STILL unmatched under the overlap test. If the top rows are DEFAULT and
+-- CABVRSN1 the whitelist is doing its job. If real-looking tactic ids remain, they need
+-- explaining before anything is excluded on their account.
+-- =========================================================================================
+SELECT TOP 15
+       e.TREATMENT_ID,
+       SUBSTR(TRIM(e.TREATMENT_ID), 8, 3) AS mne_substring,
+       e.send_rows
+FROM (SELECT TREATMENT_ID, COUNT(*) AS send_rows
+      FROM DTZV01.VENDOR_FEEDBACK_EVENT
+      WHERE disposition_cd = 1
+        AND disposition_dt_tm >= DATE '2025-08-01'
+        AND disposition_dt_tm <  DATE '2026-08-01'
+      GROUP BY 1) e
+LEFT JOIN (SELECT DISTINCT TACTIC_ID
+           FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+           WHERE TREATMT_STRT_DT < DATE '2026-08-01'
+             AND (TREATMT_END_DT >= DATE '2025-08-01' OR TREATMT_END_DT IS NULL)) t
+  ON t.TACTIC_ID = e.TREATMENT_ID
+WHERE t.TACTIC_ID IS NULL
+ORDER BY e.send_rows DESC;

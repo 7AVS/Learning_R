@@ -1075,3 +1075,25 @@ day — that heuristic discards live tactic ids and keeps residue, in both direc
 
 `preflight5.sql` Q22: **23,339 deployments**, **431 distinct mnemonics**, first start 2025-08-01,
 last start 2026-07-31. That is the whitelist any bank-wide unsub analysis should be scoped to.
+
+## 20.14 Unmatched send volume — 14.3% under a start-date whitelist
+
+`preflight5.sql` Q20, Aug 2025 – Jul 2026:
+
+| | ids | send rows |
+|---|---|---|
+| matches a deployment started in window | 10,893 | 266,400,263 |
+| NO matching deployment | 743 | 44,446,410 (**14.3%**) |
+
+Only 29 of the 743 are junk ids (§20.9, ~21.8M sends). The other **714 are properly formed tactic
+ids carrying ~22.6M sends** — too many to dismiss.
+
+Probable cause: `TREATMT_STRT_DT` inside the window excludes a deployment that launched before it
+and kept mailing through it. The correct membership test is **active during** the window:
+```sql
+TREATMT_STRT_DT <  WIN_CEIL
+AND (TREATMT_END_DT >= WIN_FLOOR OR TREATMT_END_DT IS NULL)
+```
+Q23 measures the difference; Q24 names whatever is still unmatched under it. Do not scope the
+analysis until one of the two tests explains the residual, and quote the final excluded-volume
+percentage wherever campaign counts are reported.
