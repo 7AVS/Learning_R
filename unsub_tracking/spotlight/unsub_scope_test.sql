@@ -1,185 +1,183 @@
 -- unsub_scope_test.sql
--- Settles one question: is disposition_cd=4 a PER-LIST unsubscribe or a GLOBAL opt-out?
+-- Is disposition_cd=4 a PER-LIST unsubscribe or a GLOBAL opt-out?
 --
--- Everything downstream depends on the answer. If it is global, "unsubs by campaign" means
--- "whose email was the last straw", the campaign that mails most tops any raw count mechanically,
--- and outcome metrics must be client-level. If it is per-list, per-campaign attribution is real.
+-- v1 failed two ways and both were design errors, not data problems:
+--   Q2 blew spool - it self-joined the whole bank-wide mailed base. The question only concerns
+--      clients who actually unsubscribed (~320K), not everyone who was mailed (10M+).
+--   Q3 threw 3706 - malformed Teradata interval cast. It never needed interval arithmetic:
+--      "are these timestamps identical" is COUNT(DISTINCT ts), no subtraction.
 --
--- No prior result is assumed. Pack 20's "86% same-day" is not evidence of mechanism - same-day is
--- equally consistent with a client clicking two emails in one sitting. This tests the mechanism.
+-- ENGINE: Teradata-direct (DTZV01.*, Teradata syntax, no catalog prefix).
+-- Every query returns <= 20 rows.
 --
--- ENGINE: Teradata-direct (DTZV01.*, no catalog prefix, Teradata syntax).
--- Every query returns <= 25 rows. Run them one at a time, in order.
+-- RERUN NOTE: volatile tables persist for the session. If a rerun says "table already exists",
+-- run the two DROP statements below first. They are commented out so a first run does not fail.
 --
--- COLUMNS USED - all confirmed in UNSUB_TRACKING_KNOWLEDGE.md:117,130,145,151-165:
---   DTZV01.VENDOR_FEEDBACK_EVENT : consumer_id_hashed, TREATMENT_ID, disposition_cd,
---                                  disposition_dt_tm   (1=sent, 4=unsubscribed)
---   DTZV01.VENDOR_FEEDBACK_MASTER: consumer_id_hashed, TREATMENT_ID, CLNT_NO, load_tm
--- No treatment end-date column is assumed to exist. The deployment window is DERIVED from the
--- sends, which is exact per campaign and needs no lookup.
+-- DROP TABLE vt_unsub_clients;
+-- DROP TABLE vt_unsub_sends;
 
 
 -- ============================================================================================
--- Q1. How long after a send does an unsubscribe actually happen?
--- A TREATMENT_ID is one deployment wave with one send date, so there is no campaign window to
--- derive - the only window that matters is the response lag. Measure it instead of guessing 30
--- or 90 days.
--- Read: find the bucket where the mass stops. That is the attribution window, evidenced.
--- Expect: <= 10 rows.
+-- SETUP. Volatile tables + stats. Required, not optional: the self-join in Q2 is exactly the
+-- unconstrained-product-join shape TDWM blocks, and COLLECT STATISTICS is what stops it.
+-- Window is 3 months on purpose - the MECHANISM does not need 12 months to reveal itself, and a
+-- narrow window is what keeps this inside spool.
 -- ============================================================================================
-WITH snd AS (
-    SELECT consumer_id_hashed, TREATMENT_ID,
-           MIN(CAST(disposition_dt_tm AS DATE)) AS send_dt
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-08-01'
-    GROUP BY 1, 2
-),
-uns AS (
-    SELECT consumer_id_hashed, TREATMENT_ID,
+CREATE VOLATILE TABLE vt_unsub_clients AS (
+    SELECT consumer_id_hashed,
+           TREATMENT_ID,
+           MIN(disposition_dt_tm)             AS unsub_tm,
            MIN(CAST(disposition_dt_tm AS DATE)) AS unsub_dt
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 4
-      AND disposition_dt_tm >= DATE '2025-08-01'
+      AND disposition_dt_tm >= DATE '2026-04-01'
+      AND disposition_dt_tm <  DATE '2026-07-01'
     GROUP BY 1, 2
-),
-lag AS (
-    SELECT (u.unsub_dt - s.send_dt) AS lag_days
-    FROM uns u
-    JOIN snd s ON s.consumer_id_hashed = u.consumer_id_hashed
-              AND s.TREATMENT_ID = u.TREATMENT_ID
-)
-SELECT CASE WHEN lag_days <  0  THEN 'negative - unsub before send, investigate'
-            WHEN lag_days =  0  THEN '00 same day'
-            WHEN lag_days =  1  THEN '01 next day'
-            WHEN lag_days <= 3  THEN '02 2-3 days'
-            WHEN lag_days <= 7  THEN '03 4-7 days'
-            WHEN lag_days <= 14 THEN '04 8-14 days'
-            WHEN lag_days <= 30 THEN '05 15-30 days'
-            WHEN lag_days <= 60 THEN '06 31-60 days'
-            WHEN lag_days <= 90 THEN '07 61-90 days'
-            ELSE                     '08 over 90 days' END AS lag_bucket,
-       COUNT(*) AS unsub_events
-FROM lag
+) WITH DATA PRIMARY INDEX (consumer_id_hashed) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS COLUMN (consumer_id_hashed) ON vt_unsub_clients;
+COLLECT STATISTICS COLUMN (consumer_id_hashed, TREATMENT_ID) ON vt_unsub_clients;
+
+-- Sends to those same clients only. Joining to the volatile table first is what keeps this small.
+CREATE VOLATILE TABLE vt_unsub_sends AS (
+    SELECT e.consumer_id_hashed,
+           e.TREATMENT_ID,
+           MIN(CAST(e.disposition_dt_tm AS DATE)) AS send_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN (SELECT DISTINCT consumer_id_hashed FROM vt_unsub_clients) u
+      ON u.consumer_id_hashed = e.consumer_id_hashed
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2026-03-01'   -- 30 days of run-up before the unsub window
+      AND e.disposition_dt_tm <  DATE '2026-07-01'
+    GROUP BY 1, 2
+) WITH DATA PRIMARY INDEX (consumer_id_hashed) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS COLUMN (consumer_id_hashed) ON vt_unsub_sends;
+COLLECT STATISTICS COLUMN (consumer_id_hashed, TREATMENT_ID) ON vt_unsub_sends;
+
+
+-- ============================================================================================
+-- Q3 FIRST - it is the cheapest and the most decisive.
+-- For clients with unsub events on 2+ treatments: how many DISTINCT timestamps are there?
+--
+--   n_treatments = 3, distinct_ts = 1  -> one action written to three treatments. GLOBAL.
+--   n_treatments = 3, distinct_ts = 3  -> three separate events. PER-LIST.
+--
+-- No interval arithmetic. Expect: <= 12 rows.
+-- ============================================================================================
+SELECT n_treatments,
+       distinct_ts,
+       CASE WHEN distinct_ts = 1            THEN 'GLOBAL - one timestamp, many treatments'
+            WHEN distinct_ts = n_treatments THEN 'PER-LIST - one timestamp each'
+            ELSE                                 'PARTIAL - some share a timestamp' END AS reading,
+       COUNT(*) AS clients
+FROM (
+    SELECT consumer_id_hashed,
+           COUNT(DISTINCT TREATMENT_ID) AS n_treatments,
+           COUNT(DISTINCT unsub_tm)     AS distinct_ts
+    FROM vt_unsub_clients
+    GROUP BY 1
+    HAVING COUNT(DISTINCT TREATMENT_ID) >= 2
+) x
+GROUP BY 1, 2, 3
+ORDER BY clients DESC;
+
+
+-- ============================================================================================
+-- Q3b. How many unsubscribers have more than one treatment at all? Context for Q3 - if almost
+-- nobody does, the whole question is a rounding error and per-campaign attribution is safe.
+-- Expect: <= 10 rows.
+-- ============================================================================================
+SELECT CASE WHEN n_treatments = 1 THEN '1 treatment'
+            WHEN n_treatments = 2 THEN '2 treatments'
+            WHEN n_treatments <= 4 THEN '3-4 treatments'
+            WHEN n_treatments <= 9 THEN '5-9 treatments'
+            ELSE '10+ treatments' END AS treatments_with_unsub,
+       COUNT(*) AS clients
+FROM (
+    SELECT consumer_id_hashed, COUNT(DISTINCT TREATMENT_ID) AS n_treatments
+    FROM vt_unsub_clients
+    GROUP BY 1
+) y
 GROUP BY 1
 ORDER BY 1;
 
 
 -- ============================================================================================
--- Q2. THE TEST. Among clients exposed to 2+ campaigns whose send windows OVERLAP, does the
--- unsubscribe land on ONE treatment or on ALL of them?
+-- Q2 REBUILT. Of the campaigns sent to a client in the 30 days before their unsub, how many
+-- carry the unsub? Now bounded to unsubscribers only, so it fits in spool.
 --
---   unsub_treatments = 1              -> PER-LIST. Attribution to a campaign is real.
---   unsub_treatments = overlap_count  -> GLOBAL. One click, logged against every open treatment.
---   in between                        -> mixed; read the spread before concluding anything.
+--   unsub_treatments = 1              -> PER-LIST
+--   unsub_treatments = sent_in_window -> GLOBAL
 --
--- Expect: <= 20 rows. The shape of the distribution IS the answer.
+-- Expect: <= 20 rows.
 -- ============================================================================================
-WITH sent AS (              -- one row per client x treatment they were sent, with its send date
-    SELECT e.consumer_id_hashed, e.TREATMENT_ID,
-           MIN(CAST(e.disposition_dt_tm AS DATE)) AS send_dt
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2025-08-01'
-    GROUP BY 1, 2
-),
-unsub AS (             -- one row per client x treatment they unsubscribed on
-    SELECT DISTINCT e.consumer_id_hashed, e.TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2025-08-01'
-),
-pairs AS (             -- treatments sent to the same client CLOSE TOGETHER IN TIME. A treatment
-                       -- is one wave on one date, so "overlapping exposure" means the sends land
-                       -- within RESPONSE_DAYS of each other - both emails were live in the inbox
-                       -- at the same time and either could have been the one clicked.
-    SELECT s1.consumer_id_hashed,
-           s1.TREATMENT_ID
-    FROM sent s1
-    JOIN sent s2 ON s2.consumer_id_hashed = s1.consumer_id_hashed
-                AND s2.TREATMENT_ID <> s1.TREATMENT_ID
-    WHERE ABS(s1.send_dt - s2.send_dt) <= 30       -- RESPONSE_DAYS; set from Q1's result
-    GROUP BY 1, 2
-),
-per_client AS (
-    SELECT p.consumer_id_hashed,
-           COUNT(DISTINCT p.TREATMENT_ID)                                  AS overlap_count,
-           COUNT(DISTINCT CASE WHEN u.TREATMENT_ID IS NOT NULL
-                               THEN p.TREATMENT_ID END)                    AS unsub_treatments
-    FROM pairs p
-    LEFT JOIN unsub u ON u.consumer_id_hashed = p.consumer_id_hashed
-                     AND u.TREATMENT_ID = p.TREATMENT_ID
-    GROUP BY 1
-)
-SELECT TOP 20
-       overlap_count,
+SELECT sent_in_window,
        unsub_treatments,
-       CASE WHEN unsub_treatments = 0                THEN 'no unsub'
-            WHEN unsub_treatments = 1                THEN 'PER-LIST (one treatment)'
-            WHEN unsub_treatments = overlap_count    THEN 'GLOBAL (all overlapping treatments)'
-            ELSE 'PARTIAL' END                       AS reading,
-       COUNT(*)                                      AS clients
-FROM per_client
+       CASE WHEN unsub_treatments = 1              THEN 'PER-LIST'
+            WHEN unsub_treatments = sent_in_window THEN 'GLOBAL'
+            ELSE                                        'PARTIAL' END AS reading,
+       COUNT(*) AS clients
+FROM (
+    SELECT c.consumer_id_hashed,
+           COUNT(DISTINCT s.TREATMENT_ID) AS sent_in_window,
+           COUNT(DISTINCT CASE WHEN u2.TREATMENT_ID IS NOT NULL
+                               THEN s.TREATMENT_ID END) AS unsub_treatments
+    FROM (SELECT consumer_id_hashed, MIN(unsub_dt) AS first_unsub_dt
+          FROM vt_unsub_clients GROUP BY 1) c
+    JOIN vt_unsub_sends s
+      ON s.consumer_id_hashed = c.consumer_id_hashed
+     AND s.send_dt <= c.first_unsub_dt
+     AND s.send_dt >= c.first_unsub_dt - 30       -- 30-day attribution window
+    LEFT JOIN vt_unsub_clients u2
+      ON u2.consumer_id_hashed = s.consumer_id_hashed
+     AND u2.TREATMENT_ID = s.TREATMENT_ID
+    GROUP BY 1
+) z
 WHERE unsub_treatments > 0
 GROUP BY 1, 2, 3
 ORDER BY clients DESC;
 
 
 -- ============================================================================================
--- Q3. Machine or human? For clients with 2+ unsub events, how far apart are they in TIME.
---   0 seconds        -> one system action fanned out across treatments. GLOBAL, mechanically.
---   seconds/minutes  -> still one action, batch-processed
---   hours/days       -> a person clicking unsubscribe more than once. PER-LIST behaviour.
---
--- This is the diagnostic that separates the two explanations "same day" cannot.
+-- Q1. Send-to-unsub lag. Sets the attribution window with evidence instead of a guess.
+-- Bounded to unsubscribers via the volatile tables, so it will not spool.
 -- Expect: <= 10 rows.
 -- ============================================================================================
-WITH u AS (
-    SELECT consumer_id_hashed,
-           TREATMENT_ID,
-           MIN(disposition_dt_tm) AS unsub_tm
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 4
-      AND disposition_dt_tm >= DATE '2025-08-01'
-    GROUP BY 1, 2
-),
-spread AS (
-    SELECT consumer_id_hashed,
-           COUNT(DISTINCT TREATMENT_ID)                                   AS n_treatments,
-           CAST((MAX(unsub_tm) - MIN(unsub_tm)) SECOND(4) AS INTEGER)     AS spread_seconds
-    FROM u
-    GROUP BY 1
-    HAVING COUNT(DISTINCT TREATMENT_ID) >= 2
-)
-SELECT CASE WHEN spread_seconds = 0            THEN '0 - identical timestamp'
-            WHEN spread_seconds <= 60          THEN '1-60 sec'
-            WHEN spread_seconds <= 3600        THEN '1-60 min'
-            WHEN spread_seconds <= 86400       THEN '1-24 hours'
-            ELSE 'over a day' END              AS unsub_spread,
-       COUNT(*)                                AS clients,
-       MIN(n_treatments)                       AS min_treatments,
-       MAX(n_treatments)                       AS max_treatments
-FROM spread
+SELECT CASE WHEN lag_days <  0  THEN 'negative - investigate'
+            WHEN lag_days =  0  THEN '00 same day'
+            WHEN lag_days =  1  THEN '01 next day'
+            WHEN lag_days <= 3  THEN '02 2-3 days'
+            WHEN lag_days <= 7  THEN '03 4-7 days'
+            WHEN lag_days <= 14 THEN '04 8-14 days'
+            WHEN lag_days <= 30 THEN '05 15-30 days'
+            ELSE                     '06 over 30 days' END AS lag_bucket,
+       COUNT(*) AS unsub_events
+FROM (
+    SELECT (u.unsub_dt - s.send_dt) AS lag_days
+    FROM vt_unsub_clients u
+    JOIN vt_unsub_sends s
+      ON s.consumer_id_hashed = u.consumer_id_hashed
+     AND s.TREATMENT_ID = u.TREATMENT_ID
+) l
 GROUP BY 1
-ORDER BY clients DESC;
+ORDER BY 1;
 
 
 -- ============================================================================================
--- HOW TO READ THE SET
+-- HOW TO READ IT
 --
--- Q2 GLOBAL-dominant + Q3 concentrated at 0 seconds
---     -> one opt-out, fanned out by the system. Per-campaign unsub attribution is not real, and
---        every Spotlight 1 per-campaign number has to be worded as "last straw", not "cause".
---        Outcome metrics must be client-level.
+-- Q3 distinct_ts = 1 dominant
+--     -> One opt-out written against every open treatment. Per-campaign unsub attribution is not
+--        real. Spotlight 1's per-campaign numbers are "whose email was the last straw", never
+--        "which campaign causes unsubs", and every outcome metric goes client-level.
 --
--- Q2 PER-LIST-dominant + Q3 spread over hours/days
---     -> clients are genuinely unsubscribing per campaign. Per-campaign attribution stands as is.
+-- Q3 distinct_ts = n_treatments dominant
+--     -> Genuinely separate events. Per-campaign attribution stands, last-touch within the window
+--        is the right rule.
 --
--- Mixed
---     -> both mechanisms exist. Split them: treat 0-second fan-outs as one client-level event and
---        keep the spread-out ones as genuine per-campaign unsubscribes.
+-- Q3b mostly "1 treatment"
+--     -> The ambiguity affects a small tail. Attribute per-campaign and note the exception.
 --
--- Q1 sets the attribution window for both spotlights. A treatment is one wave on one date,
--- so there is no campaign duration to derive - only the response lag. Take the bucket where
--- the mass stops and use that number, rather than defending a guessed 30 or 90.
+-- Q1 tells you where to cut the window. If the mass is inside 7 days, 30 is already generous.
 -- ============================================================================================
