@@ -693,3 +693,82 @@ except Exception as e:
 print("\nLocal output dir:", LOCAL_OUT)
 print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT survive a pod "
       "restart - the HDFS copies above are the durable ones.")
+
+
+# %% [8] CLIENT-LEVEL EXTRACT - the thing worth downloading
+# base_v2 is one row per (clnt_no, mne). At full population that is ~1 GB, which is a different
+# kind of download. Collapsing to one row per CLIENT is roughly 8x fewer rows, so the FULL
+# population lands in about the size of the 10% sample - and it still answers every client-level
+# question: dose-response, product depth, profit, cards vs bank contact load.
+#
+# What it drops: which individual campaign a client received. Per-campaign detail stays on HDFS in
+# base_v2 and in the q_mne / cube1 outputs. If a question needs per-campaign grain, it gets
+# answered on the pod, not locally.
+# ENGINE: PySpark (YARN).
+
+base = read_base()
+ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
+
+_promo = (F.col("is_branded") == 1) & (F.col("is_regulatory") == 0)
+_cards = F.col("is_cards") == 1
+
+
+def _n(cond, col):
+    return F.sum(F.when(cond, F.col(col)).otherwise(0))
+
+
+client_extract = (base.groupBy("clnt_no")
+                  .agg(F.max("unsub_flag").alias("unsub_flag"),
+                       F.min("unsub_dt").alias("unsub_dt"),
+                       F.min("first_send_dt").alias("first_send_dt"),
+                       F.max("last_send_dt").alias("last_send_dt"),
+
+                       F.countDistinct("mne").alias("n_campaigns_all"),
+                       F.countDistinct(F.when(F.col("is_branded") == 1, F.col("mne"))).alias("n_campaigns_branded"),
+                       F.countDistinct(F.when(_cards, F.col("mne"))).alias("n_campaigns_cards"),
+                       F.countDistinct(F.when(F.col("is_regulatory") == 1, F.col("mne"))).alias("n_campaigns_regulatory"),
+
+                       F.sum("n_sends").alias("n_emails_all"),
+                       F.sum("n_sends_3m").alias("n_emails_3m"),
+                       F.sum("n_sends_6m").alias("n_emails_6m"),
+                       _n(_promo, "n_sends").alias("n_emails_promo"),
+                       _n(_promo, "n_sends_6m").alias("n_emails_promo_6m"),
+                       _n(F.col("is_regulatory") == 1, "n_sends").alias("n_emails_regulatory"),
+                       _n(F.col("is_regulatory") == 1, "n_sends_6m").alias("n_emails_regulatory_6m"),
+                       _n(_cards, "n_sends").alias("n_emails_cards"),
+                       _n(_cards, "n_sends_6m").alias("n_emails_cards_6m"),
+
+                       F.max(F.when(_cards, 1).otherwise(0)).alias("touched_by_cards"),
+                       # Which cards campaigns, as one delimited string - keeps the co-exposure
+                       # question answerable locally without carrying the full client x mne grain.
+                       F.concat_ws("|", F.sort_array(F.collect_set(F.when(_cards, F.col("mne")))))
+                        .alias("cards_mnes"))
+                  .join(ucp_enriched_full, "clnt_no", "left")
+                  .withColumn("age_band", F.coalesce(F.col("age_band"), F.lit("no_ucp_match")))
+                  .withColumn("tenure_band", F.coalesce(F.col("tenure_band"), F.lit("no_ucp_match")))
+                  .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
+
+_ext_path = BASE + "out/client_extract"
+client_extract.write.mode("overwrite").parquet(_ext_path)
+
+_n_rows = spark.read.parquet(_ext_path).count()
+print("CLIENT EXTRACT | grain: one row per clnt_no |", _n_rows, "rows")
+print("landed:", _ext_path)
+print("columns:", spark.read.parquet(_ext_path).columns)
+print("\nSample:")
+spark.read.parquet(_ext_path).limit(5).toPandas().to_string(index=False)
+
+print("""
+SAMPLE OR FULL? If SMOKE was True when Cell [1] ran, this covers 10%% of clients and every
+absolute count here is a tenth of reality. Rates are unaffected. Set SMOKE=False, rerun Cell [1]
+(bite 0 is already landed and gets skipped), then rerun this cell.
+
+To pull it down - this is the one worth downloading, not base_v2:
+  !hdfs dfs -get -f %s /home/jovyan/spotlight_out/
+  !du -sh /home/jovyan/spotlight_out/client_extract
+
+Then locally:
+  import duckdb
+  duckdb.sql("SELECT prod_cat_cnt, SUM(unsub_flag) leavers, COUNT(*) clients "
+             "FROM 'client_extract/*.parquet' GROUP BY 1 ORDER BY 1").df()
+""" % _ext_path)
