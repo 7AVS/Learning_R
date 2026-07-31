@@ -306,44 +306,11 @@ print("SCHEMA_VERSION:", SCHEMA_VERSION, "| clientagg:", CLIENTAGG_DIR,
       "| mne_agg:", MNEAGG_DIR, "| cards_pair:", CARDSPAIR_DIR)
 
 
-# %% [1a] CHEAP PROBE - runs FIRST, before committing to the three pulls below. One tiny query,
-# ~1 row, so the scale of the problem is visible instead of guessed at.
-# ENGINE: Teradata-direct. Opens and closes its own EDW connection (Cell [1] has not connected
-# yet at this point in the notebook).
-
-import getpass
-import teradatasql
-
-_probe_user = input("Enter your username: ")
-_probe_pw = getpass.getpass("Enter your password: ")
-_probe_conn = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=_probe_user,
-                                  password=_probe_pw, logmech="LDAP")
-
-_probe_sql = """
-SELECT COUNT(DISTINCT m.CLNT_NO) AS distinct_clients_mailed,
-       COUNT(DISTINCT SUBSTR(ek.TREATMENT_ID, 8, 3)) AS distinct_mnemonics,
-       COUNT(*) AS total_send_events
-FROM (
-    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '%s'
-) ek
-INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-WHERE m.load_tm >= DATE '%s'
-""" % (WIN_FLOOR, WIN_FLOOR)
-
-_probe_cur = _probe_conn.cursor()
-_probe_cur.execute(_probe_sql)
-_probe_row = _probe_cur.fetchone()
-_probe_cur.close()
-_probe_conn.close()
-
-print("CHEAP PROBE (window >= %s) - distinct clients mailed: %s | distinct mnemonics: %s | "
-      "total send events: %s" % (WIN_FLOOR, _probe_row[0], _probe_row[1], _probe_row[2]))
-print("This is the scale of the problem this file measures. Compare against the estimates "
-      "printed at the top of Cell [1] before the three pulls run.")
+# %% [1a] REMOVED - the "cheap probe" was not cheap. COUNT(DISTINCT consumer_id_hashed) over the
+# full 400M+ row event window blew spool (Teradata 2646) before the pulls even started, and the
+# numbers it wanted are free downstream anyway: Pull A lands one row per client, so its row count
+# IS the distinct-client count, and Pull B returns clients_mailed and sends per mne. Enough
+# probing - preflight.sql and preflight2.sql already settled the questions that mattered.
 
 
 # %% [1] PULLS - THREE Teradata-direct pulls replacing the old single ~94M-row pull (see
