@@ -323,6 +323,8 @@ print("SCHEMA_VERSION:", SCHEMA_VERSION, "| clientagg:", CLIENTAGG_DIR,
 #   PULL C -> cards_pair_v3 - GROUP BY CLNT_NO, mne, CARDS MNES ONLY. Bitten, landed, resumable.
 
 import time
+import getpass
+import teradatasql
 import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType, DoubleType
