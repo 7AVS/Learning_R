@@ -174,7 +174,15 @@ import datetime
 
 # ---- Analysis window ----
 WIN_FLOOR = "2025-08-01"   # event window opens here
-TACTIC_ID_ONLY = True   # Andre, 2026-07-31. Keep ONLY properly formed tactic ids:
+TACTIC_ID_ONLY = False  # SUPERSEDED - do not re-enable, and do not retune the year range.
+                        # A string-shape test was the wrong instrument: a 2020 floor discarded
+                        # 2018319KVM, a live 2018-vintage id carrying 3,080,273 sends, and any
+                        # wider floor is equally arbitrary. Scope must come from the deployments
+                        # actually run in the window (DTZV01.TACTIC_EVNT_IP_AR_H60M), not from
+                        # parsing an id. Blocked on preflight5 Q19/Q20 proving TREATMENT_ID =
+                        # TACTIC_ID - asserted everywhere in this folder, never verified
+                        # (UNSUB_TRACKING_KNOWLEDGE.md:283).
+                        # ORIGINAL COMMENT: Keep ONLY properly formed tactic ids:
                         # YYYY + Julian day + 3-char program, e.g. 2024313BBP -> SUBSTR(x,8,3)
                         # = BBP. Year range is 2015-2030, not 2020: Q17 showed 2018319KVM (3,080,273 sends,
                         # 1,119,884 clients) is a live 2018-vintage tactic id, and a 2020 floor
