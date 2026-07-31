@@ -91,15 +91,6 @@ Cards is the lens; the bank is the baseline bar behind it. Regulatory campaigns 
   </div>
   <div class="chart" id="c-rate"></div>
 
-  <p class="note"><b>Only CRV and PCL run above the bank.</b> CRV 0.86% and PCL 0.79% against a bank-wide
-  0.69%. <b>AUH runs at 0.27% — well under half the bank rate.</b> On exposure, AUH is the safest cards
-  campaign we have, not a problem to solve.</p>
-
-  <p class="note"><b>Exposure over-counts, attribution under-counts.</b> A client mailed by five campaigns
-  lands in five exposure counts and one attribution count. AUH is the widest gap: 1,491 exposed, 323 attributed
-  — 4.6×. Neither is wrong; they answer different questions, and quoting one without the other lets the
-  reviewer pick the flattering number.</p>
-
   <div class="gap"><b>Not yet run:</b> send cadence per campaign (weekly / bi-weekly / monthly). Cell <code>[5b]</code>
   is written and needs one EDW pull. Without it the rate cannot be read against how often each campaign fires.</div>
 
@@ -132,12 +123,6 @@ GROUP BY 1;
   <p class="q">Unsubscribe rate by number of emails received in the window. The answer is not a straight line.</p>
 
   <div class="chart" id="c-freq"></div>
-
-  <p class="note"><b>The rate peaks at 7–12 emails (0.887%) and then falls to 0.526% at 13+.</b>
-  The most-mailed group is the <i>safest</i> group. The straightforward reading is survivorship —
-  people who tolerate thirteen emails in three months have already self-selected as people who do not
-  unsubscribe. It is not evidence that more mail is safe; it is evidence that the heaviest-mailed
-  segment is not a random one.</p>
 
   <div class="gap"><b>Cards-specific version pending.</b> Contact bands were computed bank-wide. The per-campaign
   cut exists in <code>[20h] H2</code>, written and not yet run — it needs no new pull, only a re-run.</div>
@@ -188,11 +173,6 @@ FROM b GROUP BY 1;
   </div>
   <div class="chart" id="c-prod"></div>
 
-  <p class="note"><b>The one thing here that survives the mislabelling</b> is the cards-vs-bank split, because it
-  compares like with like. A one-account client is 1.32× over-represented among AUH's leavers and 0.78× among
-  CRV's. The bank number, 0.91, is those two opposite behaviours cancelling. Whatever the band is called, the
-  bank average hides a real disagreement between two cards campaigns — which is the argument for a cards lens.</p>
-
   <div class="gap"><b>Also still short:</b> <code>tibc_mix</code> — <i>which</i> categories a client holds
   (multi / T only / I only / B only / C only) — is brief item <b>4a</b>, "depth of relationship (TIBC)".
   It has been computed since day one and printed nowhere. Free on the next run.</div>
@@ -227,24 +207,9 @@ FROM s;
   </div>
   <div class="chart" id="c-age"></div>
 
-  <p class="note"><b>Under-25s leave at 0.91% against a bank rate of 0.69%; over-45s at 0.54%.</b>
-  Nearly a 2× spread across age, and it is the widest spread of any attribute in this pack.
-  <b>Inside CRV the young rate is 1.29%</b> — the highest single number here.</p>
-
   <p class="q" style="margin-top:18px">The obvious objection: young clients simply get more email.
   Below, the same rate with mail volume held fixed.</p>
   <div class="chart" id="c-contact"></div>
-
-  <p class="note"><b>Under-25s are over-represented among leavers in every contact band</b> — 1.63 at one email
-  down to 1.25 at 7–12, never below 1.25. That rules out the obvious objection: it is not that young clients
-  simply receive more mail, because the ratio holds when mail volume is held fixed.
-  <b>Tenure does not survive the same test</b> — 1.54 at one email collapses to 1.04 at 4–6. Do not state the
-  two with equal confidence.</p>
-
-  <p class="note"><b>Value is flat and mildly protective.</b> The top profit quintile sits at 0.84 —
-  we are not losing our best clients. That is a null result, and it kills a story the pack might otherwise
-  have told. It is also not independent of age: <code>PROF_TOT_ANNUAL</code> is current-year contribution
-  and rises with tenure.</p>
 
   <details><summary>Show the data — by age</summary><div class="tblwrap" id="t-age"></div></details>
   <details><summary>Show the data — at fixed mail volume</summary><div class="tblwrap" id="t-contact"></div></details>
@@ -273,12 +238,8 @@ FROM l10b;</pre></details>
     <li><b>Product depth 1/2/3/4</b> — coded, not run. Free on the next run.</li>
     <li><b>Cards frequency and cards engagement</b> — <code>[20h] H2/H3</code>, written, not run. Free on the next run.</li>
   </ul>
-  <p class="note">Four of those five cost nothing but a re-run. Only cadence needs the database.</p>
 
   <details><summary>Populations — who is in the denominator</summary><div class="tblwrap" id="t-buckets"></div>
-  <p class="note"><b>already_out is excluded from every rate on this page.</b> Those 427,079 clients unsubscribed
-  before the window opened and were mailed anyway. They were never at risk of leaving during the window, so
-  including them in the denominator would push every rate down. They are a separate finding, not a baseline.</p>
   </details>
 </section>
 
