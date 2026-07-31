@@ -174,6 +174,18 @@ import datetime
 
 # ---- Analysis window ----
 WIN_FLOOR = "2025-08-01"   # event window opens here
+TACTIC_ID_ONLY = True   # Andre, 2026-07-31. Keep ONLY properly formed tactic ids:
+                        # YYYY + Julian day + 3-char program, e.g. 2024313BBP -> SUBSTR(x,8,3)
+                        # = BBP. Everything else (DEFAULT, CABVRSN1, vendor-internal codes) is
+                        # excluded outright. Those ids are not campaigns, SUBSTR(x,8,3) on them
+                        # yields a meaningless MNE, and because they are not date-bound a whole
+                        # year of email collapses onto one key - which is what produced the
+                        # 3,029,598 pairs Q12 showed sending "30+ days apart".
+TACTIC_ID_SQL = """
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TRIM(TREATMENT_ID), 1, 4) BETWEEN '2020' AND '2030'
+          AND SUBSTR(TRIM(TREATMENT_ID), 5, 3) BETWEEN '001' AND '366'""" if TACTIC_ID_ONLY else ""
+
 WIN_CEIL  = "2026-08-01"   # HARD ceiling. Without it each statement runs floor-to-its-own-clock,
                            # and the pulls run minutes or days apart because resume is a feature -
                            # at ~35K unsubs/month bank-wide that is ~1K/day of drift BETWEEN pulls,
@@ -280,7 +292,7 @@ UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"          # references/ucp/README.md -
 # v3 = THREE pulls, each aggregated server-side to the grain downstream actually needs (see
 # WIRE-COST REDESIGN above). base_v2/ is NOT reused - v3 is a different shape entirely.
 # v4 = MASTER deduped + null clients dropped + EVENT retries collapsed.
-SCHEMA_VERSION = 5   # v5 = Pull B bitten (MOD moved inside the MASTER subquery like A/C; cadence
+SCHEMA_VERSION = 6   # v6 = tactic-id-only scope   # v5 = Pull B bitten (MOD moved inside the MASTER subquery like A/C; cadence
                      # columns dropped from its SQL - computed in Spark from Pull C instead) +
                      # Pull C drops the constant is_cards/is_regulatory/is_branded columns.
 
@@ -548,7 +560,7 @@ def land_pullA_bite(bite):
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
-          AND disposition_dt_tm <  DATE '%(ceil)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
         GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
     ),
     joined AS (
@@ -598,7 +610,7 @@ def land_pullA_bite(bite):
         MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
     FROM joined
     GROUP BY clnt_no
-    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL,
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL, "tactic": TACTIC_ID_SQL,
            "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL,
            "reg": REGULATORY_LIST_SQL, "cut3": FREQ_CUTOFFS[3], "cut6": FREQ_CUTOFFS[6]}
 
@@ -664,7 +676,7 @@ def land_pullB_bite(bite):
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
-          AND disposition_dt_tm <  DATE '%(ceil)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
         GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
     ),
     joined AS (
@@ -708,7 +720,7 @@ def land_pullB_bite(bite):
     FROM client_mne
     GROUP BY mne, cohort_month_num
     ORDER BY mne, cohort_month_num
-    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL,
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL, "tactic": TACTIC_ID_SQL,
            "n_bites": N_BITES, "bite": bite}
 
     pdf = edw_pd(sql)
@@ -776,7 +788,7 @@ def land_pullC_bite(bite):
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
-          AND disposition_dt_tm <  DATE '%(ceil)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
           AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
         GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
     ),
@@ -808,7 +820,7 @@ def land_pullC_bite(bite):
            MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
     FROM joined
     GROUP BY clnt_no, mne
-    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL,
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL, "tactic": TACTIC_ID_SQL,
            "cards": CARDS_LIST_SQL, "n_bites": N_BITES, "bite": bite}
 
     pdf = edw_pd(sql)
