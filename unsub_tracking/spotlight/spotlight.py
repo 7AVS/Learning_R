@@ -176,14 +176,16 @@ import datetime
 WIN_FLOOR = "2025-08-01"   # event window opens here
 TACTIC_ID_ONLY = True   # Andre, 2026-07-31. Keep ONLY properly formed tactic ids:
                         # YYYY + Julian day + 3-char program, e.g. 2024313BBP -> SUBSTR(x,8,3)
-                        # = BBP. Everything else (DEFAULT, CABVRSN1, vendor-internal codes) is
+                        # = BBP. Year range is 2015-2030, not 2020: Q17 showed 2018319KVM (3,080,273 sends,
+                        # 1,119,884 clients) is a live 2018-vintage tactic id, and a 2020 floor
+                        # threw it away. Everything else (DEFAULT, CABVRSN1, vendor codes) is
                         # excluded outright. Those ids are not campaigns, SUBSTR(x,8,3) on them
                         # yields a meaningless MNE, and because they are not date-bound a whole
                         # year of email collapses onto one key - which is what produced the
                         # 3,029,598 pairs Q12 showed sending "30+ days apart".
 TACTIC_ID_SQL = """
           AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
-          AND SUBSTR(TRIM(TREATMENT_ID), 1, 4) BETWEEN '2020' AND '2030'
+          AND SUBSTR(TRIM(TREATMENT_ID), 1, 4) BETWEEN '2015' AND '2030'
           AND SUBSTR(TRIM(TREATMENT_ID), 5, 3) BETWEEN '001' AND '366'""" if TACTIC_ID_ONLY else ""
 
 WIN_CEIL  = "2026-08-01"   # HARD ceiling. Without it each statement runs floor-to-its-own-clock,

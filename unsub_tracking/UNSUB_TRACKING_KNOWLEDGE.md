@@ -1004,3 +1004,36 @@ it to sanity-check any new number before reporting it.
   the driver pod.
 - A cache guard that checks path existence, not columns or row count, will happily reuse stale
   parquet from a previous design. Version the path and write a row-count marker.
+
+## 20.9 TREATMENT_ID shapes — measured (preflight4, 2026-07-31)
+
+| | distinct ids | send rows | distinct clients |
+|---|---|---|---|
+| DATED (real tactic id) | 11,607 | 289,029,506 | 13,270,898 |
+| NOT DATED (junk) | **29** | 21,817,167 | 6,950,976 |
+
+Only **29** non-dated ids exist, and two of them are 84% of that volume:
+`DEFAULT` (13,215,751 sends / 5,357,580 clients) and `CABVRSN1` (5,155,879 / 1,587,667).
+Others: `COI`, `ESPTVER2`. Non-dated is **7.0% of send volume** — quote that figure when
+reporting excluded email.
+
+**Year floor is 2015, not 2020.** `2018319KVM` is a live 2018-vintage tactic id with 3,080,273
+sends to 1,119,884 clients still running in 2025–26. A 2020 floor discards it, plus
+`2019105THA`, `2018116KBC`, `2019350MTG` and others. Watch for ids like `21010AOT4B` and
+`2019RMT350` — 10 chars but not year-first; the year-range test catches them.
+
+## 20.10 A tactic id is one day by CONSTRUCTION, not by USE
+
+`TACTIC_ID` = `YYYY` + Julian day + program, so it encodes a single day. It does **not** follow
+that a client receives only one send under it.
+
+Measured: **2,290,008** dated (client, tactic id) pairs have sends on more than one day —
+574,165 within 1–7 days, 942,232 within 8–30, **773,611 more than 30 days apart**. Roughly 1% of
+dated pairs.
+
+Cause: evergreen and triggered campaigns reuse a single tactic id for years. `2018319KVM` was
+still sending in 2026.
+
+**Consequence:** collapse the event grain to `(client, treatment, DAY)`, never to
+`(client, treatment)`. Collapsing to the treatment deletes real emails. This is not an artifact of
+the junk ids — dated ids do it too.
