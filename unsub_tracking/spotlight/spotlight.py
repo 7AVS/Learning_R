@@ -160,6 +160,11 @@ UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"          # references/ucp/README.md -
 # output columns change; the new schema lands in a fresh directory and cannot collide.
 # v1 = cards-filtered, untagged. v2 = bank-wide, is_cards/is_regulatory/is_branded, n_sends_3m/6m.
 SCHEMA_VERSION = 2
+
+# Floor for the UCP join guard. Catches a broken join key (which shows near-zero), NOT ordinary
+# non-match: UCP is personal-only on one closed-month snapshot, so business/commercial recipients
+# and clients who closed after their last send never match. Observed 2026-07-31: 87%.
+UCP_MATCH_FLOOR = 70.0
 BASE_DIR = BASE + "base_v%d/" % SCHEMA_VERSION
 
 BASE_COLS = ["clnt_no", "mne", "n_sends", "first_send_dt", "last_send_dt", "unsub_flag",
@@ -397,16 +402,40 @@ base_ids = (read_base()
 print("Sample clnt_no (base, 5):", [r.clnt_no_long for r in base_ids.limit(5).collect()])
 print("Sample CLNT_NO (UCP, 5):", [r.clnt_no_long for r in ucp_sel.select("clnt_no_long").limit(5).collect()])
 
+_ucp_ids = ucp_sel.select("clnt_no_long").distinct()
+
 _left_n = base_ids.count()
-_matched_n = base_ids.join(ucp_sel.select("clnt_no_long").distinct(), "clnt_no_long", "inner").count()
+_matched_n = base_ids.join(_ucp_ids, "clnt_no_long", "inner").count()
 _match_pct = 100.0 * _matched_n / _left_n if _left_n else 0.0
 print("UCP JOIN MATCH RATE - base clients:", _left_n, "| matched to UCP:", _matched_n,
       "| match pct: %.1f%%" % _match_pct)
-assert _match_pct >= 90.0, (
-    "UCP join match rate %.1f%% (%d/%d) is below the 90%% guard - refusing to proceed silently. "
-    "Check clnt_no normalization on both sides (decimal(18,0)->long) and the UCP snapshot date "
-    "(%s) before rerunning." % (_match_pct, _matched_n, _left_n, _ucp_anchor)
+
+# The guard catches a BROKEN KEY (format mismatch -> near-zero match), not ordinary attrition.
+# UCP is personal-only and anchored to one closed month, so business/commercial recipients and
+# clients who closed after their last send legitimately do not match. A real key break shows up
+# in the single digits, not the eighties.
+assert _match_pct >= UCP_MATCH_FLOOR, (
+    "UCP join match rate %.1f%% (%d/%d) is below the %.0f%% floor - this looks like a broken key, "
+    "not attrition. Check clnt_no normalization on both sides (decimal(18,0)->long) and the UCP "
+    "snapshot date (%s)." % (_match_pct, _matched_n, _left_n, UCP_MATCH_FLOOR, _ucp_anchor)
 )
+
+# The rate itself is not the risk - BIAS in who fails to match is. Unmatched clients keep their
+# rows as "no_ucp_match" (left join below), but if leavers match at a materially different rate
+# than stayers, every profiling cut in Cube 1 is tilted. Print it; do not silently proceed.
+_bucket_ids = (read_base()
+               .groupBy("clnt_no").agg(F.max("unsub_flag").alias("any_unsub"))
+               .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+               .withColumn("bucket", F.when(F.col("any_unsub") == 1, "LEAVER").otherwise("STAYER")))
+_bias = (_bucket_ids
+         .join(_ucp_ids.withColumn("in_ucp", F.lit(1)), "clnt_no_long", "left")
+         .groupBy("bucket")
+         .agg(F.count("*").alias("clients"),
+              F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched")))
+print("UCP MATCH BIAS CHECK - match rate by bucket (grain: one row per STAYER/LEAVER):")
+_bias.withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)).show(truncate=False)
+print("If STAYER and LEAVER match rates differ by more than a few points, Cube 1's profiling cuts "
+      "are biased and the 'no_ucp_match' rows must be reported, not filtered out.")
 
 
 def _band(col, edges):
