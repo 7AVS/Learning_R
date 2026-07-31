@@ -237,7 +237,7 @@ UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"          # references/ucp/README.md -
 # v1 = cards-filtered, untagged, one pull. v2 = bank-wide one pull, client x mne grain, ~94M rows.
 # v3 = THREE pulls, each aggregated server-side to the grain downstream actually needs (see
 # WIRE-COST REDESIGN above). base_v2/ is NOT reused - v3 is a different shape entirely.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4   # v4 = MASTER deduped + null clients dropped + EVENT retries collapsed
 
 # Floor for the UCP join guard. Catches a broken join key (which shows near-zero), NOT ordinary
 # non-match: UCP is personal-only on one closed-month snapshot, so business/commercial recipients
@@ -484,11 +484,16 @@ def land_pullA_bite(bite):
 
     sql = """
     WITH ek AS (
-        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+        -- One row per (client, treatment, disposition). Preflight P3 found 8,084,229 pairs with
+        -- more than one cd=1 timestamp - retries of the same deployment, not separate emails.
+        -- Counting raw rows overstated every email-volume figure.
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
+               MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
           AND disposition_dt_tm <  DATE '%(ceil)s'
+        GROUP BY 1, 2, 3
     ),
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
@@ -496,9 +501,17 @@ def land_pullA_bite(bite):
                ek.disposition_cd AS disposition_cd,
                CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
         FROM ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        -- MASTER is NOT one row per (consumer_id_hashed, TREATMENT_ID): preflight P1 measured
+        -- 1.123 rows per key, max 95,014. P6 showed 376,129,145 of 385,665,736 keys map to
+        -- exactly one client, so it is duplication, not ambiguity, and DISTINCT resolves it.
+        -- P7 showed the worst keys carry a NULL CLNT_NO under junk TREATMENT_IDs ('DEFAULT',
+        -- 'CABVRSN1'); those are dropped here explicitly rather than lost inside MOD(NULL).
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(mfloor)s'
+                      AND CLNT_NO IS NOT NULL) m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(mfloor)s'
+        WHERE 1 = 1
           AND MOD(ABS(m.CLNT_NO), %(n_bites)d) = %(bite)d
     )
     SELECT
@@ -580,11 +593,16 @@ def land_mneagg():
 
     sql = """
     WITH ek AS (
-        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+        -- One row per (client, treatment, disposition). Preflight P3 found 8,084,229 pairs with
+        -- more than one cd=1 timestamp - retries of the same deployment, not separate emails.
+        -- Counting raw rows overstated every email-volume figure.
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
+               MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
           AND disposition_dt_tm <  DATE '%(ceil)s'
+        GROUP BY 1, 2, 3
     ),
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
@@ -592,9 +610,17 @@ def land_mneagg():
                ek.disposition_cd AS disposition_cd,
                CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
         FROM ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        -- MASTER is NOT one row per (consumer_id_hashed, TREATMENT_ID): preflight P1 measured
+        -- 1.123 rows per key, max 95,014. P6 showed 376,129,145 of 385,665,736 keys map to
+        -- exactly one client, so it is duplication, not ambiguity, and DISTINCT resolves it.
+        -- P7 showed the worst keys carry a NULL CLNT_NO under junk TREATMENT_IDs ('DEFAULT',
+        -- 'CABVRSN1'); those are dropped here explicitly rather than lost inside MOD(NULL).
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(mfloor)s'
+                      AND CLNT_NO IS NOT NULL) m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(mfloor)s'
+        WHERE 1 = 1
     ),
     client_mne AS (
         SELECT clnt_no, mne,
@@ -694,12 +720,17 @@ def land_pullC_bite(bite):
 
     sql = """
     WITH ek AS (
-        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+        -- One row per (client, treatment, disposition). Preflight P3 found 8,084,229 pairs with
+        -- more than one cd=1 timestamp - retries of the same deployment, not separate emails.
+        -- Counting raw rows overstated every email-volume figure.
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
+               MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
           AND disposition_dt_tm <  DATE '%(ceil)s'
           AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+        GROUP BY 1, 2, 3
     ),
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
@@ -707,9 +738,17 @@ def land_pullC_bite(bite):
                ek.disposition_cd AS disposition_cd,
                CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
         FROM ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+        -- MASTER is NOT one row per (consumer_id_hashed, TREATMENT_ID): preflight P1 measured
+        -- 1.123 rows per key, max 95,014. P6 showed 376,129,145 of 385,665,736 keys map to
+        -- exactly one client, so it is duplication, not ambiguity, and DISTINCT resolves it.
+        -- P7 showed the worst keys carry a NULL CLNT_NO under junk TREATMENT_IDs ('DEFAULT',
+        -- 'CABVRSN1'); those are dropped here explicitly rather than lost inside MOD(NULL).
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(mfloor)s'
+                      AND CLNT_NO IS NOT NULL) m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(mfloor)s'
+        WHERE 1 = 1
           AND MOD(ABS(m.CLNT_NO), %(n_bites)d) = %(bite)d
     )
     SELECT clnt_no, mne,
