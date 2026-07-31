@@ -772,3 +772,50 @@ Then locally:
   duckdb.sql("SELECT prod_cat_cnt, SUM(unsub_flag) leavers, COUNT(*) clients "
              "FROM 'client_extract/*.parquet' GROUP BY 1 ORDER BY 1").df()
 """ % _ext_path)
+
+
+# %% [9] CLEANUP - drop the client-grain intermediates, keep only aggregates
+# Nothing at client grain is meant to persist. base_v2 and ucp_enriched exist for two reasons and
+# neither survives this cell:
+#   1. Cross-system join buffer. Email events live in Teradata, UCP lives in HDFS parquet. Teradata
+#      cannot see HDFS and the join cannot be pushed down, so the two only meet after both sides
+#      land. There is no query-time alternative.
+#   2. Crash resumability. The bites are what make a killed 10-bite pull resume instead of restart.
+#
+# Once the cubes are written both jobs are done and the client-grain copies are dead weight.
+#
+# NOT automatic. Deleting means any new cut needs a fresh Teradata pull - hours. Run this only when
+# the cubes are checked and you are done re-cutting.
+
+import subprocess
+
+DROP_CLIENT_GRAIN = False   # flip to True, then run this cell
+
+_targets = [BASE_DIR.rstrip("/"), BASE + "ucp_enriched"]
+
+if not DROP_CLIENT_GRAIN:
+    print("DROP_CLIENT_GRAIN is False - nothing deleted. Would remove:")
+    for _t in _targets:
+        print("   ", _t)
+    print("\nCheck the cubes first. Once these are gone, re-cutting means re-pulling from Teradata.")
+else:
+    # Refuse to delete the join buffer before the thing it was built for exists.
+    _required = [BASE + "out/cube1_profiling", BASE + "out/cube2_frequency", BASE + "out/q_mne"]
+    _missing = []
+    for _r in _required:
+        try:
+            spark.read.option("header", True).csv(_r).limit(1).collect()
+        except Exception:
+            _missing.append(_r)
+    if _missing:
+        raise RuntimeError("Refusing to delete client-grain data - these aggregates are missing or "
+                           "unreadable: %s. Rerun the cube cells first." % _missing)
+
+    print("Aggregates verified present. Deleting client-grain intermediates:")
+    for _t in _targets:
+        _rc = subprocess.run("hdfs dfs -rm -r -skipTrash %s" % _t,
+                             shell=True, capture_output=True, text=True, timeout=600)
+        print("  ", _t, "-> rc", _rc.returncode, (_rc.stdout or _rc.stderr).strip()[:200])
+    print("\nDone. Only aggregates remain on HDFS. Nothing at client grain persists.")
+
+print("\nWhat stays:", BASE + "out/*  (cube1, cube2, q_mne, q_trend, q_emails_all, ucp_match_by_mne)")
