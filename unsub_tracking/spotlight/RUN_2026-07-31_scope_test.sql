@@ -1,0 +1,101 @@
+-- RUN_2026-07-31_scope_test.sql
+-- Transcribed results from unsub_scope_test.sql. Run 2026-07-31.
+-- Window: unsubs 2026-04-01 to 2026-07-01; sends 2026-03-01 to 2026-07-01. Bank-wide, all MNEs.
+--
+-- VERDICT: the unsubscribe is PER-LIST, not a global fan-out. Per-campaign attribution is real.
+--
+-- =========================================================================================
+-- Q3b. How many treatments carry an unsub, per unsubscriber
+-- =========================================================================================
+-- treatments_with_unsub | clients
+-- 1 treatment           | 53,727
+-- 2 treatments          |  7,744
+-- 3-4 treatments        |  6,672
+-- 5-9 treatments        |  7,012
+-- 10+ treatments        |  2,373
+-- TOTAL                 | 77,528
+--
+-- 69.3% of unsubscribers have exactly one treatment carrying the unsub. The remaining 30.7%
+-- (23,801 clients) are what Q3 tests.
+--
+-- =========================================================================================
+-- Q3. THE TEST - distinct timestamps vs distinct treatments, for multi-treatment unsubscribers
+-- =========================================================================================
+-- n_treatments | distinct_ts | reading   | clients
+--      2       |      2      | PER-LIST  | 7,581
+--      3       |      3      | PER-LIST  | 3,897
+--      4       |      4      | PER-LIST  | 2,642
+--      5       |      5      | PER-LIST  | 2,059
+--      6       |      6      | PER-LIST  | 1,532
+--      7       |      7      | PER-LIST  | 1,274
+--      8       |      8      | PER-LIST  | 1,026
+--     10       |     10      | PER-LIST  | 1,025
+--      9       |      9      | PER-LIST  |   883
+--     11..20   |   (equal)   | PER-LIST  |   ~1,225 combined
+--      2       |      1      | GLOBAL    |   163
+--      5       |      1      | GLOBAL    |     4
+--      3       |      1      | GLOBAL    |     2
+--   (various)  | (n-1, n-2)  | PARTIAL   |   ~400 combined
+--
+-- PER-LIST  ~23,100 of ~23,800 multi-treatment unsubscribers  (~97%)
+-- GLOBAL       169                                            (~0.7%)
+-- PARTIAL     ~400                                            (~1.7%)
+--
+-- REFUTED: the global-opt-out hypothesis. Pack 20's "86% same-day" was consistent with a person
+-- working through their inbox on one afternoon - same day, different timestamps. It never showed
+-- a system fan-out, and this shows it is not one.
+--
+-- =========================================================================================
+-- Q2. Campaigns sent in the 30 days before the unsub, vs campaigns carrying the unsub
+-- =========================================================================================
+-- sent_in_window | unsub_treatments | reading  | clients
+--        1       |        1         | PER-LIST | 15,502
+--        2       |        1         | PER-LIST | 10,903
+--        3       |        1         | PER-LIST |  6,730
+--        4       |        1         | PER-LIST |  4,560
+--        5       |        1         | PER-LIST |  3,444
+--        6       |        1         | PER-LIST |  2,737
+--        7       |        2         | GLOBAL   |  2,264
+--        8       |        1         | PER-LIST |  2,258
+--        9       |        1         | PER-LIST |  1,701
+--       10       |        3         | PARTIAL  |  1,677
+--   (tail continues, all counts under 1,100)
+--
+-- Consistent with Q3. Clients are mailed by many campaigns and the unsub lands on ONE of them.
+-- The "GLOBAL" label on rows like 7/2 is the query's own labelling being crude, not a fan-out -
+-- unsub_treatments there is 2, not 7.
+--
+-- =========================================================================================
+-- Q1. Send-to-unsub lag
+-- =========================================================================================
+-- lag_bucket        | unsub_events | bucket days | events per day
+-- 00 same day       |   23,118     |      1      | 23,118
+-- 01 next day       |    8,233     |      1      |  8,233
+-- 02 2-3 days       |    8,103     |      2      |  4,052
+-- 03 4-7 days       |   12,971     |      4      |  3,243
+-- 04 8-14 days      |   18,338     |      7      |  2,620
+-- 05 15-30 days     |   36,764     |     16      |  2,298
+-- 06 over 30 days   |   42,834     |    ~90      |    476
+-- negative          |        2     |             | (2 rows, ignore)
+-- TOTAL             |  150,363
+--
+-- Raw counts look like they RISE with lag. They do not - the buckets get wider. Per day it is a
+-- clean decay: 23,118 -> 8,233 -> 4,052 -> 3,243 -> 2,620 -> 2,298 -> 476.
+--
+-- A 30-day attribution window captures 71.5% of logged unsub events (107,527 of 150,363).
+-- The remaining 28.5% sit in a long thin tail whose daily rate is ~2% of day zero.
+--
+-- Note on censoring: the send window opens only 30 days before the unsub window, so long lags are
+-- observable for late unsubs but not early ones. The true tail is therefore somewhat HEAVIER than
+-- 28.5%, not lighter.
+--
+-- =========================================================================================
+-- WHAT THIS CHANGES
+-- =========================================================================================
+-- 1. Per-campaign unsub attribution is REAL. Spotlight 1's per-campaign numbers mean what they
+--    appear to mean. The "last straw, not cause" caveat is not needed.
+-- 2. Attribution rule stands: unsub attaches to the most recent send before it, within the window.
+-- 3. 30 days is a defensible window - the daily rate has fallen ~98% by then - but it drops 28.5%
+--    of logged events. State the coverage figure rather than implying the window is complete.
+-- 4. 69% of unsubscribers touch exactly one treatment, so attribution is unambiguous for the
+--    clear majority and last-touch only has to arbitrate the remaining 31%.
