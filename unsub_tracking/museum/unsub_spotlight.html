@@ -219,8 +219,20 @@ FROM s;
 <!-- ============================= 4 ============================= -->
 <section>
   <h2><span class="brief">FINDING</span>Age is the one lever that survives a control</h2>
-  <p class="q">Not briefed. Included because it is the only result here that would change who we target.</p>
+  <p class="q">Unsubscribe rate by age, bank and cards. Dashed line = bank-wide 0.686%.</p>
 
+  <div class="key">
+    <span><i style="background:var(--bank)"></i>Bank</span>
+    <span><i style="background:var(--cards)"></i>Cards campaign</span>
+  </div>
+  <div class="chart" id="c-age"></div>
+
+  <p class="note"><b>Under-25s leave at 0.91% against a bank rate of 0.69%; over-45s at 0.54%.</b>
+  Nearly a 2× spread across age, and it is the widest spread of any attribute in this pack.
+  <b>Inside CRV the young rate is 1.29%</b> — the highest single number here.</p>
+
+  <p class="q" style="margin-top:18px">The obvious objection: young clients simply get more email.
+  Below, the same rate with mail volume held fixed.</p>
   <div class="chart" id="c-contact"></div>
 
   <p class="note"><b>Under-25s are over-represented among leavers in every contact band</b> — 1.63 at one email
@@ -234,7 +246,8 @@ FROM s;
   have told. It is also not independent of age: <code>PROF_TOT_ANNUAL</code> is current-year contribution
   and rises with tenure.</p>
 
-  <details><summary>Show the data</summary><div class="tblwrap" id="t-contact"></div></details>
+  <details><summary>Show the data — by age</summary><div class="tblwrap" id="t-age"></div></details>
+  <details><summary>Show the data — at fixed mail volume</summary><div class="tblwrap" id="t-contact"></div></details>
   <details><summary>Show the logic</summary><pre>-- the same ratio, re-computed INSIDE a fixed contact band.
 -- if the raw signal were only "young people get more email", the ratio would
 -- collapse toward 1.00 once volume is held constant. It does not.
@@ -295,12 +308,27 @@ var FREQ = [
 
 // [label, scope, ratio, leavers, stayers] — L7 (bank) and L9 (cards).
 var PROD = [
-  ["1 product",    "BANK", 0.91, 11446, 1822813],
-  ["1 product",    "AUH",  1.32,   354,   97824],
-  ["1 product",    "CRV",  0.78,    91,   12733],
-  ["2 products",   "BANK", 0.97, 10319, 1543681],
-  ["3–4 products", "BANK", 1.13, 20275, 2595559],
-  ["5+ products",  "BANK", 0.96, 20591, 3107514]
+  ["1 account",     "BANK", 0.91, 11446, 1822813],
+  ["1 account",     "AUH",  1.32,   354,   97824],
+  ["1 account",     "CRV",  0.78,    91,   12733],
+  ["2 accounts",    "BANK", 0.97, 10319, 1543681],
+  ["3–4 accounts",  "BANK", 1.13, 20275, 2595559],
+  ["5+ accounts",   "BANK", 0.96, 20591, 3107514]
+];
+
+// [label, scope, ratio, leavers, stayers] — L7 age rows (bank) + L9 age rows (cards).
+// Only <25 and 45–54 were transcribed per campaign; the rest sit in csv_l9_per_campaign_ratios.
+var AGE = [
+  ["Age <25",   "BANK", 1.33,  9055,  985394],
+  ["Age <25",   "AUH",  1.29,    98,   27644],
+  ["Age <25",   "CRV",  1.42,   241,   18421],
+  ["Age 25–34", "BANK", 1.27, 15174, 1727684],
+  ["Age 35–44", "BANK", 0.95, 11958, 1822176],
+  ["Age 45–54", "BANK", 0.78,  8405, 1560770],
+  ["Age 45–54", "AUH",  0.78,   233,  108943],
+  ["Age 45–54", "CRV",  0.68,   212,   33672],
+  ["Age 55–64", "BANK", 0.87,  8370, 1388933],
+  ["Age 65+",   "BANK", 0.88,  9696, 1588020]
 ];
 
 // [label, dim, ratio, leavers, stayers] — L10b, RUN_2026-07-30_L10_L13.md §1.
@@ -427,21 +455,41 @@ table(document.getElementById("t-freq"),
   ["Emails in window","Unsub rate","Leavers","Stayers"],
   FREQ.map(function(r){return [r[0],r[1].toFixed(3)+"%",fmt(r[2]),fmt(r[3])];}));
 
-/* ---------- 3. product depth ---------- */
-ratioChart(document.getElementById("c-prod"),
-  PROD.map(function(r){return {label:r[0]+" · "+r[1],v:r[2],
-    color:r[1]==="BANK"?C_BANK:C_CARDS};}));
-table(document.getElementById("t-prod"),
-  ["Band","Scope","Ratio","Leavers","Stayers"],
-  PROD.map(function(r){return [r[0],r[1],r[2].toFixed(2),fmt(r[3]),fmt(r[4])];}));
+/* ONE unit everywhere: the unsubscribe rate. Computed from the leaver and stayer counts
+   sitting in the arrays above, so every bar can be checked against its own table row.
+   already_out is in neither count - those clients were never at risk during the window. */
+function rate(lv,st){ return 100.0*lv/(lv+st); }
 
-/* ---------- 4. age under a contact control ---------- */
-ratioChart(document.getElementById("c-contact"),
-  CONTACT.map(function(r){return {label:r[0],v:r[2],
-    color:r[1]==="age"?C_CARDS:C_BANK};}));
+/* ---------- 3. accounts held ---------- */
+barChart(document.getElementById("c-prod"),
+  PROD.map(function(r){return {label:r[0]+" · "+r[1],bars:[
+    {v:rate(r[3],r[4]),txt:rate(r[3],r[4]).toFixed(3)+"%",color:r[1]==="BANK"?C_BANK:C_CARDS}
+  ]};}), {rowH:26, padL:190, dec:2, ref:BANK_RATE, refTxt:"bank 0.686%"});
+table(document.getElementById("t-prod"),
+  ["Band","Scope","Unsub rate","vs bank","Ratio (share-of-leavers)","Leavers","Stayers"],
+  PROD.map(function(r){return [r[0],r[1],rate(r[3],r[4]).toFixed(3)+"%",
+    (rate(r[3],r[4])/BANK_RATE).toFixed(2)+"×",r[2].toFixed(2),fmt(r[3]),fmt(r[4])];}));
+
+/* ---------- 4a. age, bank vs cards ---------- */
+barChart(document.getElementById("c-age"),
+  AGE.map(function(r){return {label:r[0]+" · "+r[1],bars:[
+    {v:rate(r[3],r[4]),txt:rate(r[3],r[4]).toFixed(3)+"%",color:r[1]==="BANK"?C_BANK:C_CARDS}
+  ]};}), {rowH:24, padL:190, dec:2, ref:BANK_RATE, refTxt:"bank 0.686%"});
+table(document.getElementById("t-age"),
+  ["Age band","Scope","Unsub rate","vs bank","Ratio (share-of-leavers)","Leavers","Stayers"],
+  AGE.map(function(r){return [r[0],r[1],rate(r[3],r[4]).toFixed(3)+"%",
+    (rate(r[3],r[4])/BANK_RATE).toFixed(2)+"×",r[2].toFixed(2),fmt(r[3]),fmt(r[4])];}));
+
+/* ---------- 4b. the same rate, inside a fixed contact band ---------- */
+barChart(document.getElementById("c-contact"),
+  CONTACT.map(function(r){return {label:r[0],bars:[
+    {v:rate(r[3],r[4]),txt:rate(r[3],r[4]).toFixed(3)+"%",
+     color:r[1]==="age"?C_CARDS:C_BANK}
+  ]};}), {rowH:24, padL:190, dec:2, ref:BANK_RATE, refTxt:"bank 0.686%"});
 table(document.getElementById("t-contact"),
-  ["Segment · contact band","Ratio","Leavers","Stayers"],
-  CONTACT.map(function(r){return [r[0],r[2].toFixed(2),fmt(r[3]),fmt(r[4])];}));
+  ["Segment · contact band","Unsub rate","vs bank","Ratio (share-of-leavers)","Leavers","Stayers"],
+  CONTACT.map(function(r){return [r[0],rate(r[3],r[4]).toFixed(3)+"%",
+    (rate(r[3],r[4])/BANK_RATE).toFixed(2)+"×",r[2].toFixed(2),fmt(r[3]),fmt(r[4])];}));
 
 /* ---------- 5. populations ---------- */
 table(document.getElementById("t-buckets"),
