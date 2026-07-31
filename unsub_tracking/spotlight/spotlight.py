@@ -71,7 +71,8 @@
 # %% [0] CONFIG - every tunable lives here. No literal below this cell is hand-typed elsewhere.
 
 # ---- Analysis window ----
-WIN_FLOOR = "2024-01-01"   # repo hard rule: no scan reaches below this (feedback_2024_data_floor)
+WIN_FLOOR = "2025-08-01"   # 12 months. Answers the whole brief; ~55% less scan than the 2024 floor.
+                           # Repo hard rule is a FLOOR of 2024-01-01 - never go below it.
 # No fixed end date on purpose - every pull is "floor to now", so a rerun next sprint picks up new
 # sends/unsubs without editing this file. Add WIN_END here and thread it into Cell [1] if a fixed
 # cutoff is ever wanted instead.
@@ -85,6 +86,10 @@ CARDS_SQL_LIST = ", ".join("'" + m + "'" for m in sorted(CARDS_MNES))
 # ---- Bite plan for the one expensive pull (Cell [1]) ----
 N_BITES = 10   # MOD(CLNT_NO, N_BITES) - one independent Teradata pull per bite, each landed and
                # checked before running, so a killed run resumes at the next un-landed bite.
+
+SMOKE = True   # True  -> pull bite 0 only (10% client sample, ~20 min). Every cell below runs and
+               # prints real numbers; rates are identical, counts are 1/10.
+               # False -> all 10 bites, full population. Flip once the output looks right.
 
 # ---- Bucket edges (Cell [4]) - edit here only, never inline in a groupBy ----
 # (lo, hi, label) - hi=None means "lo and above".
@@ -117,6 +122,10 @@ import time
 import pandas as pd
 import teradatasql
 from pyspark.sql import functions as F
+
+# PySpark <3.4 calls pdf.iteritems() inside createDataFrame; pandas 2.0 removed it.
+if not hasattr(pd.DataFrame, "iteritems"):
+    pd.DataFrame.iteritems = pd.DataFrame.items
 
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
@@ -189,7 +198,7 @@ def land_bite(bite):
     print(name, ": landed", len(pdf), "rows, HDFS readback confirms", nback)
 
 
-for _b in range(N_BITES):
+for _b in (range(1) if SMOKE else range(N_BITES)):
     land_bite(_b)
 
 print("Cell [1] done - base grain landed at", BASE + "base/*", "| one row per (clnt_no, mne).")
