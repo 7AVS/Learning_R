@@ -449,13 +449,41 @@ WHERE dt_record_ext >= DATE '2025-07-01' AND dt_record_ext < DATE '2026-07-01'
   AND ABS(clnt_no) MOD 10 = %d
 GROUP BY clnt_no
 """
-_b = []
-for _i in range(10):
-    print("dfp bite %d/10" % (_i + 1), flush=True)
-    _x = edw_pd(DFP_TMPL % _i)
-    assert len(_x) > 0, "dfp bite %d returned zero rows" % _i
-    _b.append(_x)
-dfp = pd.concat(_b, ignore_index=True)
+# Two failures on 2026-07-31, both in the eleven lines this replaces.
+#
+# 1. CASING. Teradata titles an unaliased column with its DDL casing, not the casing you typed. The
+#    template says SELECT clnt_no; the frame comes back holding CLNT_NO; dfp["clnt_no"] raised
+#    KeyError: 'clnt_no'. Cell [2] never hit this because it writes m.CLNT_NO and reads ["CLNT_NO"].
+#    Every bite is lower-cased on arrival, so the read side stops depending on how the SELECT was typed.
+#
+# 2. NO CHECKPOINT. The old loop held ten bites in a kernel list and wrote nothing until all ten
+#    survived. The casing bug fired after bite 10, so the whole pull died one line short of land() and
+#    a dead kernel took all of it. Each bite now lands the moment it returns and a re-run skips whatever
+#    is already on disk - a failure at bite 8 costs bite 8. Delete a bite directory to force a re-pull.
+def _dfp_bite(i):
+    path = PULL_OUT + "dfp_bite_%d" % i
+    try:
+        cached = spark.read.option("header", True).csv(path)
+        n = cached.count()
+        if n > 0:
+            print("dfp bite %d/10 CACHED %s rows" % (i + 1, f"{n:,}"), flush=True)
+            return cached.toPandas()
+    except Exception:
+        pass
+    print("dfp bite %d/10 pulling" % (i + 1), flush=True)
+    x = edw_pd(DFP_TMPL % i)
+    assert len(x) > 0, "dfp bite %d returned zero rows" % i
+    x.columns = [c.strip().lower() for c in x.columns]
+    # everything to string before the write: the CSV round-trip returns strings either way, and the
+    # casts below already coerce. Keeps a date or decimal dtype from failing createDataFrame mid-loop.
+    spark.createDataFrame(
+        x.astype(str).replace({"NaT": "", "nan": "", "None": ""})
+    ).coalesce(8).write.mode("overwrite").option("header", True).csv(path)
+    print("   bite %d landed -> %s" % (i + 1, path), flush=True)
+    return x
+
+dfp = pd.concat([_dfp_bite(_i) for _i in range(10)], ignore_index=True)
+dfp.columns = [c.strip().lower() for c in dfp.columns]
 
 dfp["clnt_key"] = key_pd(dfp["clnt_no"], "dfp")
 dfp = dfp[dfp["clnt_key"].notna()].copy()
