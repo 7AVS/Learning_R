@@ -1,0 +1,72 @@
+-- RUN_2026-07-31_preflight.sql
+-- Results from preflight.sql. Run 2026-07-31. Window: events 2025-08-01 to 2026-08-01,
+-- MASTER load_tm >= 2025-05-01.
+--
+-- Three of four probes came back bad. The extraction cannot be trusted as written.
+--
+-- =========================================================================================
+-- P1. MASTER GRAIN -- FAILED. This is a blocker.
+-- =========================================================================================
+-- max_rows_per_key = 95,014
+-- keys_checked     = 385,665,736
+--
+-- MASTER is NOT one row per (consumer_id_hashed, TREATMENT_ID). The assumption in
+-- UNSUB_TRACKING_KNOWLEDGE.md:137 ("believed... grain NOT yet verified") is false.
+--
+-- Scale of the damage, from P4's row count: 432,925,102 rows over 385,665,736 keys = 1.123
+-- rows per key on AVERAGE. So the typical inflation is ~12%, not 95,014x -- the max is a
+-- pathological key, almost certainly a null or sentinel consumer_id_hashed rather than a real
+-- client. Both problems are real and they are different problems:
+--   - the ~12% average fan-out inflates every COUNT and SUM in all three pulls
+--   - the 95,014-row key would land ~95K duplicate rows for a single join match
+--
+-- Open question before the fix is safe: do the duplicate rows carry the SAME CLNT_NO (then
+-- SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO resolves it cleanly) or DIFFERENT
+-- CLNT_NOs (then one email maps to several clients and the attribution itself is ambiguous)?
+-- preflight2.sql answers this.
+--
+-- =========================================================================================
+-- P2. ZERO-MARGIN load_tm FILTER -- CONFIRMED, and large.
+-- =========================================================================================
+-- unsub_events_dropped_by_zero_margin = 178,184
+--
+-- The old filter silently deleted 178,184 unsub events -- unsubs that happened inside the window
+-- whose MASTER row loaded before it. Consistent with the lag finding: 28.5% of unsubs land more
+-- than 30 days after their send. Already fixed via MASTER_FLOOR = 2025-05-01 (3-month lookback).
+--
+-- =========================================================================================
+-- P3. SEND ROWS DOUBLE COUNTED -- CONFIRMED.
+-- =========================================================================================
+-- client_treatments_with_multiple_send_rows = 8,084,229
+--
+-- 8.08M (client, treatment) pairs carry more than one distinct cd=1 timestamp. Since n_emails_*
+-- sums cd=1 rows, email volume is overstated everywhere it appears -- which is the entire basis
+-- of the contact-frequency cube and the dose-response reading.
+-- UNSUB_TRACKING_KNOWLEDGE.md warns against counting raw rows without collapsing to send-journey
+-- grain first. This is that warning coming true.
+-- NOT YET FIXED.
+--
+-- =========================================================================================
+-- P4. NULL / NEGATIVE CLNT_NO
+-- =========================================================================================
+-- null_clnt_no     = 16,519,813
+-- negative_clnt_no = 0
+-- rows_checked     = 432,925,102
+--
+-- No negative client numbers, so the MOD(ABS(...)) change was harmless but unnecessary.
+-- 16.5M rows (3.8%) carry a NULL CLNT_NO. MOD(NULL, 10) matches no bite, so these drop out of the
+-- two bitten pulls but are still counted by the unbitten Pull B. That alone breaks reconciliation
+-- between q_mne and the cubes. They also cannot be joined to UCP, so they are unusable for any
+-- client-level measure -- but they must be dropped EXPLICITLY and reported, not lost silently in
+-- a MOD expression.
+-- NOT YET FIXED.
+--
+-- =========================================================================================
+-- WHAT THIS MEANS
+-- =========================================================================================
+-- Every count produced by this pipeline before today was inflated by MASTER fan-out (~12%
+-- typical), inflated again by duplicate send rows, and undercounted leavers by 178,184 events
+-- from the load_tm filter. The errors run in both directions, so they do not cancel and the net
+-- bias is not predictable from these numbers alone.
+--
+-- Nothing produced by spotlight.py before this run should be quoted.
