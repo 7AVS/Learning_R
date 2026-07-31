@@ -8,7 +8,9 @@
 import os
 import subprocess
 
-HDFS_OUT = "/user/427966379/unsub_spotlight/out"      # "/out_smoke" if you ran SMOKE=True
+HDFS_OUT    = "/user/427966379/unsub_spotlight/out"          # CSV, for Excel
+HDFS_OUT_PQ = "/user/427966379/unsub_spotlight/out_parquet"  # parquet, for duckdb in VS Code
+# If the run used SMOKE=True, both become out_smoke / out_smoke_parquet.
 # Land BOTH inside the notebook folder. Writing to /home/jovyan put them one level above the
 # JupyterLab file browser's working directory, where they were invisible without navigating up.
 WORK_DIR = "/home/jovyan/Unsub"
@@ -55,5 +57,5 @@ NEXT:
   3. In VS Code:
 
        import duckdb
-       duckdb.sql("SELECT * FROM 'spotlight_out/cube1_profiling/*.csv' LIMIT 20").df()
+       duckdb.sql("SELECT * FROM 'spotlight_out/parquet/cube1_profiling/*.parquet' LIMIT 20").df()
 """)

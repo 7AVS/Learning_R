@@ -335,6 +335,14 @@ CARDSPAIR_DIR = BASE + "cards_pair_v%d/" % SCHEMA_VERSION  # Pull C - client x m
 # True, so a smoke run's artifacts can never be mistaken for a full one - see the
 # SPOOL/CORRECTNESS FIX header note. smoke_run (1/0) is also stamped onto every cube DataFrame.
 OUT_DIR = BASE + ("out_smoke/" if SMOKE else "out/")
+PQ_DIR = OUT_DIR.rstrip("/") + "_parquet/"   # duckdb reads parquet; CSV loses every dtype
+
+
+def write_cube(df, name):
+    """Every cube lands twice: CSV for Excel, parquet for duckdb in VS Code. Both are tiny."""
+    df.coalesce(1).write.mode("overwrite").option("header", True).csv(OUT_DIR + name)
+    df.coalesce(1).write.mode("overwrite").parquet(PQ_DIR + name)
+    print("   wrote", OUT_DIR + name, "(csv) and", PQ_DIR + name, "(parquet)")
 
 CLIENTAGG_COLS = [
     "clnt_no", "n_campaigns_all", "n_campaigns_branded", "n_campaigns_cards",
@@ -925,6 +933,7 @@ q_mne_pd = q_mne.toPandas()
 print("Q_MNE - unsubs by campaign, bank-wide | grain: one row per mne | %d rows | SMOKE=%s" % (
       len(q_mne_pd), SMOKE))
 print(q_mne_pd.to_string(index=False))
+write_cube(q_mne, "q_mne")
 
 
 # %% [3] Q_TREND - mne x cohort_month, BANK-WIDE. Print .head(30) and land CSV to HDFS.
@@ -962,7 +971,7 @@ print("Q_TREND - mne x cohort_month (entry-cohort), bank-wide | grain: one row p
 print(q_trend_pd.head(30).to_string(index=False))
 
 _trend_path = OUT_DIR + "q_trend"
-q_trend.coalesce(1).write.mode("overwrite").option("header", True).csv(_trend_path)
+write_cube(q_trend, "q_trend")
 print("written to HDFS:", _trend_path, "|", len(q_trend_pd), "rows")
 
 
@@ -1148,7 +1157,7 @@ print("UCP MATCH BY MNE - CARDS ONLY (12 mnes). This replaces the old bank-wide 
       "test, which is no longer computable post wire-cost redesign (see file header) - only "
       "cards mnes still carry client x mne rows (Pull C).")
 _mne_match.show(20, truncate=False)
-_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(OUT_DIR + "ucp_match_by_mne")
+write_cube(_mne_match, "ucp_match_by_mne")
 _mne_match_pd = _mne_match.toPandas()
 print("Landed:", OUT_DIR + "ucp_match_by_mne", "| grain: one row per mne (cards-only) |", len(_mne_match_pd), "rows")
 
@@ -1182,7 +1191,7 @@ print("\nCUBE 1 PROFILING (CARDS-ONLY, 12 mnes; is_cards=1/is_regulatory=0 const
 print(cube1_profiling_pd.head(30).to_string(index=False))
 
 _cube1_path = OUT_DIR + "cube1_profiling"
-cube1_profiling.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_path)
+write_cube(cube1_profiling, "cube1_profiling")
 print("written to HDFS:", _cube1_path, "|", len(cube1_profiling_pd), "rows")
 
 # ---- cube1_allclients: SAME demographic dims, FULL bank-wide coverage, no mne dimension -----
@@ -1212,7 +1221,7 @@ print("\nCUBE 1 ALLCLIENTS (bank-wide, no mne dim) | grain: one row per (age_ban
 print(cube1_allclients_pd.to_string(index=False))
 
 _cube1_all_path = OUT_DIR + "cube1_allclients"
-cube1_allclients.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_all_path)
+write_cube(cube1_allclients, "cube1_allclients")
 print("written to HDFS:", _cube1_all_path, "|", len(cube1_allclients_pd), "rows")
 
 
@@ -1264,7 +1273,7 @@ print("CUBE 2 - contact frequency, bank-wide | grain: one row per (n_branded_cam
 print(cube2_pd.head(30).to_string(index=False))
 
 _cube2_path = OUT_DIR + "cube2_frequency"
-cube2.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube2_path)
+write_cube(cube2, "cube2_frequency")
 print("written to HDFS:", _cube2_path, "|", len(cube2_pd), "rows")
 
 # n_emails_all summary - stayer vs leaver full-window volume compare, straight off clientagg.
@@ -1286,7 +1295,7 @@ print("\nn_emails_all summary, stayers vs leavers side by side, bank-wide | 1 ro
 print(q_emails_all_pd.to_string(index=False))
 
 _emails_all_path = OUT_DIR + "q_emails_all_summary"
-q_emails_all.coalesce(1).write.mode("overwrite").option("header", True).csv(_emails_all_path)
+write_cube(q_emails_all, "q_emails_all_summary")
 print("written to HDFS:", _emails_all_path, "|", len(q_emails_all_pd), "rows")
 
 
