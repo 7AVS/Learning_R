@@ -131,7 +131,19 @@ import calendar
 import datetime
 
 # ---- Analysis window ----
-WIN_FLOOR = "2025-08-01"   # 12 months. Repo hard rule is a FLOOR of 2024-01-01 - never go below.
+WIN_FLOOR = "2025-08-01"   # event window opens here
+WIN_CEIL  = "2026-08-01"   # HARD ceiling. Without it each statement runs floor-to-its-own-clock,
+                           # and the pulls run minutes or days apart because resume is a feature -
+                           # at ~35K unsubs/month bank-wide that is ~1K/day of drift BETWEEN pulls,
+                           # so the cubes would not reconcile against each other.
+MASTER_FLOOR = "2025-05-01"  # MASTER is filtered on load_tm, which is a RECORD-LOAD timestamp, not
+                           # a send date (archaeology/18_vendor_retention_probe.sql:5). With no
+                           # margin, an unsub inside the window whose MASTER row loaded earlier is
+                           # deleted by the INNER JOIN. 28.5%% of unsubs lag their send by >30 days
+                           # (RUN_2026-07-31_scope_test.sql), so a zero-margin floor systematically
+                           # undercuts leavers in exactly the months q_trend reports. 3-month
+                           # lookback matches pack 19, pack 20 and museum/20_lookback_cards.sql.
+_WIN_FLOOR_ORIG = "2025-08-01"   # 12 months. Repo hard rule is a FLOOR of 2024-01-01 - never go below.
 # No fixed end date on purpose - every pull is "floor to now", so a rerun next sprint picks up new
 # sends/unsubs without editing this file.
 
@@ -476,6 +488,7 @@ def land_pullA_bite(bite):
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'
     ),
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
@@ -485,8 +498,8 @@ def land_pullA_bite(bite):
         FROM ek
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(floor)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
+        WHERE m.load_tm >= DATE '%(mfloor)s'
+          AND MOD(ABS(m.CLNT_NO), %(n_bites)d) = %(bite)d
     )
     SELECT
         clnt_no,
@@ -513,7 +526,8 @@ def land_pullA_bite(bite):
         MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
     FROM joined
     GROUP BY clnt_no
-    """ % {"floor": WIN_FLOOR, "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL,
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL,
+           "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL,
            "reg": REGULATORY_LIST_SQL, "cut3": FREQ_CUTOFFS[3], "cut6": FREQ_CUTOFFS[6]}
 
     pdf = edw_pd(sql)
@@ -570,6 +584,7 @@ def land_mneagg():
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'
     ),
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
@@ -579,7 +594,7 @@ def land_mneagg():
         FROM ek
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(floor)s'
+        WHERE m.load_tm >= DATE '%(mfloor)s'
     ),
     client_mne AS (
         SELECT clnt_no, mne,
@@ -599,20 +614,17 @@ def land_mneagg():
         FROM client_mne
         WHERE n_sends >= 1
     ),
-    -- Nested aggregate for cadence: PERCENTILE_CONT is an ordered analytical (OLAP) function in
-    -- Teradata, computed here via a derived table (NOT QUALIFY, per instruction) then collapsed
-    -- back to one row per mne with DISTINCT.
-    mne_cadence_raw AS (
+    -- Cadence: PERCENTILE_CONT as a GROUP BY aggregate. The WITHIN GROUP ... OVER (PARTITION BY)
+    -- form is Oracle's window syntax; Teradata documents this as an ordered aggregate, and pack 19
+    -- already died once on 3706 for exactly this class of mistake.
+    mne_cadence AS (
         SELECT mne,
-               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY approx_gap_days) OVER (PARTITION BY mne)
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY approx_gap_days)
                    AS median_days_between_sends,
-               COUNT(*) OVER (PARTITION BY mne) AS clients_used_for_gap
+               COUNT(*) AS clients_used_for_gap
         FROM client_mne_gap
         WHERE n_sends >= 2
-    ),
-    mne_cadence AS (
-        SELECT DISTINCT mne, median_days_between_sends, clients_used_for_gap
-        FROM mne_cadence_raw
+        GROUP BY mne
     ),
     month_agg AS (
         SELECT mne,
@@ -631,7 +643,7 @@ def land_mneagg():
     FROM month_agg ma
     LEFT JOIN mne_cadence mc ON ma.mne = mc.mne
     ORDER BY ma.mne, ma.cohort_month_num
-    """ % {"floor": WIN_FLOOR}
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL}
 
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
@@ -686,6 +698,7 @@ def land_pullC_bite(bite):
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
           AND disposition_dt_tm >= DATE '%(floor)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'
           AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
     ),
     joined AS (
@@ -696,8 +709,8 @@ def land_pullC_bite(bite):
         FROM ek
         INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
           ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE m.load_tm >= DATE '%(floor)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
+        WHERE m.load_tm >= DATE '%(mfloor)s'
+          AND MOD(ABS(m.CLNT_NO), %(n_bites)d) = %(bite)d
     )
     SELECT clnt_no, mne,
            SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS n_sends,
@@ -707,7 +720,8 @@ def land_pullC_bite(bite):
            MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
     FROM joined
     GROUP BY clnt_no, mne
-    """ % {"floor": WIN_FLOOR, "cards": CARDS_LIST_SQL, "n_bites": N_BITES, "bite": bite}
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL,
+           "cards": CARDS_LIST_SQL, "n_bites": N_BITES, "bite": bite}
 
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite) + " - investigate before proceeding"
@@ -1131,10 +1145,10 @@ except Exception as e:
 import subprocess as _sp
 _zip = os.path.join(LOCAL_OUT, "spotlight_cubes.zip")
 _sp.run("cd %s && rm -f spotlight_cubes.zip && "
-        "zip -rq spotlight_cubes.zip cubes_parquet spotlight_cubes.xlsx" % LOCAL_OUT, shell=True)
+        "zip -rq spotlight_cubes.zip spotlight_cubes.xlsx" % LOCAL_OUT, shell=True)
 if os.path.exists(_zip):
     print("ONE DOWNLOAD:", _zip, "|", round(os.path.getsize(_zip) / 1048576.0, 1), "MB")
-    print("xlsx = pivot in Excel. cubes_parquet/ = duckdb in VS Code.")
+    print("xlsx = pivot in Excel.")
 
 print("\nLocal output dir:", LOCAL_OUT)
 print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT survive a pod "
