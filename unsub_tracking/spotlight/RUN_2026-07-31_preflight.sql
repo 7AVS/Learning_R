@@ -70,3 +70,60 @@
 -- bias is not predictable from these numbers alone.
 --
 -- Nothing produced by spotlight.py before this run should be quoted.
+
+
+-- =========================================================================================
+-- preflight2.sql RESULTS. Run 2026-07-31. These settled the P1 blocker.
+-- =========================================================================================
+--
+-- P5. Shape of the MASTER fan-out
+-- rows_per_key      | keys        | total_rows
+-- 1 row (clean)     | 360,378,371 | 360,378,371
+-- 2 rows            |  18,787,132 |  37,574,264
+-- 3-5 rows          |   4,820,618 |  17,390,888
+-- 6-20 rows         |   1,615,359 |  13,729,928
+-- 21-100 rows       |      60,256 |   1,956,910
+-- over 100 rows     |       4,000 |   1,894,741
+-- TOTAL             | 385,665,736 | 432,925,102
+--
+-- 93.4% of keys are already clean. Excess is 47,259,366 rows = 10.9% inflation, matching the
+-- 1.123 rows-per-key average. Not a structural problem - a long tail.
+--
+-- P6. THE DECIDER - do duplicates carry the same client?
+-- 1 client (pure duplication)  | 376,129,145   (97.5%)
+-- 3-5 clients (AMBIGUOUS)      |   9,536,591
+--
+-- CAVEAT: the query's CASE had a hole - c = 0 falls through to 'c <= 5' and is labelled
+-- "3-5 clients". P7 shows the worst keys have distinct_clients = 0, so that second bucket is
+-- mostly NULL-client junk, not genuine multi-client ambiguity. The real ambiguous share is
+-- smaller than 9.5M and was not separately measured.
+--
+-- Verdict: duplication, not ambiguity. SELECT DISTINCT on the MASTER side resolves it.
+--
+-- P7. What the pathological keys actually are
+-- TREATMENT_ID | rows_for_key | distinct_clients | min/max CLNT_NO
+-- 2024313BBP   |       95,014 |        0         | null / null
+-- 2024313BBP   |       58,457 |        0         | null / null
+-- CABVRSN1     |        7,310 |        0         | null / null
+-- DEFAULT      |        5,064 |        1         | 414574160
+-- DEFAULT      |        4,733 |        1         | 128841087
+-- DEFAULT      |        4,347 |        1         | 279734628
+-- 2024313BBP   |        4,200 |        0         | null / null   (x4 more keys)
+--
+-- The monsters are NULL-client rows under junk TREATMENT_IDs. 'DEFAULT' and 'CABVRSN1' are not
+-- deployment identifiers at all, so SUBSTR(TREATMENT_ID, 8, 3) on them yields no valid MNE.
+-- Filtering CLNT_NO IS NOT NULL removes them.
+--
+-- P8. FAILED - 3662, "Concatenation between BYTE data and other types is illegal".
+-- consumer_id_hashed is a BYTE column and cannot be concatenated. Not re-run: P1 and P4 already
+-- give both numbers it was going to produce (385,665,736 keys, 432,925,102 rows).
+--
+-- =========================================================================================
+-- FIXES APPLIED (spotlight.py, SCHEMA_VERSION 4)
+-- =========================================================================================
+-- 1. MASTER joined as SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+--    WHERE CLNT_NO IS NOT NULL. Removes the 10.9% fan-out and the junk keys.
+-- 2. EVENT collapsed to one row per (client, treatment, disposition) with MIN(timestamp).
+--    Removes retry rows from email volume.
+-- 3. MASTER_FLOOR set 3 months before WIN_FLOOR. Recovers the 178,184 deleted unsub events.
+-- 4. WIN_CEIL added so pulls run at different times still cover the same window.
