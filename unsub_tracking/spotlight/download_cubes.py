@@ -9,8 +9,11 @@ import os
 import subprocess
 
 HDFS_OUT = "/user/427966379/unsub_spotlight/out"      # "/out_smoke" if you ran SMOKE=True
-LOCAL_DIR = "/home/jovyan/spotlight_out"
-ZIP_PATH = "/home/jovyan/spotlight_out.zip"
+# Land BOTH inside the notebook folder. Writing to /home/jovyan put them one level above the
+# JupyterLab file browser's working directory, where they were invisible without navigating up.
+WORK_DIR = "/home/jovyan/Unsub"
+LOCAL_DIR = WORK_DIR + "/spotlight_out"
+ZIP_PATH = WORK_DIR + "/spotlight_out.zip"
 
 
 def sh(cmd):
@@ -36,12 +39,13 @@ sh("du -sh %s/*" % LOCAL_DIR)
 
 print("\n=== zipping ===")
 sh("rm -f %s" % ZIP_PATH)
-rc, _ = sh("cd /home/jovyan && zip -rq spotlight_out.zip spotlight_out")
+rc, _ = sh("cd %s && zip -rq spotlight_out.zip spotlight_out" % WORK_DIR)
 if rc != 0 or not os.path.exists(ZIP_PATH):
     raise SystemExit("zip failed. The unzipped folder is still at %s - download that instead." % LOCAL_DIR)
 
 size_mb = os.path.getsize(ZIP_PATH) / 1048576.0
 print("\nDONE.  %s  |  %.1f MB" % (ZIP_PATH, size_mb))
+sh("ls -lh " + ZIP_PATH)
 print("""
 NEXT:
   1. Jupyter file browser -> right-click spotlight_out.zip -> Download.
