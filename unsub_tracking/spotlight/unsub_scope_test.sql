@@ -20,23 +20,49 @@
 
 
 -- ============================================================================================
--- Q1. Derive each campaign's real deployment window from its own sends.
--- Replaces the hardcoded 90-day guess: some campaigns run 5 days, some 90.
--- Expect: 25 rows. Read window_days - if it varies widely, a fixed window was always wrong.
+-- Q1. How long after a send does an unsubscribe actually happen?
+-- A TREATMENT_ID is one deployment wave with one send date, so there is no campaign window to
+-- derive - the only window that matters is the response lag. Measure it instead of guessing 30
+-- or 90 days.
+-- Read: find the bucket where the mass stops. That is the attribution window, evidenced.
+-- Expect: <= 10 rows.
 -- ============================================================================================
-SELECT TOP 25
-       SUBSTR(TREATMENT_ID, 8, 3)                       AS mne,
-       TREATMENT_ID,
-       CAST(MIN(disposition_dt_tm) AS DATE)             AS first_send_dt,
-       CAST(MAX(disposition_dt_tm) AS DATE)             AS last_send_dt,
-       (CAST(MAX(disposition_dt_tm) AS DATE)
-        - CAST(MIN(disposition_dt_tm) AS DATE))         AS window_days,
-       COUNT(DISTINCT consumer_id_hashed)               AS clients_sent
-FROM DTZV01.VENDOR_FEEDBACK_EVENT
-WHERE disposition_cd = 1
-  AND disposition_dt_tm >= DATE '2025-08-01'
-GROUP BY 1, 2
-ORDER BY clients_sent DESC;
+WITH snd AS (
+    SELECT consumer_id_hashed, TREATMENT_ID,
+           MIN(CAST(disposition_dt_tm AS DATE)) AS send_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '2025-08-01'
+    GROUP BY 1, 2
+),
+uns AS (
+    SELECT consumer_id_hashed, TREATMENT_ID,
+           MIN(CAST(disposition_dt_tm AS DATE)) AS unsub_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 4
+      AND disposition_dt_tm >= DATE '2025-08-01'
+    GROUP BY 1, 2
+),
+lag AS (
+    SELECT (u.unsub_dt - s.send_dt) AS lag_days
+    FROM uns u
+    JOIN snd s ON s.consumer_id_hashed = u.consumer_id_hashed
+              AND s.TREATMENT_ID = u.TREATMENT_ID
+)
+SELECT CASE WHEN lag_days <  0  THEN 'negative - unsub before send, investigate'
+            WHEN lag_days =  0  THEN '00 same day'
+            WHEN lag_days =  1  THEN '01 next day'
+            WHEN lag_days <= 3  THEN '02 2-3 days'
+            WHEN lag_days <= 7  THEN '03 4-7 days'
+            WHEN lag_days <= 14 THEN '04 8-14 days'
+            WHEN lag_days <= 30 THEN '05 15-30 days'
+            WHEN lag_days <= 60 THEN '06 31-60 days'
+            WHEN lag_days <= 90 THEN '07 61-90 days'
+            ELSE                     '08 over 90 days' END AS lag_bucket,
+       COUNT(*) AS unsub_events
+FROM lag
+GROUP BY 1
+ORDER BY 1;
 
 
 -- ============================================================================================
@@ -49,20 +75,13 @@ ORDER BY clients_sent DESC;
 --
 -- Expect: <= 20 rows. The shape of the distribution IS the answer.
 -- ============================================================================================
-WITH tw AS (           -- derived deployment window per treatment
-    SELECT TREATMENT_ID,
-           MIN(disposition_dt_tm) AS t_start,
-           MAX(disposition_dt_tm) AS t_end
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT
-    WHERE disposition_cd = 1
-      AND disposition_dt_tm >= DATE '2025-08-01'
-    GROUP BY 1
-),
-sent AS (              -- one row per client x treatment they were sent
-    SELECT DISTINCT e.consumer_id_hashed, e.TREATMENT_ID
+WITH sent AS (              -- one row per client x treatment they were sent, with its send date
+    SELECT e.consumer_id_hashed, e.TREATMENT_ID,
+           MIN(CAST(e.disposition_dt_tm AS DATE)) AS send_dt
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     WHERE e.disposition_cd = 1
       AND e.disposition_dt_tm >= DATE '2025-08-01'
+    GROUP BY 1, 2
 ),
 unsub AS (             -- one row per client x treatment they unsubscribed on
     SELECT DISTINCT e.consumer_id_hashed, e.TREATMENT_ID
@@ -70,16 +89,16 @@ unsub AS (             -- one row per client x treatment they unsubscribed on
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2025-08-01'
 ),
-pairs AS (             -- client's treatments whose windows overlap another of their treatments
+pairs AS (             -- treatments sent to the same client CLOSE TOGETHER IN TIME. A treatment
+                       -- is one wave on one date, so "overlapping exposure" means the sends land
+                       -- within RESPONSE_DAYS of each other - both emails were live in the inbox
+                       -- at the same time and either could have been the one clicked.
     SELECT s1.consumer_id_hashed,
            s1.TREATMENT_ID
     FROM sent s1
-    JOIN tw w1 ON w1.TREATMENT_ID = s1.TREATMENT_ID
     JOIN sent s2 ON s2.consumer_id_hashed = s1.consumer_id_hashed
                 AND s2.TREATMENT_ID <> s1.TREATMENT_ID
-    JOIN tw w2 ON w2.TREATMENT_ID = s2.TREATMENT_ID
-    WHERE w1.t_start <= w2.t_end
-      AND w2.t_start <= w1.t_end          -- windows genuinely overlap in time
+    WHERE ABS(s1.send_dt - s2.send_dt) <= 30       -- RESPONSE_DAYS; set from Q1's result
     GROUP BY 1, 2
 ),
 per_client AS (
@@ -160,6 +179,7 @@ ORDER BY clients DESC;
 --     -> both mechanisms exist. Split them: treat 0-second fan-outs as one client-level event and
 --        keep the spread-out ones as genuine per-campaign unsubscribes.
 --
--- Q1 feeds Spotlight 2 separately: use each campaign's DERIVED window instead of a hardcoded
--- 90 days, so a campaign that ran 5 days is not judged on a 90-day response window.
+-- Q1 sets the attribution window for both spotlights. A treatment is one wave on one date,
+-- so there is no campaign duration to derive - only the response lag. Take the bucket where
+-- the mass stops and use that number, rather than defending a guessed 30 or 90.
 -- ============================================================================================
