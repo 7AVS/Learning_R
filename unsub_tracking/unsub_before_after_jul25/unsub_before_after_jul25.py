@@ -108,8 +108,19 @@ def ucp(anchor, fields):
     return out.cache()
 
 def land(pdf, name):
-    """Cell [2] writes here. Cell [3] reads from here. That is the split - HDFS, not kernel memory."""
+    """Cell [2] writes here. Cell [3] reads from here. That is the split - HDFS, not kernel memory.
+
+    Object columns are forced to string with nulls as empty first. createDataFrame infers one type per
+    column and raises "cannot merge type" the moment a column holds both. The way that happens here is
+    .dt.strftime(), which returns a float NaN - not a string - for every NaT. A close-date column on a
+    portfolio where most cards are open is therefore mostly floats with some text in it. Landing is the
+    last step of an hour-long pull, so this is the worst possible place to discover a dtype problem.
+    """
     path = PULL_OUT + name
+    pdf = pdf.copy()
+    for _c in pdf.columns:
+        if pdf[_c].dtype == object or str(pdf[_c].dtype) == "string":
+            pdf[_c] = pdf[_c].where(pd.notna(pdf[_c]), "").astype(str)
     spark.createDataFrame(pdf).coalesce(8).write.mode("overwrite").option("header", True).csv(path)
     n = spark.read.option("header", True).csv(path).count()
     assert n == len(pdf), "%s readback mismatch: wrote %d read %d" % (name, len(pdf), n)

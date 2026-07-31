@@ -44,7 +44,14 @@ def key_pd(sr, label=""):
     return n.round(0).astype("Int64").astype("string")
 
 def land(pdf, name):
+    # Object columns forced to string with nulls as empty first. createDataFrame infers one type per
+    # column and raises "cannot merge type" if a column holds both. .dt.strftime() returns a float NaN
+    # for every NaT, so a close-date column on a mostly-open portfolio is floats with some text in it.
     path = PULL_OUT + name
+    pdf = pdf.copy()
+    for _c in pdf.columns:
+        if pdf[_c].dtype == object or str(pdf[_c].dtype) == "string":
+            pdf[_c] = pdf[_c].where(pd.notna(pdf[_c]), "").astype(str)
     spark.createDataFrame(pdf).coalesce(8).write.mode("overwrite").option("header", True).csv(path)
     n = spark.read.option("header", True).csv(path).count()
     assert n == len(pdf), "%s readback mismatch: wrote %d read %d" % (name, len(pdf), n)
