@@ -1123,7 +1123,10 @@ HP_AGE, HP_TENURE, HP_PRODS = 35, 5, 2          # high_potential thresholds
 # BUMP THIS WHENEVER A CUT POINT, A BAND BOUNDARY OR AN HP THRESHOLD CHANGES.
 #   v1 -> v2  contact/engagement bands added
 #   v2 -> v3  2026-07-29: prod_band "3-4" split into "3" and "4" for brief item 4
-BAND_VERSION = 3
+#   v3 -> v4  2026-07-31: depth_band added on prod_cat_cnt (TIBC categories held). prod_band sums
+#             ACCOUNT counts and was being read as depth; three chequing accounts is not a deep
+#             relationship. Brief item 4's "1 through 4" is the four TIBC categories.
+BAND_VERSION = 4
 BAND_STAMP = "band_v" + str(BAND_VERSION)
 _prof_src = clients.filter(F.col("ucp_matched") & F.col("PROF_TOT_ANNUAL").isNotNull())
 PROF_CUTS = _prof_src.approxQuantile("PROF_TOT_ANNUAL", [0.2, 0.4, 0.6, 0.8], 0.01)
@@ -1149,16 +1152,33 @@ def apply_bands(df):
                         .when(F.col("prod_cnt") == 2, "2").when(F.col("prod_cnt") == 3, "3")
                         .when(F.col("prod_cnt") == 4, "4")
                         .otherwise("5+"))
+    # TIBC = the four UCP product CATEGORIES: T Transactional, I Investment, B Borrower, C Cards
+    # (references/ucp/field_catalog_personal.md).
+    #
+    # 2026-07-31 - prod_cat_cnt KEPT instead of dropped. It was computed, used once to build
+    # tibc_mix, and discarded. That left prod_cnt as the only depth measure, and prod_cnt SUMS the
+    # four counts - so a client holding three chequing accounts scores 3, identical to a client
+    # holding chequing + investment + mortgage. One of those is a deep relationship and the other is
+    # not. Brief item 4 says "bucket 1 through 4"; there are exactly four TIBC categories, so the
+    # bucket the brief is asking for is CATEGORIES HELD, not accounts summed.
+    # prod_cnt stays - it is a real measure of account volume - but it is not depth and must not be
+    # labelled as depth.
     _held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in
              ("T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT")]
-    df = df.withColumn("_n_cat", _held[0] + _held[1] + _held[2] + _held[3])
+    df = df.withColumn("prod_cat_cnt", _held[0] + _held[1] + _held[2] + _held[3])
+    df = df.withColumn("depth_band",        # BRIEF ITEM 4. 1-4 categories, exactly as asked.
+                       F.when(F.col("prod_cat_cnt") == 0, "0")
+                        .when(F.col("prod_cat_cnt") == 1, "1 category")
+                        .when(F.col("prod_cat_cnt") == 2, "2 categories")
+                        .when(F.col("prod_cat_cnt") == 3, "3 categories")
+                        .otherwise("4 categories"))
     df = df.withColumn("tibc_mix",
-                       F.when(F.col("_n_cat") > 1, "multi")
+                       F.when(F.col("prod_cat_cnt") > 1, "multi")
                         .when(F.coalesce(F.col("T_TOT_CNT"), F.lit(0)) > 0, "T only")
                         .when(F.coalesce(F.col("I_TOT_CNT"), F.lit(0)) > 0, "I only")
                         .when(F.coalesce(F.col("B_TOT_CNT"), F.lit(0)) > 0, "B only")
                         .when(F.coalesce(F.col("C_TOT_CNT"), F.lit(0)) > 0, "C only")
-                        .otherwise("none")).drop("_n_cat")
+                        .otherwise("none"))
     df = df.withColumn("tenure_band",
                        F.when(F.col("TENURE_RBC_YEARS").isNull(), "unknown")
                         .when(F.col("TENURE_RBC_YEARS") <= 2, "0-2")
@@ -1183,7 +1203,7 @@ def apply_bands(df):
 
 
 banded = stage("banded", lambda: apply_bands(clients),
-               requires=STAGE_NEEDS + ["age_band", "tenure_band", "prod_band", "prof_quintile",
+               requires=STAGE_NEEDS + ["age_band", "tenure_band", "prod_band", "depth_band", "prof_quintile",
                                        BAND_STAMP])
 matched = banded.filter(F.col("ucp_matched")).cache()
 
@@ -1255,7 +1275,7 @@ T("L6 - CAMPAIGN SUMMARY | senders = distinct clients mailed " + WIN_START + "..
 # "what is the depth of their relationship with RBC (TIBC)". prod_band counts products; tibc_mix
 # says which CATEGORIES are held, which is the question depth actually means.
 # breadth_band rides along when the pull carried it - brief item 3b.
-_DIMS = ["age_band", "tenure_band", "prod_band", "tibc_mix", "prof_quintile"]
+_DIMS = ["age_band", "tenure_band", "depth_band", "prod_band", "tibc_mix", "prof_quintile"]
 if "breadth_band" in matched.columns:
     _DIMS.append("breadth_band")
 _bk = {r["bucket"]: r["n"] for r in
@@ -1289,7 +1309,7 @@ T("L7 - LEAVERS vs STAYERS, bank-wide | matched clients only (leavers n = " + st
 # carries EVERY band L8/L9/cards_cube consume - a short select here surfaces 200 lines later as
 # "Column 'age_band' does not exist", so the list is the union of what all three cells reference.
 _CARDS_CARRY = ["CLNT_NO", "bucket", "ucp_matched", "AGE", "TENURE_RBC_YEARS", "prod_cnt",
-                "PROF_TOT_ANNUAL", "age_band", "tenure_band", "prod_band", "tibc_mix",
+                "PROF_TOT_ANNUAL", "age_band", "tenure_band", "prod_band", "depth_band", "tibc_mix",
                 "prof_quintile", "high_potential", BAND_STAMP]
 # contact_band and engagement ride along so the CARDS ANGLE cell [20h] can repeat L10b and L11 per
 # campaign. Without them cards_send can answer "who leaves PCQ" but not "does PCQ's age skew survive
@@ -1342,7 +1362,8 @@ T("L8 - CARDS campaigns: LEAVERS vs that campaign's OWN mailed base | matched cl
 # tier that pulled client x MNE.
 # tibc_mix was already on cards_send and simply never asked for here - brief item 4a wants depth of
 # relationship PER CAMPAIGN, and this is the line that was denying it. Free: no rebuild, no new column.
-_CARD_DIMS = ["age_band", "tenure_band", "prod_band", "tibc_mix", "prof_quintile", "high_potential"]
+_CARD_DIMS = ["age_band", "tenure_band", "depth_band", "prod_band", "tibc_mix", "prof_quintile",
+              "high_potential"]
 
 _l9_parts = []
 for _d in _CARD_DIMS:
@@ -1636,7 +1657,8 @@ else:
 #
 # THE DENOMINATOR IS THE CAMPAIGN, NOT THE BANK. Every percentage below divides by that campaign's
 # own leavers or its own stayers, so a small campaign is not compared against a bank-sized base.
-_H_DIMS = [d for d in ["age_band", "tenure_band", "prod_band", "tibc_mix"] if d in cards_send.columns]
+_H_DIMS = [d for d in ["age_band", "tenure_band", "depth_band", "prod_band", "tibc_mix"]
+           if d in cards_send.columns]
 
 
 def _cards_ratio(df, extra_keys, dims):
@@ -1777,7 +1799,7 @@ else:
 # %% [20c] CARDS CUBE - the per-campaign pivot source. Same idea as the main cube but at client x
 # MNE grain, so bucket and campaign coexist on a row and a pivot can slice leaver-vs-stayer WITHIN
 # a campaign. This is the file to open if the question is "which campaign loses which kind of client".
-cards_cube = (cards_send.groupBy("mne", "bucket", "age_band", "tenure_band", "prod_band",
+cards_cube = (cards_send.groupBy("mne", "bucket", "age_band", "tenure_band", "prod_band", "depth_band",
                                  "tibc_mix", "prof_quintile", "high_potential")
               .agg(F.count("*").alias("clients"),
                    F.round(F.avg("AGE"), 2).alias("mean_age"),
@@ -1801,7 +1823,7 @@ print("CARDS CUBE:", cards_cube.count(), "rows ->", BASE + "cards_cube")
 # prof_quintile x high_potential, with the client count and the mean of each of the four measures.
 # bucket is a COLUMN (leaver / stayer / already_out), so leaver-vs-stayer is a pivot filter rather
 # than a separate export. Matched clients only - unmatched have no bands.
-cube = (matched.groupBy("mne", "program", "bucket", "age_band", "tenure_band", "prod_band",
+cube = (matched.groupBy("mne", "program", "bucket", "age_band", "tenure_band", "prod_band", "depth_band",
                         "tibc_mix", "prof_quintile", "high_potential")
         .agg(F.count("*").alias("clients"),
              F.round(F.avg("AGE"), 2).alias("mean_age"),
@@ -1998,6 +2020,7 @@ for _nm in ["cube_csv", "csv_l1_where_by_mne", "csv_l6_campaign_summary",
 _SPINE_CORE = ["CLNT_NO", "bucket", "mne", "program", "TREATMENT_ID", "unsub_tm",
                "ucp_matched", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT",
                "B_TOT_CNT", "C_TOT_CNT", "PROF_TOT_ANNUAL", "prod_cnt", "prod_band",
+               "prod_cat_cnt", "depth_band",
                "tibc_mix", "tenure_band", "age_band", "prof_quintile", "high_potential"]
 # contact, engagement and already-out detail ride along when the pull carried them, so every table
 # above can be re-derived from this one file without going back to EDW.

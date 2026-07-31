@@ -164,8 +164,18 @@ FROM b GROUP BY 1;
 
 <!-- ============================= 3 ============================= -->
 <section>
-  <h2><span class="brief">BRIEF 4</span>Product depth — do we lose thin or deep relationships?</h2>
-  <p class="q">Unsubscribe rate ratio by number of products held. 1.00 = the average client.</p>
+  <h2><span class="brief">BRIEF 4 — PARTIAL</span>Accounts held. <i>Not</i> depth of relationship.</h2>
+  <p class="q">Ratio by number of accounts held across the four TIBC categories. 1.00 = the average client.
+  Read the orange box before quoting any of it.</p>
+
+  <div class="gap"><b>This chart does not answer brief item 4, and I mislabelled it.</b>
+  It bands on <code>prod_cnt</code>, which <b>sums</b> the four TIBC account counts — so a client with three
+  chequing accounts scores 3, identical to a client holding chequing + investment + mortgage. One of those is a
+  deep relationship and the other is not.
+  <b>TIBC = T</b>ransactional, <b>I</b>nvestment, <b>B</b>orrower, <b>C</b>ards — the four UCP product
+  <i>categories</i>. The brief asks for buckets 1 through 4 because there are exactly four categories, so the
+  measure it wants is <b>categories held</b>, not accounts summed.
+  Now coded as <code>depth_band</code> (BAND_VERSION 4) and correct on the next run.</div>
 
   <div class="key">
     <span><i style="background:var(--bank)"></i>Bank baseline</span>
@@ -173,15 +183,14 @@ FROM b GROUP BY 1;
   </div>
   <div class="chart" id="c-prod"></div>
 
-  <p class="note"><b>Bank-wide, depth barely moves the needle</b> — 0.91 at one product to 1.13 at three-to-four.
-  <b>Inside cards campaigns it splits hard.</b> A single-product client is 1.32× more likely to leave AUH than
-  AUH's own average, but only 0.78× on CRV. The bank number (0.91) averages those two opposite behaviours into
-  nothing. This is the clearest case in the pack for why cards needs its own lens.</p>
+  <p class="note"><b>The one thing here that survives the mislabelling</b> is the cards-vs-bank split, because it
+  compares like with like. A one-account client is 1.32× over-represented among AUH's leavers and 0.78× among
+  CRV's. The bank number, 0.91, is those two opposite behaviours cancelling. Whatever the band is called, the
+  bank average hides a real disagreement between two cards campaigns — which is the argument for a cards lens.</p>
 
-  <div class="gap"><b>Two brief items still short.</b> (1) Product depth is banded 1 / 2 / 3–4 / 5+, not the
-  1 / 2 / 3 / 4 the brief asks for — the split is coded (<code>BAND_VERSION 3</code>) but has not been run.
-  (2) <b>TIBC</b> is computed as <code>tibc_mix</code> and sits in L7, L9, H1 and both cubes — it has never been
-  printed. Both are free on the next run: no pull, no new code.</div>
+  <div class="gap"><b>Also still short:</b> <code>tibc_mix</code> — <i>which</i> categories a client holds
+  (multi / T only / I only / B only / C only) — is brief item <b>4a</b>, "depth of relationship (TIBC)".
+  It has been computed since day one and printed nowhere. Free on the next run.</div>
 
   <details><summary>Show the data</summary><div class="tblwrap" id="t-prod"></div></details>
   <details><summary>Show the logic</summary><pre>-- ratio = share of leavers in the band  ÷  share of stayers in the band

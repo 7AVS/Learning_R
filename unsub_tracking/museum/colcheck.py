@@ -20,6 +20,7 @@ fail is worse than none, because it reads like proof. If you change the mock, re
       open('_chk.py','w',encoding='utf-8').write(c); \
       sys.exit(0 if subprocess.run([sys.executable,'_chk.py']).returncode else 1)"
 """
+import io
 import os
 import re
 import sys
@@ -227,8 +228,15 @@ def run():
     # ---- real starting schemas, taken from the file's own definitions ------------
     UCP = ["AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT",
            "PROF_TOT_ANNUAL"]
-    BANDS = ["prod_cnt", "prod_band", "tibc_mix", "tenure_band", "age_band", "prof_quintile",
-             "high_potential", "band_v3"]
+    # DERIVED from the notebook, never retyped. A checker that keeps its own copy of the thing it
+    # checks goes stale silently - that is exactly how band_v3 outlived BAND_VERSION 4.
+    _src = io.open(PATH, encoding="utf-8").read()
+    _bv = int(re.search(r"^BAND_VERSION\s*=\s*(\d+)", _src, re.M).group(1))
+    _cv = int(re.search(r"^CARDS_VERSION\s*=\s*(\d+)", _src, re.M).group(1))
+    _apply = _src[_src.index("def apply_bands("):]
+    _apply = _apply[:_apply.index("\nbanded =")]
+    BANDS = re.findall(r'withColumn\("([A-Za-z_][A-Za-z0-9_]*)"', _apply)
+    BANDS += ["band_v%d" % _bv, "cards_v%d" % _cv]
     CONTACT = ["n_send_events", "n_opens", "n_clicks", "opened", "clicked", "contact_band",
                "engagement", "breadth_upper", "breadth_lower", "breadth_band"]
     BANDED = (["CLNT_NO", "bucket", "mne", "program", "TREATMENT_ID", "unsub_tm", "ucp_matched"]
@@ -257,7 +265,7 @@ def run():
         "SAMPLE_MOD": 10, "CARDS_MNES": frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "MVP", "CRV"}),
         "BASE": "/x/", "WIN_START": "2026-03-01", "WIN_END": "2026-06-01",
         "PROF_CUTS": [0, 1, 2, 3], "HP_AGE": 35, "HP_TENURE": 5, "HP_PRODS": 2,
-        "PROVEN": True, "REGULATORY_MNES": frozenset({"FXR","OTC","VMF","VOA"}), "UCP_ANCHOR": "2026-02-28", "PULL_CADENCE": True, "SAMPLE_MOD2": 10, "RUN_CLEANUP": False, "BAND_VERSION": 3, "BAND_STAMP": "band_v3", "_n_lv": 1, "_n_st": 1,
+        "PROVEN": True, "REGULATORY_MNES": frozenset(re.findall(r"'([A-Z]{3})'", _src[_src.index("REGULATORY_MNES = frozenset"):][:900])), "UCP_ANCHOR": "2026-02-28", "PULL_CADENCE": True, "SAMPLE_MOD2": 10, "RUN_CLEANUP": False, "BAND_VERSION": _bv, "BAND_STAMP": "band_v%d" % _bv, "CARDS_VERSION": _cv, "CARDS_STAMP": "cards_v%d" % _cv, "_n_lv": 1, "_n_st": 1,
         "_WIN_DAYS": 92, "_bucket_counts": __import__("pandas").DataFrame({"bucket": ["leaver", "stayer", "already_out"], "count": [1, 2, 3]}), "_n_mailed": 1, "_n_matched": 1,
         # seeded frame removed - built by the cells
         # seeded frame removed - built by the cells
