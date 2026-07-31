@@ -1276,8 +1276,28 @@ import os
 
 # _smoke suffix when SMOKE is True - a full Run All under SMOKE must never be mistaken for a real
 # one (see SPOOL/CORRECTNESS FIX header note). Every sheet below also carries a smoke_run column.
-LOCAL_OUT = os.path.join(os.path.expanduser("~"), "spotlight_out_smoke" if SMOKE else "spotlight_out")
-os.makedirs(LOCAL_OUT, exist_ok=True)
+# expanduser("~") resolved to an unwritable path under the Spark kernel (HOME differs from the
+# local kernel, where env_probe P1 saw /home/jovyan). Try candidates, take the first that actually
+# accepts a write, and say which. Everything here is already landed on HDFS - this local copy is
+# only so the download is one file instead of a hunt through Hue.
+_leaf = "spotlight_out_smoke" if SMOKE else "spotlight_out"
+LOCAL_OUT = None
+for _cand in ("/home/jovyan", os.path.expanduser("~"), os.getcwd(), "/tmp"):
+    try:
+        _try = os.path.join(_cand, _leaf)
+        os.makedirs(_try, exist_ok=True)
+        _t = os.path.join(_try, ".writetest")
+        open(_t, "w").write("x")
+        os.remove(_t)
+        LOCAL_OUT = _try
+        break
+    except Exception:
+        continue
+if LOCAL_OUT is None:
+    print("No writable local directory found - skipping the local copy. Everything is on HDFS at",
+          OUT_DIR, "and can be pulled with:  !hdfs dfs -get -f", OUT_DIR + "* .")
+else:
+    print("Local output dir:", LOCAL_OUT)
 
 # Sheet names are capped at 31 chars by Excel; keep them short and stable.
 _sheets = {
