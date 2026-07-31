@@ -48,18 +48,23 @@ FROM (
 
 
 -- =========================================================================================
--- Q20. Weight the same question by VOLUME. The id sets can overlap poorly while the ids that
--- actually carry the mail all match. This is the number that decides whether a whitelist works.
+-- Q20 v2. Weight the same question by VOLUME.
+-- v1 threw 2646: the LEFT JOIN ran against 289M raw send rows when it only needs 11,636.
+-- Aggregate the vendor side to one row per TREATMENT_ID FIRST, then join. Same answer, tiny cost.
 -- =========================================================================================
 SELECT CASE WHEN t.TACTIC_ID IS NOT NULL THEN 'matches a deployment in window'
             ELSE 'NO matching deployment' END AS status,
-       COUNT(DISTINCT e.TREATMENT_ID)         AS distinct_ids,
-       COUNT(*)                               AS send_rows
-FROM (SELECT TREATMENT_ID
+       COUNT(*)          AS distinct_ids,
+       SUM(e.send_rows)  AS send_rows,
+       SUM(e.clients)    AS client_send_pairs
+FROM (SELECT TREATMENT_ID,
+             COUNT(*)                           AS send_rows,
+             COUNT(DISTINCT consumer_id_hashed) AS clients
       FROM DTZV01.VENDOR_FEEDBACK_EVENT
       WHERE disposition_cd = 1
         AND disposition_dt_tm >= DATE '2025-08-01'
-        AND disposition_dt_tm <  DATE '2026-08-01') e
+        AND disposition_dt_tm <  DATE '2026-08-01'
+      GROUP BY 1) e
 LEFT JOIN (SELECT DISTINCT TACTIC_ID
            FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
            WHERE TREATMT_STRT_DT >= DATE '2025-08-01'

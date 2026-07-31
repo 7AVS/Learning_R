@@ -1037,3 +1037,41 @@ still sending in 2026.
 **Consequence:** collapse the event grain to `(client, treatment, DAY)`, never to
 `(client, treatment)`. Collapsing to the treatment deletes real emails. This is not an artifact of
 the junk ids — dated ids do it too.
+
+## 20.11 TREATMENT_ID = TACTIC_ID — VERIFIED 2026-07-31 (was never tested before)
+
+Measured over Aug 2025 – Jul 2026 (`spotlight/preflight5.sql` Q19):
+
+| | ids |
+|---|---|
+| in both vendor and tactic tables | **10,893** |
+| vendor only | 743 |
+| tactic only | 12,446 |
+
+**93.6% of vendor TREATMENT_IDs match a TACTIC_ID.** Same namespace. The
+`EVENT.(consumer_id_hashed, TREATMENT_ID) → MASTER → TACTIC_EVNT_IP_AR_H60M.TACTIC_ID` chain is
+sound and `SUBSTR(TREATMENT_ID, 8, 3)` is extracting a real MNE.
+
+This closes §9 Open Questions item 1. `archaeology/03_tactic_join_channel_validation.sql` was
+written to prove this and its output was never reviewed; the assumption held, but it was an
+assumption under every number in this folder for months.
+
+The 12,446 tactic-only ids are deployments with no email component — other channels.
+
+## 20.12 The old-vintage TREATMENT_IDs are vendor residue, not live campaigns
+
+`preflight5.sql` Q21 returned **zero rows**: `2018319KVM`, `CABVRSN1`, `DEFAULT`, `2019105THA`
+and `21010AOT4B` have **no row in DTZV01.TACTIC_EVNT_IP_AR_H60M at all**, at any date.
+
+The bank is not still mailing 2018 campaigns. Those ids exist only vendor-side with no deployment
+behind them, which is why `2018319KVM` appeared to send 3,080,273 emails to 1,119,884 clients
+across 2025–26.
+
+**Rule: scope the campaign universe by joining to TACTIC_EVNT_IP_AR_H60M on deployments whose
+`TREATMT_STRT_DT` falls in the window. Do NOT parse TREATMENT_ID strings for a year and a Julian
+day — that heuristic discards live tactic ids and keeps residue, in both directions.**
+
+## 20.13 Campaign universe, Aug 2025 – Jul 2026
+
+`preflight5.sql` Q22: **23,339 deployments**, **431 distinct mnemonics**, first start 2025-08-01,
+last start 2026-07-31. That is the whitelist any bank-wide unsub analysis should be scoped to.
