@@ -1064,6 +1064,13 @@ def _band(col, edges):
 
 _held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in _TIBC_COLS]
 
+# The UCP snapshot is not unique on CLNT_NO. Measured 2026-07-31: 12,258,937 enriched rows against
+# 12,258,936 distinct clients - exactly ONE duplicate in 12.3M. Tiny, but a duplicate on the right
+# side of a left join fans out that client in every cube, so it is deduped rather than tolerated.
+_ucp_dupes = ucp_sel.count() - ucp_sel.select("clnt_no_long").distinct().count()
+print("UCP duplicate CLNT_NO rows:", _ucp_dupes, "- deduping before the join.")
+ucp_sel = ucp_sel.dropDuplicates(["clnt_no_long"])
+
 ucp_enriched = (ucp_sel
                  .withColumn("age_band", _band(F.col("AGE"), AGE_EDGES))
                  .withColumn("tenure_band", _band(F.col("TENURE_RBC_YEARS"), TENURE_EDGES))
