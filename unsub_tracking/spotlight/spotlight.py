@@ -426,12 +426,6 @@ _cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
 print("EDW round-trip returned:", _cur.fetchall())
 _cur.close()
 
-print("\nESTIMATED ROWS (before pulling, Andre's scale figures) -")
-print("  Pull A (clientagg, bank-wide, GROUP BY CLNT_NO): ~15,000,000 rows")
-print("  Pull B (mne x cohort_month, bank-wide, GROUP BY mne, month): ~3,000 rows")
-print("  Pull C (client x mne, CARDS ONLY, GROUP BY CLNT_NO, mne): ~10,000,000 rows")
-print("  TOTAL ESTIMATED: ~25,000,000 rows, vs the old v2 single pull's ~94,000,000 rows "
-      "(bank-wide client x mne, every mnemonic) - roughly 4x less wire traffic.")
 
 
 def edw_pd(sql, chunksize=1_000_000):
@@ -565,9 +559,9 @@ def land_pullA_bite(bite):
     WITH ek AS (
         -- One row per (client, treatment, disposition, DAY).
         -- P3 found 8,084,229 pairs with more than one cd=1 timestamp and I assumed retries. Q12
-        -- disproved that: only 26% are same-day. 37% are more than 30 days apart, which are real
-        -- separate sends under one TREATMENT_ID, and collapsing them would have deleted ~3M emails.
-        -- Collapsing to the DAY keeps genuine re-sends and removes only same-day retry rows.
+        -- disproved that: barely a quarter are same-day and over a third are more than 30
+        -- deleted roughly 3M emails. Collapsing to the DAY keeps genuine re-sends and removes
+        -- only same-day retry rows.
         SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
                MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
@@ -681,9 +675,9 @@ def land_pullB_bite(bite):
     WITH ek AS (
         -- One row per (client, treatment, disposition, DAY).
         -- P3 found 8,084,229 pairs with more than one cd=1 timestamp and I assumed retries. Q12
-        -- disproved that: only 26% are same-day. 37% are more than 30 days apart, which are real
-        -- separate sends under one TREATMENT_ID, and collapsing them would have deleted ~3M emails.
-        -- Collapsing to the DAY keeps genuine re-sends and removes only same-day retry rows.
+        -- disproved that: barely a quarter are same-day and over a third are more than 30
+        -- deleted roughly 3M emails. Collapsing to the DAY keeps genuine re-sends and removes
+        -- only same-day retry rows.
         SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
                MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
@@ -793,9 +787,9 @@ def land_pullC_bite(bite):
     WITH ek AS (
         -- One row per (client, treatment, disposition, DAY).
         -- P3 found 8,084,229 pairs with more than one cd=1 timestamp and I assumed retries. Q12
-        -- disproved that: only 26% are same-day. 37% are more than 30 days apart, which are real
-        -- separate sends under one TREATMENT_ID, and collapsing them would have deleted ~3M emails.
-        -- Collapsing to the DAY keeps genuine re-sends and removes only same-day retry rows.
+        -- disproved that: barely a quarter are same-day and over a third are more than 30
+        -- deleted roughly 3M emails. Collapsing to the DAY keeps genuine re-sends and removes
+        -- only same-day retry rows.
         SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
                MIN(disposition_dt_tm) AS disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
