@@ -74,26 +74,31 @@ Cards is the lens; the bank is the baseline bar behind it. Regulatory campaigns 
 
 <div class="tiles">
   <div class="tile"><b>0.69%</b><span>Bank-wide unsubscribe rate<br>leavers ÷ (leavers + stayers)</span></div>
-  <div class="tile"><b>8.6</b><span>CRV — highest cards rate<br>per 1,000 clients mailed</span></div>
-  <div class="tile"><b>4.6×</b><span>AUH gap between exposed<br>and attributed unsubs</span></div>
+  <div class="tile"><b>0.86%</b><span>CRV — highest cards rate<br>1.26× the bank</span></div>
+  <div class="tile"><b>0.27%</b><span>AUH — lowest cards rate<br>0.39× the bank</span></div>
   <div class="tile"><b>7–12</b><span>Emails where the rate peaks<br>then <i>falls</i> at 13+</span></div>
 </div>
 
 <!-- ============================= 1 ============================= -->
 <section>
-  <h2><span class="brief">BRIEF 3a</span>Which cards campaigns lose people</h2>
-  <p class="q">Absolute number and rate, per campaign. Two ways of counting, because they disagree by up to 4.6×.</p>
+  <h2><span class="brief">BRIEF 3a</span>Unsubscribe rate by cards campaign</h2>
+  <p class="q">Leavers ÷ clients mailed, same unit as the bank rate. Dashed line = bank-wide 0.686%.</p>
 
   <div class="key">
-    <span><i style="background:var(--cards)"></i>Exposed — client was mailed by this campaign and left during the window</span>
-    <span><i style="background:var(--bank)"></i>Attributed — client left <i>through</i> this campaign's email</span>
+    <span><i style="background:var(--cards)"></i>Exposed — mailed by this campaign, left during the window</span>
+    <span><i style="background:var(--bank)"></i>Attributed — left <i>through</i> this campaign's email</span>
+    <span><i style="background:var(--mut);opacity:.6"></i>Dashed — bank-wide 0.686%</span>
   </div>
   <div class="chart" id="c-rate"></div>
 
-  <p class="note"><b>Exposure over-counts and attribution under-counts.</b> A client mailed by five campaigns
-  appears in five exposure counts and one attribution count. AUH shows the widest gap: 1,491 exposed,
-  323 attributed. Neither number is wrong — they answer different questions, and a deck that quotes one
-  without the other invites the reviewer to pick the flattering one.</p>
+  <p class="note"><b>Only CRV and PCL run above the bank.</b> CRV 0.86% and PCL 0.79% against a bank-wide
+  0.69%. <b>AUH runs at 0.27% — well under half the bank rate.</b> On exposure, AUH is the safest cards
+  campaign we have, not a problem to solve.</p>
+
+  <p class="note"><b>Exposure over-counts, attribution under-counts.</b> A client mailed by five campaigns
+  lands in five exposure counts and one attribution count. AUH is the widest gap: 1,491 exposed, 323 attributed
+  — 4.6×. Neither is wrong; they answer different questions, and quoting one without the other lets the
+  reviewer pick the flattering number.</p>
 
   <div class="gap"><b>Not yet run:</b> send cadence per campaign (weekly / bi-weekly / monthly). Cell <code>[5b]</code>
   is written and needs one EDW pull. Without it the rate cannot be read against how often each campaign fires.</div>
@@ -344,6 +349,13 @@ function barChart(host,rows,opt){
     var t=el("text",{x:x,y:H-10,class:"ax","text-anchor":"middle"});
     t.textContent=(max*g/4).toFixed(opt.dec===undefined?1:opt.dec); svg.appendChild(t);
   }
+  if(opt.ref!==undefined){                     // reference line, e.g. the bank-wide rate
+    var rx=padL+plotW*opt.ref/max;
+    svg.appendChild(el("line",{x1:rx,y1:gap-2,x2:rx,y2:H-26,stroke:"currentColor",
+      "stroke-width":1.5,"stroke-dasharray":"5 4","opacity":.55}));
+    var rt=el("text",{x:rx+5,y:gap+9,class:"ax"}); rt.textContent=opt.refTxt||"";
+    svg.appendChild(rt);
+  }
   rows.forEach(function(r,i){
     var y0=gap+i*rowH, n=r.bars.length, bh=Math.min(9,(rowH-8)/n);
     var lb=el("text",{x:padL-10,y:y0+rowH/2+4,class:"lbl","text-anchor":"end"});
@@ -394,14 +406,17 @@ var C_BANK =getComputedStyle(document.documentElement).getPropertyValue("--bank"
 var C_WARN =getComputedStyle(document.documentElement).getPropertyValue("--warn").trim()||"#a8641c";
 
 /* ---------- 1. campaign rates ---------- */
+// per 1,000 -> percent. ONE unit on every chart in this pack: the unsubscribe rate.
+var BANK_RATE = 0.686;
 barChart(document.getElementById("c-rate"),
   CARDS.map(function(r){return {label:r[0],bars:[
-    {v:r[3],txt:r[3].toFixed(2),color:C_CARDS},
-    {v:r[5],txt:r[5]===null?"":r[5].toFixed(2),color:C_BANK}
-  ]};}), {rowH:34, dec:1});
+    {v:r[3]/10,txt:(r[3]/10).toFixed(3)+"%",color:C_CARDS},
+    {v:r[5]===null?null:r[5]/10,txt:r[5]===null?"":(r[5]/10).toFixed(3)+"%",color:C_BANK}
+  ]};}), {rowH:34, dec:2, ref:BANK_RATE, refTxt:"bank 0.686%"});
 table(document.getElementById("t-cards"),
-  ["Campaign","Clients mailed","Leavers exposed","Per 1,000 exposed","Unsubs attributed","Per 1,000 attributed"],
-  CARDS.map(function(r){return [r[0],fmt(r[1]),fmt(r[2]),r[3].toFixed(2),fmt(r[4]),r[5]===null?"—":r[5].toFixed(2)];}));
+  ["Campaign","Clients mailed","Leavers exposed","Unsub rate (exposed)","vs bank","Unsubs attributed","Unsub rate (attributed)"],
+  CARDS.map(function(r){return [r[0],fmt(r[1]),fmt(r[2]),(r[3]/10).toFixed(3)+"%",
+    (r[3]/10/BANK_RATE).toFixed(2)+"×",fmt(r[4]),r[5]===null?"—":(r[5]/10).toFixed(3)+"%"];}));
 
 /* ---------- 2. frequency ---------- */
 barChart(document.getElementById("c-freq"),
