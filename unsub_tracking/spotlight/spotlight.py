@@ -245,13 +245,20 @@ LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite of th
                               # ceiling; this keeps each payload well under it. Lower it if the
                               # limit is still hit on Pull A, B or C.
 
+WRITE_LOCAL_COPY = False  # HDFS is the output. This code exists to PRODUCE datasets that get
+                          # pulled down and queried locally in VS Code - not to analyse them here.
+                          # Cell [7] only ever built a convenience copy on the pod so the download
+                          # was one file; set True if you want that. Everything is on HDFS under
+                          # OUT_DIR regardless, and comes down with:
+                          #   !hdfs dfs -get -f <OUT_DIR>* .
+
 N_BITES = 10   # MOD(CLNT_NO, N_BITES) - applies to Pull A, Pull B and Pull C (all three pulls, as
                # of the v4->v5 fix - Pull B used to skip biting but was the single biggest spool
                # exposure unbitten, see the SPOOL/CORRECTNESS FIX header note). Each bite is
                # landed and checked before running, so a killed run resumes at the next un-landed
                # bite.
 
-SMOKE = True   # True  -> pull bite 0 only, for Pull A, Pull B and Pull C.
+SMOKE = False  # full population. True = bite 0 only (10% of clients).
                # False -> all 10 bites, full population, for all three pulls.
 
 # ---- Trailing send-frequency windows - Pull A hardcodes 3m/6m columns by name
@@ -1280,6 +1287,11 @@ import os
 # local kernel, where env_probe P1 saw /home/jovyan). Try candidates, take the first that actually
 # accepts a write, and say which. Everything here is already landed on HDFS - this local copy is
 # only so the download is one file instead of a hunt through Hue.
+if not WRITE_LOCAL_COPY:
+    print("Cell [7] SKIPPED - WRITE_LOCAL_COPY is False. Every cube is on HDFS at", OUT_DIR)
+    print("Pull them with:  !hdfs dfs -get -f " + OUT_DIR + "* .")
+    raise SystemExit
+
 _leaf = "spotlight_out_smoke" if SMOKE else "spotlight_out"
 LOCAL_OUT = None
 for _cand in ("/home/jovyan", os.path.expanduser("~"), os.getcwd(), "/tmp"):
