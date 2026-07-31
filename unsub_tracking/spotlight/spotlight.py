@@ -18,13 +18,44 @@
 #    tibc_mix, no depth_band. prod_cat_cnt is the bare integer (0-4), not a banded string.
 # 4. The 66 mne-pair cell is DELETED (Andre: "why do I need pairs"). Replaced by Cube 2, a
 #    contact-frequency cube: how many branded campaigns and how many emails each client got,
-#    stayer vs leaver. This required adding trailing-3m/6m send counts to Cell [1]'s SQL directly
-#    (the old MIN/MAX-per-client-mne grain cannot be aggregated into a trailing window after the
-#    fact) - no second pull was added.
-# 5. The UCP join (Cell [4]) now casts CLNT_NO through decimal(18,0)->long on BOTH sides before
-#    any comparison, prints 5 sample ids from each side before joining, and HARD-ERRORS if match
+#    stayer vs leaver.
+# 5. The UCP join now casts CLNT_NO through decimal(18,0)->long on BOTH sides before any
+#    comparison, prints 5 sample ids from each side before joining, and HARD-ERRORS if match
 #    rate < 90%. See memory note pandas_float_keys_scientific_notation: pandas float64 client ids
 #    render in scientific notation on a straight string cast, which silently zero-matches a join.
+#
+# ============================== 2026-07-31 WIRE-COST REDESIGN (schema v2 -> v3) ==============
+# PROBLEM: v2's Cell [1] pulled one row per (clnt_no, mne) BANK-WIDE across ~250 mnemonics over
+# 12 months = ~94M rows through teradatasql at ~22k rows/sec = ~70 minutes of wire time, most of
+# it moving rows that every downstream cell immediately GROUP BY'd back down. Teradata could
+# aggregate almost all of that server-side before it ever left the wire.
+#
+# FIX: v2's single pull is replaced by THREE pulls, each aggregated server-side to the grain the
+# downstream cells actually need:
+#   PULL A (clientagg_v3) - GROUP BY m.CLNT_NO, bank-wide. ~15M rows. Client-level counts, with
+#     is_cards/is_regulatory/is_branded resolved via SQL IN-list tags INSIDE the aggregation
+#     (this pull has no mne column to tag client-side afterward - the tagging has to happen
+#     before the GROUP BY collapses mne away).
+#   PULL B (mne_agg_v3) - GROUP BY mne, cohort_month, bank-wide. ~3,000 rows. NOT bitten (too
+#     small to need it). Cadence (median days between sends) is a nested aggregate: per
+#     (client, mne) gap, then PERCENTILE_CONT(0.5) per mne, via a derived table (no QUALIFY).
+#   PULL C (cards_pair_v3) - GROUP BY clnt_no, mne, CARDS MNES ONLY (SUBSTR(...) IN cards list).
+#     ~10M rows. The ONLY pull that filters by mne - it exists because it is the only output that
+#     needs a campaign and a client attribute on the same row (cube1_profiling).
+#
+# CONSEQUENCE - cube1_profiling narrows: it is now cards-only (12 mnes), because Pull C (its only
+# source with client x mne on one row) is cards-only. cube1_allclients is added alongside it to
+# keep the age/tenure/product-depth cut at FULL bank-wide coverage (Pull A + UCP, no mne dim).
+#
+# SECOND CONSEQUENCE (flagged in the delivery report, not silently dropped): the old bank-wide
+# "which mnes look like business/commercial audiences" UCP-match shape test (250 mnes) needed
+# client x mne rows for EVERY mne, which no longer exist post-optimization - only cards mnes still
+# have that grain (Pull C). ucp_match_by_mne is therefore cards-only (12 mnes) now, not 250. The
+# bank-wide match-rate and stayer/leaver bias guards (which only need client-level unsub_flag, not
+# mne) still run at full coverage in the UCP join cell.
+#
+# base_v2/ (the old grain) is NOT reused - v3's schema is entirely different (three files, not
+# one). SCHEMA_VERSION bumped 2 -> 3; each pull gets its own landed path.
 #
 # ============================== VERIFIED FACTS (file:line evidence) ==========================
 #
@@ -45,14 +76,15 @@
 #   TREATMENT_ID is unique per deployment wave (encodes MNE + julian date), so NO time-window
 #   join condition is needed or wanted - UNSUB_TRACKING_KNOWLEDGE.md:163.
 #
-# ENGINE: Cell [1] is Teradata-direct (DTZV01.* tables, no catalog prefix, Teradata syntax,
-#   teradatasql connector). Every cell after it is PySpark (YARN, Lumina pre-initialized
-#   session) reading landed parquet off HDFS - no further EDW connection is opened.
-#   references/query_engine_guidelines.md "PySpark (YARN) - Known Gotchas".
+# ENGINE: Cell [1a] and Cell [1] (all three pulls) are Teradata-direct (DTZV01.* tables, no
+#   catalog prefix, Teradata syntax, teradatasql connector). Every cell after them is PySpark
+#   (YARN, Lumina pre-initialized session) reading landed parquet off HDFS - no further EDW
+#   connection is opened. references/query_engine_guidelines.md "PySpark (YARN) - Known Gotchas".
 #
 # CARDS_MNES v2 (12 MNEs) - carried VERBATIM from unsub_value_museum.py:119-120 (Andre,
-#   2026-07-31). PCQ, PCL, PCD, AUH, CLI, CRV, VBA, VBU, CRO, CEC, VIF, MET. Used ONLY to tag
-#   is_cards client-side (Fix 1) - never as a SQL filter.
+#   2026-07-31). PCQ, PCL, PCD, AUH, CLI, CRV, VBA, VBU, CRO, CEC, VIF, MET. Used to tag
+#   is_cards (Fix 1) AND, in Pull C only, as the deliberate SQL filter (the one pull allowed to
+#   filter by mne - see WIRE-COST REDESIGN above).
 #
 # REGULATORY_MNES (22 MNEs) - transcribed from a pivot on ACTION_TYPE='Regulatory', carried
 #   VERBATIM from unsub_tracking/museum/RUN_2026-07-30_REGULATORY.md:12-33 ("The 22" table).
@@ -76,6 +108,11 @@
 #   (README.md:86-89, gotchas.md #1) - never a fixed hardcoded date, current month has no
 #   partition yet.
 #
+# TERADATA MEDIAN/PERCENTILE_CONT - per this redesign's own brief (Andre, 2026-07-31): Teradata
+#   Vantage supports PERCENTILE_CONT(p) WITHIN GROUP (ORDER BY col) OVER (PARTITION BY ...) as an
+#   ordered analytical (OLAP) function. Used in Pull B's cadence measure via a derived table
+#   (wrapped + DISTINCT to collapse back to one row per mne), NOT QUALIFY, per instruction.
+#
 # ============================== OPEN QUESTIONS - see delivery report for the full list =========
 # - Whether disposition_cd=4 is a per-list (per-MNE) unsub or a global/ESP-level opt-out is NOT
 #   settled anywhere in UNSUB_TRACKING_KNOWLEDGE.md. Cube 1's "bucket" (STAYER/LEAVER) is read at
@@ -84,6 +121,8 @@
 #   on one mne does not necessarily mean the client unsubscribed FROM that mne specifically.
 # - Which table holds ACTION_TYPE and whether it joins to TACTIC_ID/MNE (see REGULATORY_MNES
 #   note above) - would let REGULATORY_MNES be derived instead of hardcoded.
+# - Bank-wide (250-mne) UCP-match shape test is gone post-redesign (see WIRE-COST REDESIGN,
+#   second consequence) - only the cards-only (12-mne) version remains.
 
 
 # %% [0] CONFIG - every tunable lives here. No literal below this cell is hand-typed elsewhere.
@@ -96,7 +135,9 @@ WIN_FLOOR = "2025-08-01"   # 12 months. Repo hard rule is a FLOOR of 2024-01-01 
 # No fixed end date on purpose - every pull is "floor to now", so a rerun next sprint picks up new
 # sends/unsubs without editing this file.
 
-# ---- MNE tag sets - CLIENT-SIDE tags only (Fix 1). Never used as a SQL filter. ----
+# ---- MNE tag sets ----
+# CARDS_MNES: client-side tag everywhere EXCEPT Pull C, where it is the one deliberate SQL filter.
+# Never used as a SQL filter in Pull A or Pull B.
 CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "CRV",
                         "VBA", "VBU", "CRO", "CEC", "VIF", "MET"})
 assert len(CARDS_MNES) == 12, "CARDS_MNES v2 should hold exactly 12 MNEs - recount before running"
@@ -109,27 +150,38 @@ REGULATORY_MNES = frozenset({
 })
 assert len(REGULATORY_MNES) == 22, "REGULATORY_MNES should hold exactly 22 MNEs - recount vs museum file"
 
-# ---- Bite plan for the one expensive pull (Cell [1]) ----
+# SQL IN-list literals, built once here so no pull hand-types the MNE codes.
+CARDS_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_MNES))
+REGULATORY_LIST_SQL = ", ".join("'%s'" % m for m in sorted(REGULATORY_MNES))
+
+# ---- Bite plan for the two expensive pulls (Pull A, Pull C in Cell [1]) ----
 # ---- RUN SWITCHES - the only things to touch before hitting Run All ----
 WRITE_CLIENT_EXTRACT = False  # Cell [8]. Client-grain file for local ad-hoc work. Off by
                               # default: nothing at client grain is meant to persist.
-DROP_CLIENT_GRAIN = False     # Cell [9]. Delete base_v2 + ucp_enriched once the cubes land.
-                              # Leave False until the cubes are checked - deleting means any
-                              # new cut needs a fresh Teradata pull.
+DROP_CLIENT_GRAIN = False     # Cell [9]. Delete clientagg_v3 + cards_pair_v3 + ucp_enriched once
+                              # the cubes land. Leave False until the cubes are checked.
 
-LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite is ~9.5M rows and
-                              # serializes to just over Spark's 128 MB RPC ceiling; this keeps
-                              # each payload near 20 MB. Lower it if the limit is still hit.
+LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite of the old bank-wide
+                              # client x mne pull serialized to just over Spark's 128 MB RPC
+                              # ceiling; this keeps each payload well under it. Lower it if the
+                              # limit is still hit on Pull A or Pull C.
 
-N_BITES = 10   # MOD(CLNT_NO, N_BITES) - one independent Teradata pull per bite, each landed and
-               # checked before running, so a killed run resumes at the next un-landed bite.
+N_BITES = 10   # MOD(CLNT_NO, N_BITES) - applies to Pull A and Pull C (the two client-grain
+               # pulls). Pull B is NOT bitten - it is a ~3,000 row aggregate, one statement.
+               # Each bite is landed and checked before running, so a killed run resumes at the
+               # next un-landed bite.
 
-SMOKE = True   # True  -> pull bite 0 only. Bank-wide (no MNE filter) makes even one bite bigger
-               # than the old cards-only pull - check bite 0's row count before flipping this.
-               # False -> all 10 bites, full population.
+SMOKE = True   # True  -> pull bite 0 only, for Pull A and Pull C. Pull B always runs in full (it
+               # is cheap regardless - it has no CLNT_NO to bite on, it is already an aggregate).
+               # False -> all 10 bites, full population, for Pull A and Pull C.
 
-# ---- Trailing send-frequency windows (Fix 4) - months, tunable in one place ----
-FREQ_WINDOWS = [3, 6]   # -> n_sends_3m, n_sends_6m columns in Cell [1]; n_emails_3m/6m downstream.
+# ---- Trailing send-frequency windows - Pull A hardcodes 3m/6m columns by name
+# (n_emails_3m, n_emails_6m, ..._promo_6m, ..._regulatory_6m, ..._cards_6m); FREQ_WINDOWS must
+# keep 3 and 6 in it (asserted below) since those are the two windows baked into Pull A's SQL.
+FREQ_WINDOWS = [3, 6]
+assert set(FREQ_WINDOWS) >= {3, 6}, (
+    "Pull A's SQL hardcodes n_emails_3m/n_emails_6m (and the 6m promo/regulatory/cards variants) "
+    "by name - FREQ_WINDOWS must include 3 and 6 or those columns have no cutoff to use.")
 
 
 def _months_ago(n_months, anchor=None):
@@ -142,8 +194,8 @@ def _months_ago(n_months, anchor=None):
     return datetime.date(y, m, day)
 
 
-# Computed ONCE, at Cell [0] run time, and baked into every bite's SQL in Cell [1] - all bites in
-# one run share the same cutoff dates, which is what "trailing N months as of today" should mean.
+# Computed ONCE, at Cell [0] run time, and baked into Pull A's SQL in Cell [1] - all bites in one
+# run share the same cutoff dates, which is what "trailing N months as of today" should mean.
 FREQ_CUTOFFS = {n: _months_ago(n).isoformat() for n in FREQ_WINDOWS}
 
 # ---- Band edges (Cube 1: age_band, tenure_band) - carried from the only prior in-repo precedent,
@@ -162,55 +214,139 @@ EMAILS_6M_EDGES = [(0, 0, "0"), (1, 5, "1-5"), (6, 15, "6-15"), (16, 35, "16-35"
 PROMO_EMAILS_6M_EDGES = EMAILS_6M_EDGES
 REG_EMAILS_6M_EDGES = [(0, 0, "0"), (1, 1, "1"), (2, 3, "2-3"), (4, None, "4+")]
 
-# ---- Paths - HDFS only (Fix 2). No local disk path anywhere in this file. ----
+# ---- Paths - HDFS only. No local disk path anywhere in this file except Cell [7]'s driver-side
+# download convenience (explicitly the one place that is allowed, see that cell's docstring). ----
 BASE = "hdfs:///user/427966379/unsub_spotlight/"   # reference_andre_hdfs_user_path.md
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"          # references/ucp/README.md - personal only
 
 # Landed-schema version. The _landed() cache guard checks path existence, NOT columns - so a
-# schema change silently reuses stale parquet from a prior design. Bump this whenever Cell [1]'s
+# schema change silently reuses stale parquet from a prior design. Bump this whenever a pull's
 # output columns change; the new schema lands in a fresh directory and cannot collide.
-# v1 = cards-filtered, untagged. v2 = bank-wide, is_cards/is_regulatory/is_branded, n_sends_3m/6m.
-SCHEMA_VERSION = 2
+# v1 = cards-filtered, untagged, one pull. v2 = bank-wide one pull, client x mne grain, ~94M rows.
+# v3 = THREE pulls, each aggregated server-side to the grain downstream actually needs (see
+# WIRE-COST REDESIGN above). base_v2/ is NOT reused - v3 is a different shape entirely.
+SCHEMA_VERSION = 3
 
 # Floor for the UCP join guard. Catches a broken join key (which shows near-zero), NOT ordinary
 # non-match: UCP is personal-only on one closed-month snapshot, so business/commercial recipients
 # and clients who closed after their last send never match. Observed 2026-07-31: 87%.
 UCP_MATCH_FLOOR = 70.0
-BASE_DIR = BASE + "base_v%d/" % SCHEMA_VERSION
 
-BASE_COLS = ["clnt_no", "mne", "n_sends", "first_send_dt", "last_send_dt", "unsub_flag",
-             "unsub_dt", "is_cards", "is_regulatory", "is_branded"]
+CLIENTAGG_DIR = BASE + "clientagg_v%d/" % SCHEMA_VERSION   # Pull A - client grain, bank-wide
+MNEAGG_DIR = BASE + "mne_agg_v%d/" % SCHEMA_VERSION        # Pull B - mne x cohort_month, bank-wide
+CARDSPAIR_DIR = BASE + "cards_pair_v%d/" % SCHEMA_VERSION  # Pull C - client x mne, cards only
+
+CLIENTAGG_COLS = [
+    "clnt_no", "n_campaigns_all", "n_campaigns_branded", "n_campaigns_cards",
+    "n_campaigns_regulatory", "n_emails_all", "n_emails_3m", "n_emails_6m",
+    "n_emails_promo_6m", "n_emails_regulatory_6m", "n_emails_cards", "n_emails_cards_6m",
+    "unsub_flag", "unsub_dt", "first_send_dt", "last_send_dt",
+]
+MNEAGG_COLS = [
+    "mne", "cohort_month_num", "clients_mailed", "sends", "unsub_clients",
+    "median_days_between_sends", "clients_used_for_gap",
+    "is_cards", "is_regulatory", "is_branded",
+]
+CARDSPAIR_COLS = [
+    "clnt_no", "mne", "n_sends", "unsub_flag", "unsub_dt", "first_send_dt", "last_send_dt",
+    "is_cards", "is_regulatory", "is_branded",
+]
 
 
-def read_base():
-    """Every downstream cell reads the base through here so a stale/short schema fails loudly."""
-    sdf = spark.read.parquet(BASE_DIR + "*")
-    missing = [c for c in BASE_COLS if c not in sdf.columns]
+def read_clientagg():
+    """Pull A reader. Every downstream cell reads through here so a stale/short schema fails
+    loudly instead of silently running on a partial column set."""
+    sdf = spark.read.parquet(CLIENTAGG_DIR + "*")
+    missing = [c for c in CLIENTAGG_COLS if c not in sdf.columns]
     if missing:
         raise RuntimeError(
-            "base at %s is missing %s. Found: %s. This is stale parquet from an older schema - "
-            "delete %s and rerun Cell [1]." % (BASE_DIR, missing, sdf.columns, BASE_DIR))
+            "clientagg at %s is missing %s. Found: %s. Stale parquet from an older schema - "
+            "delete %s and rerun Cell [1]'s Pull A." % (CLIENTAGG_DIR, missing, sdf.columns, CLIENTAGG_DIR))
     return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
 
+
+def read_mneagg():
+    """Pull B reader."""
+    sdf = spark.read.parquet(MNEAGG_DIR + "*")
+    missing = [c for c in MNEAGG_COLS if c not in sdf.columns]
+    if missing:
+        raise RuntimeError(
+            "mne_agg at %s is missing %s. Found: %s. Stale parquet from an older schema - "
+            "delete %s and rerun Cell [1]'s Pull B." % (MNEAGG_DIR, missing, sdf.columns, MNEAGG_DIR))
+    return sdf
+
+
+def read_cardspair():
+    """Pull C reader."""
+    sdf = spark.read.parquet(CARDSPAIR_DIR + "*")
+    missing = [c for c in CARDSPAIR_COLS if c not in sdf.columns]
+    if missing:
+        raise RuntimeError(
+            "cards_pair at %s is missing %s. Found: %s. Stale parquet from an older schema - "
+            "delete %s and rerun Cell [1]'s Pull C." % (CARDSPAIR_DIR, missing, sdf.columns, CARDSPAIR_DIR))
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
 print("CONFIG loaded - floor:", WIN_FLOOR, "| cards MNEs:", len(CARDS_MNES),
-      "| regulatory MNEs:", len(REGULATORY_MNES), "| bites:", N_BITES, "| SMOKE:", SMOKE)
+      "| regulatory MNEs:", len(REGULATORY_MNES), "| bites (Pull A/C):", N_BITES, "| SMOKE:", SMOKE)
 print("FREQ_WINDOWS:", FREQ_WINDOWS, "-> cutoffs:", FREQ_CUTOFFS)
+print("SCHEMA_VERSION:", SCHEMA_VERSION, "| clientagg:", CLIENTAGG_DIR,
+      "| mne_agg:", MNEAGG_DIR, "| cards_pair:", CARDSPAIR_DIR)
 
 
-# %% [1] PULL - the ONE expensive cell. Teradata-direct EDW pull, bitten by MOD(CLNT_NO,10),
-# landed to HDFS one bite at a time so a killed run resumes at the next missing bite.
-# ENGINE: Teradata-direct (DTZV01.* tables, no catalog prefix, Teradata syntax).
-#
-# Grain landed: one row per (clnt_no, mne), BANK-WIDE - every mnemonic, not just cards (Fix 1).
-# Columns: clnt_no, mne, n_sends, n_sends_3m, n_sends_6m (per FREQ_WINDOWS), first_send_dt,
-# last_send_dt, unsub_flag, unsub_dt, is_cards, is_regulatory, is_branded. The last three are
-# added CLIENT-SIDE in Spark right before landing, not in the SQL (Fix 1).
+# %% [1a] CHEAP PROBE - runs FIRST, before committing to the three pulls below. One tiny query,
+# ~1 row, so the scale of the problem is visible instead of guessed at.
+# ENGINE: Teradata-direct. Opens and closes its own EDW connection (Cell [1] has not connected
+# yet at this point in the notebook).
 
 import getpass
+import teradatasql
+
+_probe_user = input("Enter your username: ")
+_probe_pw = getpass.getpass("Enter your password: ")
+_probe_conn = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=_probe_user,
+                                  password=_probe_pw, logmech="LDAP")
+
+_probe_sql = """
+SELECT COUNT(DISTINCT m.CLNT_NO) AS distinct_clients_mailed,
+       COUNT(DISTINCT SUBSTR(ek.TREATMENT_ID, 8, 3)) AS distinct_mnemonics,
+       COUNT(*) AS total_send_events
+FROM (
+    SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '%s'
+) ek
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+WHERE m.load_tm >= DATE '%s'
+""" % (WIN_FLOOR, WIN_FLOOR)
+
+_probe_cur = _probe_conn.cursor()
+_probe_cur.execute(_probe_sql)
+_probe_row = _probe_cur.fetchone()
+_probe_cur.close()
+_probe_conn.close()
+
+print("CHEAP PROBE (window >= %s) - distinct clients mailed: %s | distinct mnemonics: %s | "
+      "total send events: %s" % (WIN_FLOOR, _probe_row[0], _probe_row[1], _probe_row[2]))
+print("This is the scale of the problem this file measures. Compare against the estimates "
+      "printed at the top of Cell [1] before the three pulls run.")
+
+
+# %% [1] PULLS - THREE Teradata-direct pulls replacing the old single ~94M-row pull (see
+# WIRE-COST REDESIGN at the top of this file). Each is aggregated server-side to the grain
+# downstream cells need, so the network only carries rows that could not be collapsed further.
+# ENGINE: Teradata-direct (DTZV01.* tables, no catalog prefix, Teradata syntax, teradatasql).
+#
+#   PULL A -> clientagg_v3 - GROUP BY CLNT_NO, bank-wide. Bitten, landed, resumable.
+#   PULL B -> mne_agg_v3   - GROUP BY mne, cohort_month, bank-wide. NOT bitten, one statement.
+#   PULL C -> cards_pair_v3 - GROUP BY CLNT_NO, mne, CARDS MNES ONLY. Bitten, landed, resumable.
+
 import time
 import pandas as pd
-import teradatasql
 from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType, DoubleType
 
 # PySpark <3.4 calls pdf.iteritems() inside createDataFrame; pandas 2.0 removed it.
 if not hasattr(pd.DataFrame, "iteritems"):
@@ -228,6 +364,13 @@ _cur = EDW.cursor()
 _cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
 print("EDW round-trip returned:", _cur.fetchall())
 _cur.close()
+
+print("\nESTIMATED ROWS (before pulling, Andre's scale figures) -")
+print("  Pull A (clientagg, bank-wide, GROUP BY CLNT_NO): ~15,000,000 rows")
+print("  Pull B (mne x cohort_month, bank-wide, GROUP BY mne, month): ~3,000 rows")
+print("  Pull C (client x mne, CARDS ONLY, GROUP BY CLNT_NO, mne): ~10,000,000 rows")
+print("  TOTAL ESTIMATED: ~25,000,000 rows, vs the old v2 single pull's ~94,000,000 rows "
+      "(bank-wide client x mne, every mnemonic) - roughly 4x less wire traffic.")
 
 
 def edw_pd(sql, chunksize=1_000_000):
@@ -250,9 +393,12 @@ def _landed(path):
         raise RuntimeError(path + ": cannot verify HDFS state, refusing to guess. " + str(e)[:300])
 
 
-def _tag_mne_client_side(sdf):
-    """Fix 1: is_cards / is_regulatory / is_branded computed in Spark, never in SQL."""
-    mne_u = F.upper(F.trim(F.col("mne")))
+def _tag_mne_client_side(sdf, mne_col="mne"):
+    """is_cards / is_regulatory / is_branded computed in Spark from the mne column, never as a
+    SQL WHERE clause (Pull C's cards filter is the sole deliberate exception, and even there
+    these three columns are still derived the same way so cube1_profiling's dims are consistent
+    with q_mne/q_trend's)."""
+    mne_u = F.upper(F.trim(F.col(mne_col)))
     unbranded = mne_u.isNull() | (mne_u == "") | (mne_u == "DEFAULT")
     return (sdf
             .withColumn("is_branded", F.when(unbranded, F.lit(0)).otherwise(F.lit(1)))
@@ -260,125 +406,345 @@ def _tag_mne_client_side(sdf):
             .withColumn("is_regulatory", F.when(mne_u.isin(sorted(REGULATORY_MNES)), F.lit(1)).otherwise(F.lit(0))))
 
 
-from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType
+def _write_chunks(pdf, schema, hdfs_path, tag_fn=None, tag_col=None):
+    """Shared chunked-write helper for all three pulls - a full-size payload exceeds Spark's
+    128 MB RPC ceiling, so every pull writes in LAND_CHUNK_ROWS-row slices, never one shot."""
+    _first = True
+    for _s in range(0, len(pdf), LAND_CHUNK_ROWS):
+        _part = pdf.iloc[_s:_s + LAND_CHUNK_ROWS]
+        _sdf = spark.createDataFrame(_part, schema=schema)
+        if tag_fn is not None:
+            _sdf = tag_fn(_sdf, tag_col) if tag_col else tag_fn(_sdf)
+        _sdf.write.mode("overwrite" if _first else "append").parquet(BASE + hdfs_path)
+        _first = False
+        print("   ...", hdfs_path, "chunk", _s, "-", _s + len(_part), "written", flush=True)
+    nback = spark.read.parquet(BASE + hdfs_path).count()
+    return nback
 
-BASE_SPARK_SCHEMA = StructType(
-    [StructField("clnt_no", LongType(), True),
-     StructField("mne", StringType(), True),
-     StructField("n_sends", LongType(), True)]
-    + [StructField("n_sends_%dm" % _w, LongType(), True) for _w in FREQ_WINDOWS]
-    + [StructField("first_send_dt", DateType(), True),
-       StructField("last_send_dt", DateType(), True),
-       StructField("unsub_flag", IntegerType(), True),
-       StructField("unsub_dt", DateType(), True)])
+
+# ---------------------------------------------------------------------------------------------
+# PULL A - clientagg_v3. GROUP BY CLNT_NO, bank-wide. Tags resolved via SQL IN-lists INSIDE the
+# aggregation (this grain has no mne column left to tag client-side).
+# ---------------------------------------------------------------------------------------------
+
+CLIENTAGG_SPARK_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("n_campaigns_all", LongType(), True),
+    StructField("n_campaigns_branded", LongType(), True),
+    StructField("n_campaigns_cards", LongType(), True),
+    StructField("n_campaigns_regulatory", LongType(), True),
+    StructField("n_emails_all", LongType(), True),
+    StructField("n_emails_3m", LongType(), True),
+    StructField("n_emails_6m", LongType(), True),
+    StructField("n_emails_promo_6m", LongType(), True),
+    StructField("n_emails_regulatory_6m", LongType(), True),
+    StructField("n_emails_cards", LongType(), True),
+    StructField("n_emails_cards_6m", LongType(), True),
+    StructField("unsub_flag", IntegerType(), True),
+    StructField("unsub_dt", DateType(), True),
+    StructField("first_send_dt", DateType(), True),
+    StructField("last_send_dt", DateType(), True),
+])
 
 
-def _prep_for_spark(pdf):
-    """Force pandas dtypes to match BASE_SPARK_SCHEMA exactly. Without this, a chunk that happens
-    to hold only nulls in unsub_dt infers as a different type and the parts stop reading as one
-    table. Also guards the float64 client-id trap: pandas renders large float ids in scientific
-    notation, which silently zero-matches any downstream join."""
+def _prep_clientagg(pdf):
     pdf = pdf.copy()
     pdf.columns = [c.lower() for c in pdf.columns]
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
-    pdf["mne"] = pdf["mne"].astype(str)
-    for _c in ["n_sends"] + ["n_sends_%dm" % _w for _w in FREQ_WINDOWS]:
+    _int_cols = ["n_campaigns_all", "n_campaigns_branded", "n_campaigns_cards",
+                 "n_campaigns_regulatory", "n_emails_all", "n_emails_3m", "n_emails_6m",
+                 "n_emails_promo_6m", "n_emails_regulatory_6m", "n_emails_cards", "n_emails_cards_6m"]
+    for _c in _int_cols:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
     pdf["unsub_flag"] = pd.to_numeric(pdf["unsub_flag"], errors="coerce").fillna(0).astype("int32")
-    for _c in ["first_send_dt", "last_send_dt", "unsub_dt"]:
+    for _c in ["unsub_dt", "first_send_dt", "last_send_dt"]:
         pdf[_c] = pd.to_datetime(pdf[_c], errors="coerce").dt.date
         pdf[_c] = pdf[_c].where(pdf[_c].notna(), None)
-    return pdf[[f.name for f in BASE_SPARK_SCHEMA.fields]]
+    return pdf[[f.name for f in CLIENTAGG_SPARK_SCHEMA.fields]]
 
 
-def land_bite(bite):
-    """One bite = one CLNT_NO-mod slice, independently resumable. Skips if already landed - this
-    is what makes a killed 10-bite run safe to just rerun top to bottom."""
-    name = "base_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+def land_pullA_bite(bite):
+    name = "clientagg_v%d/bite_%d" % (SCHEMA_VERSION, bite)
     if _landed(name):
         n = spark.read.parquet(BASE + name).count()
         print(name, ": already landed,", n, "rows - SKIP")
         return
 
-    freq_cols_sql = "\n".join(
-        "       SUM(CAST(CASE WHEN ek.disposition_cd = 1 AND CAST(ek.disposition_dt_tm AS DATE) "
-        ">= DATE '%s' THEN 1 ELSE 0 END AS BIGINT)) AS n_sends_%dm," % (FREQ_CUTOFFS[n], n)
-        for n in FREQ_WINDOWS
-    )
-
     sql = """
-    SELECT m.CLNT_NO AS clnt_no,
-           SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
-           SUM(CAST(CASE WHEN ek.disposition_cd = 1 THEN 1 ELSE 0 END AS BIGINT)) AS n_sends,
-%s
-           MIN(CASE WHEN ek.disposition_cd = 1 THEN CAST(ek.disposition_dt_tm AS DATE) END) AS first_send_dt,
-           MAX(CASE WHEN ek.disposition_cd = 1 THEN CAST(ek.disposition_dt_tm AS DATE) END) AS last_send_dt,
-           MAX(CASE WHEN ek.disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub_flag,
-           MIN(CASE WHEN ek.disposition_cd = 4 THEN CAST(ek.disposition_dt_tm AS DATE) END) AS unsub_dt
-    FROM (
+    WITH ek AS (
         SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT
         WHERE disposition_cd IN (1, 4)
-          AND disposition_dt_tm >= DATE '%s'
-    ) ek
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-      ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-    WHERE m.load_tm >= DATE '%s'
-      AND MOD(m.CLNT_NO, %d) = %d
-    GROUP BY m.CLNT_NO, SUBSTR(ek.TREATMENT_ID, 8, 3)
-    """ % (freq_cols_sql, WIN_FLOOR, WIN_FLOOR, N_BITES, bite)
+          AND disposition_dt_tm >= DATE '%(floor)s'
+    ),
+    joined AS (
+        SELECT m.CLNT_NO AS clnt_no,
+               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+               ek.disposition_cd AS disposition_cd,
+               CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
+        FROM ek
+        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+        WHERE m.load_tm >= DATE '%(floor)s'
+          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
+    )
+    SELECT
+        clnt_no,
+        COUNT(DISTINCT mne) AS n_campaigns_all,
+        COUNT(DISTINCT CASE WHEN mne IS NOT NULL AND UPPER(TRIM(mne)) NOT IN ('', 'DEFAULT')
+                             THEN mne END) AS n_campaigns_branded,
+        COUNT(DISTINCT CASE WHEN mne IN (%(cards)s) THEN mne END) AS n_campaigns_cards,
+        COUNT(DISTINCT CASE WHEN mne IN (%(reg)s) THEN mne END) AS n_campaigns_regulatory,
+        SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS n_emails_all,
+        SUM(CASE WHEN disposition_cd = 1 AND evt_dt >= DATE '%(cut3)s' THEN 1 ELSE 0 END) AS n_emails_3m,
+        SUM(CASE WHEN disposition_cd = 1 AND evt_dt >= DATE '%(cut6)s' THEN 1 ELSE 0 END) AS n_emails_6m,
+        SUM(CASE WHEN disposition_cd = 1 AND evt_dt >= DATE '%(cut6)s'
+                  AND mne IS NOT NULL AND UPPER(TRIM(mne)) NOT IN ('', 'DEFAULT')
+                  AND mne NOT IN (%(reg)s)
+                 THEN 1 ELSE 0 END) AS n_emails_promo_6m,
+        SUM(CASE WHEN disposition_cd = 1 AND evt_dt >= DATE '%(cut6)s' AND mne IN (%(reg)s)
+                 THEN 1 ELSE 0 END) AS n_emails_regulatory_6m,
+        SUM(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS n_emails_cards,
+        SUM(CASE WHEN disposition_cd = 1 AND evt_dt >= DATE '%(cut6)s' AND mne IN (%(cards)s)
+                 THEN 1 ELSE 0 END) AS n_emails_cards_6m,
+        MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub_flag,
+        MIN(CASE WHEN disposition_cd = 4 THEN evt_dt END) AS unsub_dt,
+        MIN(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS first_send_dt,
+        MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
+    FROM joined
+    GROUP BY clnt_no
+    """ % {"floor": WIN_FLOOR, "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL,
+           "reg": REGULATORY_LIST_SQL, "cut3": FREQ_CUTOFFS[3], "cut6": FREQ_CUTOFFS[6]}
 
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite) + " - investigate before proceeding"
-
-    # createDataFrame ships the whole frame through Spark's RPC layer, and a full bite lands within
-    # a percent of spark.rpc.message.maxSize (128 MB) - bite 0 squeaked under, bite 1 did not.
-    # Write in chunks so no single payload approaches the limit. The schema is explicit rather than
-    # inferred, because a chunk where unsub_dt happens to be all-null would infer a different type
-    # and the parts would no longer read back as one table.
-    pdf = _prep_for_spark(pdf)
-    _first = True
-    for _s in range(0, len(pdf), LAND_CHUNK_ROWS):
-        _part = pdf.iloc[_s:_s + LAND_CHUNK_ROWS]
-        _sdf = _tag_mne_client_side(spark.createDataFrame(_part, schema=BASE_SPARK_SCHEMA))
-        _sdf.write.mode("overwrite" if _first else "append").parquet(BASE + name)
-        _first = False
-        print("   ...", name, "chunk", _s, "-", _s + len(_part), "written", flush=True)
-    nback = spark.read.parquet(BASE + name).count()
+    pdf = _prep_clientagg(pdf)
+    nback = _write_chunks(pdf, CLIENTAGG_SPARK_SCHEMA, name)
     assert nback == len(pdf), name + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
-    print(name, ": landed", len(pdf), "rows (bank-wide, all mnemonics), HDFS readback confirms", nback)
+    print(name, ": landed", len(pdf), "rows (bank-wide, client grain), HDFS readback confirms", nback)
 
 
 for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_bite(_b)
+    land_pullA_bite(_b)
 
-print("Cell [1] done - base grain landed at", BASE_DIR + "*",
-      "| one row per (clnt_no, mne), bank-wide, tagged is_cards/is_regulatory/is_branded.")
+print("PULL A done - landed at", CLIENTAGG_DIR + "*", "| one row per clnt_no, bank-wide.")
+
+
+# ---------------------------------------------------------------------------------------------
+# PULL B - mne_agg_v3. GROUP BY mne, cohort_month, bank-wide. NOT bitten - ~3,000 rows, one
+# statement. Cadence (median days between sends) is a nested aggregate via a derived table.
+# ---------------------------------------------------------------------------------------------
+
+MNEAGG_SPARK_SCHEMA = StructType([
+    StructField("mne", StringType(), True),
+    StructField("cohort_month_num", LongType(), True),
+    StructField("clients_mailed", LongType(), True),
+    StructField("sends", LongType(), True),
+    StructField("unsub_clients", LongType(), True),
+    StructField("median_days_between_sends", DoubleType(), True),
+    StructField("clients_used_for_gap", LongType(), True),
+])
+
+
+def _prep_mneagg(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    pdf["mne"] = pdf["mne"].astype(str)
+    pdf["cohort_month_num"] = pd.to_numeric(pdf["cohort_month_num"], errors="coerce").astype("int64")
+    for _c in ["clients_mailed", "sends", "unsub_clients", "clients_used_for_gap"]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
+    pdf["median_days_between_sends"] = pd.to_numeric(pdf["median_days_between_sends"], errors="coerce")
+    return pdf[[f.name for f in MNEAGG_SPARK_SCHEMA.fields]]
+
+
+def land_mneagg():
+    name = "mne_agg_v%d/all" % SCHEMA_VERSION
+    if _landed(name):
+        n = spark.read.parquet(BASE + name).count()
+        print(name, ": already landed,", n, "rows - SKIP")
+        return
+
+    sql = """
+    WITH ek AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd IN (1, 4)
+          AND disposition_dt_tm >= DATE '%(floor)s'
+    ),
+    joined AS (
+        SELECT m.CLNT_NO AS clnt_no,
+               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+               ek.disposition_cd AS disposition_cd,
+               CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
+        FROM ek
+        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+        WHERE m.load_tm >= DATE '%(floor)s'
+    ),
+    client_mne AS (
+        SELECT clnt_no, mne,
+               SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS n_sends,
+               MIN(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS first_send_dt,
+               MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub_flag
+        FROM joined
+        GROUP BY clnt_no, mne
+    ),
+    client_mne_gap AS (
+        -- one row per (client, mne) that actually sent at least once; the entry-cohort month and
+        -- the approximate send-gap both need a real first_send_dt.
+        SELECT clnt_no, mne, n_sends, first_send_dt, last_send_dt, unsub_flag,
+               CAST((last_send_dt - first_send_dt) AS DECIMAL(10,2)) / NULLIF(n_sends - 1, 0)
+                   AS approx_gap_days
+        FROM client_mne
+        WHERE n_sends >= 1
+    ),
+    -- Nested aggregate for cadence: PERCENTILE_CONT is an ordered analytical (OLAP) function in
+    -- Teradata, computed here via a derived table (NOT QUALIFY, per instruction) then collapsed
+    -- back to one row per mne with DISTINCT.
+    mne_cadence_raw AS (
+        SELECT mne,
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY approx_gap_days) OVER (PARTITION BY mne)
+                   AS median_days_between_sends,
+               COUNT(*) OVER (PARTITION BY mne) AS clients_used_for_gap
+        FROM client_mne_gap
+        WHERE n_sends >= 2
+    ),
+    mne_cadence AS (
+        SELECT DISTINCT mne, median_days_between_sends, clients_used_for_gap
+        FROM mne_cadence_raw
+    ),
+    month_agg AS (
+        SELECT mne,
+               (EXTRACT(YEAR FROM first_send_dt) * 100 + EXTRACT(MONTH FROM first_send_dt))
+                   AS cohort_month_num,
+               COUNT(DISTINCT clnt_no) AS clients_mailed,
+               SUM(n_sends) AS sends,
+               SUM(unsub_flag) AS unsub_clients
+        FROM client_mne_gap
+        GROUP BY mne, cohort_month_num
+    )
+    SELECT ma.mne AS mne, ma.cohort_month_num AS cohort_month_num, ma.clients_mailed AS clients_mailed,
+           ma.sends AS sends, ma.unsub_clients AS unsub_clients,
+           mc.median_days_between_sends AS median_days_between_sends,
+           mc.clients_used_for_gap AS clients_used_for_gap
+    FROM month_agg ma
+    LEFT JOIN mne_cadence mc ON ma.mne = mc.mne
+    ORDER BY ma.mne, ma.cohort_month_num
+    """ % {"floor": WIN_FLOOR}
+
+    pdf = edw_pd(sql)
+    assert len(pdf) > 0, name + " pulled zero rows - investigate before proceeding"
+    pdf = _prep_mneagg(pdf)
+    nback = _write_chunks(pdf, MNEAGG_SPARK_SCHEMA, name, tag_fn=_tag_mne_client_side)
+    assert nback == len(pdf), name + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
+    print(name, ": landed", len(pdf), "rows (mne x cohort_month, bank-wide), HDFS readback confirms", nback)
+
+
+land_mneagg()
+print("PULL B done - landed at", MNEAGG_DIR + "*", "| one row per (mne, cohort_month), bank-wide.")
+
+
+# ---------------------------------------------------------------------------------------------
+# PULL C - cards_pair_v3. GROUP BY CLNT_NO, mne, CARDS MNES ONLY - the one deliberate mne filter.
+# ---------------------------------------------------------------------------------------------
+
+CARDSPAIR_SPARK_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("mne", StringType(), True),
+    StructField("n_sends", LongType(), True),
+    StructField("unsub_flag", IntegerType(), True),
+    StructField("unsub_dt", DateType(), True),
+    StructField("first_send_dt", DateType(), True),
+    StructField("last_send_dt", DateType(), True),
+])
+
+
+def _prep_cardspair(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    pdf["mne"] = pdf["mne"].astype(str)
+    pdf["n_sends"] = pd.to_numeric(pdf["n_sends"], errors="coerce").fillna(0).astype("int64")
+    pdf["unsub_flag"] = pd.to_numeric(pdf["unsub_flag"], errors="coerce").fillna(0).astype("int32")
+    for _c in ["unsub_dt", "first_send_dt", "last_send_dt"]:
+        pdf[_c] = pd.to_datetime(pdf[_c], errors="coerce").dt.date
+        pdf[_c] = pdf[_c].where(pdf[_c].notna(), None)
+    return pdf[[f.name for f in CARDSPAIR_SPARK_SCHEMA.fields]]
+
+
+def land_pullC_bite(bite):
+    name = "cards_pair_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    if _landed(name):
+        n = spark.read.parquet(BASE + name).count()
+        print(name, ": already landed,", n, "rows - SKIP")
+        return
+
+    sql = """
+    WITH ek AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, disposition_cd, disposition_dt_tm
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd IN (1, 4)
+          AND disposition_dt_tm >= DATE '%(floor)s'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+    ),
+    joined AS (
+        SELECT m.CLNT_NO AS clnt_no,
+               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+               ek.disposition_cd AS disposition_cd,
+               CAST(ek.disposition_dt_tm AS DATE) AS evt_dt
+        FROM ek
+        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+        WHERE m.load_tm >= DATE '%(floor)s'
+          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
+    )
+    SELECT clnt_no, mne,
+           SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS n_sends,
+           MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub_flag,
+           MIN(CASE WHEN disposition_cd = 4 THEN evt_dt END) AS unsub_dt,
+           MIN(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS first_send_dt,
+           MAX(CASE WHEN disposition_cd = 1 THEN evt_dt END) AS last_send_dt
+    FROM joined
+    GROUP BY clnt_no, mne
+    """ % {"floor": WIN_FLOOR, "cards": CARDS_LIST_SQL, "n_bites": N_BITES, "bite": bite}
+
+    pdf = edw_pd(sql)
+    assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite) + " - investigate before proceeding"
+    pdf = _prep_cardspair(pdf)
+    nback = _write_chunks(pdf, CARDSPAIR_SPARK_SCHEMA, name, tag_fn=_tag_mne_client_side)
+    assert nback == len(pdf), name + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
+    print(name, ": landed", len(pdf), "rows (cards-only, client x mne), HDFS readback confirms", nback)
+
+
+for _b in (range(1) if SMOKE else range(N_BITES)):
+    land_pullC_bite(_b)
+
+print("PULL C done - landed at", CARDSPAIR_DIR + "*", "| one row per (clnt_no, mne), cards-only.")
+
+print("\nCell [1] done - all three pulls landed.",
+      "clientagg:", CLIENTAGG_DIR, "| mne_agg:", MNEAGG_DIR, "| cards_pair:", CARDSPAIR_DIR)
 
 
 # %% [2] Q_MNE - unsubs by campaign, absolute counts, BANK-WIDE (Andre filters to cards in the
 # Excel pivot using the is_cards column). Print only, no CSV - row count is however many distinct
 # mnemonics sent mail bank-wide in the window, still small enough to print in full.
-# ENGINE: PySpark (YARN), reads landed base - no new EDW connection.
+# SOURCE: Pull B (mne_agg), rolled up across cohort_month back to one row per mne.
+# ENGINE: PySpark (YARN), reads landed mne_agg - no new EDW connection.
 #
-# median_days_between_sends is an APPROXIMATION: (last_send_dt - first_send_dt) / (n_sends - 1)
-# per client, then the median of that across clients - the base grain only carries MIN/MAX send
-# dates, not every send timestamp. Directional cadence read, not an exact figure.
+# median_days_between_sends and clients_used_for_gap are computed ONCE per mne in Teradata
+# (Pull B) and repeat identically across that mne's cohort_month rows - F.max collapses the
+# repeats back to a single value per mne without changing it.
 
-base = read_base()
+mne_agg = read_mneagg()
 
-_gap = (base.filter(F.col("n_sends") >= 2)
-        .withColumn("days_span", F.datediff(F.col("last_send_dt"), F.col("first_send_dt")))
-        .withColumn("approx_gap_days", F.col("days_span") / (F.col("n_sends") - 1)))
-
-q_mne = (base.groupBy("mne", "is_cards", "is_regulatory", "is_branded")
-         .agg(F.countDistinct("clnt_no").alias("clients_mailed"),
-              F.sum("n_sends").alias("sends"),
-              F.sum(F.col("unsub_flag")).alias("unsub_clients"))
-         .join(_gap.groupBy("mne")
-               .agg(F.expr("percentile_approx(approx_gap_days, 0.5)").alias("median_days_between_sends"),
-                    F.count("*").alias("clients_used_for_gap")),
-               "mne", "left")
+q_mne = (mne_agg
+         .groupBy("mne", "is_cards", "is_regulatory", "is_branded")
+         .agg(F.sum("clients_mailed").alias("clients_mailed"),
+              F.sum("sends").alias("sends"),
+              F.sum("unsub_clients").alias("unsub_clients"),
+              F.max("median_days_between_sends").alias("median_days_between_sends"),
+              F.max("clients_used_for_gap").alias("clients_used_for_gap"))
          .orderBy("mne"))
 
 q_mne_pd = q_mne.toPandas()
@@ -387,22 +753,22 @@ print(q_mne_pd.to_string(index=False))
 
 
 # %% [3] Q_TREND - mne x cohort_month, BANK-WIDE. Print .head(30) and land CSV to HDFS.
+# SOURCE: Pull B (mne_agg) directly - this cell's grain IS Pull B's landed grain.
 # ENGINE: PySpark (YARN).
 #
 # COHORT_MONTH HERE = the month a client FIRST appears as sent-to for that mne (month of
-# first_send_dt) - an ENTRY-COHORT trend, not a per-calendar-month send-volume trend. Cell [1]'s
-# base grain collapses every send date to MIN/MAX per client x mne, so "how many sends happened
-# in June" is not recoverable from it for the FULL history - only the trailing 3m/6m windows
-# added in Cell [1] give windowed volume, and those are used in Cube 2, not here.
+# first_send_dt) - an ENTRY-COHORT trend, not a per-calendar-month send-volume trend, computed
+# server-side in Pull B's SQL (EXTRACT(YEAR/MONTH FROM first_send_dt)).
 
-base = read_base()
+mne_agg = read_mneagg()
 
-q_trend = (base
-           .withColumn("cohort_month", F.date_format(F.col("first_send_dt"), "yyyy-MM"))
-           .groupBy("mne", "is_cards", "is_regulatory", "cohort_month")
-           .agg(F.countDistinct("clnt_no").alias("clients_entered"),
-                F.sum("n_sends").alias("sends"),
-                F.sum(F.col("unsub_flag")).alias("unsub_clients"))
+q_trend = (mne_agg
+           .withColumn("cohort_month",
+                       F.concat(F.substring(F.col("cohort_month_num").cast("string"), 1, 4),
+                                F.lit("-"),
+                                F.substring(F.col("cohort_month_num").cast("string"), 5, 2)))
+           .select("mne", "is_cards", "is_regulatory", "cohort_month",
+                   F.col("clients_mailed").alias("clients_entered"), "sends", "unsub_clients")
            .orderBy("mne", "cohort_month"))
 
 q_trend_pd = q_trend.toPandas()
@@ -415,10 +781,14 @@ q_trend.coalesce(1).write.mode("overwrite").option("header", True).csv(_trend_pa
 print("written to HDFS:", _trend_path, "|", len(q_trend_pd), "rows")
 
 
-# %% [4] UCP JOIN - the single most important guard in this file (Fix 5). Casts CLNT_NO through
+# %% [4] UCP JOIN - the single most important guard in this file. Casts CLNT_NO through
 # decimal(18,0)->long on BOTH sides (never str(float) - that renders scientific notation and
 # silently zero-matches, see memory note pandas_float_keys_scientific_notation). Prints 5 sample
 # ids per side BEFORE joining, then HARD-ERRORS if match rate < 90%.
+#
+# Client universe for this join = clientagg (Pull A), bank-wide, ~15M clients - NOT a client x
+# mne grain (that per-mne UCP shape test is gone post-redesign, see the file header; it still
+# runs, cards-only, inside Cube 1's cell using Pull C).
 #
 # Snapshot: last CLOSED month-end (references/ucp/README.md:86-89, gotchas.md #1) - current month
 # never has a partition. CLNT_TYP == 'Personal' filter applied per README.md:97 ("defensive
@@ -448,12 +818,12 @@ ucp_sel = (_ucp_raw
            .select(*_UCP_COLS)
            .withColumn("clnt_no_long", F.col("CLNT_NO").cast("decimal(18,0)").cast("long")))
 
-base_ids = (read_base()
+base_ids = (read_clientagg()
             .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
             .select("clnt_no_long").distinct())
 
 # Sample BEFORE joining, so a format mismatch is visible immediately.
-print("Sample clnt_no (base, 5):", [r.clnt_no_long for r in base_ids.limit(5).collect()])
+print("Sample clnt_no (clientagg, 5):", [r.clnt_no_long for r in base_ids.limit(5).collect()])
 print("Sample CLNT_NO (UCP, 5):", [r.clnt_no_long for r in ucp_sel.select("clnt_no_long").limit(5).collect()])
 
 _ucp_ids = ucp_sel.select("clnt_no_long").distinct()
@@ -461,64 +831,37 @@ _ucp_ids = ucp_sel.select("clnt_no_long").distinct()
 _left_n = base_ids.count()
 _matched_n = base_ids.join(_ucp_ids, "clnt_no_long", "inner").count()
 _match_pct = 100.0 * _matched_n / _left_n if _left_n else 0.0
-print("UCP JOIN MATCH RATE - base clients:", _left_n, "| matched to UCP:", _matched_n,
+print("UCP JOIN MATCH RATE - clientagg clients:", _left_n, "| matched to UCP:", _matched_n,
       "| match pct: %.1f%%" % _match_pct)
 
 # The guard catches a BROKEN KEY (format mismatch -> near-zero match), not ordinary attrition.
-# UCP is personal-only and anchored to one closed month, so business/commercial recipients and
-# clients who closed after their last send legitimately do not match. A real key break shows up
-# in the single digits, not the eighties.
 assert _match_pct >= UCP_MATCH_FLOOR, (
     "UCP join match rate %.1f%% (%d/%d) is below the %.0f%% floor - this looks like a broken key, "
     "not attrition. Check clnt_no normalization on both sides (decimal(18,0)->long) and the UCP "
     "snapshot date (%s)." % (_match_pct, _matched_n, _left_n, UCP_MATCH_FLOOR, _ucp_anchor)
 )
 
-# The rate itself is not the risk - BIAS in who fails to match is. Unmatched clients keep their
-# rows as "no_ucp_match" (left join below), but if leavers match at a materially different rate
-# than stayers, every profiling cut in Cube 1 is tilted. Print it; do not silently proceed.
-_bucket_ids = (read_base()
-               .groupBy("clnt_no").agg(F.max("unsub_flag").alias("any_unsub"))
+# The rate itself is not the risk - BIAS in who fails to match is. This bias check only needs
+# CLIENT-level unsub_flag (clientagg already carries it - no mne needed), so it still runs at
+# full bank-wide coverage post-redesign.
+_bucket_ids = (read_clientagg()
+               .select("clnt_no", "unsub_flag")
                .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
-               .withColumn("bucket", F.when(F.col("any_unsub") == 1, "LEAVER").otherwise("STAYER")))
+               .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER")))
 _bias = (_bucket_ids
          .join(_ucp_ids.withColumn("in_ucp", F.lit(1)), "clnt_no_long", "left")
          .groupBy("bucket")
          .agg(F.count("*").alias("clients"),
               F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched")))
-print("UCP MATCH BIAS CHECK - match rate by bucket (grain: one row per STAYER/LEAVER):")
+print("UCP MATCH BIAS CHECK - match rate by bucket (grain: one row per STAYER/LEAVER, bank-wide):")
 _bias.withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)).show(truncate=False)
-print("If STAYER and LEAVER match rates differ by more than a few points, Cube 1's profiling cuts "
+print("If STAYER and LEAVER match rates differ by more than a few points, the profiling cuts "
       "are biased and the 'no_ucp_match' rows must be reported, not filtered out.")
 
-# WHY clients fail to match: UCP is filtered to CLNT_TYP='Personal', so a business/commercial
-# client can never match regardless of key quality. That predicts a BIMODAL distribution across
-# campaigns - consumer campaigns near 100%, business campaigns near 0%, little in between.
-# Random data loss would instead put every campaign near the overall rate. This cell decides which.
-_mne_match = (read_base().select("mne", "is_cards", "clnt_no").distinct()
-              .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
-              .join(_ucp_ids.withColumn("in_ucp", F.lit(1)), "clnt_no_long", "left")
-              .groupBy("mne", "is_cards")
-              .agg(F.countDistinct("clnt_no_long").alias("clients"),
-                   F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched"))
-              .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)))
-
-_n_business = _mne_match.filter(F.col("match_pct") < 20).count()
-_n_consumer = _mne_match.filter(F.col("match_pct") >= 80).count()
-_n_middle = _mne_match.filter((F.col("match_pct") >= 20) & (F.col("match_pct") < 80)).count()
-print("UCP MATCH BY CAMPAIGN - shape test. mnes <20%% matched:", _n_business,
-      "| 20-80%%:", _n_middle, "| >=80%%:", _n_consumer)
-print("Bimodal (big counts at both ends, small middle) => non-match is CLIENT TYPE, not a bug. "
-      "Flat (everything clustered near the overall rate) => investigate the join key.")
-
-print("\nWORST 25 campaigns by UCP match (candidates for business/commercial audiences):")
-_mne_match.orderBy("match_pct").show(25, truncate=False)
-print("CARDS campaigns only - these are the ones that matter for the brief:")
-_mne_match.filter(F.col("is_cards") == 1).orderBy("match_pct").show(20, truncate=False)
-
-_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "out/ucp_match_by_mne")
-print("Landed:", BASE + "out/ucp_match_by_mne", "| grain: one row per mne.")
-
+# NOTE: the old bank-wide (250-mne) "business vs consumer shape test" per campaign is GONE -
+# it needed client x mne rows for every mne, which no longer exist post-redesign (see file
+# header, WIRE-COST REDESIGN, second consequence). A cards-only (12-mne) version of the per-mne
+# UCP match check runs in Cell [5] using Pull C, which still has client x mne rows for cards.
 
 def _band(col, edges):
     expr = None
@@ -544,8 +887,9 @@ ucp_enriched = (ucp_sel
                  .select("clnt_no_long", "age_band", "tenure_band", "prod_cat_cnt",
                          "tenure_years", "prof_tot_annual"))
 
-# Left-join onto the FULL base client universe now, so downstream cube cells just read this table
-# and get "no_ucp_match" for anyone who fell out of the >=90% - no repeated join logic downstream.
+# Left-join onto the FULL clientagg client universe (bank-wide, ~15M) now, so downstream cube
+# cells just read this table and get "no_ucp_match" for anyone who fell out of the >=90% - no
+# repeated join logic downstream.
 ucp_enriched_full = (base_ids
                       .join(ucp_enriched, "clnt_no_long", "left")
                       .withColumn("age_band", F.coalesce(F.col("age_band"), F.lit("no_ucp_match")))
@@ -559,34 +903,54 @@ _ucp_path_out = BASE + "ucp_enriched"
 ucp_enriched_full.write.mode("overwrite").parquet(_ucp_path_out)
 _n_ucp = spark.read.parquet(_ucp_path_out).count()
 print("Cell [4] done - ucp_enriched landed at", _ucp_path_out, "| grain: one row per clnt_no "
-      "(full base universe, UCP misses labeled no_ucp_match) |", _n_ucp, "rows")
+      "(full clientagg universe, bank-wide, UCP misses labeled no_ucp_match) |", _n_ucp, "rows")
 
 
-# %% [5] CUBE 1 - profiling cube (Fix 3). EXACT spec, nothing added:
+# %% [5] CUBE 1 - profiling cube. EXACT spec, nothing added:
 # Dims:    mne, is_cards, is_regulatory, age_band, tenure_band, prod_cat_cnt (bare integer 0-4 as
 #          string, or no_ucp_match)
 # Measures: stayers, leavers, clients_total, mean_tenure_stayers/leavers,
 #          median_prof_stayers/leavers (percentile_approx .5, NOT quintile)
 #
-# WIDE, not long (Andre, 2026-07-31). stayers and leavers are COLUMNS, not values of a "bucket"
-# dimension. In long format a cell with leavers but zero stayers has no STAYER row at all, so a
-# pivot silently divides by the wrong denominator. Wide guarantees both numbers on every row and
-# halves the row count. Rate stays out of the file - Andre derives leavers/(stayers+leavers).
+# SOURCE: Pull C (cards_pair) + ucp_enriched. cube1_profiling is CARDS-ONLY (12 mnes) post-
+# redesign - Pull C is the only pull with client x mne on one row, and Pull C is cards-only (see
+# file header). cube1_allclients below restores full bank-wide coverage of the SAME demographic
+# dims (age/tenure/product-depth), just without the mne breakdown, using Pull A instead.
 #
-# Grain: one row per (clnt_no, mne) from base, so a client counts as a leaver against the mne
-# their unsub_flag sits on - see the open-question note at the top of this file on what a per-mne
-# leaver tag actually means if disposition_cd=4 turns out to be a global opt-out.
+# WIDE, not long. stayers and leavers are COLUMNS, not values of a "bucket" dimension - a cell
+# with leavers but zero stayers still gets both columns, so a pivot never divides by the wrong
+# denominator. Rate stays out of the file - Andre derives leavers/(stayers+leavers).
 # ENGINE: PySpark (YARN).
 
-base = read_base()
+cards_pair = read_cardspair()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
-cube1_src = base.join(ucp_enriched_full, "clnt_no", "left")
+# ---- Cards-only (12 mnes) UCP match-by-mne check - the surviving half of the old 250-mne shape
+# test (see Cell [4] note). Uses Pull C's client x mne rows, the only ones left with that grain.
+_ucp_ids_for_match = ucp_enriched_full.filter(F.col("age_band") != "no_ucp_match").select("clnt_no").distinct().withColumn("in_ucp", F.lit(1))
+_cardspair_ids = cards_pair.select("clnt_no", "mne").distinct()
+_mne_match = (_cardspair_ids
+              .join(_ucp_ids_for_match, "clnt_no", "left")
+              .groupBy("mne")
+              .agg(F.countDistinct("clnt_no").alias("clients"),
+                   F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched"))
+              .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1))
+              .orderBy("match_pct"))
+print("UCP MATCH BY MNE - CARDS ONLY (12 mnes). This replaces the old bank-wide 250-mne shape "
+      "test, which is no longer computable post wire-cost redesign (see file header) - only "
+      "cards mnes still carry client x mne rows (Pull C).")
+_mne_match.show(20, truncate=False)
+_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "out/ucp_match_by_mne")
+_mne_match_pd = _mne_match.toPandas()
+print("Landed:", BASE + "out/ucp_match_by_mne", "| grain: one row per mne (cards-only) |", len(_mne_match_pd), "rows")
+
+# ---- cube1_profiling: cards-only, per spec dims/measures ----
+cube1_src = cards_pair.join(ucp_enriched_full, "clnt_no", "left")
 
 _stay = F.col("unsub_flag") == 0
 _leave = F.col("unsub_flag") == 1
 
-cube1 = (cube1_src
+cube1_profiling = (cube1_src
          .groupBy("mne", "is_cards", "is_regulatory", "age_band", "tenure_band", "prod_cat_cnt")
          .agg(F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
               F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
@@ -599,30 +963,59 @@ cube1 = (cube1_src
                .alias("median_prof_leavers"))
          .orderBy("mne", "age_band", "tenure_band", "prod_cat_cnt"))
 
-cube1_pd = cube1.toPandas()
-print("CUBE 1 - profiling | grain: one row per (mne, is_cards, is_regulatory, age_band, "
-      "tenure_band, prod_cat_cnt) | stayers and leavers are COLUMNS | %d rows" % len(cube1_pd))
-print(cube1_pd.head(30).to_string(index=False))
+cube1_profiling_pd = cube1_profiling.toPandas()
+print("\nCUBE 1 PROFILING (CARDS-ONLY, 12 mnes) | grain: one row per (mne, is_cards, "
+      "is_regulatory, age_band, tenure_band, prod_cat_cnt) | stayers/leavers are COLUMNS | "
+      "%d rows" % len(cube1_profiling_pd))
+print(cube1_profiling_pd.head(30).to_string(index=False))
 
 _cube1_path = BASE + "out/cube1_profiling"
-cube1.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_path)
-print("written to HDFS:", _cube1_path, "|", len(cube1_pd), "rows")
+cube1_profiling.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_path)
+print("written to HDFS:", _cube1_path, "|", len(cube1_profiling_pd), "rows")
+
+# ---- cube1_allclients: SAME demographic dims, FULL bank-wide coverage, no mne dimension -----
+# Uses Pull A (clientagg) + ucp_enriched, every client bank-wide, not just cards. This is the
+# compensating output for cube1_profiling's cards-only narrowing (see file header).
+clientagg = read_clientagg()
+cube1_src_all = clientagg.select("clnt_no", "unsub_flag").join(ucp_enriched_full, "clnt_no", "left")
+
+cube1_allclients = (cube1_src_all
+         .groupBy("age_band", "tenure_band", "prod_cat_cnt")
+         .agg(F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
+              F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
+              F.count("*").alias("clients_total"),
+              F.avg(F.when(_stay, F.col("tenure_years"))).alias("mean_tenure_stayers"),
+              F.avg(F.when(_leave, F.col("tenure_years"))).alias("mean_tenure_leavers"),
+              F.expr("percentile_approx(CASE WHEN unsub_flag = 0 THEN prof_tot_annual END, 0.5)")
+               .alias("median_prof_stayers"),
+              F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN prof_tot_annual END, 0.5)")
+               .alias("median_prof_leavers"))
+         .orderBy("age_band", "tenure_band", "prod_cat_cnt"))
+
+cube1_allclients_pd = cube1_allclients.toPandas()
+print("\nCUBE 1 ALLCLIENTS (bank-wide, no mne dim) | grain: one row per (age_band, tenure_band, "
+      "prod_cat_cnt) | stayers/leavers are COLUMNS | %d rows" % len(cube1_allclients_pd))
+print(cube1_allclients_pd.to_string(index=False))
+
+_cube1_all_path = BASE + "out/cube1_allclients"
+cube1_allclients.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_all_path)
+print("written to HDFS:", _cube1_all_path, "|", len(cube1_allclients_pd), "rows")
 
 
-# %% [6] CUBE 2 - contact-frequency cube (Fix 4, replaces the deleted 66-pair cell). Andre: "why
-# do I need pairs" - the real question is how many campaigns and how many emails a client got, and
-# whether that differs between stayers and leavers.
-# Dims:    bucket (STAYER/LEAVER, CLIENT-level - any_unsub across ALL mnemonics),
-#          n_branded_campaigns_bucket, n_emails_3m_bucket, n_emails_6m_bucket,
+# %% [6] CUBE 2 - contact-frequency cube. Andre: "why do I need pairs" - the real question is how
+# many campaigns and how many emails a client got, and whether that differs between stayers and
+# leavers.
+# Dims:    n_branded_campaigns_bucket, n_emails_3m_bucket, n_emails_6m_bucket,
 #          n_promo_emails_6m_bucket, n_regulatory_emails_6m_bucket, prod_cat_cnt
-# Measures: clients
-# n_branded_campaigns = distinct mne where is_branded=1. n_emails_3m/6m = SUM of the trailing-
-# window send counts added to Cell [1]'s SQL directly (no second pull). promotional = branded AND
-# NOT regulatory; regulatory = in REGULATORY_MNES. n_emails_all is also reported per client so
-# Andre can compare full-window volume, stayer vs leaver, not just the trailing windows.
+# Measures: stayers, leavers, clients_total
+#
+# SOURCE: Pull A (clientagg) + ucp_enriched, BANK-WIDE, all mnemonics. clientagg is ALREADY at
+# client grain with n_campaigns_branded / n_emails_3m/6m / n_emails_promo_6m /
+# n_emails_regulatory_6m computed server-side in Pull A - no client-side re-aggregation needed
+# (the old design's client_roll groupBy is gone; clientagg IS the client roll-up).
 # ENGINE: PySpark (YARN).
 
-base = read_base()
+clientagg = read_clientagg()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
 
@@ -639,35 +1032,26 @@ def _band(col, edges):
     return expr.otherwise("unbucketed")
 
 
-_is_promo = (F.col("is_branded") == 1) & (F.col("is_regulatory") == 0)
-
-client_roll = (base.groupBy("clnt_no")
-               .agg(F.countDistinct(F.when(F.col("is_branded") == 1, F.col("mne"))).alias("n_branded_campaigns"),
-                    F.sum("n_sends").alias("n_emails_all"),
-                    F.sum("n_sends_3m").alias("n_emails_3m"),
-                    F.sum("n_sends_6m").alias("n_emails_6m"),
-                    F.sum(F.when(_is_promo, F.col("n_sends_6m")).otherwise(0)).alias("n_promo_emails_6m"),
-                    F.sum(F.when(F.col("is_regulatory") == 1, F.col("n_sends_6m")).otherwise(0)).alias("n_regulatory_emails_6m"),
-                    F.max("unsub_flag").alias("any_unsub"))
-               .withColumn("bucket", F.when(F.col("any_unsub") == 1, "LEAVER").otherwise("STAYER"))
-               .withColumn("n_branded_campaigns_bucket", _band(F.col("n_branded_campaigns"), BRANDED_CAMP_EDGES))
+client_roll = (clientagg
+               .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER"))
+               .withColumn("n_branded_campaigns_bucket", _band(F.col("n_campaigns_branded"), BRANDED_CAMP_EDGES))
                .withColumn("n_emails_3m_bucket", _band(F.col("n_emails_3m"), EMAILS_3M_EDGES))
                .withColumn("n_emails_6m_bucket", _band(F.col("n_emails_6m"), EMAILS_6M_EDGES))
-               .withColumn("n_promo_emails_6m_bucket", _band(F.col("n_promo_emails_6m"), PROMO_EMAILS_6M_EDGES))
-               .withColumn("n_regulatory_emails_6m_bucket", _band(F.col("n_regulatory_emails_6m"), REG_EMAILS_6M_EDGES))
+               .withColumn("n_promo_emails_6m_bucket", _band(F.col("n_emails_promo_6m"), PROMO_EMAILS_6M_EDGES))
+               .withColumn("n_regulatory_emails_6m_bucket", _band(F.col("n_emails_regulatory_6m"), REG_EMAILS_6M_EDGES))
                .join(ucp_enriched_full.select("clnt_no", "prod_cat_cnt"), "clnt_no", "left")
                .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
 
 cube2 = (client_roll
          .groupBy("n_branded_campaigns_bucket", "n_emails_3m_bucket", "n_emails_6m_bucket",
                    "n_promo_emails_6m_bucket", "n_regulatory_emails_6m_bucket", "prod_cat_cnt")
-         .agg(F.sum(F.when(F.col("any_unsub") == 0, 1).otherwise(0)).alias("stayers"),
-              F.sum(F.when(F.col("any_unsub") == 1, 1).otherwise(0)).alias("leavers"),
+         .agg(F.sum(F.when(F.col("unsub_flag") == 0, 1).otherwise(0)).alias("stayers"),
+              F.sum(F.when(F.col("unsub_flag") == 1, 1).otherwise(0)).alias("leavers"),
               F.count("*").alias("clients_total"))
          .orderBy("n_branded_campaigns_bucket", "n_emails_6m_bucket"))
 
 cube2_pd = cube2.toPandas()
-print("CUBE 2 - contact frequency | grain: one row per (n_branded_campaigns_bucket, "
+print("CUBE 2 - contact frequency, bank-wide | grain: one row per (n_branded_campaigns_bucket, "
       "n_emails_3m_bucket, n_emails_6m_bucket, n_promo_emails_6m_bucket, "
       "n_regulatory_emails_6m_bucket, prod_cat_cnt) | stayers and leavers are COLUMNS "
       "| %d rows" % len(cube2_pd))
@@ -677,22 +1061,20 @@ _cube2_path = BASE + "out/cube2_frequency"
 cube2.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube2_path)
 print("written to HDFS:", _cube2_path, "|", len(cube2_pd), "rows")
 
-# n_emails_all is on client_roll (used to build cube2) but not in cube2's own dims/measures list
-# per spec - land it separately as its own small summary so the stayer/leaver full-volume compare
-# Andre asked for ("that comparison is the entire point of this cube") is directly visible.
-_s = F.col("any_unsub") == 0
-_l = F.col("any_unsub") == 1
-q_emails_all = client_roll.agg(
+# n_emails_all summary - stayer vs leaver full-window volume compare, straight off clientagg.
+_s = F.col("unsub_flag") == 0
+_l = F.col("unsub_flag") == 1
+q_emails_all = clientagg.agg(
     F.sum(F.when(_s, 1).otherwise(0)).alias("stayers"),
     F.sum(F.when(_l, 1).otherwise(0)).alias("leavers"),
     F.sum(F.when(_s, F.col("n_emails_all")).otherwise(0)).alias("total_emails_stayers"),
     F.sum(F.when(_l, F.col("n_emails_all")).otherwise(0)).alias("total_emails_leavers"),
-    F.expr("percentile_approx(CASE WHEN any_unsub = 0 THEN n_emails_all END, 0.5)")
+    F.expr("percentile_approx(CASE WHEN unsub_flag = 0 THEN n_emails_all END, 0.5)")
      .alias("median_emails_stayers"),
-    F.expr("percentile_approx(CASE WHEN any_unsub = 1 THEN n_emails_all END, 0.5)")
+    F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN n_emails_all END, 0.5)")
      .alias("median_emails_leavers"))
 q_emails_all_pd = q_emails_all.toPandas()
-print("\nn_emails_all summary, stayers vs leavers side by side | 1 row | %d rows" % len(q_emails_all_pd))
+print("\nn_emails_all summary, stayers vs leavers side by side, bank-wide | 1 row | %d rows" % len(q_emails_all_pd))
 print(q_emails_all_pd.to_string(index=False))
 
 _emails_all_path = BASE + "out/q_emails_all_summary"
@@ -701,7 +1083,7 @@ print("written to HDFS:", _emails_all_path, "|", len(q_emails_all_pd), "rows")
 
 
 # %% [7] ONE FILE TO DOWNLOAD - collect every cube into a single Excel workbook on the POD's
-# local disk, so the manual HDFS -> shared-drive hop is one download instead of five.
+# local disk, so the manual HDFS -> shared-drive hop is one download instead of several.
 #
 # Why this works from the Spark kernel: df.write.csv("file:///...") writes on the EXECUTORS, which
 # are other machines, so the file lands nowhere visible. toPandas() pulls to the DRIVER, which IS
@@ -718,11 +1100,13 @@ os.makedirs(LOCAL_OUT, exist_ok=True)
 
 # Sheet names are capped at 31 chars by Excel; keep them short and stable.
 _sheets = {
-    "cube1_profiling": cube1_pd,
+    "cube1_profiling": cube1_profiling_pd,
+    "cube1_allclients": cube1_allclients_pd,
     "cube2_frequency": cube2_pd,
     "q_mne": q_mne_pd,
     "q_trend": q_trend_pd,
     "q_emails_all": q_emails_all_pd,
+    "ucp_match_by_mne": _mne_match_pd,
 }
 _sheets = {k: v for k, v in _sheets.items() if v is not None and len(v) > 0}
 
@@ -737,12 +1121,20 @@ try:
     print("\nDownload THIS ONE FILE from the pod, not the HDFS part-files.")
 except Exception as e:
     # openpyxl missing or Excel write blocked - fall back to named CSVs in one folder, still a
-    # single directory to grab rather than five HDFS part-file hunts.
+    # single directory to grab rather than several HDFS part-file hunts.
     print("Excel write failed (%s: %s) - falling back to named CSVs." % (type(e).__name__, str(e)[:200]))
     for _name, _df in _sheets.items():
         _p = os.path.join(LOCAL_OUT, _name + ".csv")
         _df.to_csv(_p, index=False)
         print("   wrote", _p, "|", len(_df), "rows")
+
+import subprocess as _sp
+_zip = os.path.join(LOCAL_OUT, "spotlight_cubes.zip")
+_sp.run("cd %s && rm -f spotlight_cubes.zip && "
+        "zip -rq spotlight_cubes.zip cubes_parquet spotlight_cubes.xlsx" % LOCAL_OUT, shell=True)
+if os.path.exists(_zip):
+    print("ONE DOWNLOAD:", _zip, "|", round(os.path.getsize(_zip) / 1048576.0, 1), "MB")
+    print("xlsx = pivot in Excel. cubes_parquet/ = duckdb in VS Code.")
 
 print("\nLocal output dir:", LOCAL_OUT)
 print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT survive a pod "
@@ -750,53 +1142,28 @@ print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT 
 
 
 # %% [8] CLIENT-LEVEL EXTRACT - the thing worth downloading
-# base_v2 is one row per (clnt_no, mne). At full population that is ~1 GB, which is a different
-# kind of download. Collapsing to one row per CLIENT is roughly 8x fewer rows, so the FULL
-# population lands in about the size of the 10% sample - and it still answers every client-level
-# question: dose-response, product depth, profit, cards vs bank contact load.
+# clientagg_v3 IS already one row per CLIENT (Pull A's grain), so no groupBy is needed here - this
+# cell mostly just joins UCP on and adds the cards_mnes / touched_by_cards fields, which need
+# Pull C (the only client x mne source, cards-only).
 #
-# What it drops: which individual campaign a client received. Per-campaign detail stays on HDFS in
-# base_v2 and in the q_mne / cube1 outputs. If a question needs per-campaign grain, it gets
-# answered on the pod, not locally.
+# What it drops vs the pre-redesign version: n_emails_promo (full-window, non-6m) is not in Pull
+# A's column spec and was NOT added (no unrequested columns) - only n_emails_promo_6m exists.
+# Per-campaign detail for NON-cards mnes is not recoverable client-side any more (Pull A collapses
+# mne away server-side) - Pull B (q_mne/q_trend) is where non-cards per-campaign detail lives.
 # ENGINE: PySpark (YARN).
 
-base = read_base()
+clientagg = read_clientagg()
+cards_pair = read_cardspair()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
-_promo = (F.col("is_branded") == 1) & (F.col("is_regulatory") == 0)
-_cards = F.col("is_cards") == 1
+_cards_roll = (cards_pair.groupBy("clnt_no")
+               .agg(F.max(F.lit(1)).alias("touched_by_cards"),
+                    F.concat_ws("|", F.sort_array(F.collect_set("mne"))).alias("cards_mnes")))
 
-
-def _n(cond, col):
-    return F.sum(F.when(cond, F.col(col)).otherwise(0))
-
-
-client_extract = (base.groupBy("clnt_no")
-                  .agg(F.max("unsub_flag").alias("unsub_flag"),
-                       F.min("unsub_dt").alias("unsub_dt"),
-                       F.min("first_send_dt").alias("first_send_dt"),
-                       F.max("last_send_dt").alias("last_send_dt"),
-
-                       F.countDistinct("mne").alias("n_campaigns_all"),
-                       F.countDistinct(F.when(F.col("is_branded") == 1, F.col("mne"))).alias("n_campaigns_branded"),
-                       F.countDistinct(F.when(_cards, F.col("mne"))).alias("n_campaigns_cards"),
-                       F.countDistinct(F.when(F.col("is_regulatory") == 1, F.col("mne"))).alias("n_campaigns_regulatory"),
-
-                       F.sum("n_sends").alias("n_emails_all"),
-                       F.sum("n_sends_3m").alias("n_emails_3m"),
-                       F.sum("n_sends_6m").alias("n_emails_6m"),
-                       _n(_promo, "n_sends").alias("n_emails_promo"),
-                       _n(_promo, "n_sends_6m").alias("n_emails_promo_6m"),
-                       _n(F.col("is_regulatory") == 1, "n_sends").alias("n_emails_regulatory"),
-                       _n(F.col("is_regulatory") == 1, "n_sends_6m").alias("n_emails_regulatory_6m"),
-                       _n(_cards, "n_sends").alias("n_emails_cards"),
-                       _n(_cards, "n_sends_6m").alias("n_emails_cards_6m"),
-
-                       F.max(F.when(_cards, 1).otherwise(0)).alias("touched_by_cards"),
-                       # Which cards campaigns, as one delimited string - keeps the co-exposure
-                       # question answerable locally without carrying the full client x mne grain.
-                       F.concat_ws("|", F.sort_array(F.collect_set(F.when(_cards, F.col("mne")))))
-                        .alias("cards_mnes"))
+client_extract = (clientagg
+                  .join(_cards_roll, "clnt_no", "left")
+                  .withColumn("touched_by_cards", F.coalesce(F.col("touched_by_cards"), F.lit(0)))
+                  .withColumn("cards_mnes", F.coalesce(F.col("cards_mnes"), F.lit("")))
                   .join(ucp_enriched_full, "clnt_no", "left")
                   .withColumn("age_band", F.coalesce(F.col("age_band"), F.lit("no_ucp_match")))
                   .withColumn("tenure_band", F.coalesce(F.col("tenure_band"), F.lit("no_ucp_match")))
@@ -815,18 +1182,20 @@ else:
     print("landed:", _ext_path)
     print("columns:", _ext.columns)
     print(_ext.limit(5).toPandas().to_string(index=False))
-    print("If SMOKE was True for Cell [1], this is 10%% of clients and every absolute count is a")
+    print("If SMOKE was True for Pulls A/C, this is 10%% of clients and every absolute count is a")
     print("tenth of reality. Rates are unaffected.")
     print("Pull it down with:  !hdfs dfs -get -f %s /home/jovyan/spotlight_out/" % _ext_path)
 
 
 # %% [9] CLEANUP - drop the client-grain intermediates, keep only aggregates
-# Nothing at client grain is meant to persist. base_v2 and ucp_enriched exist for two reasons and
-# neither survives this cell:
+# Nothing at client grain is meant to persist. clientagg_v3, cards_pair_v3 and ucp_enriched exist
+# for two reasons and neither survives this cell:
 #   1. Cross-system join buffer. Email events live in Teradata, UCP lives in HDFS parquet. Teradata
 #      cannot see HDFS and the join cannot be pushed down, so the two only meet after both sides
 #      land. There is no query-time alternative.
-#   2. Crash resumability. The bites are what make a killed 10-bite pull resume instead of restart.
+#   2. Crash resumability. The bites are what make a killed Pull A/C run resume instead of restart.
+# mne_agg_v3 is NOT client-grain (it is already an mne x cohort_month aggregate with no client
+# ids) and is left alone - there is nothing sensitive or heavy about it to clean up.
 #
 # Once the cubes are written both jobs are done and the client-grain copies are dead weight.
 #
@@ -835,7 +1204,7 @@ else:
 
 import subprocess
 
-_targets = [BASE_DIR.rstrip("/"), BASE + "ucp_enriched"]
+_targets = [CLIENTAGG_DIR.rstrip("/"), CARDSPAIR_DIR.rstrip("/"), BASE + "ucp_enriched"]
 
 if not DROP_CLIENT_GRAIN:
     print("DROP_CLIENT_GRAIN is False - nothing deleted. Would remove:")
@@ -844,7 +1213,8 @@ if not DROP_CLIENT_GRAIN:
     print("\nCheck the cubes first. Once these are gone, re-cutting means re-pulling from Teradata.")
 else:
     # Refuse to delete the join buffer before the thing it was built for exists.
-    _required = [BASE + "out/cube1_profiling", BASE + "out/cube2_frequency", BASE + "out/q_mne"]
+    _required = [BASE + "out/cube1_profiling", BASE + "out/cube1_allclients",
+                 BASE + "out/cube2_frequency", BASE + "out/q_mne"]
     _missing = []
     for _r in _required:
         try:
@@ -862,4 +1232,7 @@ else:
         print("  ", _t, "-> rc", _rc.returncode, (_rc.stdout or _rc.stderr).strip()[:200])
     print("\nDone. Only aggregates remain on HDFS. Nothing at client grain persists.")
 
-print("\nWhat stays:", BASE + "out/*  (cube1, cube2, q_mne, q_trend, q_emails_all, ucp_match_by_mne)")
+print("\nWhat stays:", BASE + "out/*  (cube1_profiling, cube1_allclients, cube2, q_mne, q_trend, "
+      "q_emails_all, ucp_match_by_mne)")
+print("mne_agg_v3/ also stays (it is an aggregate, not client-grain) in case q_mne/q_trend need "
+      "a re-cut without a fresh Teradata pull.")
