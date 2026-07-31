@@ -886,3 +886,121 @@ CPC (the consent centre) and the vendor send system are **two unsynced worlds wi
 - **#1 "received email" undefined — IMPROVED:** got_email now = disposition_cd=1 (dispatched send), not a decisioning row. **#3 re-consent / #11 CASL** — handled in E8 exclusions. **#10 pipe false-precision / #12 behavior-vs-failure** — dissolved by the "two worlds / no enforcement loop" framing (no "failure" claim). **#15 standing/selection** — T1 now scans ALL switches, standing validated, dictionary-backed.
 - **Deck-fixable:** #5 dedupe (use distinct-client counts), #6 send-volume normalization, #9 0.4%/0.04% diagram fix, #8 SUBSTR/named-campaign (DEFAULT-stream finding).
 - **NOT deck-fixable (Andre action):** #13 Legal/Compliance consult, #14 definitions meeting with system owners → defuse by framing the deck as an internal analytic read + questions for owners, not a compliance allegation.
+
+---
+
+# §20. VERIFIED 2026-07-31 — vendor table facts, proven not believed
+
+Everything below was measured against the live tables on 2026-07-31. Queries in
+`spotlight/preflight.sql`, `preflight2.sql`, `preflight3.sql`, `preflight4.sql`.
+Results in `spotlight/RUN_2026-07-31_preflight.sql` and `RUN_2026-07-31_scope_test.sql`.
+**These supersede the earlier "believed / not yet verified" entries in §4 and §5.**
+
+## 20.1 VENDOR_FEEDBACK_MASTER — the real 29 columns (HELP TABLE, live)
+
+CONSUMER_ID_HASHED, SRVC_PROVDR_NM, LEGAL_ENTITY_CD, SOURCE_EVNT_ID, EMAIL_ADDR,
+EMAIL_SUBJ_LINE, EMAIL_LANG_CD, CNTCT_EVNT_INITIATOR, CNTCT_MTHD_TYP, CLIENT_TYPE,
+EMAIL_URL, TREATMENT_ID, CATEGORY_CD, SUB_CATEGORY_CD, PRODUCT_CODE, TREATMENT_EXP_DT,
+APP_PRODUCT_TYP_CODE, CARD_ISSUE_NO, ACCESS_CARD_NO, CARD_TYPE_CD, CHANNEL_TYPE_CD,
+PRODUCT_SUB_TYPE, SYS_APP_CD, SYSTEM_OF_RECORD, CONTACT_PURPS_TYP, PRIORITY_SCORE,
+CLNT_NO, CARD_NO, LOAD_TM
+
+Three that were never being used and all three matter:
+- **CARD_NO / CARD_ISSUE_NO / ACCESS_CARD_NO** — explain the duplication (20.2).
+- **SOURCE_EVNT_ID** — a per-send identifier. Cheaper than DISTINCT if a true send key is needed.
+- **TREATMENT_EXP_DT** — treatment expiry date. It exists. Do not assume a response window.
+
+## 20.2 MASTER grain — NOT one row per (consumer_id_hashed, TREATMENT_ID)
+
+Measured: **1.123 rows per key**, max **95,014**, over 385,665,736 keys / 432,925,102 rows.
+93.4% of keys are clean; the excess is 47,259,366 rows (**10.9% inflation**).
+
+**97.5%** of keys map to exactly one CLNT_NO, so it is duplication, not ambiguity. The
+duplication is almost certainly **card-level** — one email to a client holding three cards
+writes three rows.
+
+**Rule:** join MASTER as
+`SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO ... WHERE CLNT_NO IS NOT NULL`.
+Never join it raw. Every COUNT and SUM inflates ~11% if you do.
+
+**16,519,813 rows (3.8%) carry a NULL CLNT_NO.** Zero negative. Exclude nulls explicitly —
+`MOD(NULL, n)` matches no bite, so they vanish from bitten pulls while unbitten ones still
+count them, and the outputs stop reconciling.
+
+## 20.3 load_tm is a LOAD timestamp, not a send date
+
+Filtering `m.load_tm >= window_start` with no margin **deletes in-window unsubs** whose MASTER
+row loaded earlier. Measured: **26,782 distinct clients** dropped (8.7% of the annual
+unsubscriber population) on a 12-month window.
+
+**Rule:** floor MASTER at least 3 months before the event window. Pack 19, pack 20 and
+`museum/20_lookback_cards.sql` all do this; anything that does not is undercounting.
+
+## 20.4 TREATMENT_ID comes in two shapes — filter to real tactic ids
+
+- **Dated (real):** 10 chars, `YYYY` + Julian day + 3-char program. `2024313BBP` → `SUBSTR(x,8,3)`
+  = `BBP`, sent on day 313 of 2024. One day, one program, one send per client. **Andre's rule
+  holds for these.**
+- **Not dated (junk):** `DEFAULT`, `CABVRSN1`, vendor-internal codes. `SUBSTR(x,8,3)` yields a
+  meaningless MNE, and because they are not date-bound a whole year of email collapses onto one
+  key. This alone produced the 3,029,598 pairs that appeared to send "30+ days apart" — no
+  campaign sent twice.
+
+**Rule (Andre, 2026-07-31):** exclude non-dated ids from all unsub analysis.
+```sql
+AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+AND SUBSTR(TRIM(TREATMENT_ID), 1, 4) BETWEEN '2020' AND '2030'
+AND SUBSTR(TRIM(TREATMENT_ID), 5, 3) BETWEEN '001' AND '366'
+```
+One filter fixes a correctness problem, a spool problem and an attribution problem at once.
+
+**Corrects earlier canon:** "TACTIC_ID unique per deployment" is true only for dated ids.
+
+## 20.5 The unsubscribe is PER-LIST, not a global opt-out
+
+Of 23,801 unsubscribers whose unsub touches 2+ treatments, **~97% carry a distinct timestamp per
+treatment**. Global fan-out is 169 clients. **69%** of unsubscribers touch exactly one treatment.
+
+Per-campaign attribution is real. Numbers mean what they appear to mean; no "last straw, not
+cause" caveat is needed.
+
+Pack 20's "86% same-day" never showed a mechanism — same day with different timestamps is one
+person working through an inbox.
+
+## 20.6 Send-to-unsub lag — set the window from this, do not guess
+
+Per day, not per bucket: 23,118 (same day) → 8,233 → 4,052 → 3,243 → 2,620 → 2,298 → 476 (30+).
+A **30-day window captures 71.5%** of logged unsub events. Defensible; report the coverage rather
+than implying completeness.
+
+## 20.7 Population anchors (12 months, Aug 2025 – Jul 2026, deduped)
+
+- distinct unsub events: **753,608**
+- distinct unsubscribers: **308,104**
+
+Cross-validates the independently catalogued 319,733 (RESULTS_CATALOG.md, Jul25–Jun26) to within
+3.6%. Andre's domain anchor: 0.2–0.6% unsub rate per deployment, under ~5,000 even at peak — use
+it to sanity-check any new number before reporting it.
+
+## 20.8 Engine gotchas hit this session
+
+**Teradata**
+- `PERCENTILE_CONT(p) WITHIN GROUP (ORDER BY c)` is a **GROUP BY aggregate**. The Oracle
+  `... OVER (PARTITION BY ...)` form throws 3706.
+- Ordered analytics (QUALIFY, ROW_NUMBER) are **not allowed inside subqueries** — 3706.
+- `consumer_id_hashed` is **BYTE**; `||` against it throws 3662.
+- `MOD(-7, 10) = -7`, matching no bite in `range(n)`. Use `MOD(ABS(x), n)`.
+- `COUNT(DISTINCT ...)` over a 400M-row window throws 2646. It is never a "cheap probe".
+- A bite predicate in the **outer WHERE** does not reduce spool — the join and its inputs spool
+  in full first. Push it **inside** the subquery being joined.
+
+**PySpark / pandas**
+- pandas 2.0 removed `DataFrame.iteritems`; PySpark <3.4 calls it inside `createDataFrame`.
+  Shim it at import.
+- `createDataFrame` on a large pandas frame exceeds `spark.rpc.message.maxSize` (128 MB) around
+  9M narrow rows. Write in chunks with an **explicit schema** — inferred schemas drift between
+  chunks when a column is all-null in one of them.
+- `df.write.csv("file:///...")` writes on the executors. Only `toPandas().to_csv(...)` reaches
+  the driver pod.
+- A cache guard that checks path existence, not columns or row count, will happily reuse stale
+  parquet from a previous design. Version the path and write a row-count marker.
