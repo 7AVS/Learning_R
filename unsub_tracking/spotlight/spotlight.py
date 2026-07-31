@@ -437,6 +437,34 @@ _bias.withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"
 print("If STAYER and LEAVER match rates differ by more than a few points, Cube 1's profiling cuts "
       "are biased and the 'no_ucp_match' rows must be reported, not filtered out.")
 
+# WHY clients fail to match: UCP is filtered to CLNT_TYP='Personal', so a business/commercial
+# client can never match regardless of key quality. That predicts a BIMODAL distribution across
+# campaigns - consumer campaigns near 100%, business campaigns near 0%, little in between.
+# Random data loss would instead put every campaign near the overall rate. This cell decides which.
+_mne_match = (read_base().select("mne", "is_cards", "clnt_no").distinct()
+              .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+              .join(_ucp_ids.withColumn("in_ucp", F.lit(1)), "clnt_no_long", "left")
+              .groupBy("mne", "is_cards")
+              .agg(F.countDistinct("clnt_no_long").alias("clients"),
+                   F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched"))
+              .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1)))
+
+_n_business = _mne_match.filter(F.col("match_pct") < 20).count()
+_n_consumer = _mne_match.filter(F.col("match_pct") >= 80).count()
+_n_middle = _mne_match.filter((F.col("match_pct") >= 20) & (F.col("match_pct") < 80)).count()
+print("UCP MATCH BY CAMPAIGN - shape test. mnes <20%% matched:", _n_business,
+      "| 20-80%%:", _n_middle, "| >=80%%:", _n_consumer)
+print("Bimodal (big counts at both ends, small middle) => non-match is CLIENT TYPE, not a bug. "
+      "Flat (everything clustered near the overall rate) => investigate the join key.")
+
+print("\nWORST 25 campaigns by UCP match (candidates for business/commercial audiences):")
+_mne_match.orderBy("match_pct").show(25, truncate=False)
+print("CARDS campaigns only - these are the ones that matter for the brief:")
+_mne_match.filter(F.col("is_cards") == 1).orderBy("match_pct").show(20, truncate=False)
+
+_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "out/ucp_match_by_mne")
+print("Landed:", BASE + "out/ucp_match_by_mne", "| grain: one row per mne.")
+
 
 def _band(col, edges):
     expr = None
