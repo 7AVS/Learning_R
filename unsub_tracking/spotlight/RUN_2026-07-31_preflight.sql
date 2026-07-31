@@ -127,3 +127,67 @@
 --    Removes retry rows from email volume.
 -- 3. MASTER_FLOOR set 3 months before WIN_FLOOR. Recovers the 178,184 deleted unsub events.
 -- 4. WIN_CEIL added so pulls run at different times still cover the same window.
+
+
+-- =========================================================================================
+-- preflight3.sql RESULTS. Run 2026-07-31. Two of my own fixes were wrong; both corrected.
+-- =========================================================================================
+--
+-- Q9. MASTER's real 29 columns (HELP TABLE, live - the knowledge file's list came from a
+-- screenshot and was never verified):
+--   CONSUMER_ID_HASHED, SRVC_PROVDR_NM, LEGAL_ENTITY_CD, SOURCE_EVNT_ID, EMAIL_ADDR,
+--   EMAIL_SUBJ_LINE, EMAIL_LANG_CD, CNTCT_EVNT_INITIATOR, CNTCT_MTHD_TYP, CLIENT_TYPE,
+--   EMAIL_URL, TREATMENT_ID, CATEGORY_CD, SUB_CATEGORY_CD, PRODUCT_CODE, TREATMENT_EXP_DT,
+--   APP_PRODUCT_TYP_CODE, CARD_ISSUE_NO, ACCESS_CARD_NO, CARD_TYPE_CD, CHANNEL_TYPE_CD,
+--   PRODUCT_SUB_TYPE, SYS_APP_CD, SYSTEM_OF_RECORD, CONTACT_PURPS_TYP, PRIORITY_SCORE,
+--   CLNT_NO, CARD_NO, LOAD_TM
+--
+-- THREE columns nobody was using and all three matter:
+--   CARD_NO / CARD_ISSUE_NO / ACCESS_CARD_NO - almost certainly WHY MASTER duplicates. One email
+--     to a client holding three cards writes three rows. The duplication is deliberate and
+--     card-grained, not a design fault. Deduping to (consumer_id_hashed, TREATMENT_ID, CLNT_NO)
+--     is therefore CORRECT for client-level counting - it collapses card rows to one client -
+--     and loses nothing we measure.
+--   SOURCE_EVNT_ID - a per-send identifier. Cheaper and more exact than DISTINCT if a true
+--     send key is ever needed.
+--   TREATMENT_EXP_DT - the treatment expiry date Andre asked for when we were arguing about a
+--     hardcoded 30/90-day response window. It exists. We do not need to guess the window.
+--
+-- Q10. FAILED - 3706, "Order-based Aggregate and Ordered Analytical Functions are not allowed in
+-- subqueries". My QUALIFY sat inside an IN-subquery. Not re-run; Q9's column list already
+-- explains the duplication.
+--
+-- Q11. duplicate_groups = 23,113,644 | groups_varying_<col> = 20,285,400
+-- Column header truncated in the viewer, so which of clnt_no / load_tm varies is unresolved.
+-- 88% of duplicate groups vary on something. Consistent with the card-level reading.
+--
+-- Q12. THE ONE THAT REVERSED A FIX. Spread between multiple sends of one TREATMENT_ID:
+--   00 same day     | 2,084,352   (26%)
+--   01 next day     |   604,328
+--   02 2-7 days     |   801,357
+--   03 8-30 days    | 1,564,594
+--   04 over 30 days | 3,029,598   (37%)
+--   TOTAL           | 8,084,229
+--
+-- "Retries of the same email" was wrong. Only a quarter are same-day; 37% are more than a month
+-- apart. Those are real separate sends under one TREATMENT_ID - which also contradicts the canon
+-- claim that TACTIC_ID is unique per deployment wave. Collapsing them would have deleted roughly
+-- 3M genuine emails from every volume figure.
+-- CORRECTED: the event CTE now collapses to (client, treatment, disposition, DAY). Same-day
+-- retries merge; sends on different days stay separate.
+--
+-- Q13. THE 178,184 RE-MEASURED, deduped and at client grain:
+--   distinct_unsub_events_dropped  = 58,242
+--   distinct_clients_dropped       = 26,782
+--
+-- The original 178,184 was inflated ~3x by MASTER fan-out and conflated events with clients.
+-- Andre's skepticism was correct. The real figure is 26,782 clients - 8.7% of the annual
+-- unsubscriber population. Still worth the fix, nothing like what I first reported.
+--
+-- Q14. SANITY ANCHOR, full window, deduped:
+--   distinct_unsub_events  = 753,608
+--   distinct_unsub_clients = 308,104
+--
+-- 308,104 distinct unsubscribers over 12 months sits right next to the independently catalogued
+-- 319,733 (RESULTS_CATALOG.md, Jul25-Jun26). Two different queries, two different sessions,
+-- ~3.6% apart. That is the first real cross-validation this pipeline has had.
