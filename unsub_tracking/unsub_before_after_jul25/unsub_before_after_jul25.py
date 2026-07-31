@@ -115,6 +115,29 @@ def land(pdf, name):
     assert n == len(pdf), "%s readback mismatch: wrote %d read %d" % (name, len(pdf), n)
     print("LANDED %-12s %s rows -> %s" % (name, f"{len(pdf):,}", path))
 
+def cached(name):
+    """Return a landed pull as a pandas frame, or None if it never ran.
+
+    This is what makes the pull cells safe to run top to bottom. Before this existed the file LOOKED
+    like a script you execute in order, and doing so silently re-pulled hours of EDW data that was
+    already on HDFS - the only protection was knowing which cells to skip. A completed pull now costs
+    a count(), not another hour. Delete the directory under PULL_OUT to force a genuine re-pull.
+
+    Everything comes back as strings because the landing format is CSV, so each caller re-casts - which
+    it already had to do on the pull path anyway.
+    """
+    path = PULL_OUT + name
+    try:
+        df = spark.read.option("header", True).csv(path)
+        n = df.count()
+        if n > 0:
+            print("CACHED %-12s %s rows <- %s" % (name, f"{n:,}", path))
+            print("       (delete that directory to force a re-pull)")
+            return df.toPandas()
+    except Exception:
+        pass
+    return None
+
 def save(sdf, name):
     path = OUT + name
     sdf.coalesce(1).write.mode("overwrite").option("header", True).csv(path)
@@ -197,15 +220,19 @@ def _pull_cohort():
         out[_col] = pd.to_numeric(out[_col], errors="coerce").fillna(0).astype("int32")
     return out[["clnt_key"] + COHORT_COLS]
 
-raw = _pull_cohort()
+raw = cached("cohort_raw")
+if raw is None:
+    raw = _pull_cohort()
+    land(raw, "cohort_raw")
+raw["clnt_key"] = raw["clnt_key"].astype(str)
+for _col in COHORT_COLS:
+    raw[_col] = pd.to_numeric(raw[_col], errors="coerce").fillna(0).astype("int32")
 
 n_raw       = len(raw)
 n_unsub_any = int((raw["unsubbed"] == 1).sum())
 pdf         = raw[raw["mailed"] == 1].copy()
 n_all       = len(pdf)
 n_uns       = int(pdf["unsubbed"].sum())
-
-land(raw, "cohort_raw")
 
 log(1, "send or unsub event, Jul 2025", "VENDOR_FEEDBACK", "disposition_cd IN (1,4)", n_raw, n_raw, "10 bites")
 log(2, "mailed in Jul 2025", "VENDOR_FEEDBACK", "mailed = 1", n_all, n_all, "THE UNIVERSE")
@@ -245,8 +272,11 @@ def _pull_mne():
     out["unsub_mne"] = out["unsub_mne"].fillna("").astype(str).str.strip()
     return out[["clnt_key", "unsub_mne"]]
 
-mne = _pull_mne()
-land(mne, "unsub_mne")
+mne = cached("unsub_mne")
+if mne is None:
+    mne = _pull_mne()
+    land(mne, "unsub_mne")
+mne["unsub_mne"] = mne["unsub_mne"].fillna("").astype(str).str.strip()
 
 # %% [2c] DIAG - how many mnemonics does one client touch in the window?
 # Two things ride on this. (a) If an unsubscribe carries ONE treatment id, then a client who left via VRE
@@ -392,8 +422,14 @@ def _pull_prior():
     return out[["clnt_key", "last_prior_unsub_dt", "n_prior_unsub_events"]]
 
 
-prior = _pull_prior()
-land(prior, "prior_unsub")
+# 18 monthly bites at ~400s each. This is the cell that made re-running the file from the top a
+# four-hour mistake, and the one the cache exists for.
+prior = cached("prior_unsub")
+if prior is None:
+    prior = _pull_prior()
+    land(prior, "prior_unsub")
+prior["n_prior_unsub_events"] = pd.to_numeric(
+    prior["n_prior_unsub_events"], errors="coerce").fillna(0).astype("int32")
 print("\nprior_unsub: %s clients unsubscribed between 2024-01-01 and 2025-07-01." % f"{len(prior):,}")
 
 # The overlap with the cohort is the actual finding, but it needs [2] in the same kernel. This cell
@@ -463,11 +499,11 @@ GROUP BY clnt_no
 def _dfp_bite(i):
     path = PULL_OUT + "dfp_bite_%d" % i
     try:
-        cached = spark.read.option("header", True).csv(path)
-        n = cached.count()
+        hit = spark.read.option("header", True).csv(path)
+        n = hit.count()
         if n > 0:
             print("dfp bite %d/10 CACHED %s rows" % (i + 1, f"{n:,}"), flush=True)
-            return cached.toPandas()
+            return hit.toPandas()
     except Exception:
         pass
     print("dfp bite %d/10 pulling" % (i + 1), flush=True)
@@ -482,27 +518,30 @@ def _dfp_bite(i):
     print("   bite %d landed -> %s" % (i + 1, path), flush=True)
     return x
 
-dfp = pd.concat([_dfp_bite(_i) for _i in range(10)], ignore_index=True)
-dfp.columns = [c.strip().lower() for c in dfp.columns]
+def _build_dfp():
+    d = pd.concat([_dfp_bite(_i) for _i in range(10)], ignore_index=True)
+    d.columns = [c.strip().lower() for c in d.columns]
+    d["clnt_key"] = key_pd(d["clnt_no"], "dfp")
+    d = d[d["clnt_key"].notna()].copy()
+    d["clnt_key"] = d["clnt_key"].astype(str)
+    for _c in ["n_accts", "any_open", "ever_voluntary", "ever_writeoff", "ever_bankrupt"]:
+        d[_c] = pd.to_numeric(d[_c], errors="coerce").fillna(0).astype("int32")
+    for _c in ["first_close_dt", "last_close_dt"]:
+        d[_c] = pd.to_datetime(d[_c], errors="coerce").dt.strftime("%Y-%m-%d")
+    # one mutually exclusive state per client. Any open card wins - a client with three closed cards
+    # and one open one has not attrited.
+    d["card_state"] = "closed_other"
+    d.loc[d["ever_bankrupt"] == 1, "card_state"] = "bankrupt"
+    d.loc[d["ever_writeoff"] == 1, "card_state"] = "written_off"
+    d.loc[d["ever_voluntary"] == 1, "card_state"] = "closed_voluntary"
+    d.loc[d["any_open"] == 1, "card_state"] = "open"
+    return d[["clnt_key", "card_state", "n_accts", "first_close_dt", "last_close_dt"]]
 
-dfp["clnt_key"] = key_pd(dfp["clnt_no"], "dfp")
-dfp = dfp[dfp["clnt_key"].notna()].copy()
-dfp["clnt_key"] = dfp["clnt_key"].astype(str)
-for _c in ["n_accts", "any_open", "ever_voluntary", "ever_writeoff", "ever_bankrupt"]:
-    dfp[_c] = pd.to_numeric(dfp[_c], errors="coerce").fillna(0).astype("int32")
-for _c in ["first_close_dt", "last_close_dt"]:
-    dfp[_c] = pd.to_datetime(dfp[_c], errors="coerce").dt.strftime("%Y-%m-%d")
-
-# one mutually exclusive state per client. Any open card wins - a client with three closed cards and
-# one open one has not attrited.
-dfp["card_state"] = "closed_other"
-dfp.loc[dfp["ever_bankrupt"] == 1, "card_state"] = "bankrupt"
-dfp.loc[dfp["ever_writeoff"] == 1, "card_state"] = "written_off"
-dfp.loc[dfp["ever_voluntary"] == 1, "card_state"] = "closed_voluntary"
-dfp.loc[dfp["any_open"] == 1, "card_state"] = "open"
-
-dfp = dfp[["clnt_key", "card_state", "n_accts", "first_close_dt", "last_close_dt"]]
-land(dfp, "dfp_card_state")
+dfp = cached("dfp_card_state")
+if dfp is None:
+    dfp = _build_dfp()
+    land(dfp, "dfp_card_state")
+dfp["n_accts"] = pd.to_numeric(dfp["n_accts"], errors="coerce").fillna(0).astype("int32")
 display(dfp["card_state"].value_counts().rename_axis("card_state").reset_index(name="clients"))
 print("\nClients in the cohort with NO row here hold no card at all - that is a third state,")
 print("and it is not the same as having left. [A1] onward keeps them separate.")
