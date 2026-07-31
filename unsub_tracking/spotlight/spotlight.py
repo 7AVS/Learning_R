@@ -110,6 +110,13 @@ REGULATORY_MNES = frozenset({
 assert len(REGULATORY_MNES) == 22, "REGULATORY_MNES should hold exactly 22 MNEs - recount vs museum file"
 
 # ---- Bite plan for the one expensive pull (Cell [1]) ----
+# ---- RUN SWITCHES - the only things to touch before hitting Run All ----
+WRITE_CLIENT_EXTRACT = False  # Cell [8]. Client-grain file for local ad-hoc work. Off by
+                              # default: nothing at client grain is meant to persist.
+DROP_CLIENT_GRAIN = False     # Cell [9]. Delete base_v2 + ucp_enriched once the cubes land.
+                              # Leave False until the cubes are checked - deleting means any
+                              # new cut needs a fresh Teradata pull.
+
 N_BITES = 10   # MOD(CLNT_NO, N_BITES) - one independent Teradata pull per bite, each landed and
                # checked before running, so a killed run resumes at the next un-landed bite.
 
@@ -749,29 +756,21 @@ client_extract = (base.groupBy("clnt_no")
                   .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
 
 _ext_path = BASE + "out/client_extract"
-client_extract.write.mode("overwrite").parquet(_ext_path)
 
-_n_rows = spark.read.parquet(_ext_path).count()
-print("CLIENT EXTRACT | grain: one row per clnt_no |", _n_rows, "rows")
-print("landed:", _ext_path)
-print("columns:", spark.read.parquet(_ext_path).columns)
-print("\nSample:")
-spark.read.parquet(_ext_path).limit(5).toPandas().to_string(index=False)
-
-print("""
-SAMPLE OR FULL? If SMOKE was True when Cell [1] ran, this covers 10%% of clients and every
-absolute count here is a tenth of reality. Rates are unaffected. Set SMOKE=False, rerun Cell [1]
-(bite 0 is already landed and gets skipped), then rerun this cell.
-
-To pull it down - this is the one worth downloading, not base_v2:
-  !hdfs dfs -get -f %s /home/jovyan/spotlight_out/
-  !du -sh /home/jovyan/spotlight_out/client_extract
-
-Then locally:
-  import duckdb
-  duckdb.sql("SELECT prod_cat_cnt, SUM(unsub_flag) leavers, COUNT(*) clients "
-             "FROM 'client_extract/*.parquet' GROUP BY 1 ORDER BY 1").df()
-""" % _ext_path)
+if not WRITE_CLIENT_EXTRACT:
+    print("Cell [8] SKIPPED - WRITE_CLIENT_EXTRACT is False.")
+    print("The cubes are the deliverable. This file exists only for local ad-hoc re-cutting at")
+    print("client grain; flip the switch in Cell [0] if you want it.")
+else:
+    client_extract.write.mode("overwrite").parquet(_ext_path)
+    _ext = spark.read.parquet(_ext_path)
+    print("CLIENT EXTRACT | grain: one row per clnt_no |", _ext.count(), "rows")
+    print("landed:", _ext_path)
+    print("columns:", _ext.columns)
+    print(_ext.limit(5).toPandas().to_string(index=False))
+    print("If SMOKE was True for Cell [1], this is 10%% of clients and every absolute count is a")
+    print("tenth of reality. Rates are unaffected.")
+    print("Pull it down with:  !hdfs dfs -get -f %s /home/jovyan/spotlight_out/" % _ext_path)
 
 
 # %% [9] CLEANUP - drop the client-grain intermediates, keep only aggregates
@@ -784,12 +783,10 @@ Then locally:
 #
 # Once the cubes are written both jobs are done and the client-grain copies are dead weight.
 #
-# NOT automatic. Deleting means any new cut needs a fresh Teradata pull - hours. Run this only when
-# the cubes are checked and you are done re-cutting.
+# NOT automatic. Controlled by DROP_CLIENT_GRAIN in Cell [0]. Deleting means any new cut needs
+# a fresh Teradata pull - hours. Leave it False until the cubes are checked.
 
 import subprocess
-
-DROP_CLIENT_GRAIN = False   # flip to True, then run this cell
 
 _targets = [BASE_DIR.rstrip("/"), BASE + "ucp_enriched"]
 
