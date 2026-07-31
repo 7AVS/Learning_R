@@ -245,6 +245,12 @@ LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite of th
                               # ceiling; this keeps each payload well under it. Lower it if the
                               # limit is still hit on Pull A, B or C.
 
+RUN_PULLS = ["A", "B", "C"]   # restrict Cell [1] to specific pulls, e.g. ["C"] to resume only
+                              # the cards pair pull. Landed bites are skipped anyway via their
+                              # _ROWCOUNT marker, so this only saves the guard from re-checking.
+                              # A killed bite has no marker and re-pulls clean; a completed one
+                              # is never touched.
+
 WRITE_LOCAL_COPY = False  # HDFS is the output. This code exists to PRODUCE datasets that get
                           # pulled down and queried locally in VS Code - not to analyse them here.
                           # Cell [7] only ever built a convenience copy on the pod so the download
@@ -639,8 +645,11 @@ def land_pullA_bite(bite):
     print(name, ": landed", len(pdf), "rows (bank-wide, client grain), HDFS readback confirms", nback)
 
 
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_pullA_bite(_b)
+if "A" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_pullA_bite(_b)
+else:
+    print("PULL A skipped - not in RUN_PULLS")
 
 print("PULL A done - landed at", CLIENTAGG_DIR + "*", "| one row per clnt_no, bank-wide.")
 
@@ -751,8 +760,11 @@ def land_pullB_bite(bite):
     print(name, ": landed", len(pdf), "rows (mne x cohort_month, bank-wide), HDFS readback confirms", nback)
 
 
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_pullB_bite(_b)
+if "B" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_pullB_bite(_b)
+else:
+    print("PULL B skipped - not in RUN_PULLS")
 
 print("PULL B done - landed at", MNEAGG_DIR + "*", "| one row per (mne, cohort_month) PER BITE, "
       "bank-wide - Cell [2] sums partial aggregates across bites to recover the true totals.")
@@ -856,8 +868,11 @@ def land_pullC_bite(bite):
     print(name, ": landed", len(pdf), "rows (cards-only, client x mne), HDFS readback confirms", nback)
 
 
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_pullC_bite(_b)
+if "C" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_pullC_bite(_b)
+else:
+    print("PULL C skipped - not in RUN_PULLS")
 
 print("PULL C done - landed at", CARDSPAIR_DIR + "*", "| one row per (clnt_no, mne), cards-only.")
 
