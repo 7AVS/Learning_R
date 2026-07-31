@@ -354,10 +354,10 @@ def read_cardspair():
 
 
 print("CONFIG loaded - floor:", WIN_FLOOR, "| cards MNEs:", len(CARDS_MNES),
-      "| regulatory MNEs:", len(REGULATORY_MNES), "| bites (Pull A/C):", N_BITES, "| SMOKE:", SMOKE)
+      "| regulatory MNEs:", len(REGULATORY_MNES), "| bites (Pull A/B/C):", N_BITES, "| SMOKE:", SMOKE)
 print("FREQ_WINDOWS:", FREQ_WINDOWS, "-> cutoffs:", FREQ_CUTOFFS)
 print("SCHEMA_VERSION:", SCHEMA_VERSION, "| clientagg:", CLIENTAGG_DIR,
-      "| mne_agg:", MNEAGG_DIR, "| cards_pair:", CARDSPAIR_DIR)
+      "| mne_agg:", MNEAGG_DIR, "| cards_pair:", CARDSPAIR_DIR, "| OUT_DIR:", OUT_DIR)
 
 
 # %% [1a] REMOVED - the "cheap probe" was not cheap. COUNT(DISTINCT consumer_id_hashed) over the
@@ -382,7 +382,7 @@ import getpass
 import teradatasql
 import pandas as pd
 from pyspark.sql import functions as F
-from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType, DoubleType
+from pyspark.sql.types import StructType, StructField, LongType, StringType, DateType, IntegerType
 
 # PySpark <3.4 calls pdf.iteritems() inside createDataFrame; pandas 2.0 removed it.
 if not hasattr(pd.DataFrame, "iteritems"):
@@ -1051,11 +1051,15 @@ assert _n_ucp == _left_n, (
     "join is unsafe until this is fixed." % (_n_ucp, _left_n))
 
 
-# %% [5] CUBE 1 - profiling cube. EXACT spec, nothing added:
-# Dims:    mne, is_cards, is_regulatory, age_band, tenure_band, prod_cat_cnt (bare integer 0-4 as
-#          string, or no_ucp_match)
+# %% [5] CUBE 1 - profiling cube. EXACT spec, minus two constants (see below):
+# Dims:    mne, age_band, tenure_band, prod_cat_cnt (bare integer 0-4 as string, or no_ucp_match)
 # Measures: stayers, leavers, clients_total, mean_tenure_stayers/leavers,
 #          median_prof_stayers/leavers (percentile_approx .5, NOT quintile)
+#
+# is_cards and is_regulatory are DROPPED as dims (v5) - Pull C is cards-filtered in SQL, so both
+# were constant across every row of this cube: is_cards=1 for all 12 mnes, is_regulatory=0 for all
+# 12 (none of CARDS_MNES are in REGULATORY_MNES - the two sets are disjoint). Carrying a constant
+# as a groupBy dim is waste, not information; documented here instead of stored as a column.
 #
 # SOURCE: Pull C (cards_pair) + ucp_enriched. cube1_profiling is CARDS-ONLY (12 mnes) post-
 # redesign - Pull C is the only pull with client x mne on one row, and Pull C is cards-only (see
@@ -1080,14 +1084,16 @@ _mne_match = (_cardspair_ids
               .agg(F.countDistinct("clnt_no").alias("clients"),
                    F.sum(F.coalesce(F.col("in_ucp"), F.lit(0))).alias("matched"))
               .withColumn("match_pct", F.round(100.0 * F.col("matched") / F.col("clients"), 1))
-              .orderBy("match_pct"))
+              .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+              .orderBy("match_pct")
+              .cache())  # cached: used by .show(), .write(), and .toPandas() below (3 actions).
 print("UCP MATCH BY MNE - CARDS ONLY (12 mnes). This replaces the old bank-wide 250-mne shape "
       "test, which is no longer computable post wire-cost redesign (see file header) - only "
       "cards mnes still carry client x mne rows (Pull C).")
 _mne_match.show(20, truncate=False)
-_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(BASE + "out/ucp_match_by_mne")
+_mne_match.coalesce(1).write.mode("overwrite").option("header", True).csv(OUT_DIR + "ucp_match_by_mne")
 _mne_match_pd = _mne_match.toPandas()
-print("Landed:", BASE + "out/ucp_match_by_mne", "| grain: one row per mne (cards-only) |", len(_mne_match_pd), "rows")
+print("Landed:", OUT_DIR + "ucp_match_by_mne", "| grain: one row per mne (cards-only) |", len(_mne_match_pd), "rows")
 
 # ---- cube1_profiling: cards-only, per spec dims/measures ----
 cube1_src = cards_pair.join(ucp_enriched_full, "clnt_no", "left")
@@ -1096,7 +1102,7 @@ _stay = F.col("unsub_flag") == 0
 _leave = F.col("unsub_flag") == 1
 
 cube1_profiling = (cube1_src
-         .groupBy("mne", "is_cards", "is_regulatory", "age_band", "tenure_band", "prod_cat_cnt")
+         .groupBy("mne", "age_band", "tenure_band", "prod_cat_cnt")
          .agg(F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
               F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
               F.count("*").alias("clients_total"),
@@ -1106,15 +1112,19 @@ cube1_profiling = (cube1_src
                .alias("median_prof_stayers"),
               F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN prof_tot_annual END, 0.5)")
                .alias("median_prof_leavers"))
-         .orderBy("mne", "age_band", "tenure_band", "prod_cat_cnt"))
+         .withColumn("is_cards", F.lit(1))       # constant - Pull C is cards-filtered in SQL
+         .withColumn("is_regulatory", F.lit(0))  # constant - CARDS_MNES and REGULATORY_MNES are disjoint
+         .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+         .orderBy("mne", "age_band", "tenure_band", "prod_cat_cnt")
+         .cache())  # cached: used by .toPandas() then .write() below (2 actions on the same DAG).
 
 cube1_profiling_pd = cube1_profiling.toPandas()
-print("\nCUBE 1 PROFILING (CARDS-ONLY, 12 mnes) | grain: one row per (mne, is_cards, "
-      "is_regulatory, age_band, tenure_band, prod_cat_cnt) | stayers/leavers are COLUMNS | "
-      "%d rows" % len(cube1_profiling_pd))
+print("\nCUBE 1 PROFILING (CARDS-ONLY, 12 mnes; is_cards=1/is_regulatory=0 constant, see header) | "
+      "grain: one row per (mne, age_band, tenure_band, prod_cat_cnt) | stayers/leavers are "
+      "COLUMNS | %d rows" % len(cube1_profiling_pd))
 print(cube1_profiling_pd.head(30).to_string(index=False))
 
-_cube1_path = BASE + "out/cube1_profiling"
+_cube1_path = OUT_DIR + "cube1_profiling"
 cube1_profiling.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_path)
 print("written to HDFS:", _cube1_path, "|", len(cube1_profiling_pd), "rows")
 
@@ -1135,14 +1145,16 @@ cube1_allclients = (cube1_src_all
                .alias("median_prof_stayers"),
               F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN prof_tot_annual END, 0.5)")
                .alias("median_prof_leavers"))
-         .orderBy("age_band", "tenure_band", "prod_cat_cnt"))
+         .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+         .orderBy("age_band", "tenure_band", "prod_cat_cnt")
+         .cache())  # cached: used by .toPandas() then .write() below (2 actions on the same DAG).
 
 cube1_allclients_pd = cube1_allclients.toPandas()
 print("\nCUBE 1 ALLCLIENTS (bank-wide, no mne dim) | grain: one row per (age_band, tenure_band, "
       "prod_cat_cnt) | stayers/leavers are COLUMNS | %d rows" % len(cube1_allclients_pd))
 print(cube1_allclients_pd.to_string(index=False))
 
-_cube1_all_path = BASE + "out/cube1_allclients"
+_cube1_all_path = OUT_DIR + "cube1_allclients"
 cube1_allclients.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube1_all_path)
 print("written to HDFS:", _cube1_all_path, "|", len(cube1_allclients_pd), "rows")
 
@@ -1163,22 +1175,10 @@ print("written to HDFS:", _cube1_all_path, "|", len(cube1_allclients_pd), "rows"
 clientagg = read_clientagg()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
-
-def _band(col, edges):
-    expr = None
-    for lo, hi, label in edges:
-        if lo is None:
-            cond = col < hi
-        elif hi is None:
-            cond = col >= lo
-        else:
-            cond = (col >= lo) & (col <= hi)
-        expr = F.when(cond, label) if expr is None else expr.when(cond, label)
-    return expr.otherwise("unbucketed")
-
+# _band() already defined in Cell [4] (duplicate definition removed here - same function, no
+# reason for two copies).
 
 client_roll = (clientagg
-               .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER"))
                .withColumn("n_branded_campaigns_bucket", _band(F.col("n_campaigns_branded"), BRANDED_CAMP_EDGES))
                .withColumn("n_emails_3m_bucket", _band(F.col("n_emails_3m"), EMAILS_3M_EDGES))
                .withColumn("n_emails_6m_bucket", _band(F.col("n_emails_6m"), EMAILS_6M_EDGES))
@@ -1186,6 +1186,8 @@ client_roll = (clientagg
                .withColumn("n_regulatory_emails_6m_bucket", _band(F.col("n_emails_regulatory_6m"), REG_EMAILS_6M_EDGES))
                .join(ucp_enriched_full.select("clnt_no", "prod_cat_cnt"), "clnt_no", "left")
                .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
+# NOTE: no "bucket" (STAYER/LEAVER) column here - it was never consumed downstream (cube2 groups
+# by the *_bucket dims below, not by "bucket"); unconsumed column removed.
 
 cube2 = (client_roll
          .groupBy("n_branded_campaigns_bucket", "n_emails_3m_bucket", "n_emails_6m_bucket",
@@ -1193,7 +1195,9 @@ cube2 = (client_roll
          .agg(F.sum(F.when(F.col("unsub_flag") == 0, 1).otherwise(0)).alias("stayers"),
               F.sum(F.when(F.col("unsub_flag") == 1, 1).otherwise(0)).alias("leavers"),
               F.count("*").alias("clients_total"))
-         .orderBy("n_branded_campaigns_bucket", "n_emails_6m_bucket"))
+         .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+         .orderBy("n_branded_campaigns_bucket", "n_emails_6m_bucket")
+         .cache())  # cached: used by .toPandas() then .write() below (2 actions on the same DAG).
 
 cube2_pd = cube2.toPandas()
 print("CUBE 2 - contact frequency, bank-wide | grain: one row per (n_branded_campaigns_bucket, "
@@ -1202,14 +1206,14 @@ print("CUBE 2 - contact frequency, bank-wide | grain: one row per (n_branded_cam
       "| %d rows" % len(cube2_pd))
 print(cube2_pd.head(30).to_string(index=False))
 
-_cube2_path = BASE + "out/cube2_frequency"
+_cube2_path = OUT_DIR + "cube2_frequency"
 cube2.coalesce(1).write.mode("overwrite").option("header", True).csv(_cube2_path)
 print("written to HDFS:", _cube2_path, "|", len(cube2_pd), "rows")
 
 # n_emails_all summary - stayer vs leaver full-window volume compare, straight off clientagg.
 _s = F.col("unsub_flag") == 0
 _l = F.col("unsub_flag") == 1
-q_emails_all = clientagg.agg(
+q_emails_all = (clientagg.agg(
     F.sum(F.when(_s, 1).otherwise(0)).alias("stayers"),
     F.sum(F.when(_l, 1).otherwise(0)).alias("leavers"),
     F.sum(F.when(_s, F.col("n_emails_all")).otherwise(0)).alias("total_emails_stayers"),
@@ -1218,11 +1222,13 @@ q_emails_all = clientagg.agg(
      .alias("median_emails_stayers"),
     F.expr("percentile_approx(CASE WHEN unsub_flag = 1 THEN n_emails_all END, 0.5)")
      .alias("median_emails_leavers"))
+    .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+    .cache())  # cached: used by .toPandas() then .write() below (2 actions on the same DAG).
 q_emails_all_pd = q_emails_all.toPandas()
 print("\nn_emails_all summary, stayers vs leavers side by side, bank-wide | 1 row | %d rows" % len(q_emails_all_pd))
 print(q_emails_all_pd.to_string(index=False))
 
-_emails_all_path = BASE + "out/q_emails_all_summary"
+_emails_all_path = OUT_DIR + "q_emails_all_summary"
 q_emails_all.coalesce(1).write.mode("overwrite").option("header", True).csv(_emails_all_path)
 print("written to HDFS:", _emails_all_path, "|", len(q_emails_all_pd), "rows")
 
@@ -1240,7 +1246,9 @@ print("written to HDFS:", _emails_all_path, "|", len(q_emails_all_pd), "rows")
 
 import os
 
-LOCAL_OUT = os.path.join(os.path.expanduser("~"), "spotlight_out")
+# _smoke suffix when SMOKE is True - a full Run All under SMOKE must never be mistaken for a real
+# one (see SPOOL/CORRECTNESS FIX header note). Every sheet below also carries a smoke_run column.
+LOCAL_OUT = os.path.join(os.path.expanduser("~"), "spotlight_out_smoke" if SMOKE else "spotlight_out")
 os.makedirs(LOCAL_OUT, exist_ok=True)
 
 # Sheet names are capped at 31 chars by Excel; keep them short and stable.
@@ -1287,7 +1295,7 @@ print("If env_probe.py cell [P8] showed this path on overlay/tmpfs, it does NOT 
 
 
 # %% [8] CLIENT-LEVEL EXTRACT - the thing worth downloading
-# clientagg_v3 IS already one row per CLIENT (Pull A's grain), so no groupBy is needed here - this
+# clientagg_v5 IS already one row per CLIENT (Pull A's grain), so no groupBy is needed here - this
 # cell mostly just joins UCP on and adds the cards_mnes / touched_by_cards fields, which need
 # Pull C (the only client x mne source, cards-only).
 #
@@ -1312,9 +1320,10 @@ client_extract = (clientagg
                   .join(ucp_enriched_full, "clnt_no", "left")
                   .withColumn("age_band", F.coalesce(F.col("age_band"), F.lit("no_ucp_match")))
                   .withColumn("tenure_band", F.coalesce(F.col("tenure_band"), F.lit("no_ucp_match")))
-                  .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match"))))
+                  .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match")))
+                  .withColumn("smoke_run", F.lit(1 if SMOKE else 0)))
 
-_ext_path = BASE + "out/client_extract"
+_ext_path = OUT_DIR + "client_extract"
 
 if not WRITE_CLIENT_EXTRACT:
     print("Cell [8] SKIPPED - WRITE_CLIENT_EXTRACT is False.")
@@ -1327,19 +1336,19 @@ else:
     print("landed:", _ext_path)
     print("columns:", _ext.columns)
     print(_ext.limit(5).toPandas().to_string(index=False))
-    print("If SMOKE was True for Pulls A/C, this is 10%% of clients and every absolute count is a")
-    print("tenth of reality. Rates are unaffected.")
+    print("If SMOKE was True for Pulls A/B/C, this is 10%% of clients and every absolute count is")
+    print("a tenth of reality (see smoke_run column) - rates are unaffected.")
     print("Pull it down with:  !hdfs dfs -get -f %s /home/jovyan/spotlight_out/" % _ext_path)
 
 
 # %% [9] CLEANUP - drop the client-grain intermediates, keep only aggregates
-# Nothing at client grain is meant to persist. clientagg_v3, cards_pair_v3 and ucp_enriched exist
+# Nothing at client grain is meant to persist. clientagg_v5, cards_pair_v5 and ucp_enriched exist
 # for two reasons and neither survives this cell:
 #   1. Cross-system join buffer. Email events live in Teradata, UCP lives in HDFS parquet. Teradata
 #      cannot see HDFS and the join cannot be pushed down, so the two only meet after both sides
 #      land. There is no query-time alternative.
-#   2. Crash resumability. The bites are what make a killed Pull A/C run resume instead of restart.
-# mne_agg_v3 is NOT client-grain (it is already an mne x cohort_month aggregate with no client
+#   2. Crash resumability. The bites are what make a killed Pull A/B/C run resume instead of restart.
+# mne_agg_v5 is NOT client-grain (it is already an mne x cohort_month aggregate with no client
 # ids) and is left alone - there is nothing sensitive or heavy about it to clean up.
 #
 # Once the cubes are written both jobs are done and the client-grain copies are dead weight.
@@ -1357,9 +1366,11 @@ if not DROP_CLIENT_GRAIN:
         print("   ", _t)
     print("\nCheck the cubes first. Once these are gone, re-cutting means re-pulling from Teradata.")
 else:
-    # Refuse to delete the join buffer before the thing it was built for exists.
-    _required = [BASE + "out/cube1_profiling", BASE + "out/cube1_allclients",
-                 BASE + "out/cube2_frequency", BASE + "out/q_mne"]
+    # Refuse to delete the join buffer before the thing it was built for exists. OUT_DIR (not a
+    # hardcoded "out/") so this checks the SMOKE-suffixed path when SMOKE is True, matching what
+    # the cube cells actually wrote.
+    _required = [OUT_DIR + "cube1_profiling", OUT_DIR + "cube1_allclients",
+                 OUT_DIR + "cube2_frequency", OUT_DIR + "q_trend"]
     _missing = []
     for _r in _required:
         try:
@@ -1377,7 +1388,7 @@ else:
         print("  ", _t, "-> rc", _rc.returncode, (_rc.stdout or _rc.stderr).strip()[:200])
     print("\nDone. Only aggregates remain on HDFS. Nothing at client grain persists.")
 
-print("\nWhat stays:", BASE + "out/*  (cube1_profiling, cube1_allclients, cube2, q_mne, q_trend, "
+print("\nWhat stays:", OUT_DIR + "*  (cube1_profiling, cube1_allclients, cube2, q_mne, q_trend, "
       "q_emails_all, ucp_match_by_mne)")
-print("mne_agg_v3/ also stays (it is an aggregate, not client-grain) in case q_mne/q_trend need "
-      "a re-cut without a fresh Teradata pull.")
+print(("mne_agg_v%d/ also stays (it is an aggregate, not client-grain) in case q_mne/q_trend need "
+       "a re-cut without a fresh Teradata pull.") % SCHEMA_VERSION)
