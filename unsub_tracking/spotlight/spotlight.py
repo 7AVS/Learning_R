@@ -155,6 +155,27 @@ REG_EMAILS_6M_EDGES = [(0, 0, "0"), (1, 1, "1"), (2, 3, "2-3"), (4, None, "4+")]
 BASE = "hdfs:///user/427966379/unsub_spotlight/"   # reference_andre_hdfs_user_path.md
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"          # references/ucp/README.md - personal only
 
+# Landed-schema version. The _landed() cache guard checks path existence, NOT columns - so a
+# schema change silently reuses stale parquet from a prior design. Bump this whenever Cell [1]'s
+# output columns change; the new schema lands in a fresh directory and cannot collide.
+# v1 = cards-filtered, untagged. v2 = bank-wide, is_cards/is_regulatory/is_branded, n_sends_3m/6m.
+SCHEMA_VERSION = 2
+BASE_DIR = BASE + "base_v%d/" % SCHEMA_VERSION
+
+BASE_COLS = ["clnt_no", "mne", "n_sends", "first_send_dt", "last_send_dt", "unsub_flag",
+             "unsub_dt", "is_cards", "is_regulatory", "is_branded"]
+
+
+def read_base():
+    """Every downstream cell reads the base through here so a stale/short schema fails loudly."""
+    sdf = spark.read.parquet(BASE_DIR + "*")
+    missing = [c for c in BASE_COLS if c not in sdf.columns]
+    if missing:
+        raise RuntimeError(
+            "base at %s is missing %s. Found: %s. This is stale parquet from an older schema - "
+            "delete %s and rerun Cell [1]." % (BASE_DIR, missing, sdf.columns, BASE_DIR))
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
 print("CONFIG loaded - floor:", WIN_FLOOR, "| cards MNEs:", len(CARDS_MNES),
       "| regulatory MNEs:", len(REGULATORY_MNES), "| bites:", N_BITES, "| SMOKE:", SMOKE)
 print("FREQ_WINDOWS:", FREQ_WINDOWS, "-> cutoffs:", FREQ_CUTOFFS)
@@ -226,7 +247,7 @@ def _tag_mne_client_side(sdf):
 def land_bite(bite):
     """One bite = one CLNT_NO-mod slice, independently resumable. Skips if already landed - this
     is what makes a killed 10-bite run safe to just rerun top to bottom."""
-    name = "base/bite_%d" % bite
+    name = "base_v%d/bite_%d" % (SCHEMA_VERSION, bite)
     if _landed(name):
         n = spark.read.parquet(BASE + name).count()
         print(name, ": already landed,", n, "rows - SKIP")
@@ -272,7 +293,7 @@ def land_bite(bite):
 for _b in (range(1) if SMOKE else range(N_BITES)):
     land_bite(_b)
 
-print("Cell [1] done - base grain landed at", BASE + "base/*",
+print("Cell [1] done - base grain landed at", BASE_DIR + "*",
       "| one row per (clnt_no, mne), bank-wide, tagged is_cards/is_regulatory/is_branded.")
 
 
@@ -285,7 +306,7 @@ print("Cell [1] done - base grain landed at", BASE + "base/*",
 # per client, then the median of that across clients - the base grain only carries MIN/MAX send
 # dates, not every send timestamp. Directional cadence read, not an exact figure.
 
-base = spark.read.parquet(BASE + "base/*").withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+base = read_base()
 
 _gap = (base.filter(F.col("n_sends") >= 2)
         .withColumn("days_span", F.datediff(F.col("last_send_dt"), F.col("first_send_dt")))
@@ -315,7 +336,7 @@ print(q_mne_pd.to_string(index=False))
 # in June" is not recoverable from it for the FULL history - only the trailing 3m/6m windows
 # added in Cell [1] give windowed volume, and those are used in Cube 2, not here.
 
-base = spark.read.parquet(BASE + "base/*").withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+base = read_base()
 
 q_trend = (base
            .withColumn("cohort_month", F.date_format(F.col("first_send_dt"), "yyyy-MM"))
@@ -368,7 +389,7 @@ ucp_sel = (_ucp_raw
            .select(*_UCP_COLS)
            .withColumn("clnt_no_long", F.col("CLNT_NO").cast("decimal(18,0)").cast("long")))
 
-base_ids = (spark.read.parquet(BASE + "base/*")
+base_ids = (read_base()
             .withColumn("clnt_no_long", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
             .select("clnt_no_long").distinct())
 
@@ -439,7 +460,7 @@ print("Cell [4] done - ucp_enriched landed at", _ucp_path_out, "| grain: one row
 # No rate is computed here - Andre derives LEAVER / (STAYER+LEAVER) himself in the pivot.
 # ENGINE: PySpark (YARN).
 
-base = spark.read.parquet(BASE + "base/*").withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+base = read_base()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
 cube1_src = (base
@@ -476,7 +497,7 @@ print("written to HDFS:", _cube1_path, "|", len(cube1_pd), "rows")
 # Andre can compare full-window volume, stayer vs leaver, not just the trailing windows.
 # ENGINE: PySpark (YARN).
 
-base = spark.read.parquet(BASE + "base/*").withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+base = read_base()
 ucp_enriched_full = spark.read.parquet(BASE + "ucp_enriched")
 
 
