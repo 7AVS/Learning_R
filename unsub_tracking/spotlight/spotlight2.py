@@ -1,226 +1,397 @@
 # unsub_tracking/spotlight/spotlight2.py
 #
-# Workstream 2: Unsubscription Drivers by LOB and MNE. How unsubscribing relates to cards
-# spend, revolver/transactor behavior, and account closure over time.
+# Workstream 2: what an unsub is WORTH and what happens to the client afterwards. Spend,
+# revolver/transactor behaviour, product depth, profitability proxy and account closure, read at
+# t = -3, 0, +3, +6, +9, +12 months relative to the cohort window end, stayers vs leavers.
 #
-# Standalone file. Does NOT import spotlight.py - any shared fact (CARDS_MNES, the UCP read
-# pattern, the accumulator trap) is re-verified and retyped here, cited to its source.
+# The -3 point is load-bearing. Without a pre-period this is a level comparison and the first
+# challenge in the room is "were leavers already lower-spending before they left".
 #
-# ============================== SCOPE ========================================================
-# Target: Spends (High/Mid/Low tercile) x [Revolver/Transactor/Dormant Subs|Unsubs], read at
-# t = -3, 0, +3, +6, +9, +12 months relative to the cohort window end. -3 is load-bearing: it is
-# what turns a level comparison ("leavers spend less") into a trend comparison ("leavers were
-# ALREADY lower-spending before they left").
+# ============================================================================================
+# 2026-07-31 REWRITE - what changed vs the morning version, and why
+# ============================================================================================
+# 1. IT NO LONGER RE-PULLS THE VENDOR TABLES. The morning version re-queried
+#    DTZV01.VENDOR_FEEDBACK_EVENT + VENDOR_FEEDBACK_MASTER to rebuild its own cohort. That data
+#    is ALREADY landed on HDFS by spotlight.py and is read here, not re-pulled:
+#      hdfs:///user/427966379/unsub_spotlight/clientagg_v6/bite_*   (one row per client, ~12.3M)
+#      hdfs:///user/427966379/unsub_spotlight/cards_pair_v6/bite_*  (one row per client x cards mne)
+#    Roughly an hour of Teradata pulling is saved and, more important, the two files now agree by
+#    construction instead of by luck - a second pull run minutes later drifts (~1K unsubs/day
+#    bank-wide) and the cubes stop reconciling against spotlight.py's.
 #
-# ============================== VERIFIED FACTS (file:line evidence) ==========================
+# 2. UCP IS READ AT SIX MONTH-ENDS, NOT ONE. The morning version applied a single UCP snapshot to
+#    every t_offset, so profitability and product depth never moved across t = -3 -> +12. For a
+#    file whose entire subject is change over time that is a hole. MONTH_END_DATE is a PATH
+#    SEGMENT (references/ucp/README.md:56-64,88-97), so six snapshots is six partition reads in
+#    ONE Spark job - not six expensive queries.
 #
-# UNSUB EVENT = DTZV01.VENDOR_FEEDBACK_EVENT.disposition_cd = 4. SEND = disposition_cd = 1.
-#   Same table pair and join path as spotlight.py - unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md:130.
+# 3. Every hardening spotlight.py earned the hard way is carried over verbatim: bite predicate
+#    INSIDE the joined subquery, MOD(ABS(...)), chunked writes on an explicit StructType,
+#    _ROWCOUNT resume markers written INSIDE the bite directory, pandas dtype prep before Spark,
+#    UCP dedup + row-count assert, no stray percent signs in SQL, SMOKE default True with a
+#    smoke_run stamp, every switch in Cell [0].
 #
-# JOIN: EVENT.(consumer_id_hashed, TREATMENT_ID) = MASTER.(consumer_id_hashed, TREATMENT_ID).
-#   MASTER carries CLNT_NO - EVENT does not. MNE = SUBSTR(TREATMENT_ID, 8, 3).
-#   UNSUB_TRACKING_KNOWLEDGE.md:145-165.
+# 4. What still genuinely needs pulling is exactly TWO things: DFP (spend + closure) and
+#    CR_CRD_RPTS_ACCT (revolver/transactor). Both are aggregated server-side to ONE ROW PER
+#    CLIENT with the t_offsets pivoted into columns - not one row per client x month, which would
+#    have been ~72M rows on the wire for nothing.
 #
-# ATTRIBUTION RULE = unsub attaches to the CLOSEST PRECEDING send (any MNE), within 30 days.
-#   unsub_tracking/spotlight/RUN_2026-07-31_scope_test.sql (whole file). Verdict on line 5:
-#   "the unsubscribe is PER-LIST, not a global fan-out. Per-campaign attribution is real."
-#   ~97% of multi-treatment unsubscribers show distinct_ts == n_treatments (line 40), refuting
-#   the global-opt-out hypothesis pack 20 had left open. Line 85: a 30-day window captures 71.5%
-#   of logged unsub events - stated as coverage, not completeness, per that file's own note.
+# ============================================================================================
+# VERIFIED FACTS (file:line evidence)
+# ============================================================================================
 #
-# DFP GRAIN: D3CV12A.DLY_FULL_PORTFOLIO, one row per acct_no x dt_record_ext, event-driven,
-#   gaps allowed. clnt_no is DIRECT (decimal(13,0)) - no acct-to-client bridge table needed here,
-#   unlike the CRV scripts that bridge through TACTIC keys. dt_record_ext is the real record
-#   date - me_dt is a derived calendar tag, not the join/filter column (both confirmed present
-#   in the same table per campaigns/PCQ/next_best_card/pcq_q1_26_monthly_balance.sql, which uses
-#   dt_record_ext for filtering/ranking and me_dt only as the calendar-month group tag).
+# COHORT SOURCE - spotlight.py's landed pulls. clientagg_v6 = one row per clnt_no bank-wide,
+#   columns per spotlight.py:347-352 (CLIENTAGG_COLS). cards_pair_v6 = one row per
+#   (clnt_no, cards mne), columns per spotlight.py:363-365 (CARDSPAIR_COLS). unsub_flag on both
+#   is MAX(disposition_cd = 4) inside the window - spotlight.py:638, :860.
 #
-# ACCUMULATOR: net_prch_amt_mtd is a MONTH-TO-DATE running total that resets on the 1st -
-#   NOT a running-forever total. Validated ONCE, already, in this exact repo:
-#   pcq_q1_26_monthly_balance.sql CTE 3 (last_net_prch_amt_mtd via ROW_NUMBER rn=1 per
-#   (acct_no, me_dt) ordered by dt_record_ext DESC) cross-checked against
-#   SUM(net_prch_amt_dly) - see that file's "PAIN POINTS RESOLVED" note [A]. Cell [1] below
-#   re-runs the same check as a live blocking gate rather than trusting the prior write-up.
+# UNSUB EVENT = DTZV01.VENDOR_FEEDBACK_EVENT.disposition_cd = 4; SEND = 1.
+#   unsub_tracking/UNSUB_TRACKING_KNOWLEDGE.md:130. Inherited through the landed files - this
+#   file never touches those tables itself.
 #
-# CR_CRD_RPTS_ACCT: D3CV12A.CR_CRD_RPTS_ACCT, column usg_bhvr_seg_at_cyc_cd
-#   (Dormant/Transactor/Revolver/null). ACCOUNT-level, no clnt_no column seen in either grep hit
-#   below - bridged through DFP's acct_no/clnt_no pairing instead (see UNVERIFIED #2 in the
-#   delivery report).
-#   Snapshot/date column CONFIRMED = ME_DT (month-end), grepped from two in-repo precedents:
-#     - campaigns/CRV/suppression_experiment/c4_demand_shaping.sql:86-99 - joins on
-#       "r.me_dt < k.offer_start_date AND r.me_dt >= k.offer_start_date - INTERVAL '70' DAY",
-#       ranked by ME_DT DESC to get the most recent PRE-treatment snapshot.
-#     - campaigns/CRV/bulletproof_analysis/26_behavior_mix_by_overlap_arm.sql:64-78 - reads
-#       "ME_DT BETWEEN DATE '2024-09-30' AND DATE '2026-05-31'", joins on
-#       "b.ME_DT = f.treatmt_strt_dt - EXTRACT(DAY FROM f.treatmt_strt_dt)" (month-end before).
-#       Line 13's own sanity-check comment: "if higher, CR_CRD_RPTS_ACCT has >1 row per acct x
-#       ME_DT and needs a dedup first" - i.e. the source ITSELF flags this as unverified, not
-#       resolved. This file dedups defensively (see UNVERIFIED #1) rather than assuming clean.
+# DFP - D3CV12A.DLY_FULL_PORTFOLIO. Every column used here is confirmed in
+#   references/table_catalog_notes.md:143-176 (the repo's authoritative empirical inventory -
+#   "No formal schema doc exists anywhere in the repo; this is the authoritative empirical
+#   inventory", line 140):
+#     - grain "acct_no x dt_record_ext (with gaps)", event-driven not truly daily (line 143-146)
+#     - dt_record_ext = "actual record/extract date. THE daily date for filtering/joining/curves"
+#       (line 155); me_dt = "month-end tag ... NOT the record date" (line 156). Filter and rank on
+#       dt_record_ext, never me_dt.
+#     - clnt_no decimal(13,0) present DIRECTLY on DFP (line 159) - no acct-to-client bridge needed
+#     - acct_cls_dt (line 157), acct_open_dt (line 157)
+#     - net_prch_amt_mtd = "cumulative month-to-date through that row's dt_record_ext (last row of
+#       month = monthly total)" (line 164-165). net_prch_amt_dly = daily delta (line 169).
+#     - status char(4) OPEN/VOL/WOFF/BKPT/COLL/FRD/INV, "Once non-OPEN, stays non-OPEN" (line 177-179)
 #
-# UCP: /prod/sz/tsz/00172/data/ucp4/, MONTH_END_DATE partition (path segment, not a column),
-#   filter trim(CLNT_TYP)=='Personal', snapshot = last CLOSED month. PROF_TOT_ANNUAL, CLNT_NO,
-#   T/I/B/C_TOT_CNT all CONFIRMED live 2026-07-27 (references/ucp/field_catalog_personal.md
-#   RELIABILITY BANNER). PROF_TOT_ANNUAL has NO confirmed definition (references/ucp/gotchas.md
-#   #8) and there is no cards-specific profit field anywhere - every use below is named/labeled
-#   "_ucp_proxy" so nobody downstream mistakes it for a vetted LTV figure.
+# DFP READ PATTERN - table_catalog_notes.md:147-152 is explicit: "Query in ONE scan + window
+#   functions - never multi-scan / multi-subquery on this table in one volatile (blows spool). For
+#   per-acct + per-month aggregates use two ROW_NUMBER() windows ... then GROUP BY acct_no and
+#   pivot via MAX(CASE...)". Cell [3] follows that pattern exactly: ONE scan, one ROW_NUMBER in a
+#   derived table with WHERE rn = 1 (not QUALIFY - Teradata-direct, but the file's convention is
+#   ranked-CTE anyway), then two levels of GROUP BY and a CASE pivot. See DEPARTURE note below.
 #
-# CARDS_MNES (12) - retyped VERBATIM from spotlight.py (Andre, 2026-07-31, sourced from
-#   unsub_tracking/museum/unsub_value_museum.py:119-120). Used ONLY to tag is_cards_exposed
-#   client-side, never as a SQL filter. Kept in manual sync with spotlight.py - see UNVERIFIED #6.
+# MONTHLY SPEND = the LAST record per (acct_no, month) at MAX(dt_record_ext), reading
+#   net_prch_amt_mtd. NOT a SUM of ~30 daily rows. Cell [1] proves the accumulator resets monthly
+#   before anything depends on it - if it were year-to-date instead, every monthly figure in this
+#   file would be wrong, so that gate raises rather than warns.
 #
-# ============================== UNVERIFIED - see delivery report for the full list ===========
-# 1. CR_CRD_RPTS_ACCT >1 row per (acct_no, ME_DT): flagged by its own prior users, never
-#    resolved. Dedup here takes MAX(usg_bhvr_seg_at_cyc_cd) per (acct_no, ME_DT) - an arbitrary,
-#    deterministic tiebreak, not a documented rule.
-# 2. CR_CRD_RPTS_ACCT has no clnt_no in any grep hit found - bridged through DFP's acct_no set
-#    for the same cohort/window. Not independently confirmed complete.
-# 3. Client-level revolver/transactor rollup (a client can hold >1 account): precedence
-#    Revolver > Transactor > Dormant > no_data, picked here with zero prior in-repo precedent
-#    (references/ucp/gotchas.md #7 already flags "no house standard" for band cuts generally -
-#    this extends that same gap to behavior-segment precedence).
-# 4. Closure uses acct_cls_dt only (permanent once set, per RUN_THIS_dfp_only.py's "status is
-#    one-way" comment) - does NOT cross-check the `status` code. If acct_cls_dt is ever null for
-#    a WOFF/BKPT/COLL/FRD account, that account reads as still-open.
-# 5. Closure has no account-OPEN date pulled, so an account opened after an early t_offset
-#    (e.g. t=-3) cannot be distinguished from one that already existed and stayed open - both
-#    read "open." Directional, not exact, at early offsets.
-# 6. is_cards_exposed's CARDS_MNES list is a manual retype of spotlight.py's set, not a shared
-#    import - a future edit to one and not the other silently diverges the two files.
-# 7. UCP is ONE fixed month-end snapshot applied to every t_offset (same simplification as
-#    spotlight.py) even though this file's whole point is trend-over-time; prod_cat_cnt and the
-#    profit proxy do not actually move with the client the way spend/behavior/closure do here.
-# 8. Attribution tie-break (two sends at the identical timestamp): ROW_NUMBER ORDER BY
-#    send_ts DESC has no secondary sort key, so Teradata's own row order decides ties.
+# BEHAVIOUR - D3CV12A.CR_CRD_RPTS_ACCT, column usg_bhvr_seg_at_cyc_cd.
+#   Snapshot/date column CONFIRMED = ME_DT (month-end), from two independent in-repo precedents:
+#     - campaigns/CRV/bulletproof_analysis/26_behavior_mix_by_overlap_arm.sql:64-66 -
+#       "SELECT acct_no, ME_DT, usg_bhvr_seg_at_cyc_cd FROM D3CV12A.CR_CRD_RPTS_ACCT
+#        WHERE ME_DT BETWEEN DATE '2024-09-30' AND DATE '2026-05-31'"
+#       and :78 - "AND b.ME_DT = f.treatmt_strt_dt - EXTRACT(DAY FROM f.treatmt_strt_dt)"
+#       (i.e. the month-end BEFORE treatment), with line 6 naming the column outright:
+#       "Behavior = usg_bhvr_seg_at_cyc_cd from D3CV12A.CR_CRD_RPTS_ACCT".
+#     - campaigns/CRV/suppression_experiment/c4_demand_shaping.sql:92-99 -
+#       "r.usg_bhvr_seg_at_cyc_cd AS usg_bhvr_seg ... ORDER BY r.me_dt DESC ...
+#        AND r.me_dt < k.offer_start_date AND r.me_dt >= k.offer_start_date - INTERVAL '70' DAY".
 #
-# ==============================================================================================
+# BEHAVIOUR CARRIES clnt_no - CORRECTION TO THE BRIEF, stated up front rather than buried.
+#   The brief for this rewrite said CR_CRD_RPTS_ACCT is account-level with no clnt_no and must be
+#   bridged through DFP's (clnt_no, acct_no). Two files in this repo disagree, and they are the
+#   ones that actually ran:
+#     - campaigns/CRV/installments_tag/crv_acct_to_clnt_bridge.sql:3-10 - its whole purpose is
+#       "CRV table is acct-grain with NO clnt_no; CR_CRD_RPTS_ACCT is the acct->clnt lookup",
+#       selecting "r.clnt_no ... FROM D3CV12A.CR_CRD_RPTS_ACCT r".
+#     - campaigns/CRV/suppression_experiment/c4_demand_shaping.sql:73-77 -
+#       "SELECT r.acct_no, r.clnt_no ... FROM d3cv12a.cr_crd_rpts_acct r".
+#   So the bridge is unnecessary. Cell [4] bites CR_CRD_RPTS_ACCT on its OWN clnt_no, which (a)
+#   removes an entire DFP re-scan, (b) lets the bite predicate sit inside the innermost derived
+#   table exactly like every other pull here, and (c) means a client whose account never shows up
+#   in the DFP scan window still gets a behaviour reading. If the column turns out to be absent at
+#   run time the pull fails loudly on an unknown-column error, which is the right failure.
+#
+# UCP - /prod/sz/tsz/00172/data/ucp4/, partitioned by MONTH_END_DATE as a PATH SEGMENT, not a
+#   column (references/ucp/README.md:56-64: "You cannot SELECT MONTH_END_DATE or filter on it as a
+#   DataFrame column pre-read - it only exists as the .../MONTH_END_DATE=yyyy-MM-dd/ directory
+#   segment"). Read via .option("basePath", UCP_BASE) + explicit partition paths (README.md:88-97).
+#   Defensive filter trim(CLNT_TYP) == 'Personal' (README.md:97; gotchas.md:160-165 confirms
+#   CLNT_TYP is live on personal ucp4 as of the 2026-07-27 probe).
+#   Partition availability CONFIRMED 2023-12-31 through 2026-06-30 by a live probe
+#   (gotchas.md #1, "CONFIRMED RANGE (2026-07-27, pack 28 v4)"), and the current open month never
+#   has a partition (gotchas.md #1).
+#   Fields used - all CONFIRMED live 2026-07-27 (references/ucp/field_catalog_personal.md:10-13,
+#   :81, :96, :165): CLNT_NO, CLNT_TYP, AGE, TENURE_RBC_YEARS, PROF_TOT_ANNUAL,
+#   T_TOT_CNT / I_TOT_CNT / B_TOT_CNT / C_TOT_CNT.
+#
+# PRODUCT DEPTH = COUNT of NONZERO TIBC columns (0-4), never their SUM. Summing the four counts
+#   measures ACCOUNT VOLUME, not depth (spotlight.py:97-102, citing
+#   unsub_value_museum.py:1126-1174 BAND_VERSION v4).
+#
+# PROFIT COLUMN IS NAMED prof_annual_ucp_proxy, deliberately. PROF_TOT_ANNUAL has NO documented
+#   definition anywhere (references/ucp/gotchas.md #8, lines 186-208: "is not defined anywhere -
+#   do NOT treat it as an LTV proxy without vetting"), and there is no cards-specific profit field
+#   in UCP at all. The caveat travels with the column name so nobody downstream reads it as a
+#   vetted LTV figure.
+#
+# CARDS_MNES (12) - retyped VERBATIM from spotlight.py:220-221 (which sources it from
+#   unsub_value_museum.py:119-120). Used here only to sanity-check cards_pair_v6's mne set; the
+#   is_cards_exposed flag comes from clientagg's own n_campaigns_cards, which spotlight.py's
+#   Pull A computed server-side with the same list.
+#
+# ============================================================================================
+# DEPARTURES FROM THE BRIEF - both stated at the top, per house rule, not buried
+# ============================================================================================
+# D1. The brief said "no ordered analytics inside subqueries" for Teradata-direct. Cell [3] uses
+#     ONE ROW_NUMBER() in a derived table (WHERE rn = 1, never QUALIFY). The alternative -
+#     MAX(dt_record_ext) GROUP BY (acct_no, ym) then a self-join back to DFP - reads the table
+#     TWICE, which is precisely what table_catalog_notes.md:147-148 forbids for this table
+#     ("never multi-scan / multi-subquery on this table ... blows spool") and prescribes the
+#     window-function form instead. Canon beats the general rule here. Cell [4] uses no analytics
+#     at all.
+# D2. The brief said CR_CRD_RPTS_ACCT must be bridged through DFP for clnt_no. It carries clnt_no
+#     directly - see the two citations above. Bridging was dropped.
+#
+# ============================================================================================
+# UNVERIFIED - exhaustive, and repeated in the delivery report
+# ============================================================================================
+# U1. usg_bhvr_seg_at_cyc_cd's VALUE DOMAIN. Two repo files describe it as
+#     "Dormant/Transactor/Revolver" in prose (26_behavior_mix_by_overlap_arm.sql:6 header,
+#     c4_demand_shaping.sql:133 "Dormant/Transactor/Revolver, pre-wave") but neither prints the
+#     raw codes, so it is unconfirmed whether the stored values are those words or codes.
+#     Cell [4] runs a DISTINCT-value probe BEFORE the bites and prints what is actually in the
+#     column; anything outside the three expected labels maps to rank 4 = "other_or_none", which
+#     the probe makes visible rather than hiding.
+# U2. CR_CRD_RPTS_ACCT may hold more than one row per (acct_no, ME_DT).
+#     26_behavior_mix_by_overlap_arm.sql:13 flags this itself and never resolves it: "if higher,
+#     CR_CRD_RPTS_ACCT has >1 row per acct x ME_DT and needs a dedup first". Cell [4] collapses
+#     to CLIENT grain with MIN(seg_rank), so duplicates cannot fan out - but the precedence that
+#     MIN implements is U3, not a documented rule.
+# U3. Client-level behaviour precedence Revolver > Transactor > Dormant > other_or_none. A client
+#     can hold several cards in different segments. No in-repo precedent exists for collapsing
+#     them (references/ucp/gotchas.md #7 already records "no house standard" for band cuts; this
+#     is the same gap). Editable in Cell [0] via SEG_PRECEDENCE.
+# U4. Closure uses acct_cls_dt only. `status` is not cross-checked. If acct_cls_dt is ever null on
+#     a WOFF/BKPT/COLL/FRD account, that account reads as still open. status IS confirmed one-way
+#     (table_catalog_notes.md:179) so a status-based definition is possible later.
+# U5. No account-OPEN gate at early offsets. acct_open_dt exists on DFP but is not pulled, so an
+#     account opened after t=-3 cannot be told apart from one that already existed. Closure counts
+#     at early offsets are directional, not exact.
+# U6. An account is assumed to keep the same clnt_no across the scan window. If it moves, it is
+#     counted once under each client in n_accts_total.
+# U7. "Annual spend" = trailing 12 calendar months ending at t=0. Editable choice, no house
+#     standard; picked because it is the only window that needs no data from after the cut point.
+# U8. Behaviour is matched at the EXACT anchor month-end (an IN-list of six dates), not as-of the
+#     most recent ME_DT at or before it. A client with no row at that exact month-end reads
+#     no_data rather than carrying the previous month forward. Cheaper by a wide margin and
+#     honest about gaps; flip BEHAVIOUR_EXACT_MONTH_END in Cell [0] only if you are prepared to
+#     pay for the ranked as-of scan.
+# U9. CARDS_MNES is a manual retype of spotlight.py's set, not a shared import - editing one and
+#     not the other silently diverges the files.
+# U10. spotlight.py's own open question rides along unchanged: whether disposition_cd = 4 is a
+#     per-list or a global opt-out. cards_pair_v6's per-mne unsub_flag inherits that ambiguity, so
+#     trigger_mne below is "the cards campaign the unsub was logged against", not proven causation.
+# ============================================================================================
 
 
-# %% [0] CONFIG - every tunable lives here.
+# %% [0] CONFIG - every tunable lives here. No literal below this cell is hand-typed elsewhere.
 
 import calendar
 import datetime
 
-# ---- Cohort window: all clients emailed (disposition_cd=1) here, bank-wide, all mnemonics ----
-WIN_START = "2026-04-01"
-WIN_END   = "2026-07-01"     # matches RUN_2026-07-31_scope_test.sql's validated window exactly
-WIN_START_DATE = datetime.date(2026, 4, 1)
-WIN_END_DATE   = datetime.date(2026, 7, 1)
-assert WIN_START_DATE >= datetime.date(2024, 1, 1), "repo floor is 2024-01-01 - do not go below"
+# ---- RUN SWITCHES - the only things to touch before hitting Run All -------------------------
+SMOKE = True            # True -> bite 0 only (about a tenth of clients). Flip to False for the
+                        # full population AFTER checking bite-0 counts and the Cell [1] gate.
+                        # Outputs land under a _smoke-suffixed prefix and every cube carries a
+                        # smoke_run column, so a smoke run can never be mistaken for a full one.
+N_BITES = 10            # MOD(ABS(clnt_no), N_BITES). ABS matters: Teradata MOD(-7, 10) = -7 and
+                        # matches no bite, so negative ids would silently vanish.
+LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite serialized in one shot
+                        # exceeds spark.rpc.message.maxSize (128 MB). Lower if the limit is hit.
+RUN_PULLS = ["DFP", "BHV"]    # restrict Cell [3] / Cell [4], e.g. ["BHV"] to resume only that one.
+                        # Landed bites are skipped via their _ROWCOUNT marker regardless.
+DROP_CLIENT_GRAIN = False     # Cell [8]. Refuses to delete unless the cubes exist AND read back.
+                        # Never touches spotlight.py's landings - those are shared.
+BEHAVIOUR_EXACT_MONTH_END = True   # see UNVERIFIED U8. False is not implemented; the flag exists
+                        # so the assumption is visible in the config, not buried in SQL.
 
-# ---- Attribution ----
-RESPONSE_DAYS = 30   # unsub attaches to the closest PRECEDING send within this many days.
-                     # RUN_2026-07-31_scope_test.sql: 30 days covers 71.5% of logged unsub
-                     # events - state coverage, don't imply completeness.
+# ---- Cohort window. MUST match the window spotlight.py's landed pulls were built over, or the
+# reused files describe a different population than the t_offsets are anchored on. ------------
+WIN_START = "2025-08-01"    # spotlight.py:176 WIN_FLOOR
+WIN_END   = "2026-08-01"    # spotlight.py:202 WIN_CEIL - a HARD ceiling, not "floor to now"
+WIN_START_DATE = datetime.date(2025, 8, 1)
+WIN_END_DATE   = datetime.date(2026, 8, 1)
+assert WIN_START_DATE >= datetime.date(2024, 1, 1), \
+    "repo floor is 2024-01-01 (memory: 2024_data_floor) - do not go below"
+
+# ---- Time points, months relative to the cohort window end -----------------------------------
+T_OFFSETS = [-3, 0, 3, 6, 9, 12]
+assert -3 in T_OFFSETS and 0 in T_OFFSETS, \
+    "t=-3 and t=0 are both load-bearing: without the pre-period this is a level comparison, and " \
+    "the spend tier is cut at t=0. Removing either changes what the cube means."
 
 
 def _add_months(d, n):
     total = d.year * 12 + (d.month - 1) + n
     y, m = divmod(total, 12)
     m += 1
-    day = min(d.day, calendar.monthrange(y, m)[1])
-    return datetime.date(y, m, day)
+    return datetime.date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
 
 
 def _month_end(d):
     return datetime.date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
 
 
-ATTR_SEND_START = (WIN_START_DATE - datetime.timedelta(days=RESPONSE_DAYS)).isoformat()
+def _tag(o):
+    """Column-name-safe tag for an offset: -3 -> m3, 0 -> t0, +6 -> p6."""
+    return "t0" if o == 0 else ("m%d" % abs(o) if o < 0 else "p%d" % o)
 
-# ---- Time points, months relative to WIN_END. -3 is load-bearing (pre-period, not optional) ----
-T_OFFSETS = [-3, 0, 3, 6, 9, 12]
-T_OFFSET_ANCHOR_DATE = {o: _month_end(_add_months(WIN_END_DATE, o)) for o in T_OFFSETS}   # month-end dt
-T_OFFSET_YM = {o: _add_months(WIN_END_DATE, o).strftime("%Y%m") for o in T_OFFSETS}        # for spend join
 
-# ---- Spend tier: tercile of ANNUAL spend, cut ONCE on the whole cohort at t=0, held FIXED
-# across every t_offset. "Annual" = trailing 12 calendar months ending at t=0 (months t=-11..0
-# inclusive). This is an editable choice, not a house standard - no prior in-repo precedent for
-# what "annual spend" means at a point in time; trailing-12-ending-at-t=0 was picked because it
-# is the only window that doesn't require future data relative to the cut point itself.
+def _ym(d):
+    return d.year * 100 + d.month
+
+
+# t=0 anchor. The cohort window ends on WIN_END, so the natural anchor is the month-end inside it,
+# but UCP has no partition for the current open month (references/ucp/gotchas.md #1) and neither
+# DFP nor CR_CRD_RPTS_ACCT has a complete month for it either. Clamp to the last CLOSED month-end
+# and say so out loud - a silent clamp would move every offset by a month without anyone noticing.
+_T0_NATURAL = _month_end(WIN_END_DATE - datetime.timedelta(days=1))
+_LAST_CLOSED = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
+T0_ANCHOR = min(_T0_NATURAL, _LAST_CLOSED)
+if T0_ANCHOR != _T0_NATURAL:
+    print("NOTE: t=0 clamped from %s (month-end inside the cohort window) to %s (last CLOSED "
+          "month-end). Current open months have no UCP partition and no complete DFP month. "
+          "Every t_offset below is anchored on the clamped date."
+          % (_T0_NATURAL.isoformat(), T0_ANCHOR.isoformat()))
+
+T_ANCHOR = {o: _month_end(_add_months(T0_ANCHOR, o)) for o in T_OFFSETS}   # month-end date per offset
+T_YM = {o: _ym(T_ANCHOR[o]) for o in T_OFFSETS}                            # YYYYMM int per offset
+T_TAG = {o: _tag(o) for o in T_OFFSETS}
+
+# ---- Annual spend for the tier cut: trailing 12 calendar months ending at t=0 (UNVERIFIED U7) --
 ANNUAL_LOOKBACK_MONTHS = 12
-ANNUAL_SPEND_YMS = [_add_months(WIN_END_DATE, o).strftime("%Y%m")
-                    for o in range(-(ANNUAL_LOOKBACK_MONTHS - 1), 1)]   # t=-11 .. t=0, 12 months
+ANNUAL_YMS = [_ym(_add_months(T0_ANCHOR, k)) for k in range(-(ANNUAL_LOOKBACK_MONTHS - 1), 1)]
+assert len(ANNUAL_YMS) == ANNUAL_LOOKBACK_MONTHS
 
-# ---- DFP / CR_CRD_RPTS_ACCT scan window: must cover every t_offset PLUS the annual lookback ----
-_month_range_start_offset = min(T_OFFSETS + [-(ANNUAL_LOOKBACK_MONTHS - 1)])
-_month_range_end_offset = max(T_OFFSETS)
-_spend_floor_date = _add_months(WIN_END_DATE.replace(day=1), _month_range_start_offset)
-if _spend_floor_date < datetime.date(2024, 1, 1):
-    print("NOTE: computed spend/behavior floor %s is below the 2024-01-01 repo floor - clamping. "
-          "This shortens the annual-spend lookback and the t=-3 pre-period for this run."
-          % _spend_floor_date.isoformat())
-    _spend_floor_date = datetime.date(2024, 1, 1)
-SPEND_FLOOR = _spend_floor_date.isoformat()
-SPEND_CEILING = _add_months(_month_end(_add_months(WIN_END_DATE, _month_range_end_offset)), 1).replace(day=1).isoformat()
-# ^ first day of the month AFTER the last t_offset's month-end - exclusive upper bound.
-# NOTE: t=+12's anchor date is in the future relative to any recent WIN_END - that bite of the
-# pull will legitimately come back thin (no rows past "today"), not broken. Expected, not a bug.
+# ---- Every month DFP has to be scanned for = the six offsets plus the annual lookback ---------
+SPEND_YMS = sorted(set(list(T_YM.values()) + ANNUAL_YMS))
+_all_anchor_dates = sorted(set(list(T_ANCHOR.values()) +
+                              [_month_end(_add_months(T0_ANCHOR, k))
+                               for k in range(-(ANNUAL_LOOKBACK_MONTHS - 1), 1)]))
+_scan_floor = _all_anchor_dates[0].replace(day=1)
+if _scan_floor < datetime.date(2024, 1, 1):
+    print("NOTE: computed DFP scan floor %s is below the 2024-01-01 repo floor - clamping. This "
+          "shortens the annual-spend lookback for this run." % _scan_floor.isoformat())
+    _scan_floor = datetime.date(2024, 1, 1)
+    SPEND_YMS = [y for y in SPEND_YMS if y >= 202401]
+SPEND_FLOOR = _scan_floor.isoformat()
+SPEND_CEILING = (_all_anchor_dates[-1] + datetime.timedelta(days=1)).isoformat()   # exclusive
+# t=+12 (and any offset past today) is in the future - those bites come back with no rows for
+# those months. Thin, not broken. The cube reports them as zero-spend / no_data, which is the
+# honest reading, and Cell [5] names every offset with no UCP partition explicitly.
 
-# ---- MNE tag set - CLIENT-SIDE tag only, retyped verbatim from spotlight.py (UNVERIFIED #6) ----
+SPEND_YMS_SQL = ", ".join(str(y) for y in SPEND_YMS)
+ANNUAL_YMS_SQL = ", ".join(str(y) for y in ANNUAL_YMS)
+ANCHOR_DATES_SQL = ", ".join("DATE '%s'" % T_ANCHOR[o].isoformat() for o in T_OFFSETS)
+
+# ---- Behaviour segment precedence at client grain (UNVERIFIED U3) -----------------------------
+# rank 1 wins. Anything not in this map lands on rank 4 and is labelled other_or_none, which the
+# Cell [4] probe makes visible instead of silently folding it into a real segment.
+SEG_PRECEDENCE = [("Revolver", 1), ("Transactor", 2), ("Dormant", 3)]
+SEG_LABEL = {1: "Revolver", 2: "Transactor", 3: "Dormant", 4: "other_or_none", 0: "no_data"}
+
+# ---- Spend tiers: tercile of annual spend, cut ONCE at t=0 and HELD FIXED across every offset --
+# Re-cutting per period lets clients migrate between tiers and the comparison stops meaning
+# anything - "High spenders fell" would then partly be "the ones who fell left the High tier".
+SPEND_TIER_QUANTILES = [1.0 / 3.0, 2.0 / 3.0]
+SPEND_TIER_REL_ERR = 0.01
+# Zero-spend clients are ZEROS, not exclusions - dropping them would move every median. The cube
+# reports stayers_with_spend / leavers_with_spend beside the counts so the denominator is visible.
+
+# ---- MNE tag set - retyped verbatim from spotlight.py:220-221 (UNVERIFIED U9) ------------------
 CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "CRV",
                         "VBA", "VBU", "CRO", "CEC", "VIF", "MET"})
-assert len(CARDS_MNES) == 12, "CARDS_MNES should hold exactly 12 MNEs - recount vs spotlight.py"
+assert len(CARDS_MNES) == 12, "CARDS_MNES should hold exactly 12 MNEs - recount vs spotlight.py:220"
 
-# ---- Bite plan ----
-N_BITES = 10   # MOD(CLNT_NO, N_BITES) on the VENDOR_FEEDBACK side; MOD(ABS(clnt_no), N_BITES) on
-               # the DFP side (ABS matches RUN_THIS_dfp_only.py's defensive precedent).
-SMOKE = True   # True -> bite 0 only. Flip after checking bite-0 row counts and the accumulator gate.
+# ---- Paths ------------------------------------------------------------------------------------
+BASE = "hdfs:///user/427966379/unsub_spotlight2/"          # this file's own landings
+SPOTLIGHT1_BASE = "hdfs:///user/427966379/unsub_spotlight/"  # spotlight.py's - READ ONLY, never deleted
+UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"                 # references/ucp/README.md - personal only
+S1_SCHEMA_VERSION = 6   # spotlight.py:321 SCHEMA_VERSION - the version of ITS landed files
 
-# ---- Run switches ----
-DROP_CLIENT_GRAIN = False   # Cell [10]. Refuses to run unless the cubes are already landed.
+CLIENTAGG_DIR = SPOTLIGHT1_BASE + "clientagg_v%d/" % S1_SCHEMA_VERSION
+CARDSPAIR_DIR = SPOTLIGHT1_BASE + "cards_pair_v%d/" % S1_SCHEMA_VERSION
+MNEAGG_DIR    = SPOTLIGHT1_BASE + "mne_agg_v%d/" % S1_SCHEMA_VERSION   # read only by the reconcile print
 
-# ---- Paths ----
-BASE = "hdfs:///user/427966379/unsub_spotlight2/"
-UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
-
-# Schema version in every landed path - a column change lands in a fresh directory, never
-# silently reuses stale parquet from a prior design (spotlight.py's own documented bug).
+# Landed-schema version for THIS file. The _landed() guard checks counts, not columns, so a schema
+# change has to land in a fresh directory or a rerun silently reuses parquet from a prior design.
 SCHEMA_VERSION = 1
-EXPOSURE_DIR = BASE + "exposure_v%d/" % SCHEMA_VERSION
-SPEND_DIR    = BASE + "spend_v%d/" % SCHEMA_VERSION
-CLOSURE_DIR  = BASE + "closure_v%d/" % SCHEMA_VERSION
-BEHAVIOR_DIR = BASE + "behavior_v%d/" % SCHEMA_VERSION
-UCP_DIR      = BASE + "ucp_enriched_v%d/" % SCHEMA_VERSION
-LONG_DIR     = BASE + "client_long_v%d/" % SCHEMA_VERSION
-OUT_CUBE     = BASE + "out/cube_main_v%d" % SCHEMA_VERSION
+DFP_DIR = BASE + "dfp_client_v%d/" % SCHEMA_VERSION      # Pull DFP  - one row per clnt_no, wide by offset
+BHV_DIR = BASE + "bhvr_client_v%d/" % SCHEMA_VERSION     # Pull BHV  - one row per clnt_no, wide by offset
+UCP_DIR = BASE + "ucp_offsets_v%d/" % SCHEMA_VERSION     # one row per (clnt_no, t_offset)
+LONG_DIR = BASE + "client_long_v%d/" % SCHEMA_VERSION    # one row per (clnt_no, t_offset)
 
-EXPOSURE_COLS = ["clnt_no", "mne", "n_sends_in_window", "first_send_dt", "last_send_dt",
-                 "n_campaigns_in_window", "unsub_flag", "unsub_dt", "trigger_mne"]
-SPEND_COLS = ["clnt_no", "ym", "client_month_spend"]
-CLOSURE_COLS = ["clnt_no", "acct_no", "acct_cls_dt"]
-BEHAVIOR_COLS = ["acct_no", "me_dt", "usg_bhvr_seg"]
+OUT_DIR = BASE + ("out_smoke/" if SMOKE else "out/")
+PQ_DIR = OUT_DIR.rstrip("/") + "_parquet/"   # duckdb reads parquet; CSV loses every dtype
 
-print("CONFIG loaded - window:", WIN_START, "to", WIN_END, "| attribution lookback from:",
-      ATTR_SEND_START, "| t_offsets (months):", T_OFFSETS)
-print("DFP/behavior scan range:", SPEND_FLOOR, "to", SPEND_CEILING, "| annual-spend YMs:",
-      ANNUAL_SPEND_YMS)
-print("bites:", N_BITES, "| SMOKE:", SMOKE, "| SCHEMA_VERSION:", SCHEMA_VERSION)
+# ---- Landed schemas of the files this file REUSES (spotlight.py:347-365) -----------------------
+CLIENTAGG_COLS = [
+    "clnt_no", "n_campaigns_all", "n_campaigns_branded", "n_campaigns_cards",
+    "n_campaigns_regulatory", "n_emails_all", "n_emails_3m", "n_emails_6m",
+    "n_emails_promo_6m", "n_emails_regulatory_6m", "n_emails_cards", "n_emails_cards_6m",
+    "unsub_flag", "unsub_dt", "first_send_dt", "last_send_dt",
+]
+CARDSPAIR_COLS = [
+    "clnt_no", "mne", "n_sends", "unsub_flag", "unsub_dt", "first_send_dt", "last_send_dt",
+]
+
+# ---- Landed schemas of the two things this file pulls itself ----------------------------------
+DFP_COLS = (["clnt_no", "n_accts_total", "annual_spend_t0"]
+            + ["spend_" + T_TAG[o] for o in T_OFFSETS]
+            + ["n_closed_" + T_TAG[o] for o in T_OFFSETS])
+BHV_COLS = ["clnt_no"] + ["bhvr_rank_" + T_TAG[o] for o in T_OFFSETS]
+UCP_OFFSET_COLS = ["clnt_no", "t_offset", "age", "tenure_years", "prod_cat_cnt",
+                   "prof_annual_ucp_proxy"]
+
+print("CONFIG loaded")
+print("  cohort window (spotlight.py's):", WIN_START, "->", WIN_END,
+      "| reusing", CLIENTAGG_DIR, "and", CARDSPAIR_DIR)
+print("  t=0 anchor:", T0_ANCHOR.isoformat(), "| offsets:", T_OFFSETS)
+print("  anchors:", {o: T_ANCHOR[o].isoformat() for o in T_OFFSETS})
+print("  DFP scan:", SPEND_FLOOR, "->", SPEND_CEILING, "|", len(SPEND_YMS), "months in the IN-list")
+print("  annual-spend months (t=-11..0):", ANNUAL_YMS)
+print("  SMOKE:", SMOKE, "| N_BITES:", N_BITES, "| RUN_PULLS:", RUN_PULLS,
+      "| SCHEMA_VERSION:", SCHEMA_VERSION)
+print("  OUT_DIR:", OUT_DIR)
 
 
 # %% [1] ACCUMULATOR VALIDATION GATE - blocking, runs BEFORE anything depends on net_prch_amt_mtd.
-# ENGINE: Teradata-direct (D3CV12A.DLY_FULL_PORTFOLIO, no catalog prefix). Establishes the ONE
-# EDW connection reused by Cells [2]-[5] in this same kernel session.
+# ENGINE: Teradata-direct (D3CV12A.DLY_FULL_PORTFOLIO, no catalog prefix, Teradata syntax,
+# teradatasql). Opens the ONE EDW connection reused by Cells [3] and [4] in this kernel session.
 #
-# Method: pick 20 accounts active on day 1 of a known-closed calendar month (the month before
-# WIN_END - unambiguously in the past). For that month, compare SUM(net_prch_amt_dly) against
-# the LAST record's net_prch_amt_mtd per account (same ranked pattern as
-# pcq_q1_26_monthly_balance.sql CTE 3). If net_prch_amt_mtd resets on the 1st, the two match.
-# If it is actually year-to-date, the MTD figure is 3-12x too large depending on the month -
-# that is a hard error, not a warning, because every monthly spend figure downstream depends on it.
+# Method: take the accounts active on the first record-date of a known-CLOSED calendar month (the
+# month before t=0, unambiguously in the past). For that month, compare SUM(net_prch_amt_dly)
+# against the LAST record's net_prch_amt_mtd per account. If net_prch_amt_mtd resets on the 1st,
+# the two agree. If it is actually year-to-date, the MTD figure is several times too large and
+# EVERY monthly spend number in this file is wrong - so this raises rather than warns.
+#
+# table_catalog_notes.md:164-165 states the reset ("cumulative month-to-date through that row's
+# dt_record_ext, last row of month = monthly total"). This gate re-proves it live rather than
+# trusting a write-up, per the house prove-then-proceed rule.
 
 import getpass
 import time
+
 import pandas as pd
 import teradatasql
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+from pyspark.sql.types import (StructType, StructField, LongType, StringType, DoubleType,
+                               IntegerType, DateType)
 
+# PySpark <3.4 calls pdf.iteritems() inside createDataFrame; pandas 2.0 removed it.
 if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
+
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
 
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
 EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=username, password=password,
                           logmech="LDAP")
 
+# PROOF, not a print: round-trip the connection before trusting any pull off it.
 _cur = EDW.cursor()
 _cur.execute("SELECT USER, SESSION, CURRENT_TIMESTAMP")
 print("EDW round-trip returned:", _cur.fetchall())
@@ -230,601 +401,930 @@ _cur.close()
 def edw_pd(sql, chunksize=1_000_000):
     parts, n, t0 = [], 0, time.time()
     for c in pd.read_sql(sql, EDW, chunksize=chunksize):
-        parts.append(c); n += len(c)
+        parts.append(c)
+        n += len(c)
         print("  ...", n, "rows,", int(time.time() - t0), "s elapsed", flush=True)
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
+_val_month_start = _add_months(T0_ANCHOR.replace(day=1), -1)
+_val_month_end = T0_ANCHOR.replace(day=1)
+VALIDATION_MONTH = _val_month_start.isoformat()
+
+_val_sql = """
+WITH month_rows AS (
+    SELECT p.acct_no, p.dt_record_ext,
+           CAST(p.net_prch_amt_dly AS FLOAT) AS dly,
+           CAST(p.net_prch_amt_mtd AS FLOAT) AS mtd
+    FROM D3CV12A.DLY_FULL_PORTFOLIO p
+    WHERE p.dt_record_ext >= DATE '%(mstart)s'
+      AND p.dt_record_ext <  DATE '%(mend)s'
+      AND p.clnt_no IS NOT NULL
+      AND MOD(ABS(p.acct_no), 100000) = 7
+),
+ranked AS (
+    SELECT acct_no, dt_record_ext, dly, mtd,
+           ROW_NUMBER() OVER (PARTITION BY acct_no ORDER BY dt_record_ext DESC) AS rn
+    FROM month_rows
+),
+sums AS (
+    SELECT acct_no, SUM(dly) AS sum_dly, COUNT(*) AS n_rows
+    FROM month_rows
+    GROUP BY acct_no
+)
+SELECT s.acct_no, s.n_rows, s.sum_dly, r.mtd AS last_mtd, r.dt_record_ext AS last_dt
+FROM sums s
+INNER JOIN ranked r ON r.acct_no = s.acct_no AND r.rn = 1
+ORDER BY s.acct_no
+""" % {"mstart": _val_month_start.isoformat(), "mend": _val_month_end.isoformat()}
+
+_val_pdf = edw_pd(_val_sql)
+assert len(_val_pdf) > 0, (
+    "accumulator validation pulled zero accounts for %s - the 1-in-100000 acct_no sample found "
+    "nothing. Widen the sample (change the MOD divisor in _val_sql) or pick a different month; do "
+    "NOT proceed on an unproven accumulator." % VALIDATION_MONTH)
+
+_val_pdf.columns = [c.lower() for c in _val_pdf.columns]
+_val_pdf["sum_dly"] = pd.to_numeric(_val_pdf["sum_dly"], errors="coerce")
+_val_pdf["last_mtd"] = pd.to_numeric(_val_pdf["last_mtd"], errors="coerce")
+_val_pdf["abs_diff"] = (_val_pdf["last_mtd"] - _val_pdf["sum_dly"]).abs()
+_val_pdf["ratio"] = _val_pdf["last_mtd"] / _val_pdf["sum_dly"].replace(0, pd.NA)
+
+print("ACCUMULATOR CHECK | month %s | grain: one row per acct_no | %d accounts sampled"
+      % (VALIDATION_MONTH, len(_val_pdf)))
+print("Expected if net_prch_amt_mtd resets on the 1st: last_mtd == sum_dly for every row.")
+print(_val_pdf.head(20).to_string(index=False))
+
+# Only judge accounts with material activity - a near-zero sum_dly makes the ratio meaningless.
+_material = _val_pdf[_val_pdf["sum_dly"].abs() > 1.0]
+_bad = _material[_material["abs_diff"] > (0.01 * _material["sum_dly"].abs())]
+print("Accounts with material activity (abs(sum_dly) > 1):", len(_material),
+      "| mismatching by more than 1 pct:", len(_bad))
+
+if len(_material) == 0:
+    raise RuntimeError(
+        "ACCUMULATOR CHECK INCONCLUSIVE - not one sampled account had material spend in %s, so "
+        "nothing was actually proven. Widen the sample or pick another month. Refusing to proceed "
+        "on an unproven accumulator: if net_prch_amt_mtd were year-to-date, every monthly figure "
+        "in Cells [3]/[6]/[7] would be silently inflated." % VALIDATION_MONTH)
+
+if len(_bad) > 0:
+    raise RuntimeError(
+        "ACCUMULATOR CHECK FAILED - last-of-month net_prch_amt_mtd does not equal SUM(net_prch_amt_dly) "
+        "for %d of %d materially-active sampled accounts in %s. If the ratios below cluster well "
+        "above 1 this is a YEAR-to-date accumulator, not month-to-date, and every monthly spend "
+        "figure downstream is wrong. Fix the method before rerunning - do not relax this gate.\n%s"
+        % (len(_bad), len(_material), VALIDATION_MONTH, _bad.head(20).to_string(index=False)))
+
+ACCUM_VALIDATED = True
+print("ACCUMULATOR CHECK PASSED - %d materially-active accounts, last-of-month MTD equals "
+      "SUM(daily deltas) within 1 pct on every one. Taking the last record per (acct_no, month) "
+      "and reading net_prch_amt_mtd is sound." % len(_material))
+
+
+# %% [2] READERS - spotlight.py's landed files (REUSED, never re-pulled) and this file's own
+# landings. Every reader asserts its full expected column list loudly, exactly like
+# spotlight.py:368-399 read_clientagg(): a stale or short schema fails here rather than producing
+# a quietly-wrong cube six cells later.
+# ENGINE: PySpark (YARN). No EDW connection is opened or used in this cell.
+
+
+def _read_dir(dir_path, cols, label, rerun_hint):
+    sdf = spark.read.parquet(dir_path + "bite_*")
+    missing = [c for c in cols if c not in sdf.columns]
+    if missing:
+        raise RuntimeError(
+            "%s at %s is missing %s. Found: %s. Stale parquet from an older schema - %s"
+            % (label, dir_path, missing, sdf.columns, rerun_hint))
+    return sdf
+
+
+def read_clientagg():
+    """spotlight.py Pull A - one row per clnt_no, BANK-WIDE, about 12.3M rows. REUSED, not
+    re-pulled: rebuilding this from VENDOR_FEEDBACK_* costs roughly an hour of wire time and, worse,
+    a second pull drifts against the first (about 1K unsubs/day bank-wide) so the two files' cubes
+    would no longer reconcile."""
+    sdf = _read_dir(CLIENTAGG_DIR, CLIENTAGG_COLS, "clientagg (spotlight.py Pull A)",
+                    "rerun spotlight.py Cell [1] Pull A - do NOT delete it from this file.")
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+def read_cardspair():
+    """spotlight.py Pull C - one row per (clnt_no, cards mne), cards-only. REUSED, not re-pulled."""
+    sdf = _read_dir(CARDSPAIR_DIR, CARDSPAIR_COLS, "cards_pair (spotlight.py Pull C)",
+                    "rerun spotlight.py Cell [1] Pull C - do NOT delete it from this file.")
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+def read_dfp():
+    sdf = _read_dir(DFP_DIR, DFP_COLS, "dfp_client",
+                    "delete %s and rerun Cell [3]." % DFP_DIR)
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+def read_bhv():
+    sdf = _read_dir(BHV_DIR, BHV_COLS, "bhvr_client",
+                    "delete %s and rerun Cell [4]." % BHV_DIR)
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+def read_ucp_offsets():
+    sdf = spark.read.parquet(UCP_DIR)
+    missing = [c for c in UCP_OFFSET_COLS if c not in sdf.columns]
+    if missing:
+        raise RuntimeError("ucp_offsets at %s is missing %s. Found: %s. Delete it and rerun "
+                           "Cell [5]." % (UCP_DIR, missing, sdf.columns))
+    return sdf
+
+
+def write_cube(df, name):
+    """Every cube lands twice: CSV for the Excel pivot, parquet for duckdb in VS Code."""
+    df.coalesce(1).write.mode("overwrite").option("header", True).csv(OUT_DIR + name)
+    df.coalesce(1).write.mode("overwrite").parquet(PQ_DIR + name)
+    print("   wrote", OUT_DIR + name, "(csv) and", PQ_DIR + name, "(parquet)")
+
+
+# ---- Cohort, straight off the reused clientagg. Leaver = unsub_flag 1, stayer = 0. -------------
+_clientagg = read_clientagg()
+cohort = (_clientagg
+          .select("clnt_no", "unsub_flag", "n_campaigns_cards", "unsub_dt")
+          .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER"))
+          .withColumn("is_cards_exposed", (F.col("n_campaigns_cards") > 0).cast("int"))
+          .cache())
+
+COHORT_N = cohort.count()
+print("COHORT read from spotlight.py's clientagg_v%d - grain: one row per clnt_no | %d clients"
+      % (S1_SCHEMA_VERSION, COHORT_N))
+cohort.groupBy("bucket").agg(F.count("*").alias("clients"),
+                             F.sum("is_cards_exposed").alias("cards_exposed")).show(truncate=False)
+
+_cohort_dupes = COHORT_N - cohort.select("clnt_no").distinct().count()
+assert _cohort_dupes == 0, (
+    "clientagg_v%d is not unique on clnt_no (%d duplicate rows). It is the left side of every join "
+    "below, so a duplicate fans the client out through the whole cube. Investigate spotlight.py's "
+    "Pull A before continuing." % (S1_SCHEMA_VERSION, _cohort_dupes))
+print("Cohort uniqueness on clnt_no: confirmed, 0 duplicates.")
+
+# ---- trigger_mne rides along from cards_pair (the cards campaign the unsub was logged against) --
+# Client-level outcomes are NOT divisible across the campaigns that mailed a client - spend and
+# profit belong to the client, not to a campaign - so this is a descriptive tag on the client, not
+# an attribution of the outcome. See UNVERIFIED U10.
+_cards_pair = read_cardspair()
+_trigger = (_cards_pair
+            .filter(F.col("unsub_flag") == 1)
+            .withColumn("rn", F.row_number().over(
+                Window.partitionBy("clnt_no").orderBy(F.col("unsub_dt").asc_nulls_last(),
+                                                      F.col("mne").asc())))
+            .filter(F.col("rn") == 1)
+            .select("clnt_no", F.col("mne").alias("trigger_mne")))
+
+_unexpected_mnes = (_cards_pair.select("mne").distinct()
+                    .filter(~F.upper(F.trim(F.col("mne"))).isin(sorted(CARDS_MNES))))
+_n_unexpected = _unexpected_mnes.count()
+if _n_unexpected > 0:
+    print("WARNING: cards_pair_v%d holds %d mne values outside this file's CARDS_MNES list "
+          "(UNVERIFIED U9 - the two lists have diverged):" % (S1_SCHEMA_VERSION, _n_unexpected))
+    _unexpected_mnes.show(20, truncate=False)
+else:
+    print("cards_pair mne set matches CARDS_MNES (12) - the retyped list is still in sync.")
+
+print("Cell [2] done - readers ready, cohort cached (%d clients), trigger_mne derived from the "
+      "REUSED cards_pair. Zero Teradata rows pulled in this cell." % COHORT_N)
+
+
+# %% [3] PULL DFP - spend + closure, one row per CLIENT with the t_offsets pivoted into columns.
+# ENGINE: Teradata-direct (D3CV12A.DLY_FULL_PORTFOLIO, no catalog prefix, teradatasql).
+#
+# WHY WIDE: one row per (clnt_no, month) would be about 12M clients x 18 months on the wire for
+# nothing - every downstream cell immediately collapses it. Aggregating server-side to one row per
+# client with six spend columns, six closed-account counts and the annual total puts about 1/18th
+# of that on the wire.
+#
+# MONTHLY SPEND = the LAST record per (acct_no, month) at MAX(dt_record_ext), reading
+# net_prch_amt_mtd (table_catalog_notes.md:164-165; proven live by Cell [1]). NOT a SUM of the
+# daily rows.
+#
+# SPOOL HARDENING, carried from spotlight.py's v4 to v5 fix:
+#   - the bite predicate MOD(ABS(clnt_no), N) lives INSIDE the innermost scanned subquery, never in
+#     an outer WHERE. Outside, the full scan spools before the bite narrows anything - that is what
+#     threw Teradata 2646 repeatedly.
+#   - ABS() because Teradata MOD(-7, 10) = -7, which matches no bite; negative ids would vanish
+#     from bitten pulls while unbitten ones still counted them.
+#   - ONE scan of DFP, one ROW_NUMBER window, then two levels of GROUP BY - the pattern
+#     table_catalog_notes.md:147-152 prescribes for this table by name. See DEPARTURE D1.
+#   - the month IN-list narrows the scan to the 18 months actually needed on top of the
+#     dt_record_ext range filter (the range prunes, the IN-list narrows).
+# No percent sign appears anywhere in the SQL below - a comment containing a percent sign broke a
+# pull earlier today, because these strings are percent-formatted.
+
+assert "ACCUM_VALIDATED" in globals() and ACCUM_VALIDATED, \
+    "Run Cell [1] first - it proves the accumulator this cell depends on."
+
+DFP_SPARK_SCHEMA = StructType(
+    [StructField("clnt_no", LongType(), True),
+     StructField("n_accts_total", LongType(), True),
+     StructField("annual_spend_t0", DoubleType(), True)]
+    + [StructField("spend_" + T_TAG[o], DoubleType(), True) for o in T_OFFSETS]
+    + [StructField("n_closed_" + T_TAG[o], LongType(), True) for o in T_OFFSETS])
+
+BHV_SPARK_SCHEMA = StructType(
+    [StructField("clnt_no", LongType(), True)]
+    + [StructField("bhvr_rank_" + T_TAG[o], IntegerType(), True) for o in T_OFFSETS])
+
+
+def _rowcount_marker_path(path):
+    """INSIDE the bite directory, not a sibling. spotlight.py used a sibling <name>_ROWCOUNT and it
+    doubled the entry count under the landing dir, which slowed every download. Spark's file index
+    skips children whose name starts with an underscore, so a nested _ROWCOUNT is invisible to a
+    parquet read of the bite itself."""
+    return path.rstrip("/") + "/_ROWCOUNT"
+
+
 def _landed(path):
+    """A directory existing is NOT proof a bite fully landed - a session killed mid-write leaves a
+    short directory that would otherwise be silently accepted as done, undercounting everything
+    downstream. Landed means: the parquet reads AND the _ROWCOUNT marker exists AND matches."""
     try:
-        spark.read.parquet(path).limit(1).collect()
-        return True
+        _n_actual = spark.read.parquet(path).count()
     except Exception as e:
         msg = str(e).lower()
         if any(s in msg for s in ("path does not exist", "path_not_found", "filenotfound",
                                   "unable to infer schema")):
             return False
         raise RuntimeError(path + ": cannot verify HDFS state, refusing to guess. " + str(e)[:300])
+    try:
+        _n_expected = spark.read.parquet(_rowcount_marker_path(path)).collect()[0]["expected_rows"]
+    except Exception:
+        print(path, ": parquet exists but no _ROWCOUNT marker - partial write from a killed "
+                    "session, treating as NOT landed and re-pulling.")
+        return False
+    if _n_actual != _n_expected:
+        print("WARNING:", path, "- marker expects", _n_expected, "actual", _n_actual,
+              "- partial write. Re-pulling this bite.")
+        return False
+    return True
 
 
-def land_bite(bite_dir, bite, sql):
-    """Shared bite-and-land helper for Cells [2]-[5]. Skips if this bite already landed."""
-    path = bite_dir + "bite_%d" % bite
-    if _landed(path):
-        n = spark.read.parquet(path).count()
-        print(path, ": already landed,", n, "rows - SKIP")
-        return
-    pdf = edw_pd(sql)
-    assert len(pdf) > 0, path + " pulled zero rows - investigate before proceeding (a thin " \
-        "future-dated t_offset can shrink a bite but should not zero it entirely)"
-    sdf = spark.createDataFrame(pdf)
-    sdf.write.mode("overwrite").parquet(path)
+def _write_chunks(pdf, schema, path):
+    """Chunked write on an EXPLICIT StructType. Two reasons, both learned the hard way:
+    a full bite in one createDataFrame call exceeds spark.rpc.message.maxSize (128 MB), and an
+    INFERRED schema drifts between chunks whenever a column happens to be all-null in one of
+    them, which makes the appended parquet unreadable as a single dataset."""
+    _first = True
+    for _s in range(0, len(pdf), LAND_CHUNK_ROWS):
+        _part = pdf.iloc[_s:_s + LAND_CHUNK_ROWS]
+        _sdf = spark.createDataFrame(_part, schema=schema)
+        _sdf.write.mode("overwrite" if _first else "append").parquet(path)
+        _first = False
+        print("   ...", path, "chunk", _s, "-", _s + len(_part), "written", flush=True)
     nback = spark.read.parquet(path).count()
-    assert nback == len(pdf), path + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
-    print(path, ": landed", len(pdf), "rows, HDFS readback confirms", nback)
+    # Marker written ONLY after every chunk landed, so a session killed mid-bite leaves no marker
+    # and the rerun correctly re-pulls instead of trusting a short directory.
+    _marker_schema = StructType([StructField("expected_rows", LongType(), False)])
+    (spark.createDataFrame([(int(nback),)], schema=_marker_schema)
+     .coalesce(1).write.mode("overwrite").parquet(_rowcount_marker_path(path)))
+    return nback
 
 
-_val_month_start = _add_months(WIN_END_DATE, -1).replace(day=1).isoformat()
-_val_month_end = WIN_END_DATE.replace(day=1).isoformat()
-
-_val_sql = """
-WITH day1_accts AS (
-    SELECT TOP 20 acct_no
-    FROM D3CV12A.DLY_FULL_PORTFOLIO
-    WHERE dt_record_ext = DATE '%s'
-    ORDER BY acct_no
-),
-month_rows AS (
-    SELECT p.acct_no, p.dt_record_ext, p.net_prch_amt_dly, p.net_prch_amt_mtd
-    FROM D3CV12A.DLY_FULL_PORTFOLIO p
-    INNER JOIN day1_accts d ON d.acct_no = p.acct_no
-    WHERE p.dt_record_ext >= DATE '%s'
-      AND p.dt_record_ext <  DATE '%s'
-)
-SELECT acct_no,
-       SUM(CAST(net_prch_amt_dly AS FLOAT)) AS sum_dly,
-       MAX(CASE WHEN dt_record_ext = maxdt THEN net_prch_amt_mtd END) AS last_mtd
-FROM (
-    SELECT acct_no, dt_record_ext, net_prch_amt_dly, net_prch_amt_mtd,
-           MAX(dt_record_ext) OVER (PARTITION BY acct_no) AS maxdt
-    FROM month_rows
-) x
-GROUP BY acct_no
-""" % (_val_month_start, _val_month_start, _val_month_end)
-
-_val_pdf = edw_pd(_val_sql)
-assert len(_val_pdf) > 0, "accumulator validation pulled zero accounts for %s - pick a different " \
-    "validation month, this one may have no activity" % _val_month_start
-
-_val_pdf["sum_dly"] = pd.to_numeric(_val_pdf["sum_dly"], errors="coerce")
-_val_pdf["last_mtd"] = pd.to_numeric(_val_pdf["last_mtd"], errors="coerce")
-_val_pdf["ratio"] = _val_pdf["last_mtd"] / _val_pdf["sum_dly"].replace(0, pd.NA)
-print("ACCUMULATOR CHECK - %s sample accounts, month %s | grain: one row per acct_no | %d rows"
-      % (len(_val_pdf), _val_month_start, len(_val_pdf)))
-print(_val_pdf.to_string(index=False))
-
-_bad = _val_pdf[(_val_pdf["sum_dly"].abs() > 1) & (_val_pdf["ratio"].abs() > 3)]
-if len(_bad) > 0:
-    raise RuntimeError(
-        "ACCUMULATOR CHECK FAILED - net_prch_amt_mtd does not reset monthly for %d of %d sampled "
-        "accounts (last_mtd is >3x sum_dly). This looks like a YEAR-to-date accumulator, not "
-        "month-to-date - every monthly spend figure in Cells [3]/[7]/[9] would be wrong until "
-        "this is fixed. Failing rows:\n%s"
-        % (len(_bad), len(_val_pdf), _bad.to_string(index=False))
-    )
-
-ACCUM_VALIDATED = True
-print("ACCUMULATOR CHECK PASSED for all %d sampled accounts - net_prch_amt_mtd resets monthly, "
-      "last-of-month MTD matches SUM(daily deltas) within tolerance. Monthly spend method is sound."
-      % len(_val_pdf))
+def _prep_dfp(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, ("clnt_no has %d null/unparseable values - the SQL filters "
+                          "clnt_no IS NOT NULL, so the filter is not firing" % _n_null)
+    # int64, NEVER float: pandas renders large float64 ids in scientific notation on a string cast
+    # and the join silently matches zero rows (memory: pandas_float_keys_scientific_notation).
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    # fillna BEFORE any int cast - casting a null to int throws "cannot convert non-finite values".
+    for _c in ["n_accts_total"] + ["n_closed_" + T_TAG[o] for o in T_OFFSETS]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
+    for _c in ["annual_spend_t0"] + ["spend_" + T_TAG[o] for o in T_OFFSETS]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0.0).astype("float64")
+    return pdf[[f.name for f in DFP_SPARK_SCHEMA.fields]]
 
 
-# %% [2] PULL EXPOSURE + UNSUB ATTRIBUTION - one row per (clnt_no, mne), bank-wide, bitten.
-# ENGINE: Teradata-direct, reuses EDW/edw_pd/land_bite from Cell [1].
-#
-# trigger_mne / unsub_flag / unsub_dt / n_campaigns_in_window are CLIENT-level facts, denormalized
-# onto every mne row for that client (same "stamp cohort facts on every row" pattern as
-# pcq_q1_26_monthly_balance.sql's cohort_accts). Collapsed to client grain in Cell [8].
+_dfp_spend_cols_sql = ",\n       ".join(
+    "SUM(spend_%s) AS spend_%s" % (T_TAG[o], T_TAG[o]) for o in T_OFFSETS)
+_dfp_closed_cols_sql = ",\n       ".join(
+    "SUM(CASE WHEN acct_cls_dt IS NOT NULL AND acct_cls_dt <= DATE '%s' THEN 1 ELSE 0 END) "
+    "AS n_closed_%s" % (T_ANCHOR[o].isoformat(), T_TAG[o]) for o in T_OFFSETS)
+_dfp_acct_spend_sql = ",\n           ".join(
+    "SUM(CASE WHEN ym = %d THEN acct_month_spend ELSE 0 END) AS spend_%s" % (T_YM[o], T_TAG[o])
+    for o in T_OFFSETS)
 
-assert "ACCUM_VALIDATED" in globals() and ACCUM_VALIDATED, "Run Cell [1] first - it validates " \
-    "the accumulator this file depends on."
 
-
-def _exposure_sql(bite):
+def _dfp_sql(bite):
     return """
-    WITH sends_member AS (
-        SELECT DISTINCT m.CLNT_NO AS clnt_no, ek.consumer_id_hashed,
-               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
-               CAST(ek.disposition_dt_tm AS TIMESTAMP(0)) AS send_ts
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE ek.disposition_cd = 1
-          AND ek.disposition_dt_tm >= DATE '%(win_start)s'
-          AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
-    ),
-    sends_lookback AS (
-        SELECT DISTINCT m.CLNT_NO AS clnt_no, ek.consumer_id_hashed,
-               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
-               CAST(ek.disposition_dt_tm AS TIMESTAMP(0)) AS send_ts
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE ek.disposition_cd = 1
-          AND ek.disposition_dt_tm >= DATE '%(attr_start)s'
-          AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
-    ),
-    unsubs_first AS (
-        SELECT clnt_no, consumer_id_hashed, unsub_ts
-        FROM (
-            SELECT m.CLNT_NO AS clnt_no, ek.consumer_id_hashed,
-                   CAST(ek.disposition_dt_tm AS TIMESTAMP(0)) AS unsub_ts,
-                   ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO ORDER BY ek.disposition_dt_tm ASC) AS rn
-            FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-            INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-              ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-            WHERE ek.disposition_cd = 4
-              AND ek.disposition_dt_tm >= DATE '%(win_start)s'
-              AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-              AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
-        ) z
-        WHERE rn = 1
-    ),
-    attributed AS (
-        SELECT clnt_no, trigger_mne
-        FROM (
-            SELECT u.clnt_no, l.mne AS trigger_mne,
-                   ROW_NUMBER() OVER (PARTITION BY u.clnt_no ORDER BY l.send_ts DESC) AS rn
-            FROM unsubs_first u
-            INNER JOIN sends_lookback l
-              ON l.consumer_id_hashed = u.consumer_id_hashed
-             AND l.send_ts <  u.unsub_ts
-             AND l.send_ts >= u.unsub_ts - INTERVAL '%(response_days)d' DAY
-        ) y
-        WHERE rn = 1
-    ),
-    member_agg AS (
-        SELECT clnt_no, mne, COUNT(*) AS n_sends_in_window,
-               MIN(send_ts) AS first_send_dt, MAX(send_ts) AS last_send_dt
-        FROM sends_member
-        GROUP BY clnt_no, mne
-    ),
-    client_campaigns AS (
-        SELECT clnt_no, COUNT(DISTINCT mne) AS n_campaigns_in_window
-        FROM sends_member
-        GROUP BY clnt_no
-    )
-    SELECT ma.clnt_no, ma.mne, ma.n_sends_in_window, ma.first_send_dt, ma.last_send_dt,
-           cc.n_campaigns_in_window,
-           CASE WHEN u.clnt_no IS NOT NULL THEN 1 ELSE 0 END AS unsub_flag,
-           u.unsub_ts AS unsub_dt,
-           a.trigger_mne
-    FROM member_agg ma
-    INNER JOIN client_campaigns cc ON cc.clnt_no = ma.clnt_no
-    LEFT JOIN unsubs_first u ON u.clnt_no = ma.clnt_no
-    LEFT JOIN attributed a ON a.clnt_no = ma.clnt_no
-    """ % {"win_start": WIN_START, "win_end": WIN_END, "attr_start": ATTR_SEND_START,
-           "n_bites": N_BITES, "bite": bite, "response_days": RESPONSE_DAYS}
-
-
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_bite(EXPOSURE_DIR, _b, _exposure_sql(_b))
-
-print("Cell [2] done - exposure grain landed at", EXPOSURE_DIR + "*",
-      "| one row per (clnt_no, mne), client-level attribution facts denormalized on every row.")
-
-
-# %% [3] PULL CLIENT MONTHLY SPEND - one row per (clnt_no, ym), bitten. ENGINE: Teradata-direct.
-#
-# One row per (acct_no, month) at MAX(dt_record_ext) within the month holds that month's true
-# total (Cell [1] just proved this). Summed across a client's accounts -> client_month_spend.
-# No row for a (clnt_no, ym) means zero spend that month (event-driven gaps) - NOT an exclusion,
-# handled downstream via coalesce-to-zero, never dropped.
-
-def _spend_sql(bite):
-    return """
-    WITH cohort_bite AS (
-        SELECT DISTINCT m.CLNT_NO AS clnt_no
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE ek.disposition_cd = 1
-          AND ek.disposition_dt_tm >= DATE '%(win_start)s'
-          AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
-    ),
-    dfp_scoped AS (
-        SELECT p.clnt_no, p.acct_no, p.dt_record_ext, p.net_prch_amt_mtd
+    WITH dfp_scoped AS (
+        -- ONE scan of DLY_FULL_PORTFOLIO. The bite predicate is INSIDE this scan, not in an outer
+        -- WHERE: outside, the full table spools before the bite narrows anything, which is the
+        -- Teradata 2646 failure mode. ABS() because MOD of a negative id is negative in Teradata
+        -- and would match no bite at all.
+        -- dt_record_ext is the record date and the thing to filter on; me_dt is only a month-end
+        -- tag shared by every row in a month (table_catalog_notes.md lines 155-156).
+        SELECT p.clnt_no,
+               p.acct_no,
+               p.dt_record_ext,
+               p.acct_cls_dt,
+               CAST(p.net_prch_amt_mtd AS FLOAT) AS net_prch_amt_mtd,
+               EXTRACT(YEAR FROM p.dt_record_ext) * 100
+                 + EXTRACT(MONTH FROM p.dt_record_ext) AS ym
         FROM D3CV12A.DLY_FULL_PORTFOLIO p
-        INNER JOIN cohort_bite c ON c.clnt_no = p.clnt_no
-        WHERE p.dt_record_ext >= DATE '%(spend_floor)s'
-          AND p.dt_record_ext <  DATE '%(spend_ceiling)s'
+        WHERE p.dt_record_ext >= DATE '%(floor)s'
+          AND p.dt_record_ext <  DATE '%(ceil)s'
+          AND p.clnt_no IS NOT NULL
           AND MOD(ABS(p.clnt_no), %(n_bites)d) = %(bite)d
+          AND EXTRACT(YEAR FROM p.dt_record_ext) * 100
+                + EXTRACT(MONTH FROM p.dt_record_ext) IN (%(yms)s)
     ),
     ranked AS (
-        SELECT clnt_no, acct_no, net_prch_amt_mtd,
-               EXTRACT(YEAR FROM dt_record_ext) * 100 + EXTRACT(MONTH FROM dt_record_ext) AS ym,
-               ROW_NUMBER() OVER (
-                   PARTITION BY acct_no,
-                                EXTRACT(YEAR FROM dt_record_ext) * 100 + EXTRACT(MONTH FROM dt_record_ext)
-                   ORDER BY dt_record_ext DESC) AS rn
+        -- Last record per (acct_no, month). The month total lives on that row's
+        -- net_prch_amt_mtd - a running month-to-date accumulator, proven to reset by Cell [1].
+        -- Summing the daily rows instead would double-count nothing but would silently drop the
+        -- spend on days with no row, since DFP is event-driven with gaps.
+        SELECT clnt_no, acct_no, ym, acct_cls_dt, net_prch_amt_mtd,
+               ROW_NUMBER() OVER (PARTITION BY acct_no, ym
+                                  ORDER BY dt_record_ext DESC) AS rn
         FROM dfp_scoped
     ),
     acct_month AS (
-        SELECT clnt_no, acct_no, ym, net_prch_amt_mtd AS acct_month_spend
+        SELECT clnt_no, acct_no, ym, acct_cls_dt,
+               net_prch_amt_mtd AS acct_month_spend
         FROM ranked
         WHERE rn = 1
-    )
-    SELECT clnt_no, CAST(ym AS VARCHAR(6)) AS ym,
-           SUM(CAST(acct_month_spend AS FLOAT)) AS client_month_spend
-    FROM acct_month
-    GROUP BY clnt_no, ym
-    """ % {"win_start": WIN_START, "win_end": WIN_END, "spend_floor": SPEND_FLOOR,
-           "spend_ceiling": SPEND_CEILING, "n_bites": N_BITES, "bite": bite}
-
-
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_bite(SPEND_DIR, _b, _spend_sql(_b))
-
-print("Cell [3] done - client monthly spend landed at", SPEND_DIR + "*",
-      "| one row per (clnt_no, ym) with activity - gaps mean zero spend, filled downstream.")
-
-
-# %% [4] PULL ACCOUNT CLOSURE STATE - one row per (clnt_no, acct_no), bitten. ENGINE: Teradata-direct.
-#
-# acct_cls_dt is a PERMANENT flag once set (RUN_THIS_dfp_only.py: "status is one-way ... once an
-# account goes non-OPEN it stays non-OPEN"). MAX() here is defensive collapse of the daily rows
-# to one value per account, not a real MAX-over-time (the value should already be constant).
-# See UNVERIFIED #4/#5 in the file header for what this does NOT capture.
-
-def _closure_sql(bite):
-    return """
-    WITH cohort_bite AS (
-        SELECT DISTINCT m.CLNT_NO AS clnt_no
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE ek.disposition_cd = 1
-          AND ek.disposition_dt_tm >= DATE '%(win_start)s'
-          AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
     ),
-    dfp_scoped AS (
-        SELECT p.clnt_no, p.acct_no, p.acct_cls_dt
-        FROM D3CV12A.DLY_FULL_PORTFOLIO p
-        INNER JOIN cohort_bite c ON c.clnt_no = p.clnt_no
-        WHERE p.dt_record_ext >= DATE '%(spend_floor)s'
-          AND p.dt_record_ext <  DATE '%(spend_ceiling)s'
-          AND MOD(ABS(p.clnt_no), %(n_bites)d) = %(bite)d
+    acct_wide AS (
+        -- Collapse to ONE row per account, pivoting the months into columns. Doing the closure
+        -- roll-up here rather than at client grain avoids needing several COUNT(DISTINCT) in one
+        -- SELECT, which Teradata handles badly.
+        SELECT clnt_no, acct_no,
+           MAX(acct_cls_dt) AS acct_cls_dt,
+           SUM(CASE WHEN ym IN (%(annual_yms)s) THEN acct_month_spend ELSE 0 END) AS annual_spend,
+           %(acct_spend)s
+        FROM acct_month
+        GROUP BY clnt_no, acct_no
     )
-    SELECT clnt_no, acct_no, MAX(acct_cls_dt) AS acct_cls_dt
-    FROM dfp_scoped
-    GROUP BY clnt_no, acct_no
-    """ % {"win_start": WIN_START, "win_end": WIN_END, "spend_floor": SPEND_FLOOR,
-           "spend_ceiling": SPEND_CEILING, "n_bites": N_BITES, "bite": bite}
+    SELECT clnt_no,
+       COUNT(*) AS n_accts_total,
+       SUM(annual_spend) AS annual_spend_t0,
+       %(spend_cols)s,
+       %(closed_cols)s
+    FROM acct_wide
+    GROUP BY clnt_no
+    """ % {"floor": SPEND_FLOOR, "ceil": SPEND_CEILING, "n_bites": N_BITES, "bite": bite,
+           "yms": SPEND_YMS_SQL, "annual_yms": ANNUAL_YMS_SQL,
+           "acct_spend": _dfp_acct_spend_sql, "spend_cols": _dfp_spend_cols_sql,
+           "closed_cols": _dfp_closed_cols_sql}
 
 
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_bite(CLOSURE_DIR, _b, _closure_sql(_b))
+def land_dfp_bite(bite):
+    path = DFP_DIR + "bite_%d" % bite
+    if _landed(path):
+        print(path, ": already landed,", spark.read.parquet(path).count(), "rows - SKIP")
+        return
+    pdf = edw_pd(_dfp_sql(bite))
+    assert len(pdf) > 0, (
+        path + " pulled zero rows - investigate before proceeding. A future-dated offset makes a "
+        "bite thin, it does not empty it: the annual-lookback months are all in the past.")
+    pdf = _prep_dfp(pdf)
+    nback = _write_chunks(pdf, DFP_SPARK_SCHEMA, path)
+    assert nback == len(pdf), path + " HDFS readback mismatch: pulled %d, read back %d" % (
+        len(pdf), nback)
+    print(path, ": landed", len(pdf), "rows (one per clnt_no, offsets pivoted), readback", nback)
 
-print("Cell [4] done - account closure state landed at", CLOSURE_DIR + "*",
-      "| one row per (clnt_no, acct_no). NULL acct_cls_dt = never closed in the scan window.")
+
+if "DFP" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_dfp_bite(_b)
+else:
+    print("DFP pull skipped - not in RUN_PULLS")
+
+print("Cell [3] done - DFP landed at", DFP_DIR + "bite_*",
+      "| one row per clnt_no: n_accts_total, annual_spend_t0, spend and n_closed per t_offset.")
 
 
-# %% [5] PULL REVOLVER/TRANSACTOR BEHAVIOR - one row per (acct_no, me_dt), bitten. ENGINE: Teradata-direct.
+# %% [4] PULL BEHAVIOUR - revolver/transactor/dormant, one row per CLIENT, offsets pivoted.
+# ENGINE: Teradata-direct (D3CV12A.CR_CRD_RPTS_ACCT, no catalog prefix, teradatasql).
 #
-# Bridged through DFP's acct_no set for this bite (UNVERIFIED #2 - CR_CRD_RPTS_ACCT itself has
-# no clnt_no). MAX(usg_bhvr_seg_at_cyc_cd) collapses any duplicate (acct_no, ME_DT) rows -
-# arbitrary tiebreak (UNVERIFIED #1), not a documented rule. Per-t_offset as-of matching happens
-# in Spark (Cell [8]) - this cell lands the raw monthly segment history, undecided by time point.
+# NO BRIDGE THROUGH DFP. CR_CRD_RPTS_ACCT carries clnt_no directly - crv_acct_to_clnt_bridge.sql:3-10
+# exists solely to use it as the account-to-client lookup, and c4_demand_shaping.sql:73-77 selects
+# r.acct_no, r.clnt_no off it. See DEPARTURE D2 in the header. That removes a whole DFP re-scan and
+# lets the bite predicate sit inside the innermost derived table, same as every other pull here.
+#
+# ME_DT is the snapshot column (26_behavior_mix_by_overlap_arm.sql:64-66, c4_demand_shaping.sql:94-99).
+# Matching is on the EXACT anchor month-ends, an IN-list of six dates - a client with no row at
+# that exact month-end reads no_data rather than carrying the previous month forward (UNVERIFIED U8).
+#
+# The DISTINCT-value probe runs FIRST, before any bite, because the whole rank mapping below rests
+# on values nobody in this repo has ever printed (UNVERIFIED U1). Anything outside the three
+# expected labels lands on rank 4 = other_or_none and shows up in the probe output.
 
-def _behavior_sql(bite):
+_seg_case_sql = "\n                    ".join(
+    "WHEN TRIM(r.usg_bhvr_seg_at_cyc_cd) = '%s' THEN %d" % (lbl, rk) for lbl, rk in SEG_PRECEDENCE)
+_bhv_rank_cols_sql = ",\n       ".join(
+    "MIN(CASE WHEN me_dt = DATE '%s' THEN seg_rank END) AS bhvr_rank_%s"
+    % (T_ANCHOR[o].isoformat(), T_TAG[o]) for o in T_OFFSETS)
+
+_probe_sql = """
+SELECT r.usg_bhvr_seg_at_cyc_cd AS raw_value, COUNT(*) AS accounts
+FROM D3CV12A.CR_CRD_RPTS_ACCT r
+WHERE r.ME_DT = DATE '%s'
+GROUP BY r.usg_bhvr_seg_at_cyc_cd
+ORDER BY accounts DESC
+""" % T_ANCHOR[0].isoformat()
+
+if "BHV" in RUN_PULLS:
+    _probe = edw_pd(_probe_sql)
+    _probe.columns = [c.lower() for c in _probe.columns]
+    print("BEHAVIOUR VALUE PROBE - distinct usg_bhvr_seg_at_cyc_cd at ME_DT %s | grain: one row "
+          "per raw value | %d rows" % (T_ANCHOR[0].isoformat(), len(_probe)))
+    print(_probe.to_string(index=False))
+    _expected = [lbl for lbl, _ in SEG_PRECEDENCE]
+    _seen = [str(v).strip() for v in _probe["raw_value"].tolist()]
+    _unmapped = [v for v in _seen if v not in _expected and v not in ("", "None", "nan")]
+    if _unmapped:
+        print("WARNING (UNVERIFIED U1): these raw values are NOT in SEG_PRECEDENCE and will be "
+              "labelled other_or_none, not folded into a real segment:", _unmapped)
+        print("If any of them is really a Revolver/Transactor/Dormant code, add it to "
+              "SEG_PRECEDENCE in Cell [0] and rerun this pull before reading the cube.")
+    else:
+        print("All raw values map cleanly onto SEG_PRECEDENCE", _expected, "- U1 is now resolved "
+              "for this snapshot. Record it in UNSUB_TRACKING_KNOWLEDGE.md.")
+else:
+    print("Behaviour probe skipped - BHV not in RUN_PULLS")
+
+
+def _prep_bhv(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, ("clnt_no has %d null/unparseable values - the SQL filters "
+                          "clnt_no IS NOT NULL, so the filter is not firing" % _n_null)
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    for _c in ["bhvr_rank_" + T_TAG[o] for o in T_OFFSETS]:
+        # 0 is the sentinel for "no row at that exact month-end", mapped to no_data in Cell [6].
+        # fillna before the int cast - a null cast to int throws on non-finite values.
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int32")
+    return pdf[[f.name for f in BHV_SPARK_SCHEMA.fields]]
+
+
+def _bhv_sql(bite):
     return """
-    WITH cohort_bite AS (
-        SELECT DISTINCT m.CLNT_NO AS clnt_no
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT ek
-        INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
-        WHERE ek.disposition_cd = 1
-          AND ek.disposition_dt_tm >= DATE '%(win_start)s'
-          AND ek.disposition_dt_tm <  DATE '%(win_end)s'
-          AND MOD(m.CLNT_NO, %(n_bites)d) = %(bite)d
-    ),
-    cohort_accts AS (
-        SELECT DISTINCT p.acct_no
-        FROM D3CV12A.DLY_FULL_PORTFOLIO p
-        INNER JOIN cohort_bite c ON c.clnt_no = p.clnt_no
-        WHERE p.dt_record_ext >= DATE '%(spend_floor)s'
-          AND p.dt_record_ext <  DATE '%(spend_ceiling)s'
-          AND MOD(ABS(p.clnt_no), %(n_bites)d) = %(bite)d
+    WITH seg AS (
+        -- Bite predicate INSIDE the scan, on CR_CRD_RPTS_ACCT's own clnt_no. ABS() because
+        -- Teradata MOD of a negative id is negative and matches no bite.
+        -- ME_DT restricted to the six anchor month-ends, so this reads six monthly snapshots
+        -- rather than the whole history.
+        SELECT r.clnt_no,
+               r.acct_no,
+               r.ME_DT AS me_dt,
+               CASE
+                    %(seg_case)s
+                    ELSE 4
+               END AS seg_rank
+        FROM D3CV12A.CR_CRD_RPTS_ACCT r
+        WHERE r.ME_DT IN (%(anchors)s)
+          AND r.clnt_no IS NOT NULL
+          AND MOD(ABS(r.clnt_no), %(n_bites)d) = %(bite)d
     )
-    SELECT r.acct_no, r.ME_DT AS me_dt, MAX(r.usg_bhvr_seg_at_cyc_cd) AS usg_bhvr_seg
-    FROM D3CV12A.CR_CRD_RPTS_ACCT r
-    INNER JOIN cohort_accts a ON a.acct_no = r.acct_no
-    WHERE r.ME_DT >= DATE '%(spend_floor)s'
-      AND r.ME_DT <  DATE '%(spend_ceiling)s'
-    GROUP BY r.acct_no, r.ME_DT
-    """ % {"win_start": WIN_START, "win_end": WIN_END, "spend_floor": SPEND_FLOOR,
-           "spend_ceiling": SPEND_CEILING, "n_bites": N_BITES, "bite": bite}
+    SELECT clnt_no,
+       %(rank_cols)s
+    FROM seg
+    GROUP BY clnt_no
+    """ % {"seg_case": _seg_case_sql, "anchors": ANCHOR_DATES_SQL, "n_bites": N_BITES,
+           "bite": bite, "rank_cols": _bhv_rank_cols_sql}
+    # MIN(seg_rank) per client implements the precedence in SEG_PRECEDENCE (rank 1 wins) and, as a
+    # side effect, makes duplicate rows per (acct_no, ME_DT) harmless - see UNVERIFIED U2 and U3.
 
 
-for _b in (range(1) if SMOKE else range(N_BITES)):
-    land_bite(BEHAVIOR_DIR, _b, _behavior_sql(_b))
-
-print("Cell [5] done - behavior history landed at", BEHAVIOR_DIR + "*",
-      "| one row per (acct_no, me_dt). As-of matching to each t_offset happens in Cell [8].")
-
-
-# %% [6] READ HELPERS - loud schema asserts, mirrors spotlight.py's read_base(). ENGINE: PySpark.
-
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
-
-spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
-
-
-def _read(dir_path, cols, label):
-    sdf = spark.read.parquet(dir_path + "*")
-    missing = [c for c in cols if c not in sdf.columns]
-    if missing:
-        raise RuntimeError(
-            "%s at %s is missing %s. Found: %s. Stale/short schema - delete %s and rerun its "
-            "pull cell." % (label, dir_path, missing, sdf.columns, dir_path))
-    return sdf
+def land_bhv_bite(bite):
+    path = BHV_DIR + "bite_%d" % bite
+    if _landed(path):
+        print(path, ": already landed,", spark.read.parquet(path).count(), "rows - SKIP")
+        return
+    pdf = edw_pd(_bhv_sql(bite))
+    assert len(pdf) > 0, (
+        path + " pulled zero rows - investigate. Future-dated offsets are expected to be empty, "
+        "but t=-3 and t=0 are both in the past, so an empty bite means the ME_DT IN-list or the "
+        "bite predicate is wrong.")
+    pdf = _prep_bhv(pdf)
+    nback = _write_chunks(pdf, BHV_SPARK_SCHEMA, path)
+    assert nback == len(pdf), path + " HDFS readback mismatch: pulled %d, read back %d" % (
+        len(pdf), nback)
+    print(path, ": landed", len(pdf), "rows (one per clnt_no, offsets pivoted), readback", nback)
 
 
-def read_exposure():
-    return (_read(EXPOSURE_DIR, EXPOSURE_COLS, "exposure")
-            .withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long")))
+if "BHV" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_bhv_bite(_b)
+else:
+    print("Behaviour pull skipped - not in RUN_PULLS")
+
+print("Cell [4] done - behaviour landed at", BHV_DIR + "bite_*",
+      "| one row per clnt_no, bhvr_rank per t_offset (1 Revolver, 2 Transactor, 3 Dormant, "
+      "4 other_or_none, 0 no row at that month-end).")
 
 
-def read_spend():
-    return (_read(SPEND_DIR, SPEND_COLS, "spend")
-            .withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
-            .withColumn("client_month_spend", F.col("client_month_spend").cast("double")))
+# %% [5] UCP AT SIX MONTH-ENDS - one row per (clnt_no, t_offset). ENGINE: PySpark (YARN) reading
+# HDFS parquet. Not Trino, not Teradata.
+#
+# THE FIX THIS REWRITE EXISTS FOR. The morning version applied ONE snapshot to every offset, so
+# profitability and product depth were flat across t = -3 -> +12 by construction. In a file about
+# change over time that is a hole, not a simplification.
+#
+# MONTH_END_DATE is a PATH SEGMENT, not a column (references/ucp/README.md:56-64), so six snapshots
+# is six partition paths handed to ONE spark.read - one Spark job, not six queries. basePath makes
+# MONTH_END_DATE reappear as a column so each row knows which snapshot it came from.
+#
+# Order of operations matters: filter Personal, select the seven columns, then SEMI-JOIN down to
+# the cohort IMMEDIATELY - before the TIBC arithmetic, before dedup, before anything. Otherwise
+# this carries 12.3M rows x 6 snapshots through every subsequent step.
+
+_ucp_paths = {}
+_ucp_missing = []
+_ucp_ceiling = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
 
 
-def read_closure():
-    return (_read(CLOSURE_DIR, CLOSURE_COLS, "closure")
-            .withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long")))
+def _hdfs_exists(path):
+    _jvm = spark._jvm
+    _p = _jvm.org.apache.hadoop.fs.Path(path)
+    return _p.getFileSystem(spark._jsc.hadoopConfiguration()).exists(_p)
 
 
-def read_behavior():
-    return _read(BEHAVIOR_DIR, BEHAVIOR_COLS, "behavior")
+for _o in T_OFFSETS:
+    _d = T_ANCHOR[_o].isoformat()
+    _p = UCP_BASE + "MONTH_END_DATE=" + _d
+    if _hdfs_exists(_p):
+        _ucp_paths[_o] = _p
+    else:
+        _ucp_missing.append((_o, _d, _p))
 
+# A missing PAST partition is a real data gap and must stop the run - it would show up in the cube
+# as a genuine-looking trend break. A missing FUTURE partition is arithmetic: UCP has no partition
+# for a month that has not closed yet (references/ucp/gotchas.md #1).
+_past_missing = [(o, d, p) for (o, d, p) in _ucp_missing
+                 if datetime.date(*[int(x) for x in d.split("-")]) <= _ucp_ceiling]
+_future_missing = [(o, d, p) for (o, d, p) in _ucp_missing if (o, d, p) not in _past_missing]
 
-print("Cell [6] done - read_exposure/read_spend/read_closure/read_behavior ready.")
+if _past_missing:
+    raise RuntimeError(
+        "UCP partition MISSING for a CLOSED month - refusing to run. A silently absent month "
+        "reads as a real trend in the cube. Missing: %s. Confirmed-available range per "
+        "references/ucp/gotchas.md #1 is 2023-12-31 through 2026-06-30; check the path and the "
+        "t=0 anchor (%s)." % (_past_missing, T0_ANCHOR.isoformat()))
 
+if _future_missing:
+    print("UCP has NO partition for these offsets because their month-end has not closed yet "
+          "(last closed month-end: %s):" % _ucp_ceiling.isoformat())
+    for _o, _d, _p in _future_missing:
+        print("   t = %+d  ->  %s  (no partition)" % (_o, _d))
+    print("Those offsets carry prod_cat_cnt = no_ucp_match and a NULL profit proxy in the cube. "
+          "They are NOT zeros and must not be read as a decline. Spend and behaviour at those "
+          "offsets are likewise thin-to-empty. Move WIN_END forward and rerun once the months "
+          "close.")
 
-# %% [7] UCP PROFIT PROXY JOIN - snapshot = last CLOSED month, CLNT_TYP='Personal'.
-# ENGINE: PySpark (YARN) reading HDFS parquet - not Trino, not Teradata.
-# Pattern per references/ucp/README.md "Canonical read pattern" + gotchas.md #1/#3/#4.
+UCP_OFFSETS_AVAILABLE = sorted(_ucp_paths.keys())
+assert 0 in UCP_OFFSETS_AVAILABLE and -3 in UCP_OFFSETS_AVAILABLE, (
+    "UCP is missing t=0 and/or t=-3 (%s). Those two carry the whole pre/post comparison - there is "
+    "no point running the cube without them." % UCP_OFFSETS_AVAILABLE)
+print("UCP partitions to read:", {o: _ucp_paths[o] for o in UCP_OFFSETS_AVAILABLE})
 
-import datetime as _dt
-
-_ucp_anchor_date = _dt.date.today().replace(day=1) - _dt.timedelta(days=1)   # last closed month-end
-_ucp_anchor = _ucp_anchor_date.strftime("%Y-%m-%d")
-_ucp_path = UCP_BASE + "MONTH_END_DATE=" + _ucp_anchor
 _TIBC_COLS = ["T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
-_UCP_COLS = ["CLNT_NO", "CLNT_TYP", "PROF_TOT_ANNUAL"] + _TIBC_COLS
+_UCP_COLS = ["CLNT_NO", "CLNT_TYP", "AGE", "TENURE_RBC_YEARS", "PROF_TOT_ANNUAL"] + _TIBC_COLS
 
-_ucp_raw = spark.read.option("basePath", UCP_BASE).parquet(_ucp_path)
-_missing = [c for c in _UCP_COLS if c not in _ucp_raw.columns]
-assert not _missing, "UCP missing required columns at " + _ucp_anchor + ": " + str(_missing)
-print("UCP SCHEMA PROBE at", _ucp_anchor, "- all required columns present:", _UCP_COLS)
+_ucp_raw = (spark.read.option("basePath", UCP_BASE)
+            .parquet(*[_ucp_paths[o] for o in UCP_OFFSETS_AVAILABLE]))
+_missing_cols = [c for c in _UCP_COLS if c not in _ucp_raw.columns]
+assert not _missing_cols, (
+    "UCP is missing required columns across the six partitions: %s. Found: %s. Every one of these "
+    "is marked CONFIRMED live 2026-07-27 in references/ucp/field_catalog_personal.md - if one has "
+    "gone, stop and re-probe the schema before trusting anything here."
+    % (_missing_cols, _ucp_raw.columns))
+assert "MONTH_END_DATE" in _ucp_raw.columns, (
+    "MONTH_END_DATE did not materialise as a partition column - basePath was not honoured, so "
+    "every row would be untagged and all six snapshots would collapse into one.")
+print("UCP SCHEMA PROBE - all required columns present across", len(UCP_OFFSETS_AVAILABLE),
+      "partitions:", _UCP_COLS)
 
-_held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in _TIBC_COLS]
+# Path segment -> t_offset. Built from the same dict that produced the paths, so they cannot drift.
+_offset_expr = None
+for _o in UCP_OFFSETS_AVAILABLE:
+    _cond = F.col("MONTH_END_DATE").cast("string") == T_ANCHOR[_o].isoformat()
+    _offset_expr = F.when(_cond, F.lit(_o)) if _offset_expr is None else _offset_expr.when(_cond, F.lit(_o))
+
+_cohort_ids = cohort.select("clnt_no").distinct()
 
 ucp_sel = (_ucp_raw
            .filter(F.trim(F.col("CLNT_TYP")) == "Personal")
-           .select(*_UCP_COLS)
+           .select(*(_UCP_COLS + ["MONTH_END_DATE"]))
+           .withColumn("t_offset", _offset_expr)
            .withColumn("clnt_no", F.col("CLNT_NO").cast("decimal(18,0)").cast("long"))
-           .withColumn("prod_cat_cnt", (_held[0] + _held[1] + _held[2] + _held[3]).cast("string"))
+           .drop("CLNT_NO", "CLNT_TYP")
+           # SEMI-JOIN TO THE COHORT NOW - before the TIBC arithmetic, before dedup. Otherwise this
+           # carries about 12.3M rows per snapshot x 6 through everything that follows.
+           .join(_cohort_ids, "clnt_no", "left_semi"))
+
+assert ucp_sel.filter(F.col("t_offset").isNull()).limit(1).count() == 0, \
+    "some UCP rows did not map to a t_offset - MONTH_END_DATE format differs from the ISO date " \
+    "used to build the partition paths."
+
+# prod_cat_cnt = COUNT of NONZERO TIBC categories (0-4), NEVER their sum. Summing the four counts
+# measures ACCOUNT VOLUME, not product depth (spotlight.py:97-102 / unsub_value_museum.py:1126-1174).
+_held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in _TIBC_COLS]
+
+ucp_off = (ucp_sel
+           .withColumn("prod_cat_cnt", (_held[0] + _held[1] + _held[2] + _held[3]))
+           .withColumnRenamed("AGE", "age")
+           .withColumnRenamed("TENURE_RBC_YEARS", "tenure_years")
+           # Named _ucp_proxy deliberately: PROF_TOT_ANNUAL is bank-wide and formally undefined
+           # (references/ucp/gotchas.md #8), so the caveat travels with the column.
            .withColumnRenamed("PROF_TOT_ANNUAL", "prof_annual_ucp_proxy")
-           .select("clnt_no", "prod_cat_cnt", "prof_annual_ucp_proxy"))
+           .select("clnt_no", "t_offset", "age", "tenure_years",
+                   F.col("prod_cat_cnt").cast("string").alias("prod_cat_cnt"),
+                   F.col("prof_annual_ucp_proxy").cast("double").alias("prof_annual_ucp_proxy")))
 
-_cohort_ids = read_exposure().select("clnt_no").distinct()
-_left_n = _cohort_ids.count()
-_matched_n = _cohort_ids.join(ucp_sel.select("clnt_no").distinct(), "clnt_no", "inner").count()
-_match_pct = 100.0 * _matched_n / _left_n if _left_n else 0.0
-print("UCP JOIN MATCH RATE - cohort clients:", _left_n, "| matched to UCP:", _matched_n,
-      "| match pct: %.1f%%" % _match_pct)
-print("Sample cohort clnt_no (5):", [r.clnt_no for r in _cohort_ids.limit(5).collect()])
-print("Sample UCP clnt_no (5):", [r.clnt_no for r in ucp_sel.select("clnt_no").limit(5).collect()])
-print("Below ~70%% would look like a broken join key rather than ordinary attrition - UCP is "
-      "personal-only on one snapshot month, see spotlight.py Cell [4] for the same floor logic. "
-      "No hard assert here (directional file, not the profit-critical one) - read the number.")
+# DEDUP before it becomes the right side of a left join. Measured on the single-snapshot version
+# 2026-07-31: exactly ONE duplicate in 12.3M - tiny, but one duplicate fans that client out through
+# every offset of every cube.
+_n_pre = ucp_off.count()
+ucp_off = ucp_off.dropDuplicates(["clnt_no", "t_offset"])
+_n_post = ucp_off.count()
+print("UCP rows after cohort semi-join:", _n_pre, "| after dedup on (clnt_no, t_offset):", _n_post,
+      "| duplicates removed:", _n_pre - _n_post)
 
-ucp_enriched = (_cohort_ids
-                 .join(ucp_sel, "clnt_no", "left")
-                 .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match")))
-                 .withColumn("prof_annual_ucp_proxy", F.col("prof_annual_ucp_proxy").cast("double")))
+ucp_off.write.mode("overwrite").parquet(UCP_DIR)
+_ucp_land = read_ucp_offsets().cache()
 
-ucp_enriched.write.mode("overwrite").parquet(UCP_DIR)
-_n_ucp = spark.read.parquet(UCP_DIR).count()
-print("Cell [7] done - ucp_enriched landed at", UCP_DIR, "| one row per cohort clnt_no |",
-      _n_ucp, "rows. prod_cat_cnt/prof_annual_ucp_proxy are a SINGLE fixed snapshot - see "
-      "UNVERIFIED #7.")
+_per_off = (_ucp_land.groupBy("t_offset")
+            .agg(F.count("*").alias("rows"),
+                 F.countDistinct("clnt_no").alias("distinct_clients"))
+            .orderBy("t_offset"))
+print("UCP MATCH BY OFFSET | grain: one row per t_offset | cohort size", COHORT_N)
+_per_off.show(truncate=False)
+
+_per_off_pd = _per_off.toPandas()
+for _r in _per_off_pd.itertuples(index=False):
+    assert _r.rows == _r.distinct_clients, (
+        "UCP offset %d has %d rows for %d distinct clients - the dedup did not hold and every "
+        "left join at that offset fans out." % (_r.t_offset, _r.rows, _r.distinct_clients))
+    assert _r.rows <= COHORT_N, (
+        "UCP offset %d has %d rows against a cohort of %d - the semi-join did not narrow to the "
+        "cohort." % (_r.t_offset, _r.rows, COHORT_N))
+print("Cell [5] done - ucp_offsets landed at", UCP_DIR,
+      "| one row per (clnt_no, t_offset) | rows == distinct clients at every offset, confirmed.")
+print("Match rate is expected below 100 pct: UCP is personal-only, so business recipients and "
+      "clients closed before a given snapshot never match. A LOW rate at one offset only is the "
+      "signal worth chasing - a uniformly low rate is the usual personal-only attrition.")
 
 
-# %% [8] BUILD CLIENT x T_OFFSET LONG TABLE - the join layer. Nothing here is the deliverable;
-# Cell [9] aggregates this into the cube and this table gets dropped in Cell [10].
-# ENGINE: PySpark (YARN).
+# %% [6] CLIENT x T_OFFSET LONG TABLE - the join layer. Nothing here is the deliverable; Cell [7]
+# aggregates it into the cubes and Cell [8] can delete it. ENGINE: PySpark (YARN).
+#
+# Outcomes are CLIENT-level throughout. Spend and profit are not divisible across the campaigns
+# that mailed a client, so trigger_mne and n_campaigns_cards ride along as descriptive tags on the
+# client - never as a way of splitting a dollar.
 
-exposure = read_exposure()
-spend = read_spend()
-closure = read_closure()
-behavior = read_behavior()
-ucp_enriched = spark.read.parquet(UCP_DIR)
+dfp_wide = read_dfp()
+bhv_wide = read_bhv()
+ucp_off = read_ucp_offsets()
 
-# ---- client-level exposure rollup ----
-_cards_u = F.upper(F.trim(F.col("mne")))
-exposure_tagged = exposure.withColumn("is_cards_mne", F.when(_cards_u.isin(sorted(CARDS_MNES)), 1).otherwise(0))
-client_exposure = (exposure_tagged.groupBy("clnt_no")
-                    .agg(F.max("unsub_flag").alias("unsub_flag"),
-                         F.max("n_campaigns_in_window").alias("n_campaigns_in_window"),
-                         F.max("is_cards_mne").alias("is_cards_exposed"),
-                         F.max("trigger_mne").alias("trigger_mne"))
-                    .withColumn("bucket", F.when(F.col("unsub_flag") == 1, "LEAVER").otherwise("STAYER")))
+# ---- pivot the wide pulls back to long, one struct per offset -------------------------------
+_dfp_structs = [F.struct(F.lit(o).alias("t_offset"),
+                         F.col("spend_" + T_TAG[o]).alias("month_spend"),
+                         F.col("n_closed_" + T_TAG[o]).alias("n_closed"))
+                for o in T_OFFSETS]
+dfp_long = (dfp_wide
+            .select("clnt_no", "n_accts_total",
+                    F.explode(F.array(*_dfp_structs)).alias("s"))
+            .select("clnt_no", "n_accts_total",
+                    F.col("s.t_offset").alias("t_offset"),
+                    F.col("s.month_spend").alias("month_spend"),
+                    F.col("s.n_closed").alias("n_closed"))
+            # A client is CLOSED at t only when every account it holds is closed by then. A client
+            # with no DFP account at all is not "closed" - it never had a card (n_accts_total 0).
+            .withColumn("closed_flag",
+                        ((F.col("n_accts_total") > 0)
+                         & (F.col("n_closed") == F.col("n_accts_total"))).cast("int"))
+            .select("clnt_no", "t_offset", "month_spend", "closed_flag"))
 
-full_clients = client_exposure.select("clnt_no")
+_bhv_structs = [F.struct(F.lit(o).alias("t_offset"),
+                         F.col("bhvr_rank_" + T_TAG[o]).alias("rank"))
+                for o in T_OFFSETS]
+_seg_label_expr = None
+for _rk in sorted(SEG_LABEL):
+    _c = F.col("rank") == _rk
+    _seg_label_expr = (F.when(_c, F.lit(SEG_LABEL[_rk])) if _seg_label_expr is None
+                       else _seg_label_expr.when(_c, F.lit(SEG_LABEL[_rk])))
 
-# ---- t_offset anchor spine (t_offset, anchor_date, ym) - tiny, broadcast everywhere ----
-_anchors_pd = [(o, T_OFFSET_ANCHOR_DATE[o].isoformat(), T_OFFSET_YM[o]) for o in T_OFFSETS]
-anchors = spark.createDataFrame(_anchors_pd, ["t_offset", "anchor_dt", "ym"])
-anchors = anchors.withColumn("anchor_dt", F.col("anchor_dt").cast("date"))
+bhv_long = (bhv_wide
+            .select("clnt_no", F.explode(F.array(*_bhv_structs)).alias("s"))
+            .select("clnt_no", F.col("s.t_offset").alias("t_offset"), F.col("s.rank").alias("rank"))
+            .withColumn("usg_bhvr_seg", _seg_label_expr.otherwise(F.lit("no_data")))
+            .select("clnt_no", "t_offset", "usg_bhvr_seg"))
 
-spine = full_clients.crossJoin(F.broadcast(anchors)).select("clnt_no", "t_offset", "ym", "anchor_dt")
+# ---- spine: every cohort client at every offset. Zero-spend clients are ZEROS, not exclusions. --
+_offsets_df = spark.createDataFrame([(o,) for o in T_OFFSETS], ["t_offset"])
+spine = cohort.select("clnt_no").crossJoin(F.broadcast(_offsets_df))
 
-# ---- spend per t_offset: exact ym match, gaps -> 0 ----
-spend_by_offset = (spine.join(spend, ["clnt_no", "ym"], "left")
-                   .withColumn("client_month_spend", F.coalesce(F.col("client_month_spend"), F.lit(0.0)))
-                   .select("clnt_no", "t_offset", "client_month_spend"))
+annual = dfp_wide.select("clnt_no", "annual_spend_t0", "n_accts_total")
 
-# ---- annual spend at t=0 for the tier cut (Cell [9] cuts on this) ----
-annual_spend = (spend.filter(F.col("ym").isin(ANNUAL_SPEND_YMS))
-                 .groupBy("clnt_no").agg(F.sum("client_month_spend").alias("annual_spend")))
-annual_full = (full_clients.join(annual_spend, "clnt_no", "left")
-               .withColumn("annual_spend", F.coalesce(F.col("annual_spend"), F.lit(0.0))))
-
-# ---- closure per t_offset: client closed iff every one of its accounts is closed by then ----
-n_accts_total = closure.groupBy("clnt_no").agg(F.countDistinct("acct_no").alias("n_accts_total"))
-closure_anchor = (closure.crossJoin(F.broadcast(anchors.select("t_offset", "anchor_dt").distinct()))
-                  .withColumn("acct_closed_by_t",
-                              (F.col("acct_cls_dt").isNotNull() & (F.col("acct_cls_dt") <= F.col("anchor_dt"))).cast("int")))
-closed_counts = closure_anchor.groupBy("clnt_no", "t_offset").agg(F.sum("acct_closed_by_t").alias("n_closed_by_t"))
-closed_flag = (closed_counts.join(n_accts_total, "clnt_no")
-               .withColumn("closed_flag", (F.col("n_closed_by_t") == F.col("n_accts_total")).cast("int"))
-               .select("clnt_no", "t_offset", "closed_flag"))
-
-# ---- behavior per t_offset: as-of match (most recent me_dt <= anchor), then account -> client
-#      rollup by precedence Revolver > Transactor > Dormant > no_data (UNVERIFIED #3) ----
-_acct_anchors = anchors.select("t_offset", "anchor_dt").distinct()
-_behavior_asof = (behavior.crossJoin(F.broadcast(_acct_anchors))
-                  .filter(F.col("me_dt") <= F.col("anchor_dt"))
-                  .withColumn("rn", F.row_number().over(
-                      Window.partitionBy("acct_no", "t_offset").orderBy(F.col("me_dt").desc())))
-                  .filter(F.col("rn") == 1)
-                  .select("acct_no", "t_offset", "usg_bhvr_seg"))
-
-_acct_to_client = closure.select("acct_no", "clnt_no").distinct()
-_seg_rank = (F.when(F.col("usg_bhvr_seg") == "Revolver", 1)
-              .when(F.col("usg_bhvr_seg") == "Transactor", 2)
-              .when(F.col("usg_bhvr_seg") == "Dormant", 3)
-              .otherwise(4))
-behavior_client = (_behavior_asof.join(_acct_to_client, "acct_no")
-                   .withColumn("seg_rank", _seg_rank)
-                   .withColumn("rn", F.row_number().over(
-                       Window.partitionBy("clnt_no", "t_offset").orderBy("seg_rank")))
-                   .filter(F.col("rn") == 1)
-                   .select("clnt_no", "t_offset", "usg_bhvr_seg"))
-
-# ---- assemble ----
-long_tbl = (spine.select("clnt_no", "t_offset")
-            .join(spend_by_offset, ["clnt_no", "t_offset"], "left")
-            .join(closed_flag, ["clnt_no", "t_offset"], "left")
-            .join(behavior_client, ["clnt_no", "t_offset"], "left")
-            .join(annual_full.select("clnt_no", "annual_spend"), "clnt_no", "left")
-            .join(ucp_enriched.select("clnt_no", "prod_cat_cnt", "prof_annual_ucp_proxy"), "clnt_no", "left")
-            .join(client_exposure.select("clnt_no", "bucket", "is_cards_exposed"), "clnt_no", "left")
-            .withColumn("client_month_spend", F.coalesce(F.col("client_month_spend"), F.lit(0.0)))
+long_tbl = (spine
+            .join(dfp_long, ["clnt_no", "t_offset"], "left")
+            .join(bhv_long, ["clnt_no", "t_offset"], "left")
+            .join(ucp_off.select("clnt_no", "t_offset", "prod_cat_cnt", "prof_annual_ucp_proxy",
+                                 "age", "tenure_years"), ["clnt_no", "t_offset"], "left")
+            .join(annual, "clnt_no", "left")
+            .join(cohort.select("clnt_no", "bucket", "unsub_flag", "is_cards_exposed",
+                                "n_campaigns_cards"), "clnt_no", "left")
+            .join(_trigger, "clnt_no", "left")
+            .withColumn("month_spend", F.coalesce(F.col("month_spend"), F.lit(0.0)))
+            .withColumn("annual_spend_t0", F.coalesce(F.col("annual_spend_t0"), F.lit(0.0)))
+            .withColumn("n_accts_total", F.coalesce(F.col("n_accts_total"), F.lit(0)))
             .withColumn("closed_flag", F.coalesce(F.col("closed_flag"), F.lit(0)))
-            .withColumn("usg_bhvr_seg", F.coalesce(F.col("usg_bhvr_seg"), F.lit("no_data"))))
+            .withColumn("usg_bhvr_seg", F.coalesce(F.col("usg_bhvr_seg"), F.lit("no_data")))
+            .withColumn("prod_cat_cnt", F.coalesce(F.col("prod_cat_cnt"), F.lit("no_ucp_match")))
+            .withColumn("trigger_mne", F.coalesce(F.col("trigger_mne"), F.lit("none"))))
 
 long_tbl.write.mode("overwrite").parquet(LONG_DIR)
-_n_long = spark.read.parquet(LONG_DIR).count()
-_n_expected = full_clients.count() * len(T_OFFSETS)
-print("Cell [8] done - client x t_offset long table landed at", LONG_DIR, "|", _n_long, "rows | "
-      "expected", _n_expected, "(clients x", len(T_OFFSETS), "t_offsets)")
-assert _n_long == _n_expected, "long table row count mismatch - spine crossJoin fanned out or " \
-    "collapsed somewhere. Investigate before Cell [9]."
+long_tbl = spark.read.parquet(LONG_DIR).cache()
+
+_n_long = long_tbl.count()
+_n_expected = COHORT_N * len(T_OFFSETS)
+print("LONG TABLE landed at", LONG_DIR, "| grain: one row per (clnt_no, t_offset) |", _n_long,
+      "rows | expected", _n_expected, "(", COHORT_N, "clients x", len(T_OFFSETS), "offsets )")
+assert _n_long == _n_expected, (
+    "long table row count mismatch: %d vs %d expected. A left join fanned out - the usual cause is "
+    "a duplicate key in dfp_wide, bhv_wide, ucp_offsets or the trigger_mne table. Every one of "
+    "those is asserted unique upstream, so start by re-reading those asserts."
+    % (_n_long, _n_expected))
+
+print("\nCOVERAGE BY OFFSET | grain: one row per t_offset | clients with any spend, any behaviour "
+      "reading, any UCP row. Future-dated offsets are expected to be thin - that is arithmetic, "
+      "not a bug.")
+(long_tbl.groupBy("t_offset")
+ .agg(F.count("*").alias("clients"),
+      F.sum((F.col("month_spend") != 0).cast("int")).alias("clients_with_spend"),
+      F.sum((F.col("usg_bhvr_seg") != "no_data").cast("int")).alias("clients_with_behaviour"),
+      F.sum((F.col("prod_cat_cnt") != "no_ucp_match").cast("int")).alias("clients_with_ucp"),
+      F.sum("closed_flag").alias("clients_all_accts_closed"))
+ .orderBy("t_offset").show(truncate=False))
+print("Cell [6] done.")
 
 
-# %% [9] SPEND TIER CUT + MAIN CUBE - tercile of annual_spend cut ONCE on the whole cohort
-# (including zero-spenders - dropping them would inflate the median), held FIXED across every
-# t_offset row for that client. ENGINE: PySpark (YARN).
+# %% [7] SPEND TIER CUT + CUBES. ENGINE: PySpark (YARN).
+#
+# The tier is cut ONCE, on annual spend at t=0, and HELD FIXED across every offset. Re-cutting per
+# period lets clients migrate between tiers, and then "High spenders fell" partly means "the ones
+# who fell stopped being High" - the comparison stops meaning anything.
+#
+# Zero-spend clients are in the cut, not excluded - dropping them would move every tier boundary
+# and every median. clients_with_spend rides beside the counts so the denominator is visible.
+#
+# WIDE, not long: stayers and leavers are COLUMNS. In long format a cell with leavers but no
+# stayers has no stayer row at all, and a pivot then divides by the wrong denominator.
+# COUNTS ONLY - no rates, no percentages, no lifts. Numerator and denominator are both present and
+# Andre derives the rate in the pivot.
 
-long_tbl = spark.read.parquet(LONG_DIR)
+_tier_src = (long_tbl.filter(F.col("t_offset") == 0)
+             .select("clnt_no", "annual_spend_t0").distinct())
+_q1, _q2 = _tier_src.approxQuantile("annual_spend_t0", SPEND_TIER_QUANTILES, SPEND_TIER_REL_ERR)
+print("SPEND TIER CUT | annual spend = trailing %d months ending at t=0 (%s) | cut ONCE, held "
+      "fixed across every offset | Low <= %.2f < Mid <= %.2f < High"
+      % (ANNUAL_LOOKBACK_MONTHS, T0_ANCHOR.isoformat(), _q1, _q2))
+if _q1 == _q2:
+    print("WARNING: the two tercile cut points are identical (%.2f). More than a third of the "
+          "cohort has the same annual spend - almost certainly zero - so Low and Mid are not "
+          "separable and every client at that value lands in Low. Read the tier as "
+          "zero-vs-something, not as three real terciles." % _q1)
 
-_q1, _q2 = annual_full.approxQuantile("annual_spend", [1.0 / 3.0, 2.0 / 3.0], 0.01)
-print("Spend tercile cut points (annual_spend, trailing %d months ending at t=0): Low <= %.2f, "
-      "Mid <= %.2f, High above." % (ANNUAL_LOOKBACK_MONTHS, _q1, _q2))
+spend_tier = (_tier_src
+              .withColumn("spend_tier",
+                          F.when(F.col("annual_spend_t0") <= _q1, "Low")
+                           .when(F.col("annual_spend_t0") <= _q2, "Mid")
+                           .otherwise("High"))
+              .select("clnt_no", "spend_tier"))
 
-_tier_expr = F.when(F.col("annual_spend") <= _q1, "Low").when(F.col("annual_spend") <= _q2, "Mid").otherwise("High")
-spend_tier = annual_full.withColumn("spend_tier", _tier_expr).select("clnt_no", "spend_tier")
+(spend_tier.groupBy("spend_tier").agg(F.count("*").alias("clients")).orderBy("spend_tier")
+ .show(truncate=False))
 
 cube_src = (long_tbl.join(spend_tier, "clnt_no", "left")
-            .withColumn("spend_tier", F.coalesce(F.col("spend_tier"), F.lit("no_ucp_match"))))
+            .withColumn("spend_tier", F.coalesce(F.col("spend_tier"), F.lit("untiered")))
+            .cache())
 
 _stay = F.col("bucket") == "STAYER"
 _leave = F.col("bucket") == "LEAVER"
-_has_spend = F.col("client_month_spend") > 0
+_has_spend = F.col("month_spend") != 0
 
-cube_main = (cube_src
-             .groupBy("t_offset", "spend_tier", "usg_bhvr_seg", "prod_cat_cnt", "is_cards_exposed")
-             .agg(
-                 F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
-                 F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
-                 F.count("*").alias("clients_total"),
-                 F.sum(F.when(_stay & _has_spend, 1).otherwise(0)).alias("stayers_with_spend"),
-                 F.sum(F.when(_leave & _has_spend, 1).otherwise(0)).alias("leavers_with_spend"),
-                 F.expr("percentile_approx(CASE WHEN bucket = 'STAYER' THEN client_month_spend END, 0.5)")
-                  .alias("median_spend_stayers"),
-                 F.expr("percentile_approx(CASE WHEN bucket = 'LEAVER' THEN client_month_spend END, 0.5)")
-                  .alias("median_spend_leavers"),
-                 F.expr("percentile_approx(CASE WHEN bucket = 'STAYER' THEN prof_annual_ucp_proxy END, 0.5)")
-                  .alias("median_prof_stayers_ucp_proxy"),
-                 F.expr("percentile_approx(CASE WHEN bucket = 'LEAVER' THEN prof_annual_ucp_proxy END, 0.5)")
-                  .alias("median_prof_leavers_ucp_proxy"),
-                 F.sum(F.when(_stay & (F.col("closed_flag") == 1), 1).otherwise(0)).alias("closed_stayers"),
-                 F.sum(F.when(_leave & (F.col("closed_flag") == 1), 1).otherwise(0)).alias("closed_leavers"),
-             )
-             .orderBy("t_offset", "spend_tier", "usg_bhvr_seg", "prod_cat_cnt", "is_cards_exposed"))
+_MEASURES = [
+    F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
+    F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
+    F.count("*").alias("clients_total"),
+    F.sum(F.when(_stay & _has_spend, 1).otherwise(0)).alias("stayers_with_spend"),
+    F.sum(F.when(_leave & _has_spend, 1).otherwise(0)).alias("leavers_with_spend"),
+    F.expr("percentile_approx(CASE WHEN bucket = 'STAYER' THEN month_spend END, 0.5)")
+     .alias("median_spend_stayers"),
+    F.expr("percentile_approx(CASE WHEN bucket = 'LEAVER' THEN month_spend END, 0.5)")
+     .alias("median_spend_leavers"),
+    F.expr("percentile_approx(CASE WHEN bucket = 'STAYER' THEN prof_annual_ucp_proxy END, 0.5)")
+     .alias("median_prof_stayers_ucp_proxy"),
+    F.expr("percentile_approx(CASE WHEN bucket = 'LEAVER' THEN prof_annual_ucp_proxy END, 0.5)")
+     .alias("median_prof_leavers_ucp_proxy"),
+    F.sum(F.when(_stay & (F.col("closed_flag") == 1), 1).otherwise(0)).alias("closed_stayers"),
+    F.sum(F.when(_leave & (F.col("closed_flag") == 1), 1).otherwise(0)).alias("closed_leavers"),
+]
+
+CUBE_DIMS = ["t_offset", "spend_tier", "usg_bhvr_seg", "prod_cat_cnt", "is_cards_exposed"]
+
+cube_main = (cube_src.groupBy(*CUBE_DIMS).agg(*_MEASURES)
+             .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+             .orderBy(*CUBE_DIMS)
+             .cache())   # cached: toPandas() then two writes = three actions on one DAG
 
 cube_main_pd = cube_main.toPandas()
-print("CUBE MAIN | grain: one row per (t_offset, spend_tier, usg_bhvr_seg, prod_cat_cnt, "
-      "is_cards_exposed) | stayers/leavers are COLUMNS, no rates | %d rows" % len(cube_main_pd))
-print(cube_main_pd.to_string(index=False))
+print("\nCUBE MAIN | grain: one row per (%s) | stayers and leavers are COLUMNS | counts only, no "
+      "rates | %d rows | SMOKE=%s" % (", ".join(CUBE_DIMS), len(cube_main_pd), SMOKE))
+print(cube_main_pd.head(40).to_string(index=False))
+write_cube(cube_main, "cube_main")
 
-cube_main.coalesce(1).write.mode("overwrite").option("header", True).csv(OUT_CUBE)
-print("Cell [9] done - written to HDFS:", OUT_CUBE, "|", len(cube_main_pd), "rows")
+# ---- the campaign dimension riding along. Same measures, grain (t_offset, trigger_mne). Outcomes
+# are still CLIENT-level: this says "clients whose unsub was logged against PCL spend X", not
+# "PCL cost X". See UNVERIFIED U10.
+cube_trigger = (cube_src.groupBy("t_offset", "trigger_mne", "is_cards_exposed").agg(*_MEASURES)
+                .withColumn("smoke_run", F.lit(1 if SMOKE else 0))
+                .orderBy("t_offset", "trigger_mne")
+                .cache())
+cube_trigger_pd = cube_trigger.toPandas()
+print("\nCUBE BY TRIGGER MNE | grain: one row per (t_offset, trigger_mne, is_cards_exposed) | "
+      "trigger_mne = 'none' means no cards-campaign unsub was logged for that client | %d rows"
+      % len(cube_trigger_pd))
+print(cube_trigger_pd.head(30).to_string(index=False))
+write_cube(cube_trigger, "cube_by_trigger_mne")
+
+# ---- reconciliation against spotlight.py, so the two files cannot quietly disagree -------------
+_recon = cube_main_pd[cube_main_pd["t_offset"] == 0]
+_recon_stay = int(_recon["stayers"].sum())
+_recon_leave = int(_recon["leavers"].sum())
+_s1 = (cohort.agg(F.sum((F.col("unsub_flag") == 0).cast("int")).alias("stayers"),
+                  F.sum((F.col("unsub_flag") == 1).cast("int")).alias("leavers")).collect()[0])
+print("\nRECONCILIATION against spotlight.py's clientagg_v%d | grain: one row" % S1_SCHEMA_VERSION)
+print("   cube_main at t=0 : stayers %d, leavers %d" % (_recon_stay, _recon_leave))
+print("   clientagg        : stayers %d, leavers %d" % (_s1["stayers"], _s1["leavers"]))
+assert _recon_stay == _s1["stayers"] and _recon_leave == _s1["leavers"], (
+    "cube_main at t=0 does not reconcile against the clientagg it was built from. Every client "
+    "must appear exactly once per offset - a mismatch means a join fanned out or dropped rows "
+    "between Cell [6]'s assert and here.")
+print("   RECONCILED - every cohort client appears exactly once at t=0.")
+
 if SMOKE:
-    print("SMOKE was True - this is bite 0 only, ~1/%d of the bank-wide cohort. Every absolute "
-          "count is roughly a tenth of the full-run figure; flip SMOKE and rerun before reporting "
-          "real numbers." % N_BITES)
+    print("\nSMOKE was True. The COHORT is the full bank-wide clientagg, but the DFP and behaviour "
+          "pulls only ran bite 0, so spend, closure and behaviour exist for about a tenth of "
+          "clients and the rest read as zero-spend / no_data. Do NOT report these numbers. Flip "
+          "SMOKE to False in Cell [0] and rerun Cells [3]-[7].")
+
+print("\nCell [7] done -", OUT_DIR, "holds cube_main and cube_by_trigger_mne, as CSV and parquet.")
+print("Pull them down with:  hdfs dfs -get -f " + OUT_DIR + "* .")
 
 
-# %% [10] CLEANUP - drop client/account-grain intermediates, keep only the cube.
-# NOT automatic. Controlled by DROP_CLIENT_GRAIN in Cell [0]. Refuses to delete unless the cube
-# is already landed and readable - same gate shape as spotlight.py Cell [9].
+# %% [8] CLEANUP - drop this file's client-grain intermediates, keep the cubes.
+# NOT automatic. Controlled by DROP_CLIENT_GRAIN in Cell [0]. Refuses to delete unless both cubes
+# exist AND read back.
+#
+# spotlight.py's landings (clientagg_v6, cards_pair_v6, mne_agg_v6, ucp_enriched) are NEVER touched
+# by this cell. They are shared, they cost roughly an hour to rebuild, and spotlight.py has its own
+# cleanup cell that owns them.
 
 import subprocess
 
-_targets = [EXPOSURE_DIR.rstrip("/"), SPEND_DIR.rstrip("/"), CLOSURE_DIR.rstrip("/"),
-            BEHAVIOR_DIR.rstrip("/"), UCP_DIR.rstrip("/"), LONG_DIR.rstrip("/")]
+_targets = [DFP_DIR.rstrip("/"), BHV_DIR.rstrip("/"), UCP_DIR.rstrip("/"), LONG_DIR.rstrip("/")]
+for _t in _targets:
+    assert _t.startswith(BASE.rstrip("/")), (
+        "refusing to delete %s - it is outside this file's own BASE (%s). spotlight.py's landings "
+        "are shared and must never be deleted from here." % (_t, BASE))
+
+_required = [OUT_DIR + "cube_main", OUT_DIR + "cube_by_trigger_mne"]
 
 if not DROP_CLIENT_GRAIN:
     print("DROP_CLIENT_GRAIN is False - nothing deleted. Would remove:")
     for _t in _targets:
         print("   ", _t)
-    print("\nCheck", OUT_CUBE, "first. Once these are gone, re-cutting means re-pulling from Teradata.")
+    print("\nCheck the cubes first:", _required)
+    print("Once these are gone, re-cutting means re-pulling DFP and CR_CRD_RPTS_ACCT from Teradata.")
 else:
-    try:
-        spark.read.option("header", True).csv(OUT_CUBE).limit(1).collect()
-        _cube_ok = True
-    except Exception:
-        _cube_ok = False
-    if not _cube_ok:
-        raise RuntimeError("Refusing to delete client-grain data - %s is missing or unreadable. "
-                           "Rerun Cell [9] first." % OUT_CUBE)
-
-    print("Cube verified present. Deleting client/account-grain intermediates:")
+    _missing_out = []
+    for _r in _required:
+        try:
+            spark.read.option("header", True).csv(_r).limit(1).collect()
+        except Exception:
+            _missing_out.append(_r)
+    if _missing_out:
+        raise RuntimeError("Refusing to delete client-grain data - these cubes are missing or "
+                           "unreadable: %s. Rerun Cell [7] first." % _missing_out)
+    print("Cubes verified present and readable. Deleting this file's client-grain intermediates:")
     for _t in _targets:
         _rc = subprocess.run("hdfs dfs -rm -r -skipTrash %s" % _t,
                              shell=True, capture_output=True, text=True, timeout=600)
         print("  ", _t, "-> rc", _rc.returncode, (_rc.stdout or _rc.stderr).strip()[:200])
-    print("\nDone. Only the cube remains on HDFS. Nothing at client or account grain persists.")
+    print("\nDone. Only the cubes remain. Nothing at client grain persists under", BASE)
 
-print("\nWhat stays:", OUT_CUBE)
+print("\nWhat stays here:", OUT_DIR + "*  (cube_main, cube_by_trigger_mne; csv and parquet)")
+print("What this file NEVER deletes:", CLIENTAGG_DIR, "|", CARDSPAIR_DIR, "|", MNEAGG_DIR)
