@@ -19,7 +19,7 @@ LOCAL_DIR = WORK_DIR + "/spotlight_parquet"
 ZIP_PATH = WORK_DIR + "/spotlight_parquet.zip"
 
 # Everything landed as parquet. Add or drop names here if a version suffix differs.
-DATASETS = ["clientagg_v6", "cards_pair_v6", "mne_agg_v6", "ucp_enriched"]
+DATASETS = ["client_month_v6", "clientagg_v6", "cards_pair_v6", "mne_agg_v6", "ucp_enriched"]
 
 
 def sh(cmd):
