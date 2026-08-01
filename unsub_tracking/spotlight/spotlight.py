@@ -245,7 +245,7 @@ LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call. A full bite of th
                               # ceiling; this keeps each payload well under it. Lower it if the
                               # limit is still hit on Pull A, B or C.
 
-RUN_PULLS = ["A", "B", "C"]   # restrict Cell [1] to specific pulls, e.g. ["C"] to resume only
+RUN_PULLS = ["A", "B", "C", "D"]   # restrict Cell [1] to specific pulls, e.g. ["C"] to resume only
                               # the cards pair pull. Landed bites are skipped anyway via their
                               # _ROWCOUNT marker, so this only saves the guard from re-checking.
                               # A killed bite has no marker and re-pulls clean; a completed one
@@ -660,6 +660,117 @@ else:
     print("PULL A skipped - not in RUN_PULLS")
 
 print("PULL A done - landed at", CLIENTAGG_DIR + "*", "| one row per clnt_no, bank-wide.")
+
+
+# ---------------------------------------------------------------------------------------------
+# PULL D - client_month_v6. ONE ROW PER (CLIENT, MONTH), bank-wide. Bitten, landed, resumable.
+#
+# Why this exists: Pull A collapses each client to first_send_dt / last_send_dt, so there is NO
+# monthly denominator anywhere - a client mailed in August and March is indistinguishable from one
+# mailed every month. That blocks monthly senders, monthly unsub rate, the trend view, campaign
+# counts in any trailing window, and contact load before a client's exposure to a given campaign.
+# All of it is the same missing grain, and it cannot be derived from MIN/MAX after the fact.
+#
+# After this lands, every window question is a SUM over months with no further pull, ever.
+# ENGINE: Teradata-direct.
+
+CLIENTMONTH_DIR = BASE + "client_month_v%d/" % SCHEMA_VERSION
+
+CLIENTMONTH_SPARK_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("ym", IntegerType(), True),                     # yyyymm of the send/unsub
+    StructField("n_emails", LongType(), True),
+    StructField("n_campaigns", LongType(), True),
+    StructField("n_emails_promo", LongType(), True),
+    StructField("n_emails_regulatory", LongType(), True),
+    StructField("n_emails_cards", LongType(), True),
+    StructField("n_campaigns_cards", LongType(), True),
+    StructField("n_unsub_events", LongType(), True),
+])
+CLIENTMONTH_COLS = [f.name for f in CLIENTMONTH_SPARK_SCHEMA.fields]
+
+
+def read_clientmonth():
+    sdf = spark.read.parquet(CLIENTMONTH_DIR + "bite_*")
+    missing = [c for c in CLIENTMONTH_COLS if c not in sdf.columns]
+    if missing:
+        raise RuntimeError("client_month at %s is missing %s. Found: %s. Stale parquet - delete "
+                           "the directory and rerun Pull D." % (CLIENTMONTH_DIR, missing, sdf.columns))
+    return sdf
+
+
+def _prep_clientmonth(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, "clnt_no has %d nulls - the SQL CLNT_NO IS NOT NULL filter is not firing" % _n_null
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    pdf["ym"] = pd.to_numeric(pdf["ym"], errors="coerce").fillna(0).astype("int32")
+    for _c in CLIENTMONTH_COLS[2:]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
+    return pdf[CLIENTMONTH_COLS]
+
+
+def land_pullD_bite(bite):
+    name = "client_month_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    if _landed(name):
+        n = spark.read.parquet(BASE + name).count()
+        print(name, ": already landed,", n, "rows - SKIP")
+        return
+
+    sql = """
+    WITH ek AS (
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd,
+               MIN(disposition_dt_tm) AS dt
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd IN (1, 4)
+          AND disposition_dt_tm >= DATE '%(floor)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
+        GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
+    ),
+    joined AS (
+        SELECT m.CLNT_NO AS clnt_no,
+               SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+               ek.disposition_cd AS cd,
+               (EXTRACT(YEAR FROM ek.dt) * 100 + EXTRACT(MONTH FROM ek.dt)) AS ym
+        FROM ek
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(mfloor)s'
+                      AND CLNT_NO IS NOT NULL
+                      AND MOD(ABS(CLNT_NO), %(n_bites)d) = %(bite)d) m
+          ON m.consumer_id_hashed = ek.consumer_id_hashed
+         AND m.TREATMENT_ID = ek.TREATMENT_ID
+    )
+    SELECT clnt_no,
+           ym,
+           SUM(CASE WHEN cd = 1 THEN 1 ELSE 0 END)                              AS n_emails,
+           COUNT(DISTINCT CASE WHEN cd = 1 THEN mne END)                        AS n_campaigns,
+           SUM(CASE WHEN cd = 1 AND mne NOT IN (%(reg)s) THEN 1 ELSE 0 END)     AS n_emails_promo,
+           SUM(CASE WHEN cd = 1 AND mne IN (%(reg)s) THEN 1 ELSE 0 END)         AS n_emails_regulatory,
+           SUM(CASE WHEN cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END)       AS n_emails_cards,
+           COUNT(DISTINCT CASE WHEN cd = 1 AND mne IN (%(cards)s) THEN mne END) AS n_campaigns_cards,
+           SUM(CASE WHEN cd = 4 THEN 1 ELSE 0 END)                              AS n_unsub_events
+    FROM joined
+    GROUP BY clnt_no, ym
+    """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL, "tactic": TACTIC_ID_SQL,
+           "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL, "reg": REGULATORY_LIST_SQL}
+
+    pdf = edw_pd(sql)
+    assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite)
+    pdf = _prep_clientmonth(pdf)
+    nback = _write_chunks(pdf, CLIENTMONTH_SPARK_SCHEMA, name)
+    assert nback == len(pdf), name + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
+    print(name, ": landed", len(pdf), "rows (client x month, bank-wide)")
+
+
+if "D" in RUN_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_pullD_bite(_b)
+    print("PULL D done - one row per (client, month) at", CLIENTMONTH_DIR)
+else:
+    print("PULL D skipped - not in RUN_PULLS")
+
 
 
 # ---------------------------------------------------------------------------------------------
