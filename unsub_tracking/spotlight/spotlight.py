@@ -731,7 +731,7 @@ def land_pullD_bite(bite):
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
                SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
-               ek.disposition_cd AS cd,
+               ek.disposition_cd AS disp_cd,
                (EXTRACT(YEAR FROM ek.dt) * 100 + EXTRACT(MONTH FROM ek.dt)) AS ym
         FROM ek
         INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
@@ -744,13 +744,13 @@ def land_pullD_bite(bite):
     )
     SELECT clnt_no,
            ym,
-           SUM(CASE WHEN cd = 1 THEN 1 ELSE 0 END)                              AS n_emails,
-           COUNT(DISTINCT CASE WHEN cd = 1 THEN mne END)                        AS n_campaigns,
-           SUM(CASE WHEN cd = 1 AND mne NOT IN (%(reg)s) THEN 1 ELSE 0 END)     AS n_emails_promo,
-           SUM(CASE WHEN cd = 1 AND mne IN (%(reg)s) THEN 1 ELSE 0 END)         AS n_emails_regulatory,
-           SUM(CASE WHEN cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END)       AS n_emails_cards,
-           COUNT(DISTINCT CASE WHEN cd = 1 AND mne IN (%(cards)s) THEN mne END) AS n_campaigns_cards,
-           SUM(CASE WHEN cd = 4 THEN 1 ELSE 0 END)                              AS n_unsub_events
+           SUM(CASE WHEN disp_cd = 1 THEN 1 ELSE 0 END)                              AS n_emails,
+           COUNT(DISTINCT CASE WHEN disp_cd = 1 THEN mne END)                        AS n_campaigns,
+           SUM(CASE WHEN disp_cd = 1 AND mne NOT IN (%(reg)s) THEN 1 ELSE 0 END)     AS n_emails_promo,
+           SUM(CASE WHEN disp_cd = 1 AND mne IN (%(reg)s) THEN 1 ELSE 0 END)         AS n_emails_regulatory,
+           SUM(CASE WHEN disp_cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END)       AS n_emails_cards,
+           COUNT(DISTINCT CASE WHEN disp_cd = 1 AND mne IN (%(cards)s) THEN mne END) AS n_campaigns_cards,
+           SUM(CASE WHEN disp_cd = 4 THEN 1 ELSE 0 END)                              AS n_unsub_events
     FROM joined
     GROUP BY clnt_no, ym
     """ % {"floor": WIN_FLOOR, "mfloor": MASTER_FLOOR, "ceil": WIN_CEIL, "tactic": TACTIC_ID_SQL,
