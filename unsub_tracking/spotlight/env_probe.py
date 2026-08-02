@@ -88,6 +88,32 @@ except ImportError:
     print("pyarrow NOT INSTALLED")
 
 
+# %% [P6b] THE question for the brain-local kernel: can it read the UCP parquet on HDFS
+# Three escalating checks: list the UCP root, list one month partition, read ONE row group
+# of ONE parquet file (never the whole table - a month partition is large).
+# If all three pass on brain-local, the unified pipeline runs end-to-end on this kernel.
+# If only P5 (hdfs CLI) passed, plan B: `hdfs dfs -get` landed outputs to pod disk, read locally.
+# If neither, all pulls + UCP joins must run on the YARN kernel; brain-local is analysis-only.
+UCP_ROOT = "/prod/sz/tsz/00172/data/ucp4"   # from references/ucp/ canon - adjust if canon says otherwise
+try:
+    import pyarrow.fs as pafs
+    import pyarrow.parquet as pq
+    _hdfs = pafs.HadoopFileSystem("default")
+    _parts = [_i.path for _i in _hdfs.get_file_info(pafs.FileSelector(UCP_ROOT, recursive=False))]
+    print("UCP root: OK,", len(_parts), "entries. Last 3:", _parts[-3:])
+    _month = sorted([p for p in _parts if "MONTH_END_DATE=" in p])[-1]
+    _files = [_i.path for _i in _hdfs.get_file_info(pafs.FileSelector(_month, recursive=False))
+              if _i.path.endswith((".parquet", ".parq")) or _i.size and _i.size > 0]
+    print("UCP month partition: OK,", len(_files), "files in", _month.split("/")[-1])
+    _pf = pq.ParquetFile(_files[0], filesystem=_hdfs)
+    _batch = next(_pf.iter_batches(batch_size=5))
+    print("UCP READ: OK - 5 rows,", _batch.num_columns, "cols. Columns incl:",
+          [c for c in _batch.schema.names if c.upper() in
+           ("CLNT_NO", "CLNT_TYP", "AGE", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT")])
+except Exception as e:
+    print("UCP via pyarrow: FAILED -", type(e).__name__, str(e)[:300])
+
+
 # %% [P7] What is actually mounted - is the shared drive reachable from the pod at all
 # A network share, if mounted, shows up here as cifs/nfs/smb/fuse. If nothing does, no amount of
 # code fixes it - it is an infra request, not a coding problem.
