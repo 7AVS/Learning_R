@@ -114,6 +114,27 @@ except Exception as e:
     print("UCP via pyarrow: FAILED -", type(e).__name__, str(e)[:300])
 
 
+# %% [P6c] THE decisive test after P6b failed on libjvm: can the IN-SCOPE SPARK SESSION
+# read the UCP parquet from HDFS. This is the same route spotlight.py already uses, so if
+# this passes, the unified pipeline runs unchanged on this kernel. Reads 3 rows, nothing more.
+UCP_ROOT = "/prod/sz/tsz/00172/data/ucp4"
+try:
+    # partition listing via hdfs CLI (proven working in P5), newest month:
+    import subprocess
+    _ls = subprocess.run(["hdfs", "dfs", "-ls", UCP_ROOT], capture_output=True, text=True, timeout=120)
+    _months = sorted(l.split()[-1] for l in _ls.stdout.splitlines() if "MONTH_END_DATE=" in l)
+    print("UCP partitions via hdfs CLI:", len(_months), "| newest:", _months[-1] if _months else "NONE")
+    _df = spark.read.parquet(_months[-1])
+    _pdf = _df.limit(3).toPandas()
+    print("SPARK UCP READ: OK -", len(_pdf), "rows,", len(_pdf.columns), "cols")
+    print("   key cols present:", [c for c in _pdf.columns if c.upper() in
+          ("CLNT_NO", "CLNT_TYP", "AGE", "TENURE_RBC_YEARS", "T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT")])
+except Exception as e:
+    print("SPARK UCP READ: FAILED -", type(e).__name__, str(e)[:300])
+    print("   if this failed, plan B: run pulls+UCP join on the YARN kernel, land outputs,")
+    print("   then 'hdfs dfs -get' them to pod disk (P5 proved the CLI works) for local analysis.")
+
+
 # %% [P7] What is actually mounted - is the shared drive reachable from the pod at all
 # A network share, if mounted, shows up here as cifs/nfs/smb/fuse. If nothing does, no amount of
 # code fixes it - it is an infra request, not a coding problem.
