@@ -329,6 +329,8 @@ if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
 
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+spark.sparkContext.setLogLevel("ERROR")   # silence WARN chatter (LogicalRDD / CommandsHarvester
+                                          # noise) so the file's own printed checks stay readable
 
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
@@ -1525,25 +1527,39 @@ else:
               P12_ANCHOR_B.isoformat(), "closes; investigate any OTHER name on this list before "
               "shipping.")
     _xlsx = os.path.join(LOCAL_OUT, "unsub_unified_cubes.xlsx")
+    _bundle_names = []          # whatever actually got written - xlsx or fallback CSVs
     try:
-        with pd.ExcelWriter(_xlsx, engine="openpyxl") as _xl:
+        try:
+            import openpyxl  # noqa - fail fast with a clear message, engine check
+            _engine = "openpyxl"
+        except ImportError:
+            import xlsxwriter  # noqa - second choice, often present when openpyxl is not
+            _engine = "xlsxwriter"
+        with pd.ExcelWriter(_xlsx, engine=_engine) as _xl:
             for _name, _df in _sheets.items():
                 _df.to_excel(_xl, sheet_name=_name[:31], index=False)
-        print("WROTE", _xlsx, "|", os.path.getsize(_xlsx), "bytes")
+        print("WROTE", _xlsx, "(engine=%s) |" % _engine, os.path.getsize(_xlsx), "bytes")
         for _name, _df in _sheets.items():
             print("   sheet %-24s %6d rows x %d cols" % (_name[:31], len(_df), len(_df.columns)))
+        _bundle_names = ["unsub_unified_cubes.xlsx"]
     except Exception as e:
         print("Excel write failed (%s: %s) - falling back to named CSVs." % (type(e).__name__, str(e)[:200]))
+        print("   (to get one xlsx next run: pip install openpyxl)")
         for _name, _df in _sheets.items():
             _p = os.path.join(LOCAL_OUT, _name + ".csv")
             _df.to_csv(_p, index=False)
             print("   wrote", _p, "|", len(_df), "rows")
+            _bundle_names.append(_name + ".csv")
 
+    # zip whatever exists - xlsx or the fallback CSVs - so ONE DOWNLOAD always prints.
     _zip = os.path.join(LOCAL_OUT, "unsub_unified_cubes.zip")
-    _sp.run("cd %s && rm -f unsub_unified_cubes.zip && zip -rq unsub_unified_cubes.zip "
-            "unsub_unified_cubes.xlsx" % LOCAL_OUT, shell=True)
+    _sp.run("cd %s && rm -f unsub_unified_cubes.zip && zip -rq unsub_unified_cubes.zip %s"
+            % (LOCAL_OUT, " ".join("'%s'" % n for n in _bundle_names)), shell=True)
     if os.path.exists(_zip):
-        print("ONE DOWNLOAD:", _zip, "|", round(os.path.getsize(_zip) / 1048576.0, 1), "MB")
+        print("ONE DOWNLOAD:", _zip, "|", round(os.path.getsize(_zip) / 1048576.0, 1), "MB",
+              "| contains:", ", ".join(_bundle_names))
+    else:
+        print("WARN: zip not created - download the files above individually from", LOCAL_OUT)
 
 
 # %% [17] COVERAGE / RUN SUMMARY - final self-check against the header's coverage table. Print
