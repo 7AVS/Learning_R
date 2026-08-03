@@ -344,8 +344,19 @@ if not hasattr(pd.DataFrame, "iteritems"):
     pd.DataFrame.iteritems = pd.DataFrame.items
 
 spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
-spark.sparkContext.setLogLevel("ERROR")   # silence WARN chatter (LogicalRDD / CommandsHarvester
-                                          # noise) so the file's own printed checks stay readable
+spark.sparkContext.setLogLevel("ERROR")   # silence WARN chatter so OUR printed checks stay readable
+# The atlas lineage harvester (the "Missing unknown leaf node: LogicalRDD/ReusedExchange..." red
+# blocks) logs through its own logger and ignores setLogLevel - switch it OFF by name. This kills
+# ONLY system log noise; every check/assert/WARN printed by THIS FILE is stdout and untouched.
+try:
+    _l4j = spark.sparkContext._jvm.org.apache.log4j
+    _l4j.LogManager.getRootLogger().setLevel(_l4j.Level.ERROR)
+    for _noisy in ("com.hortonworks.spark.atlas", "com.hortonworks", "org.apache.spark.scheduler",
+                   "org.apache.spark.storage", "org.apache.spark.executor"):
+        _l4j.LogManager.getLogger(_noisy).setLevel(_l4j.Level.OFF)
+    print("log noise: root=ERROR, atlas lineage harvester=OFF - file's own checks unaffected.")
+except Exception as _e:
+    print("log-noise suppression skipped (%s) - cosmetic only, run is unaffected." % type(_e).__name__)
 
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
