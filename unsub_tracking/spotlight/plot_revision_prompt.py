@@ -78,6 +78,12 @@ and add n per combo.
 
 ### Q5 - before/after heatmaps
 KEEP: the tier x segment cut and the concentration finding.
+ORDER (Andre 2026-08-03): LEAD with the cards-unsub prevalence panel
+(leavers_cards_unsub_subset / clients_total) - THAT is the Cards profit
+story. The any-list prevalence (~4%) becomes one labeled context line
+("share of the cohort that disengaged from email overall"), not a
+co-equal panel. Keep the ratio panel (cards share of unsubs) - it carries
+the high-spend concentration finding.
 FIX: (a) G5 relabel everywhere - panel titles become: "Any-list unsub
 prevalence by anchor (% of cohort)", "Cards-list unsub prevalence", and
 "Cards share of unsubs (%)"; the third panel's finding restated as:

@@ -24,18 +24,33 @@
 #    is an UPPER BOUND, not exact. CARDS_TOTAL_UNIQUE_CLIENTS is the ONE exception: it reads
 #    cards_unsub_flag directly off a1_client (not a sum of per-mne A2 rows), so Cards-vs-rest is
 #    EXACT, same dedup guarantee as ENTERPRISE_TOTAL. Every OTHER per-LOB ratio remains an upper
-#    bound.
+#    bound. CARDS_MNES (Cell [0]) is now ALL 32 catalog codes, INCLUDING regulatory/operational/
+#    fulfillment (Andre 2026-08-03, scope change: those must stay IN and be ISOLATABLE, not
+#    dropped) - cards_unsub_flag/n_emails_cards reflect that full 32. Two twin pairs ride on
+#    a1_client to make the subsets isolatable without re-querying: n_emails_cards_ex_fwc /
+#    cards_ex_fwc_unsub_flag (flag basis minus FWC, 31 mnes) and n_emails_cards_nonmkt /
+#    cards_nonmkt_unsub_flag (the 10 regulatory/operational/fulfillment mnes). Marketing-only view
+#    is derivable by subtraction (cards minus nonmkt) - no third twin materialized. Not surfaced in
+#    a1_mne_share; available to A3/A4.
+#  A1b unique unsub clients x 5 LOB groupings (ENTERPRISE/    -> Cell [6b] -> a1_lob_dedup.csv
+#    CARDS_LOB_ALL[32]/CARDS_MKT[22]/CARDS_EX_FWC[21]/CARDS_NONMKT[10]), each an exact client-grain
+#    COUNT DISTINCT (not a per-mne sum) - CARDS_LOB_ALL cross-checked against A1's
+#    ENTERPRISE_TOTAL_UNIQUE_CLIENTS-vs-CARDS_TOTAL_UNIQUE_CLIENTS split, same window.
 #  A2 mne x {senders, unsubs_attributed, leavers_exposed}  -> Cell [7]  -> a2_mne_rates.csv
 #  A3 in-window contact load, banded, x unsub x cards_unsub-> Cell [8]  -> a3_contact_cube.csv
+#    + sum_emails_all / sum_emails_cards (2026-08-03c, per-bucket email volume alongside client counts)
 #  A4 age x tenure x T/I/B/C(separate) x depth x stay/leave-> Cell [9]  -> a4_profile_cube.csv
-#    x leavers_cards_unsub (cards-view subset, rides beside leavers)
+#    x leavers_cards_unsub (cards-view subset, rides beside leavers) x leavers_cards_ex_fwc x
+#    leavers_cards_nonmkt (2026-08-03c, ex-FWC and non-marketing subsets) + sum_emails_all /
+#    sum_emails_cards (per-profile email volume)
 #
-#  PIECE B (anchor 2025-08-31 HARDCODED, remeasure +12m = 2026-08-31, Cards-mailed cohort only)
+#  PIECE B (anchor 2025-08-31 HARDCODED, remeasure +12m = 2026-08-31, Cards-mailed cohort only,
+#  MARKETING-ONLY scope - CARDS_MKT_MNES/22, not the 32-mne CARDS_MNES flag - see Cell [12])
 #  ---------------------------------------------------------------------------------------------
-#  cohort + leaver flags (any-list, cards subset), scoped  -> Cell [12] -> b_cohort_v1/ (landed)
+#  cohort + leaver flags (any-list, cards subset), scoped  -> Cell [12] -> b_cohort_v2/ (landed)
 #  BEFORE pulling DFP/BHV, not post-hoc
-#  spend (DFP trailing-12m) at t0/t12, cohort-scoped        -> Cell [13] -> b_dfp_v1/ (landed)
-#  revolver/transactor at t0/t12, cohort-scoped              -> Cell [14] -> b_bhv_v1/ (landed)
+#  spend (DFP trailing-12m) at t0/t12, cohort-scoped        -> Cell [13] -> b_dfp_v2/ (landed)
+#  revolver/transactor at t0/t12, cohort-scoped              -> Cell [14] -> b_bhv_v2/ (landed)
 #  spend_tier x spend_tier_at_offset x usg_bhvr_seg x        -> Cell [15] -> b_before_after_cube.csv
 #  {stayers,leavers} x {t0,t12}  (spend_tier = held fixed at t0 terciles; spend_tier_at_offset =
 #  the SAME t0 cutpoints applied to the offset-appropriate spend value, t0 or p12 - answers the
@@ -48,7 +63,7 @@
 #
 #  DELIVERY
 #  ---------------------------------------------------------------------------------------------
-#  one xlsx bundling all six CSVs above                     -> Cell [16] -> spotlight_unified.xlsx
+#  one xlsx bundling all seven CSVs above                   -> Cell [16] -> spotlight_unified.xlsx
 #  coverage / row-count self-check                          -> Cell [17] -> printed only
 #
 # ============================================================================================
@@ -56,7 +71,7 @@
 # ============================================================================================
 #
 #  1. Mnemonic/shape filter everywhere        -> TACTIC_ID_SQL appended to every ek/cohort_ek
-#                                                 CTE's WHERE (Cells 2,3,4,12,13,14).
+#                                                 CTE's WHERE (Cells 2,3,4,6b,12,13,14).
 #  2. Attribution vs exposure conflation       -> A2 (Cell 7) carries senders / unsubs_attributed /
 #                                                 leavers_exposed as three NAMED columns, never a
 #                                                 bare "unsubs" column.
@@ -64,7 +79,11 @@
 #                                                 unfiltered by mne in the ek CTE) -> Cell [2]/[3].
 #                                                 A1's enterprise total (Cell 6) is a CLIENT-GRAIN
 #                                                 dedup, not a sum of per-mne counts (which would
-#                                                 double-count multi-list unsubscribers).
+#                                                 double-count multi-list unsubscribers). Cell [6b]
+#                                                 (2026-08-03d) re-derives the same ENTERPRISE dedup
+#                                                 independently and asserts it against Cell [6]'s
+#                                                 number - a second, differently-shaped proof of the
+#                                                 same client-grain-dedup discipline.
 #  4. Left truncation on any lookback crossing -> Piece C's trailing-12m floor (2025-08-01) sits
 #     the Aug-2025 data floor                    exactly AT the data floor, not before it (12m
 #                                                 ending ~Aug 2026 needs no data earlier than the
@@ -72,7 +91,7 @@
 #                                                 2024-01-01 (repo hard floor) with its own
 #                                                 MASTER_FLOOR margin (Cell [12]).
 #  5. MASTER join not 1:1 (~11% inflation)     -> DISTINCT subquery in every MASTER join
-#                                                 (Cells 2,3,4,12,13,14), copied verbatim from
+#                                                 (Cells 2,3,4,6b,12,13,14), copied verbatim from
 #                                                 spotlight.py.
 #  6. Bite predicate must sit inside the       -> MOD(ABS(CLNT_NO), N_BITES) lives inside the
 #     MASTER subquery (spool 2646)                MASTER DISTINCT subquery in every pull, never
@@ -105,6 +124,15 @@
 #                                                 from each side before joining.
 # 13. NOT IN with a subquery (NULL trap)       -> not used anywhere in this file; cohort/leaver
 #                                                 scoping is INNER JOIN / EXISTS-shaped, never NOT IN.
+# 14. Two ex-FWC sets, easy to swap            -> CARDS_EX_FWC (CARDS_MNES/32 minus FWC, flag basis)
+#     (2026-08-03d, new this build)               feeds ONLY A1 (Cell [2]) / A4 (Cell [9]).
+#                                                 CARDS_MKT_EX_FWC (CARDS_MKT_MNES/22 minus FWC,
+#                                                 marketing basis) feeds ONLY B_COHORT (Cell [12])
+#                                                 and the LOB-dedup pull's CARDS_EX_FWC row (Cell
+#                                                 [6b]) - both marketing-scoped by construction.
+#                                                 Named distinctly on purpose so a copy-paste never
+#                                                 silently reintroduces the 10 non-marketing mnes
+#                                                 into a marketing-scoped pull, or vice versa.
 #
 # ============================================================================================
 # WHAT THIS FILE REUSES VERBATIM FROM spotlight.py / spotlight2.py (do not redesign these)
@@ -114,7 +142,10 @@
 # - MASTER_FLOOR margin logic (load_tm lags disposition_dt_tm; 3-month margin) — spotlight.py
 #   Cell [0] comment on MASTER_FLOOR.
 # - TACTIC_ID_SHAPE_ONLY / TACTIC_ID_SQL — spotlight.py Cell [0], verbatim.
-# - CARDS_MNES (12, verbatim list) — spotlight.py Cell [0].
+# - CARDS_MNES origin — spotlight.py Cell [0] (was 12, verbatim). SUPERSEDED 2026-08-03d: now the
+#   32-code catalog Andre transcribed (MNE_CATALOG, includes regulatory/operational/fulfillment -
+#   those must stay seeable/isolatable, not dropped), plus CARDS_MKT_MNES (22, marketing-only,
+#   Piece B's cohort scope) and two ex-FWC twins on different bases. See Cell [0] comments.
 # - _landed / _write_chunks / _rowcount_marker_path / write_cube — spotlight.py Cell [1],
 #   near-verbatim (paths point at this file's own BASE).
 # - AGE_EDGES / TENURE_EDGES / _band() — spotlight.py Cell [0]/[4].
@@ -148,7 +179,7 @@
 # - REGULATORY_MNES tagging (spotlight.py carried this) is dropped — no ask in the unified brief
 #   touches regulatory-campaign segmentation.
 #
-# ENGINE MAP: Cells [1]-[4], [10]-[14] are Teradata-direct (DTZV01.*, D3CV12A.*, no catalog
+# ENGINE MAP: Cells [1]-[4], [6b], [10]-[14] are Teradata-direct (DTZV01.*, D3CV12A.*, no catalog
 # prefix, teradatasql connector). Every other cell is PySpark (YARN, Lumina pre-initialized
 # session) reading landed parquet off HDFS. Neither engine follows Trino/Starburst syntax rules
 # (references/query_engine_guidelines.md) — that canon is for the federated engine, not used here.
@@ -168,11 +199,92 @@ TACTIC_ID_SQL = """
           AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
           AND SUBSTR(TRIM(TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'""" if TACTIC_ID_SHAPE_ONLY else ""
 
-# ---- CARDS_MNES - verbatim from spotlight.py Cell [0] / spotlight2.py Cell [0]. ----
-CARDS_MNES = frozenset({"PCQ", "PCL", "PCD", "AUH", "CLI", "CRV",
-                        "VBA", "VBU", "CRO", "CEC", "VIF", "MET"})
-assert len(CARDS_MNES) == 12, "CARDS_MNES should hold exactly 12 MNEs - recount before running"
+# ---- MNE_CATALOG - ALL mnemonics in Andre's 2026-08-03 catalog transcription, (description,
+# action_type) per mne. Transcribed EXACTLY - do not paraphrase/reorder. This is the full universe
+# used to build CARDS_MNES/CARDS_LOB_ALL below and the LOB-dedup grouping (Cell [6b]).
+# COUNT FLAG RESOLVED (2026-08-03): the earlier 31-vs-32 mismatch was a dictation drop - VIF was
+# missing from the catalog relayed to Claude, even though it is in the source photo AND was in the
+# ORIGINAL 12-code cards flag this file started from. VIF added below; catalog is now verified at
+# 32 = 31 photo codes (including CLI, kept per Andre - no recent deployments) + VIF.
+MNE_CATALOG = {
+    "FWC": ("RBC X VISA FIFA Campaign", "Pre_Attract"),
+    "VIF": ("Info Protector", "Attract"),
+    "PCQ": ("Credit Card Opportunity", "Attract"),
+    "PCL": ("Credit Card Limit Increase Opportunity", "Deepen"),
+    "PCD": ("Credit Card Best Fit Check", "Deepen"),
+    "COB": ("Personal Cards Onboarding", "Onboard"),
+    "CRV": ("Credit card installment plan offer", "Deepen"),
+    "VBA": ("Business Credit Card Opportunity", "Attract"),
+    "WJR": ("WestJet Retention Trigger Monthly Campaign", "Retain"),
+    "MWA": ("Mobile Wallet Activity", "Onboard"),
+    "VBU": ("Business Cards Upgrade", "Deepen"),
+    "CEC": ("CRO Reminder Emails on Retail PreApproved Credit", "Attract"),
+    "AUH": ("Card Authorized User Acquisition", "Deepen"),
+    "CLL": ("Credit Card limit increase nurture", "Attract"),
+    "MVP": ("MVP Tests for Next Best Action", "Attract"),
+    "BCO": ("Business Cards Onboarding", "Onboard"),
+    "VLI": ("Business Credit Card Limit Increase", "Deepen"),
+    "WJF": ("WestJet Engagement Trigger Fulfillment", "Fulfillment"),
+    "WJA": ("WestJet Acquisition Offer Fulfillment", "Fulfillment"),
+    "POT": ("Pontiac Life Cycle Trigger Onboarding Emails", "Onboard"),
+    "MET": ("moi RBC Visa Onboarding", "Deepen"),
+    "WNH": ("Remediation ENOVA WATERLOO NORTH HYDRO", "Operational"),
+    "OTC": ("Regulatory notification on changes to T and Cs", "Regulatory"),
+    "RPF": ("PBA Retention Fulfillment", "Fulfillment"),
+    "HCD": ("Medical and Dental Student Offers", "Fulfillment"),
+    "VCL": ("Credit Card Limit Increase Opportunity", "Deepen"),
+    "BAF": ("British Airways Fulfillment Process", "Fulfillment"),
+    "CRO": ("Retail PreApproved Credit for New Clients", "Attract"),
+    "AML": ("AML Client ID not compliant", "Regulatory"),
+    "MEF": ("Metro Employee Application Bonus Fulfillment", "Fulfillment"),
+    "PON": ("Project Pontiac Bill 96 Client Monitoring", "Regulatory"),
+    "CLI": ("Credit Limit Increase", "Deepen"),   # kept per Andre 2026-08-03 - no recent deployments.
+}
+assert len(MNE_CATALOG) == 32, "MNE_CATALOG should hold exactly 32 mnes - recount before running"
+CARDS_LOB_ALL = frozenset(MNE_CATALOG)
+
+# ---- CARDS_MNES - the "cards" flag scope. SCOPE CHANGE (Andre 2026-08-03, supersedes an earlier
+# 12-mne verbatim list AND a since-reverted 22-mne marketing-only draft): CARDS_MNES is now ALL 32
+# catalog codes - regulatory/operational/fulfillment mnes STAY IN the cards_unsub_flag/n_emails_cards
+# population, because they must be SEEABLE, not silently dropped. Isolating the marketing-only or
+# non-marketing-only view happens via the twin columns below (Cell [2]), not via shrinking this set.
+CARDS_MNES = CARDS_LOB_ALL
+assert len(CARDS_MNES) == 32, "CARDS_MNES should hold exactly 32 MNEs (== MNE_CATALOG) - recount before running"
 CARDS_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_MNES))
+
+# ---- CARDS_NONMKT - the 10 non-marketing codes (Regulatory/Operational/Fulfillment action types)
+# inside CARDS_MNES. Powers the nonmkt twin columns (Cell [2]/[9]) that isolate this slice without
+# a second query. ----
+CARDS_NONMKT = frozenset({"OTC", "AML", "PON", "WNH", "WJF", "WJA", "RPF", "HCD", "BAF", "MEF"})
+assert len(CARDS_NONMKT) == 10, "CARDS_NONMKT should hold exactly 10 MNEs - recount before running"
+CARDS_NONMKT_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_NONMKT))
+
+# ---- CARDS_MKT_MNES - marketing-only subset (CARDS_MNES minus CARDS_NONMKT). Used ONLY for Piece
+# B's cohort definition (Cell [12]) - "Cards-mailed" membership there means CAMPAIGN CONTACT, and a
+# regulatory T&C notice or an operational remediation email is not campaign contact; including it
+# would silently redefine the Piece-B cohort as "all cardholders touched by any cards-coded mail",
+# not "clients marketed to". ASSUMPTION logged 2026-08-03, Andre-overridable. ----
+CARDS_MKT_MNES = CARDS_MNES - CARDS_NONMKT
+assert len(CARDS_MKT_MNES) == 22, "CARDS_MKT_MNES should hold exactly 22 MNEs - recount before running"
+CARDS_MKT_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_MKT_MNES))
+
+# ---- Two DISTINCT ex-FWC sets - do not collapse into one. FWC (FIFA) is enterprise-wide, not a
+# steady-state cards campaign, so isolating it matters on BOTH bases, but the "population minus
+# FWC" question means something different depending which population is being asked about:
+#   CARDS_EX_FWC     = CARDS_MNES (all 32, the A1/a4 flag population) minus FWC - used by A1's own
+#                       ex-FWC twin (Cell [2]) and a4's leavers_cards_ex_fwc (Cell [9]).
+#   CARDS_MKT_EX_FWC = CARDS_MKT_MNES (the 22-mne marketing/Piece-B population) minus FWC - used
+#                       ONLY by B_COHORT's cards_ex_fwc_unsub_by_anchor (Cell [12]) and the LOB-dedup
+#                       pull's CARDS_EX_FWC row (Cell [6b]), both of which are marketing-scoped by
+#                       construction. Using the flag-basis set there would silently reintroduce the
+#                       10 non-marketing mnes B is deliberately excluding.
+CARDS_EX_FWC = CARDS_MNES - {"FWC"}
+assert len(CARDS_EX_FWC) == 31, "CARDS_EX_FWC should hold exactly 31 MNEs - recount before running"
+CARDS_EX_FWC_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_EX_FWC))
+
+CARDS_MKT_EX_FWC = CARDS_MKT_MNES - {"FWC"}
+assert len(CARDS_MKT_EX_FWC) == 21, "CARDS_MKT_EX_FWC should hold exactly 21 MNEs - recount before running"
+CARDS_MKT_EX_FWC_LIST_SQL = ", ".join("'%s'" % m for m in sorted(CARDS_MKT_EX_FWC))
 
 
 def _months_before(date_str, n):
@@ -232,8 +344,8 @@ ANCHOR_DATES_SQL_B = ", ".join("DATE '%s'" % T_ANCHOR_B[o].isoformat() for o in 
 # hand-typed - round-2 review blocker fix (Sept-rerun no-op).
 P12_CLOSE_DATE_B = _add_months(P12_ANCHOR_B.replace(day=1), 1)   # 2026-09-01
 
-# Cohort membership window: "clients mailed by CARDS_MNES before the anchor" - own floor, the
-# repo hard floor (2024_data_floor memory), not derived from WIN_A/WIN_C.
+# Cohort membership window: "clients mailed by CARDS_MKT_MNES (marketing-only) before the anchor" -
+# own floor, the repo hard floor (2024_data_floor memory), not derived from WIN_A/WIN_C.
 COHORT_B_FLOOR = "2024-01-01"
 assert datetime.date.fromisoformat(COHORT_B_FLOOR) >= datetime.date(2024, 1, 1), \
     "repo floor is 2024-01-01 - do not go below"
@@ -290,15 +402,24 @@ UCP_MATCH_FLOOR = 70.0   # catches a broken join key, not ordinary UCP attrition
 # ---- Paths - HDFS only. Own namespace, does not collide with spotlight.py/spotlight2.py. ----
 BASE = "hdfs:///user/427966379/unsub_unified/"      # reference_andre_hdfs_user_path.md
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"           # references/ucp/README.md - personal only
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1        # A2/C ONLY - their SQL has no CARDS_MNES dependency (verified 2026-08-03d
+                           # while making this change), so a cards-list update never re-lands them.
+CARDS_SCHEMA_VERSION = 2  # A1/B_COHORT/B_DFP/B_BHV - bumped 2026-08-03d: CARDS_MNES scope change
+                           # (32-code flag) + ex-FWC/nonmkt twin columns changed these SQL blocks
+                           # and schemas. Kept SEPARATE from SCHEMA_VERSION so A2/C never re-land on
+                           # a cards-list-only change.
 
-A1_DIR = BASE + "a1_client_v%d/" % SCHEMA_VERSION
+A1_DIR = BASE + "a1_client_v%d/" % CARDS_SCHEMA_VERSION
 A2_DIR = BASE + "a2_mne_v%d/" % SCHEMA_VERSION
 C_DIR = BASE + "c_month_mne_v%d/" % SCHEMA_VERSION
-BCOHORT_DIR = BASE + "b_cohort_v%d/" % SCHEMA_VERSION
-BDFP_DIR = BASE + "b_dfp_v%d/" % SCHEMA_VERSION
-BBHV_DIR = BASE + "b_bhv_v%d/" % SCHEMA_VERSION
-UCPA_DIR = BASE + "ucp_enriched_a2_v%d/" % SCHEMA_VERSION  # bitten UCP-join output, Cell [5].
+BCOHORT_DIR = BASE + "b_cohort_v%d/" % CARDS_SCHEMA_VERSION
+BDFP_DIR = BASE + "b_dfp_v%d/" % CARDS_SCHEMA_VERSION
+BBHV_DIR = BASE + "b_bhv_v%d/" % CARDS_SCHEMA_VERSION
+UCPA_DIR = BASE + "ucp_enriched_a3_v%d/" % SCHEMA_VERSION  # bitten UCP-join output, Cell [5].
+# (a3, 2026-08-03d: name bumped from ucp_enriched_a2 - upstream a1_client moved to
+# CARDS_SCHEMA_VERSION=2 for the cards-list scope change; new namespace avoids any ambiguity about
+# which a1_client vintage a given ucp_enriched_a bite was joined against, same reasoning as the
+# prior a -> a2 bump below. Only the join's LEFT side gained columns - id set/join logic unchanged.)
 # (a2, 2026-08-03: name bumped from ucp_enriched_a - the v1 dirs mixed landings from two code
 # vintages and carried a1 RAW accounting (10,439,806 incl 10 NULL-id rows) vs distinct base
 # (10,439,797); re-landing every bite under one code version, with the explicit NULL policy
@@ -328,7 +449,10 @@ def _stamp(df, window_label, population_label):
 # BUILD STAMP - bump the tag on EVERY code change that gets pushed. This prints first so any
 # screenshot of any run is instantly attributable to the exact code version that produced it
 # (2026-08-03: three debugging rounds were spent on outputs from older code than assumed).
-PIPELINE_BUILD = "build 2026-08-03c | SMOKE-aware A4 guard; empty-B-read guards; zip path quoting - full static sweep applied"
+PIPELINE_BUILD = ("build 2026-08-03d | CARDS_MNES now ALL 32 catalog mnes incl VIF (reg/ops/"
+                   "fulfillment stay IN, isolatable via ex-FWC/nonmkt twins); CARDS_MKT_MNES (22) "
+                   "marketing-only for Piece B's cohort; email sums in a3/a4; LOB dedup pull "
+                   "(5 groupings, Cell [6b]); landing v2 for A1/B_COHORT/B_DFP/B_BHV")
 print("=" * 88)
 print("PIPELINE_BUILD:", PIPELINE_BUILD)
 print("=" * 88)
@@ -532,6 +656,10 @@ print("Cell [1] done - EDW connection live, landing helpers ready.")
 # LOB - the enterprise total (Cell [6]) is the deduped truth; any per-LOB ratio built from mne sums
 # is an UPPER BOUND, not exact. cards_unsub_flag landed here (client grain) is the exception that
 # lets Cell [6] add an EXACT CARDS_TOTAL_UNIQUE_CLIENTS row alongside ENTERPRISE_TOTAL.
+# cards_unsub_flag/n_emails_cards are now scoped by CARDS_MNES = ALL 32 catalog mnes (2026-08-03d
+# scope change - regulatory/operational/fulfillment stay IN, isolatable via two twin pairs added
+# this build: n_emails_cards_ex_fwc/cards_ex_fwc_unsub_flag (flag basis minus FWC, CARDS_EX_FWC)
+# and n_emails_cards_nonmkt/cards_nonmkt_unsub_flag (the 10 non-marketing mnes, CARDS_NONMKT).
 
 A1_SCHEMA = StructType([
     StructField("clnt_no", LongType(), True),
@@ -539,6 +667,10 @@ A1_SCHEMA = StructType([
     StructField("cards_unsub_flag", IntegerType(), True),
     StructField("n_emails_all", LongType(), True),
     StructField("n_emails_cards", LongType(), True),
+    StructField("n_emails_cards_ex_fwc", LongType(), True),        # NEW 2026-08-03d - CARDS_EX_FWC twin
+    StructField("cards_ex_fwc_unsub_flag", IntegerType(), True),   # NEW 2026-08-03d - CARDS_EX_FWC twin
+    StructField("n_emails_cards_nonmkt", LongType(), True),        # NEW 2026-08-03d - CARDS_NONMKT twin
+    StructField("cards_nonmkt_unsub_flag", IntegerType(), True),   # NEW 2026-08-03d - CARDS_NONMKT twin
 ])
 
 
@@ -548,15 +680,15 @@ def _prep_a1(pdf):
     _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
     assert _n_null == 0, "clnt_no has %d nulls - CLNT_NO IS NOT NULL filter is not firing" % _n_null
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
-    for _c in ["unsub_flag_any", "cards_unsub_flag"]:
+    for _c in ["unsub_flag_any", "cards_unsub_flag", "cards_ex_fwc_unsub_flag", "cards_nonmkt_unsub_flag"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int32")
-    for _c in ["n_emails_all", "n_emails_cards"]:
+    for _c in ["n_emails_all", "n_emails_cards", "n_emails_cards_ex_fwc", "n_emails_cards_nonmkt"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int64")
     return pdf[[f.name for f in A1_SCHEMA.fields]]
 
 
 def land_a1_bite(bite):
-    name = "a1_client_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    name = "a1_client_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
     if _landed(name):
         print(name, ": already landed,", spark.read.parquet(BASE + name).count(), "rows - SKIP")
         return
@@ -586,11 +718,16 @@ def land_a1_bite(bite):
            MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub_flag_any,
            MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS cards_unsub_flag,
            SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS n_emails_all,
-           SUM(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS n_emails_cards
+           SUM(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS n_emails_cards,
+           SUM(CASE WHEN disposition_cd = 1 AND mne IN (%(cards_ex_fwc)s) THEN 1 ELSE 0 END) AS n_emails_cards_ex_fwc,
+           MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards_ex_fwc)s) THEN 1 ELSE 0 END) AS cards_ex_fwc_unsub_flag,
+           SUM(CASE WHEN disposition_cd = 1 AND mne IN (%(cards_nonmkt)s) THEN 1 ELSE 0 END) AS n_emails_cards_nonmkt,
+           MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards_nonmkt)s) THEN 1 ELSE 0 END) AS cards_nonmkt_unsub_flag
     FROM joined
     GROUP BY clnt_no
     """ % {"floor": WIN_A_FLOOR, "ceil": WIN_A_CEIL, "mfloor": MASTER_FLOOR_A, "tactic": TACTIC_ID_SQL,
-           "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL}
+           "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL,
+           "cards_ex_fwc": CARDS_EX_FWC_LIST_SQL, "cards_nonmkt": CARDS_NONMKT_LIST_SQL}
     pdf = edw_pd(sql)
     assert len(pdf) > 0, name + " pulled zero rows for bite " + str(bite) + " - investigate"
     pdf = _prep_a1(pdf)
@@ -936,7 +1073,7 @@ print("Pruned + enriched UCP (Personal, deduped, needed columns only) cached:", 
 # ---- Bite loop: the actual client-grain x client-grain join, done ~1 bite (~1.1M rows) at a
 # time. Resume-safe via _landed()/_write_spark_marker, same convention as every Teradata pull. ----
 for _bite in (range(1) if SMOKE else range(N_BITES)):
-    _bite_name = "ucp_enriched_a2_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
+    _bite_name = "ucp_enriched_a3_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
     if _landed(_bite_name):
         print(_bite_name, ": already landed,", spark.read.parquet(BASE + _bite_name).count(),
               "rows - SKIP")
@@ -1061,6 +1198,102 @@ print(a1_mne_share_pd.to_string(index=False))
 write_cube(a1_mne_share, "a1_mne_share")
 
 
+# %% [6b] LOB DEDUP PULL - one Teradata aggregated query, WINDOW A, unique unsub clients (cd=4)
+# under FIVE labeled groupings - each an exact client-grain COUNT(DISTINCT clnt_no), same dedup
+# guarantee as A1's ENTERPRISE_TOTAL/CARDS_TOTAL rows (Cell [6]), never a per-mne sum. Reuses the
+# ek/MASTER DISTINCT join pattern (trap #1 shape filter via TACTIC_ID_SQL, trap #5 DISTINCT
+# subquery) - NOT bitten (tiny wire cost, five COUNT(DISTINCT) numbers back, same cost class as
+# Pull C's fan-out guard diagnostic, Cell [4]/[10]).
+#   ENTERPRISE       - no mne filter (still shape-filtered) - cross-checks A1's
+#                       ENTERPRISE_TOTAL_UNIQUE_CLIENTS row, same window/population.
+#   CARDS_LOB_ALL(32) - CARDS_LIST_SQL, the full flag population (Cell [0]).
+#   CARDS_MKT(22)     - CARDS_MKT_LIST_SQL, marketing-only (same set Piece B's cohort uses).
+#   CARDS_EX_FWC(21)  - CARDS_MKT_EX_FWC_LIST_SQL - MARKETING basis minus FWC (matches B_COHORT's
+#                       cards_ex_fwc_unsub_by_anchor twin, NOT A1's flag-basis CARDS_EX_FWC twin -
+#                       see the two-ex-FWC-sets comment in Cell [0]).
+#   CARDS_NONMKT(10)  - CARDS_NONMKT_LIST_SQL, the 10 regulatory/operational/fulfillment mnes.
+# The CARDS_LOB_ALL/OTHER split is built via CASE on SUBSTR(TREATMENT_ID,8,3), per spec; the other
+# three rows are simple mne-IN filters over the same `joined` CTE (no need to re-tag). Label column
+# CAST to VARCHAR(40) in every branch (Teradata UNION ALL truncation rule - canon
+# teradata_pushdown notes - the first SELECT sets the width for every branch that follows).
+# ENGINE: Teradata-direct.
+
+_lob_dedup_sql = """
+WITH ek AS (
+    SELECT consumer_id_hashed, TREATMENT_ID,
+           MIN(disposition_dt_tm) AS disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 4
+      AND disposition_dt_tm >= DATE '%(floor)s'
+      AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
+    GROUP BY 1, 2, CAST(disposition_dt_tm AS DATE)
+),
+joined AS (
+    SELECT m.CLNT_NO AS clnt_no,
+           SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne
+    FROM ek
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE load_tm >= DATE '%(mfloor)s'
+                  AND CLNT_NO IS NOT NULL) m
+      ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+),
+lob_tagged AS (
+    SELECT clnt_no,
+           CASE WHEN mne IN (%(lob_all)s) THEN 'CARDS_LOB' ELSE 'OTHER' END AS lob_group
+    FROM joined
+)
+SELECT CAST('ENTERPRISE' AS VARCHAR(40)) AS label, COUNT(DISTINCT clnt_no) AS unique_unsub_clients
+FROM joined
+UNION ALL
+SELECT CAST('CARDS_LOB_ALL' AS VARCHAR(40)), COUNT(DISTINCT clnt_no)
+FROM lob_tagged WHERE lob_group = 'CARDS_LOB'
+UNION ALL
+SELECT CAST('CARDS_MKT' AS VARCHAR(40)), COUNT(DISTINCT clnt_no)
+FROM joined WHERE mne IN (%(mkt)s)
+UNION ALL
+SELECT CAST('CARDS_EX_FWC' AS VARCHAR(40)), COUNT(DISTINCT clnt_no)
+FROM joined WHERE mne IN (%(mkt_ex_fwc)s)
+UNION ALL
+SELECT CAST('CARDS_NONMKT' AS VARCHAR(40)), COUNT(DISTINCT clnt_no)
+FROM joined WHERE mne IN (%(nonmkt)s)
+""" % {"floor": WIN_A_FLOOR, "ceil": WIN_A_CEIL, "mfloor": MASTER_FLOOR_A, "tactic": TACTIC_ID_SQL,
+       "lob_all": CARDS_LIST_SQL, "mkt": CARDS_MKT_LIST_SQL, "mkt_ex_fwc": CARDS_MKT_EX_FWC_LIST_SQL,
+       "nonmkt": CARDS_NONMKT_LIST_SQL}
+
+_lob_dedup_pdf = edw_pd(_lob_dedup_sql)
+_lob_dedup_pdf.columns = [c.lower() for c in _lob_dedup_pdf.columns]
+assert len(_lob_dedup_pdf) == 5, (
+    "a1_lob_dedup pulled %d rows, expected exactly 5 (ENTERPRISE/CARDS_LOB_ALL/CARDS_MKT/"
+    "CARDS_EX_FWC/CARDS_NONMKT) - check the UNION ALL." % len(_lob_dedup_pdf))
+_lob_dedup_pdf["unique_unsub_clients"] = pd.to_numeric(
+    _lob_dedup_pdf["unique_unsub_clients"], errors="coerce").fillna(0).astype("int64")
+print("A1_LOB_DEDUP | grain: one row per label | WIN_A Jan-Apr 2026 | 5 rows")
+print(_lob_dedup_pdf.to_string(index=False))
+
+_ent_lob_row = _lob_dedup_pdf.loc[_lob_dedup_pdf["label"] == "ENTERPRISE", "unique_unsub_clients"]
+if len(_ent_lob_row) and "_enterprise_unsubs" in globals():
+    _ent_lob = int(_ent_lob_row.iloc[0])
+    if _ent_lob != _enterprise_unsubs:
+        print("NOTE: a1_lob_dedup ENTERPRISE (%d) vs a1_mne_share's ENTERPRISE_TOTAL_UNIQUE_CLIENTS "
+              "(%d) differ - both are supposed to be the same client-grain dedup over the same WIN_A "
+              "window; investigate before trusting either if this drifts." % (_ent_lob, _enterprise_unsubs))
+    else:
+        print("Cross-check OK: a1_lob_dedup ENTERPRISE matches a1_mne_share's "
+              "ENTERPRISE_TOTAL_UNIQUE_CLIENTS (%d)." % _ent_lob)
+
+_LOB_DEDUP_SCHEMA = StructType([
+    StructField("label", StringType(), True),
+    StructField("unique_unsub_clients", LongType(), True),
+])
+a1_lob_dedup = spark.createDataFrame(_lob_dedup_pdf[["label", "unique_unsub_clients"]],
+                                      schema=_LOB_DEDUP_SCHEMA)
+a1_lob_dedup_stamped = _stamp(a1_lob_dedup, "WIN_A Jan-Apr 2026",
+                               "enterprise-wide, shape-filtered, five LOB groupings")
+a1_lob_dedup_pd = a1_lob_dedup_stamped.toPandas()
+write_cube(a1_lob_dedup_stamped, "a1_lob_dedup")
+
+
 # %% [7] A2 OUTPUT - mne x {senders, unsubs_attributed, leavers_exposed}, counts only, no rates
 # (Andre derives rates in the Excel pivot). ENGINE: PySpark.
 
@@ -1090,7 +1323,9 @@ a3_contact_cube = (client_roll_a3
                          F.sum(F.when(F.col("unsub_flag_any") == 1, 1).otherwise(0)).alias("leavers"),
                          F.sum(F.when((F.col("unsub_flag_any") == 1) & (F.col("cards_unsub_flag") == 1), 1)
                                .otherwise(0)).alias("leavers_cards_unsub_subset"),
-                         F.count("*").alias("clients_total"))
+                         F.count("*").alias("clients_total"),
+                         F.sum("n_emails_all").alias("sum_emails_all"),        # NEW 2026-08-03d
+                         F.sum("n_emails_cards").alias("sum_emails_cards"))    # NEW 2026-08-03d
                     .orderBy("n_emails_all_bucket", "n_emails_cards_bucket")
                     .cache())
 
@@ -1112,6 +1347,9 @@ write_cube(a3_contact_cube_stamped, "a3_contact_cube")
 # per the brief's locked decision) x prod_cat_cnt (depth, kept too) x {stayers, leavers}.
 # leavers_cards_unsub rides beside leavers as the cards-view subset (same pattern as A3's
 # leavers_cards_unsub_subset) - lets the cards profile cut be derived without a second cube.
+# 2026-08-03d ADDITIONS (appended at the end of the agg list, existing columns untouched):
+# leavers_cards_ex_fwc (flag-basis CARDS_EX_FWC subset), leavers_cards_nonmkt (CARDS_NONMKT
+# subset), sum_emails_all / sum_emails_cards (per-profile email volume, mirrors A3's additions).
 #
 # BITE RETROFIT (OOM fix): a1_client x ucp_enriched_a is a client-grain x client-grain join at up
 # to ~10.4M rows on each side - the same shape of join that killed Cell [5]. Both sides already
@@ -1132,7 +1370,7 @@ for _bite in (range(1) if SMOKE else range(N_BITES)):
     _a1_bite = a1_client.filter((F.abs(F.col("clnt_no")) % N_BITES) == _bite)
     _a1_bite_n = _a1_bite.count()
     _a4_expected += _a1_bite_n
-    _ucp_bite_path = "ucp_enriched_a2_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
+    _ucp_bite_path = "ucp_enriched_a3_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
     _ucp_bite = spark.read.parquet(BASE + _ucp_bite_path)
     _a4_src_bite = _a1_bite.join(_ucp_bite, "clnt_no", "left")
     _a4_bite_n = _a4_src_bite.count()
@@ -1148,7 +1386,13 @@ for _bite in (range(1) if SMOKE else range(N_BITES)):
              F.sum(F.when(F.col("unsub_flag_any") == 1, 1).otherwise(0)).alias("leavers"),
              F.sum(F.when((F.col("unsub_flag_any") == 1) & (F.col("cards_unsub_flag") == 1), 1)
                    .otherwise(0)).alias("leavers_cards_unsub"),
-             F.count("*").alias("clients_total")))
+             F.count("*").alias("clients_total"),
+             F.sum(F.when((F.col("unsub_flag_any") == 1) & (F.col("cards_ex_fwc_unsub_flag") == 1), 1)
+                   .otherwise(0)).alias("leavers_cards_ex_fwc"),          # NEW 2026-08-03d
+             F.sum("n_emails_all").alias("sum_emails_all"),               # NEW 2026-08-03d
+             F.sum("n_emails_cards").alias("sum_emails_cards"),           # NEW 2026-08-03d
+             F.sum(F.when((F.col("unsub_flag_any") == 1) & (F.col("cards_nonmkt_unsub_flag") == 1), 1)
+                   .otherwise(0)).alias("leavers_cards_nonmkt")))         # NEW 2026-08-03d
     print("A4 bite", _bite, "of", N_BITES, ": joined", _a4_bite_n, "clients, no fan-out, partial cube built.")
 
 assert _a4_join_total == _a4_expected, (
@@ -1173,7 +1417,11 @@ a4_profile_cube = (_a4_union
                     .agg(F.sum("stayers").alias("stayers"),
                          F.sum("leavers").alias("leavers"),
                          F.sum("leavers_cards_unsub").alias("leavers_cards_unsub"),
-                         F.sum("clients_total").alias("clients_total"))
+                         F.sum("clients_total").alias("clients_total"),
+                         F.sum("leavers_cards_ex_fwc").alias("leavers_cards_ex_fwc"),   # NEW 2026-08-03d
+                         F.sum("sum_emails_all").alias("sum_emails_all"),               # NEW 2026-08-03d
+                         F.sum("sum_emails_cards").alias("sum_emails_cards"),           # NEW 2026-08-03d
+                         F.sum("leavers_cards_nonmkt").alias("leavers_cards_nonmkt"))   # NEW 2026-08-03d
                     .orderBy("age_band", "tenure_band", "prod_cat_cnt"))
 
 a4_profile_cube_stamped = _stamp(a4_profile_cube, "WIN_A Jan-Apr 2026",
@@ -1277,21 +1525,27 @@ print("ACCUMULATOR CHECK PASSED -", len(_material), "materially-active accounts,
 
 
 # %% [12] PULL B_COHORT - client-grain, cohort SCOPING pull. Defines the Piece-B population
-# (clients mailed by CARDS_MNES on/before the anchor) AND the leaver flags at anchor, in the SAME
-# pull that scopes it - this is the fix for spotlight2.py's defect #4 ("pulls bank-wide, cards
+# (clients mailed by CARDS_MKT_MNES on/before the anchor) AND the leaver flags at anchor, in the
+# SAME pull that scopes it - this is the fix for spotlight2.py's defect #4 ("pulls bank-wide, cards
 # flag applied post-hoc"). The WHERE mailed_cards = 1 at the very end IS the scoping: only cohort
 # clients are landed, nothing bank-wide ever reaches HDFS.
+# MARKETING-ONLY SCOPE (2026-08-03d, Andre-overridable assumption, Cell [0]): mailed_cards /
+# cards_unsub_by_anchor use CARDS_MKT_MNES (22 mnes), NOT the 32-mne CARDS_MNES flag A1 uses - a
+# regulatory T&C notice or an operational remediation email is not campaign contact, and folding
+# those in would silently redefine "Cards-mailed" as "any cards-coded mail, including non-marketing".
 #
 # LEAVER FLAG has its OWN window (COHORT_B_FLOOR -> anchor+1day), separate from Piece A/C's
 # windows - the fix for spotlight2.py's defect #2 ("do NOT reuse a flag computed over the full
-# year"). any_unsub_by_anchor is enterprise-wide (any mne); cards_unsub_by_anchor is the cards
-# subset, carried as a second column per the brief.
+# year"). any_unsub_by_anchor is enterprise-wide (any mne); cards_unsub_by_anchor is the
+# marketing-cards subset; cards_ex_fwc_unsub_by_anchor (2026-08-03d) is the same subset minus FWC
+# (CARDS_MKT_EX_FWC, marketing basis - see the two-ex-FWC-sets comment in Cell [0]).
 # ENGINE: Teradata-direct.
 
 BCOHORT_SCHEMA = StructType([
     StructField("clnt_no", LongType(), True),
     StructField("any_unsub_by_anchor", IntegerType(), True),
     StructField("cards_unsub_by_anchor", IntegerType(), True),
+    StructField("cards_ex_fwc_unsub_by_anchor", IntegerType(), True),   # NEW 2026-08-03d - marketing-basis ex-FWC twin
 ])
 
 
@@ -1301,13 +1555,13 @@ def _prep_bcohort(pdf):
     _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
     assert _n_null == 0, "clnt_no has %d nulls - CLNT_NO IS NOT NULL filter is not firing" % _n_null
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
-    for _c in ["any_unsub_by_anchor", "cards_unsub_by_anchor"]:
+    for _c in ["any_unsub_by_anchor", "cards_unsub_by_anchor", "cards_ex_fwc_unsub_by_anchor"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int32")
     return pdf[[f.name for f in BCOHORT_SCHEMA.fields]]
 
 
 def land_bcohort_bite(bite):
-    name = "b_cohort_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    name = "b_cohort_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
     if _landed(name):
         print(name, ": already landed,", spark.read.parquet(BASE + name).count(), "rows - SKIP")
         return
@@ -1337,15 +1591,17 @@ def land_bcohort_bite(bite):
         SELECT clnt_no,
                MAX(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS mailed_cards,
                MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS any_unsub_by_anchor,
-               MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS cards_unsub_by_anchor
+               MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards)s) THEN 1 ELSE 0 END) AS cards_unsub_by_anchor,
+               MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards_ex_fwc)s) THEN 1 ELSE 0 END) AS cards_ex_fwc_unsub_by_anchor
         FROM joined
         GROUP BY clnt_no
     )
-    SELECT clnt_no, any_unsub_by_anchor, cards_unsub_by_anchor
+    SELECT clnt_no, any_unsub_by_anchor, cards_unsub_by_anchor, cards_ex_fwc_unsub_by_anchor
     FROM client_flags
     WHERE mailed_cards = 1
     """ % {"floor": COHORT_B_FLOOR, "ceil": ANCHOR_B_CEIL, "mfloor": MASTER_FLOOR_B, "tactic": TACTIC_ID_SQL,
-           "n_bites": N_BITES, "bite": bite, "cards": CARDS_LIST_SQL}
+           "n_bites": N_BITES, "bite": bite, "cards": CARDS_MKT_LIST_SQL,
+           "cards_ex_fwc": CARDS_MKT_EX_FWC_LIST_SQL}
     pdf = edw_pd(sql)
     if len(pdf) == 0:
         print(name, ": zero cohort clients in this bite - possible for a MOD-narrow bite this "
@@ -1422,7 +1678,12 @@ def _cohort_cte_sql(bite):
     """Cheap, cards-only cohort-membership CTE, shared text between the DFP and BHV pulls. Kept
     as a Python function (not a stored SQL macro) so both pulls stay self-contained files.
     Half-open on the anchor (< ANCHOR_B_CEIL), matching Cell [12]'s own cohort pull - anchor-day
-    off-by-one fix, was <= T0_ANCHOR_B which double-counted anchor-day events across the boundary."""
+    off-by-one fix, was <= T0_ANCHOR_B which double-counted anchor-day events across the boundary.
+    MARKETING-ONLY (2026-08-03d): uses CARDS_MKT_LIST_SQL, matching Cell [12]'s B_COHORT population
+    exactly - this is a self-contained RE-DERIVATION of the same cohort, not a read from Cell [12]'s
+    landed table, so the two definitions must stay identical or Piece B's population drifts between
+    cells. Using the broader 32-mne flag list here would scan/pull extra accounts DFP/BHV never
+    needed (Cell [15] joins onto Cell [12]'s cohort_bite regardless), so this is also a compute fix."""
     return """
     cohort_ek AS (
         SELECT consumer_id_hashed, TREATMENT_ID, MIN(disposition_dt_tm) AS dt
@@ -1442,7 +1703,7 @@ def _cohort_cte_sql(bite):
                       AND CLNT_NO IS NOT NULL
                       AND MOD(ABS(CLNT_NO), %(n_bites)d) = %(bite)d) m
           ON m.consumer_id_hashed = cohort_ek.consumer_id_hashed AND m.TREATMENT_ID = cohort_ek.TREATMENT_ID
-    )""" % {"cfloor": COHORT_B_FLOOR, "anchor_ceil": ANCHOR_B_CEIL, "cards": CARDS_LIST_SQL,
+    )""" % {"cfloor": COHORT_B_FLOOR, "anchor_ceil": ANCHOR_B_CEIL, "cards": CARDS_MKT_LIST_SQL,
             "tactic": TACTIC_ID_SQL, "mfloor": MASTER_FLOOR_B, "n_bites": N_BITES, "bite": bite}
 
 
@@ -1525,7 +1786,7 @@ def _prep_bdfp(pdf):
 
 
 def land_bdfp_bite(bite):
-    path = "b_dfp_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    path = "b_dfp_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
     if _landed_b_offset(path):
         return
     pdf = edw_pd(_dfp_sql(bite))
@@ -1644,7 +1905,7 @@ def _prep_bbhv(pdf):
 
 
 def land_bbhv_bite(bite):
-    path = "b_bhv_v%d/bite_%d" % (SCHEMA_VERSION, bite)
+    path = "b_bhv_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
     if _landed_b_offset(path):
         return
     pdf = edw_pd(_bhv_sql(bite))
@@ -1892,7 +2153,7 @@ if T0_ANCHOR_B <= datetime.date.today() < P12_ANCHOR_B:
 write_cube(b_before_after_cube_stamped, "b_before_after_cube")
 
 
-# %% [16] ONE FILE TO DOWNLOAD - bundle all six CSVs into a single xlsx, one sheet each. Verbatim
+# %% [16] ONE FILE TO DOWNLOAD - bundle all seven CSVs into a single xlsx, one sheet each. Verbatim
 # pattern from spotlight.py Cell [7]: HDFS is the durable output, this is a delivery convenience.
 # TOLERATES a missing/empty b_before_after_cube (pre-Sept-2026 runs, before t12 closes, or any
 # other cube landing thin/empty): the filter below drops empty frames from the workbook and NAMES
@@ -1923,6 +2184,7 @@ else:
     print("Local output dir:", LOCAL_OUT)
     _sheets = {
         "a1_mne_share": a1_mne_share_pd,
+        "a1_lob_dedup": a1_lob_dedup_pd,
         "a2_mne_rates": a2_mne_rates_pd,
         "a3_contact_cube": a3_pd,
         "a4_profile_cube": a4_pd,
@@ -1981,6 +2243,7 @@ print("RUN SUMMARY -", SCRIPT_NAME, "| run_date:", RUN_DATE, "| SMOKE:", SMOKE)
 print("=" * 90)
 _summary = [
     ("A1", "a1_mne_share.csv", len(a1_mne_share_pd)),
+    ("A1b", "a1_lob_dedup.csv", len(a1_lob_dedup_pd)),
     ("A2", "a2_mne_rates.csv", len(a2_mne_rates_pd)),
     ("A3", "a3_contact_cube.csv", len(a3_pd)),
     ("A4", "a4_profile_cube.csv", len(a4_pd)),
