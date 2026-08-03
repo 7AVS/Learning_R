@@ -328,7 +328,7 @@ def _stamp(df, window_label, population_label):
 # BUILD STAMP - bump the tag on EVERY code change that gets pushed. This prints first so any
 # screenshot of any run is instantly attributable to the exact code version that produced it
 # (2026-08-03: three debugging rounds were spent on outputs from older code than assumed).
-PIPELINE_BUILD = "build 2026-08-03a | 68c5b1b bite_? glob fix - markers no longer read as data"
+PIPELINE_BUILD = "build 2026-08-03b | isin tuple->list fix in Cell [6]; glob fix confirmed working"
 print("=" * 88)
 print("PIPELINE_BUILD:", PIPELINE_BUILD)
 print("=" * 88)
@@ -1047,7 +1047,9 @@ _a1_enterprise_row = spark.createDataFrame(
     [("ENTERPRISE_TOTAL_UNIQUE_CLIENTS", int(_enterprise_unsubs))], ["mne", "unsubs_attributed"])
 _a1_cards_row = spark.createDataFrame(
     [("CARDS_TOTAL_UNIQUE_CLIENTS", int(_cards_unsubs))], ["mne", "unsubs_attributed"])
-_a1_summary_mnes = ("ENTERPRISE_TOTAL_UNIQUE_CLIENTS", "CARDS_TOTAL_UNIQUE_CLIENTS")
+_a1_summary_mnes = ["ENTERPRISE_TOTAL_UNIQUE_CLIENTS", "CARDS_TOTAL_UNIQUE_CLIENTS"]  # LIST, not
+# tuple - pyspark Column.isin() unpacks list/set but wraps a tuple whole into lit() -> JVM
+# "literal for ArrayList not supported" crash (hit 2026-08-03, first run to reach this line).
 a1_mne_share = (_a1_mne_rows.unionByName(_a1_enterprise_row).unionByName(_a1_cards_row)
                  .orderBy(F.col("mne").isin(_a1_summary_mnes), F.desc("unsubs_attributed")))
 a1_mne_share = _stamp(a1_mne_share, "WIN_A Jan-Apr 2026", "enterprise-wide, all mnes, shape-filtered")
