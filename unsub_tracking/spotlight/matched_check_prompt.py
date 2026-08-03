@@ -12,9 +12,21 @@ client with spend_3mo_then, spend_3mo_now, the leaver flag, cards_unsub_mne).
 
 ## The check
 
-1. Read the landed b_panel (Spark, bite_? convention) or rebuild it from the
-   landed b_cohort_v3 + b_dfp_v3 parquet if the panel isn't persisted -
-   client grain, cohort only.
+1. Read the landed parquet - EXACT paths and schemas (verified from the
+   pipeline code, build 03e; still run printSchema() first and STOP if it
+   disagrees):
+   - hdfs:///user/427966379/unsub_unified/b_cohort_v3/bite_?  (the bite_?
+     glob, NEVER bite_* - sidecar marker files pollute wider globs)
+     columns: clnt_no (long), any_unsub_by_anchor (int),
+     cards_unsub_by_anchor (int), cards_ex_fwc_unsub_by_anchor (int),
+     cards_unsub_mne (string, NULL for stayers)
+   - hdfs:///user/427966379/unsub_unified/b_dfp_v3/bite_?
+     columns: clnt_no (long), n_accts_total (long),
+     spend_3mo_then (double, NULLable), spend_3mo_now (double, NULLable)
+   Join on clnt_no (left join cohort->dfp). Leaver = cards_unsub_by_anchor
+   = 1; stayer = 0. Avg monthly spend = spend_3mo_then/3 and _now/3.
+   Sanity before anything: cohort rows must be 4,783,193 (today's build) -
+   any other number means wrong/stale data, STOP.
 2. Restrict to clients with spend_3mo_then/3 (avg monthly spend THEN) in a
    band, and within the band compare CARDS UNSUBSCRIBERS vs STAYERS:
    - avg monthly spend then (should be ~equal by construction - print it)
