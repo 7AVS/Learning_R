@@ -125,6 +125,65 @@ misleading top points (POT, CEC); (c) print the full 17-row source table
 in the notebook output - 16 of 17 rows were invisible in review; every
 pixel-read number must be checkable; (d) G4 label.
 
+## ROUND 2 ORDERS (2026-08-03, review of the revised full set)
+
+Round-1 orders were verified applied - good. These are the remaining fixes,
+found by a second full review. Apply ON THE NEW 03d CSVs (7 files incl
+a1_lob_dedup.csv) once the full run lands - not on the old data.
+
+R2-1. **Reliability encoding.** No CIs exist anywhere. Minimum: (a) heatmap
+  cells with thin n get muted/hatched color regardless of rate - color must
+  not scream "severe" on n=1.9K as loudly as on n=620K; flag the whole
+  Dormant COLUMN as thin, not just one cell; (b) on any rate ranking that
+  spans wildly different denominators (Q2 rate panel: 12K vs 4.2M), add
+  Wilson 95% CI whiskers or drop sub-50k rows to a separate "small base"
+  table.
+R2-2. **One rate format everywhere, including TABLES.** The M0/M-cards
+  tables print bare decimals (0.188) beside %-formatted tables (0.11%) -
+  a reader will read 0.188 as 18.8%. Every rate cell and axis carries %.
+R2-3. **Window-mismatch rule (the FNI case).** A campaign can have
+  in-window unsubs with zero in-window sends (unsubs from PRIOR sends -
+  real, not a bug). Rule: a rate is computed ONLY when sends and unsubs
+  share the window; otherwise show volume + tag "unsubs from pre-window
+  sends", rate = n/a. Apply globally; FNI is the known instance.
+R2-4. **PBA send spikes 202603 + 202606 (7.9M/8.4M vs ~1M other months):**
+  investigate BEFORE charting any monthly trend - which PBA MNEs, real
+  burst or double-count? Report the answer.
+R2-5. **Q6 robustness check (required):** recompute the Cards share-of-
+  events peak EXCLUDING the immature months (202606-202607) and confirm
+  the ~17.6% Apr peak stands independent of the shrinking denominator.
+  State the result on-chart.
+R2-6. **Q6 chart 1:** stacked-subset bar again - replace with two clean
+  series (enterprise volume line + cards volume line) or grouped bars;
+  make the immature-month marking a hard visual break (hatch + axis note),
+  not opacity alone.
+R2-7. **Q4 age/tenure:** cards bars are crushed on the shared axis - the
+  "4-7yr peak" is invisible. Give cards its own panel or print value
+  labels on every cards bar.
+R2-8. **Q4 TIBC:** add the cards-list series (the panel is enterprise-only
+  - the cards mandate is missing); sort bars by value; key the colors; and
+  drop the word "only" from the title - two other combos sit in the same
+  band.
+R2-9. **Action-type monthly trend:** raw counts invite the volume-artifact
+  read. Add the monthly SENDS for FWC (or plot monthly unsub rate %) so
+  the Feb-Apr spike is shown per-send, not just per-calendar; small
+  series (Onboard/Attract/Deepen) get their own scale or panel.
+R2-10. **KILL the dual-axis combo chart (senders bars + rate diamonds on
+  two x-axes).** Highest misread risk in the set - PCQ's rate diamond
+  visually lands at FWC's volume. Use the existing two-panel pattern
+  (volume panel + rate panel). Fix truncated MNE labels; label any log
+  axis "log scale".
+R2-11. Explicit zeros: Operational prints "0 unsubs (n=540)" - blank bar
+  reads as missing data. Also check Attract's 0.58%: if its campaigns
+  started mid-window, the shorter exposure inflates the rate - verify
+  against first-send dates and caption if so.
+R2-12. **Deliverable hygiene:** export every final chart as PNG from the
+  notebook (no phone photos - a screen-overlay icon currently blocks data
+  points in three captures); print every source table in full under its
+  chart; re-render the FWC timing-check panel fully visible (it was cut
+  off - and it is now a headline exhibit: "unsubs track send waves with
+  0-1 month lag").
+
 ## AFTER APPLYING: rebuild all plots, re-print the full source tables
 under each, then STOP and show the revised set for review BEFORE building
 the HTML page. The HTML build then follows the exploration-page prompt
