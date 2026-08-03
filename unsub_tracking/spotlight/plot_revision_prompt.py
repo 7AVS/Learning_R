@@ -136,9 +136,17 @@ V1. Plain, precise, few words. Never a complicated word for a simple concept.
     bounds", "multi-list overlap", "heavier-mailed clients" (say "clients who
     received more emails"), "leaver" without definition, "prevalence" where
     "unsub rate" works.
-    The overlap caveat, said plainly: "One person can unsubscribe from several
-    campaigns - campaign counts add to 146,706 but there are 109,431 unique
-    people." Write it exactly that simply wherever it applies.
+    The overlap caveat - REFRAMED AS A FINDING (Andre 2026-08-03): by system
+    design, one unsubscribe should log to CPC and suppress ALL future
+    marketing mail, so a second unsubscribe should be impossible outside the
+    short propagation window between log and next decisioning. Observed:
+    campaign counts add to 146,706 vs 109,431 unique people - ~37K clients
+    (1 in 4 unsubscribers) had to unsubscribe MORE THAN ONCE. State it that
+    way: "a measure of the suppression gap", an exception/defect signal (ties
+    to the CPC leak workstream), never "normal multi-list behavior".
+    NEW REQUIRED CHART: for repeat unsubscribers, histogram the time between
+    first and second unsub (days). Short gaps = propagation lag; long gaps =
+    the suppression flag not consulted. One query on the event table.
 V2. EVERY section states its measurement window in the title or first line -
     and ANNOUNCES when the window changes from the previous section (monthly
     Aug-Jun -> recent Jan-Apr -> anchor Aug-2025+12m). These transitions will
