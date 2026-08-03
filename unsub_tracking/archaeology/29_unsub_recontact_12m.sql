@@ -18,16 +18,28 @@
 --   1. vt_sent_evt (disp=1, 13mo span) is THE BIG ONE if left unscoped — EVENT-wide sends over 13mo could be a
 --      large fraction of the 400M rows. It is semi-joined to vt_cohort_addr (the July cohort's own
 --      consumer_id_hashed set, ~low hundreds of thousands) INSIDE the CREATE, so spool only ever holds cohort
---      sends, not all-of-RBC's sends.
---   2. vt_sent_resolved_raw — MASTER join keyed off vt_sent_evt's small (consumer_id_hashed,TREATMENT_ID) set,
---      still 2-pass load_tm-chunked (pack-22 idiom) as a second layer of defense since MASTER's non-1:1 rows
---      can multiply before the load_tm floor narrows them back down.
---   3. vt_unsub_evt / vt_unsub_resolved — small by construction (one month of disp=4 events); low risk.
+--      sends, not all-of-RBC's sends. Confirmed cheap in the real run (~3.3s).
+--   2. vt_sent_resolved_raw — MASTER resolution. 4-pass load_tm-chunked, each pass's MASTER dedup constrained
+--      by an explicit consumer_id_hashed IN (vt_cohort_addr) semi-join INSIDE the derived table, before the
+--      DISTINCT (see the incident record below — this is the step that actually broke).
+--   3. vt_unsub_resolved — small by construction (one month of disp=4 events), same semi-join-before-DISTINCT
+--      pattern applied for defense in depth; low risk, survived the real run unchanged.
+-- INCIDENT (2026-08-03, real run against full data): the pack as of the prior revision died with spool error
+-- 2646 at the CREATE of vt_sent_resolved_raw (pass 1/2 of that version) — everything upstream (the full cohort
+-- chain through vt_sent_evt) built fine, everything downstream cascaded 3807. Root cause: that version relied
+-- on the outer INNER JOIN (vt_sent_evt / vt_cohort_clnt) to shrink the MASTER side, but a load_tm floor alone
+-- does not bound MASTER to a small set, and the optimizer could still materialize the load_tm-filtered MASTER
+-- slice in spool before applying the join — the old pass 2/2 alone spanned 13mo of load_tm. FIX applied: (i)
+-- the MASTER dedup subquery now carries the consumer_id_hashed IN (vt_cohort_addr) semi-join BEFORE the
+-- DISTINCT, in its own derived table, so the dedup itself only ever sees cohort-address rows regardless of
+-- join order; (ii) the sends-side MASTER resolution widened from 2 to 4 sequential load_tm passes; (iii) the
+-- same semi-join-before-DISTINCT restructuring applied to vt_unsub_resolved for defense in depth even though
+-- it survived the real run.
 -- If a spool error still occurs, shrink in this order: (a) date-chunk vt_sent_evt itself into 2-4 sequential
--- INSERTs by month (see OPTIONAL fallback at eof — same pattern as vt_sent_resolved_raw), (b) widen the
--- vt_sent_resolved_raw load_tm chunking from 2 passes to 4 with a MOD(CLNT_NO,4) slice per pass (also at eof),
--- (c) as a last resort, cut cohort scope — top-N MNEs by n_unsub_clients (from a first pass of R1) or a
--- MOD(CLNT_NO,N) slice on vt_cohort_clnt before it's used to build vt_cohort_addr / scope vt_sent_resolved_raw.
+-- INSERTs by month (see OPTIONAL fallback at eof), (b) widen vt_sent_resolved_raw's load_tm chunking further,
+-- e.g. 4 passes -> 8, or add a MOD(CLNT_NO,4) slice within each pass (also at eof), (c) as a last resort, cut
+-- cohort scope — top-N MNEs by n_unsub_clients (from a first pass of R1) or a MOD(CLNT_NO,N) slice on
+-- vt_cohort_clnt before it's used to build vt_cohort_addr / scope vt_sent_resolved_raw.
 -- Pre-clean DROPs below: 'does not exist' errors on a fresh session are harmless. Always run top to bottom.
 
 DROP TABLE vt_client_spine;
@@ -69,13 +81,18 @@ CREATE VOLATILE TABLE vt_unsub_evt AS (
 COLLECT STATISTICS ON vt_unsub_evt COLUMN (consumer_id_hashed, TREATMENT_ID);
 
 
--- vt_unsub_resolved: STAGE 2 — resolve CLNT_NO via MASTER (gotcha 1: CLNT_NO IS NOT NULL, dedup on output;
--- gotcha 2: join on consumer_id_hashed+TREATMENT_ID; gotcha 3: load_tm floored 3mo before earliest event date
--- used, i.e. window_start), plus the shape test + MNE extraction computed inline (THE RULE, no year-range filter)
--- -- proves: every window unsub event, resolved to a client, tagged valid/invalid before any cohort logic runs
+-- vt_unsub_resolved: STAGE 2 — resolve CLNT_NO via MASTER. RESTRUCTURED 2026-08-03 (real-run spool fix, see
+-- header SPOOL NOTES): the MASTER dedup now happens INSIDE a derived table carrying an explicit
+-- consumer_id_hashed IN (vt_unsub_evt) semi-join alongside the load_tm floor, BEFORE the DISTINCT — this
+-- pass survived the real run, but is restructured here for defense in depth to match the fix required on the
+-- sends-side pass, so the cohort-address constraint is guaranteed to apply before the dedup regardless of how
+-- the optimizer orders the outer join (gotcha 1: CLNT_NO IS NOT NULL; gotcha 2: consumer_id_hashed+TREATMENT_ID
+-- join key; gotcha 3: load_tm floored 3mo before earliest event date used, i.e. window_start), plus the shape
+-- test + MNE extraction computed inline (THE RULE, no year-range filter) -- proves: every window unsub event,
+-- resolved to a client, tagged valid/invalid before any cohort logic runs
 CREATE VOLATILE TABLE vt_unsub_resolved AS (
     SELECT DISTINCT
-        m.CLNT_NO,
+        md.CLNT_NO,
         u.TREATMENT_ID,
         u.disposition_dt_tm,
         CASE WHEN CHARACTER_LENGTH(TRIM(u.TREATMENT_ID)) = 10
@@ -85,14 +102,21 @@ CREATE VOLATILE TABLE vt_unsub_resolved AS (
               AND SUBSTR(TRIM(u.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
              THEN SUBSTR(TRIM(u.TREATMENT_ID), 8, 3)
              ELSE NULL END AS unsub_mne
-    FROM vt_unsub_evt u
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = u.consumer_id_hashed
-        AND m.TREATMENT_ID       = u.TREATMENT_ID
-    CROSS JOIN vt_params vp
-    WHERE m.CLNT_NO IS NOT NULL                          -- gotcha 1: 3.8% NULL CLNT_NO excluded explicitly
-      AND m.load_tm >= ADD_MONTHS(vp.window_start, -3)   -- gotcha 3: floor >=3mo before earliest event date used
-      AND m.load_tm <  ADD_MONTHS(vp.window_end, 1)
+    FROM (
+        SELECT DISTINCT
+            m.consumer_id_hashed,
+            m.TREATMENT_ID,
+            m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+        CROSS JOIN vt_params vp
+        WHERE m.CLNT_NO IS NOT NULL                                                 -- gotcha 1: 3.8% NULL CLNT_NO excluded explicitly
+          AND m.consumer_id_hashed IN (SELECT consumer_id_hashed FROM vt_unsub_evt) -- semi-join pushed BEFORE the DISTINCT
+          AND m.load_tm >= ADD_MONTHS(vp.window_start, -3)                          -- gotcha 3: floor >=3mo before earliest event date used
+          AND m.load_tm <  ADD_MONTHS(vp.window_end, 1)
+    ) md
+    INNER JOIN vt_unsub_evt u
+        ON  u.consumer_id_hashed = md.consumer_id_hashed
+        AND u.TREATMENT_ID       = md.TREATMENT_ID
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_unsub_resolved COLUMN (CLNT_NO);
@@ -173,20 +197,23 @@ CREATE VOLATILE TABLE vt_sent_evt AS (
 COLLECT STATISTICS ON vt_sent_evt COLUMN (consumer_id_hashed, TREATMENT_ID);
 
 
--- vt_sent_resolved_raw: STAGE 2 — resolve CLNT_NO via MASTER, joined ONLY to the (consumer_id_hashed,
--- TREATMENT_ID) pairs present in vt_sent_evt (gotcha 6 — never a bare/unconstrained MASTER scan), plus a
--- second scoping layer (vt_cohort_clnt INNER JOIN on CLNT_NO — belt #2, since vt_sent_evt is already
--- address-scoped to cohort addresses via belt #1), shape test + MNE computed inline. Still chunked into 2
--- sequential MASTER passes on load_tm (idiom from 22) as a third layer of defense: MASTER is not 1:1, so even
--- key-constrained, a given (consumer_id_hashed,TREATMENT_ID) can carry many load_tm-dated rows across the
--- ~17mo span before the floor/pad filters narrow it down — chunk to keep each pass's intermediate spool small.
--- NOTE: since MASTER is not 1:1 (gotcha 1), the same (CLNT_NO,TREATMENT_ID,send_dt) can resolve via a
--- MASTER row in pass 1 AND a different MASTER row (same key, different load_tm) in pass 2 — this raw table can
--- carry cross-pass duplicates; vt_sent_resolved below does the final dedup.
--- pass 1/2: load_tm window_start-3mo to window_end
+-- vt_sent_resolved_raw: STAGE 2 — resolve CLNT_NO via MASTER. RESTRUCTURED 2026-08-03 after a real run died
+-- with spool error 2646 at this exact CREATE (see header SPOOL NOTES for the incident record). Root cause:
+-- the old version relied on the outer INNER JOIN (to vt_sent_evt / vt_cohort_clnt) to shrink the MASTER side,
+-- but the optimizer could still choose to materialize the load_tm-filtered MASTER slice in spool BEFORE
+-- applying that join — a load_tm floor alone does not bound MASTER to a small set. FIX: the MASTER dedup now
+-- happens INSIDE a derived table carrying an explicit consumer_id_hashed IN (vt_cohort_addr) semi-join
+-- alongside the load_tm floor, BEFORE the DISTINCT, so the dedup only ever sees cohort-address rows no matter
+-- how the optimizer orders the rest of the plan. vt_cohort_clnt INNER JOIN kept as a second scoping layer
+-- (belt #2) on CLNT_NO, applied to the derived table's output. ALSO widened from 2 to 4 sequential MASTER
+-- passes on load_tm (the old pass 2/2 alone spanned 13mo — the suspected trigger) to keep each pass's
+-- intermediate spool small even with the semi-join in place.
+-- NOTE: since MASTER is not 1:1 (gotcha 1), the same (CLNT_NO,TREATMENT_ID,send_dt) can resolve via different
+-- MASTER rows across passes — this raw table can carry cross-pass duplicates; vt_sent_resolved below dedups.
+-- pass 1/4: load_tm window_start-3mo to window_end
 CREATE VOLATILE TABLE vt_sent_resolved_raw AS (
     SELECT DISTINCT
-        m.CLNT_NO,
+        md.CLNT_NO,
         s.TREATMENT_ID,
         CAST(s.disposition_dt_tm AS DATE) AS send_dt,
         CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
@@ -196,21 +223,28 @@ CREATE VOLATILE TABLE vt_sent_resolved_raw AS (
               AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
              THEN SUBSTR(TRIM(s.TREATMENT_ID), 8, 3)
              ELSE NULL END AS send_mne
-    FROM vt_sent_evt s
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = s.consumer_id_hashed
-        AND m.TREATMENT_ID       = s.TREATMENT_ID
-    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = m.CLNT_NO         -- scope to cohort clients only
-    CROSS JOIN vt_params vp
-    WHERE m.CLNT_NO IS NOT NULL                                    -- gotcha 1
-      AND m.load_tm >= ADD_MONTHS(vp.window_start, -3)             -- gotcha 3: floor >=3mo before earliest event date
-      AND m.load_tm <  vp.window_end
+    FROM (
+        SELECT DISTINCT
+            m.consumer_id_hashed,
+            m.TREATMENT_ID,
+            m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+        CROSS JOIN vt_params vp
+        WHERE m.CLNT_NO IS NOT NULL                                                    -- gotcha 1
+          AND m.consumer_id_hashed IN (SELECT consumer_id_hashed FROM vt_cohort_addr)  -- semi-join pushed BEFORE the DISTINCT
+          AND m.load_tm >= ADD_MONTHS(vp.window_start, -3)                             -- gotcha 3
+          AND m.load_tm <  vp.window_end
+    ) md
+    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = md.CLNT_NO         -- belt #2: scope to cohort clients
+    INNER JOIN vt_sent_evt s
+        ON  s.consumer_id_hashed = md.consumer_id_hashed
+        AND s.TREATMENT_ID       = md.TREATMENT_ID
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
--- pass 2/2: load_tm window_end to window_end+13mo (event window + 1mo pad)
+-- pass 2/4: load_tm window_end to window_start+5mo
 INSERT INTO vt_sent_resolved_raw
     SELECT DISTINCT
-        m.CLNT_NO,
+        md.CLNT_NO,
         s.TREATMENT_ID,
         CAST(s.disposition_dt_tm AS DATE) AS send_dt,
         CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
@@ -220,20 +254,87 @@ INSERT INTO vt_sent_resolved_raw
               AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
              THEN SUBSTR(TRIM(s.TREATMENT_ID), 8, 3)
              ELSE NULL END AS send_mne
-    FROM vt_sent_evt s
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-        ON  m.consumer_id_hashed = s.consumer_id_hashed
-        AND m.TREATMENT_ID       = s.TREATMENT_ID
-    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = m.CLNT_NO
-    CROSS JOIN vt_params vp
-    WHERE m.CLNT_NO IS NOT NULL
-      AND m.load_tm >= vp.window_end
-      AND m.load_tm <  ADD_MONTHS(vp.window_end, 13);
+    FROM (
+        SELECT DISTINCT
+            m.consumer_id_hashed,
+            m.TREATMENT_ID,
+            m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+        CROSS JOIN vt_params vp
+        WHERE m.CLNT_NO IS NOT NULL
+          AND m.consumer_id_hashed IN (SELECT consumer_id_hashed FROM vt_cohort_addr)
+          AND m.load_tm >= vp.window_end
+          AND m.load_tm <  ADD_MONTHS(vp.window_start, 5)
+    ) md
+    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = md.CLNT_NO
+    INNER JOIN vt_sent_evt s
+        ON  s.consumer_id_hashed = md.consumer_id_hashed
+        AND s.TREATMENT_ID       = md.TREATMENT_ID;
+
+-- pass 3/4: load_tm window_start+5mo to window_start+9mo
+INSERT INTO vt_sent_resolved_raw
+    SELECT DISTINCT
+        md.CLNT_NO,
+        s.TREATMENT_ID,
+        CAST(s.disposition_dt_tm AS DATE) AS send_dt,
+        CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
+              AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
+             THEN 1 ELSE 0 END AS shape_valid,
+        CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
+              AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
+             THEN SUBSTR(TRIM(s.TREATMENT_ID), 8, 3)
+             ELSE NULL END AS send_mne
+    FROM (
+        SELECT DISTINCT
+            m.consumer_id_hashed,
+            m.TREATMENT_ID,
+            m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+        CROSS JOIN vt_params vp
+        WHERE m.CLNT_NO IS NOT NULL
+          AND m.consumer_id_hashed IN (SELECT consumer_id_hashed FROM vt_cohort_addr)
+          AND m.load_tm >= ADD_MONTHS(vp.window_start, 5)
+          AND m.load_tm <  ADD_MONTHS(vp.window_start, 9)
+    ) md
+    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = md.CLNT_NO
+    INNER JOIN vt_sent_evt s
+        ON  s.consumer_id_hashed = md.consumer_id_hashed
+        AND s.TREATMENT_ID       = md.TREATMENT_ID;
+
+-- pass 4/4: load_tm window_start+9mo to window_end+13mo (event window + 1mo pad)
+INSERT INTO vt_sent_resolved_raw
+    SELECT DISTINCT
+        md.CLNT_NO,
+        s.TREATMENT_ID,
+        CAST(s.disposition_dt_tm AS DATE) AS send_dt,
+        CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
+              AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
+             THEN 1 ELSE 0 END AS shape_valid,
+        CASE WHEN CHARACTER_LENGTH(TRIM(s.TREATMENT_ID)) = 10
+              AND SUBSTR(TRIM(s.TREATMENT_ID), 1, 7) BETWEEN '0000000' AND '9999999'
+             THEN SUBSTR(TRIM(s.TREATMENT_ID), 8, 3)
+             ELSE NULL END AS send_mne
+    FROM (
+        SELECT DISTINCT
+            m.consumer_id_hashed,
+            m.TREATMENT_ID,
+            m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+        CROSS JOIN vt_params vp
+        WHERE m.CLNT_NO IS NOT NULL
+          AND m.consumer_id_hashed IN (SELECT consumer_id_hashed FROM vt_cohort_addr)
+          AND m.load_tm >= ADD_MONTHS(vp.window_start, 9)
+          AND m.load_tm <  ADD_MONTHS(vp.window_end, 13)
+    ) md
+    INNER JOIN vt_cohort_clnt cc ON cc.CLNT_NO = md.CLNT_NO
+    INNER JOIN vt_sent_evt s
+        ON  s.consumer_id_hashed = md.consumer_id_hashed
+        AND s.TREATMENT_ID       = md.TREATMENT_ID;
 
 COLLECT STATISTICS ON vt_sent_resolved_raw COLUMN (CLNT_NO);
 
 
--- vt_sent_resolved: final dedup across the 2 chunk passes -- proves: exact (CLNT_NO, TREATMENT_ID, send_dt)
+-- vt_sent_resolved: final dedup across the 4 chunk passes -- proves: exact (CLNT_NO, TREATMENT_ID, send_dt)
 -- grain per gotcha 4, no cross-pass double-count from MASTER's non-1:1 rows
 CREATE VOLATILE TABLE vt_sent_resolved AS (
     SELECT DISTINCT
@@ -609,10 +710,11 @@ DROP TABLE vt_params;
 -- INSERT INTO vt_sent_evt  ... same ...  AND e.disposition_dt_tm >= ADD_MONTHS(vp.window_start, 9)
 --                                        AND e.disposition_dt_tm <  ADD_MONTHS(vp.window_end, 12)    -- chunk 3/3
 
--- OPTIONAL fallback #2: if CPU abort persists on vt_sent_resolved_raw (idiom from 19's tail comment) -- shrink
--- step (b) from the header SPOOL NOTES: split each of the 2 load_tm passes further by MOD(cc.CLNT_NO, 4) and
--- UNION ALL the 4 slices per pass:
--- ... same SELECT DISTINCT / JOIN / WHERE as vt_sent_resolved_raw pass 1 or 2 ...
+-- OPTIONAL fallback #2: if spool/CPU abort persists on vt_sent_resolved_raw even after the 4-pass load_tm
+-- chunking + semi-join-before-DISTINCT fix (idiom from 19's tail comment) -- shrink step (b) from the header
+-- SPOOL NOTES: split each of the 4 load_tm passes further by MOD(cc.CLNT_NO, 4) and UNION ALL the 4 slices per
+-- pass (16 total slices):
+-- ... same SELECT DISTINCT / derived-table / JOIN / WHERE as vt_sent_resolved_raw pass 1, 2, 3, or 4 ...
 --     AND MOD(cc.CLNT_NO, 4) = 0
 -- UNION ALL  ... same ...  AND MOD(cc.CLNT_NO, 4) = 1
 -- UNION ALL  ... same ...  AND MOD(cc.CLNT_NO, 4) = 2
