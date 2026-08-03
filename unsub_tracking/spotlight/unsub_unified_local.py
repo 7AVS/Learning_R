@@ -823,6 +823,16 @@ print("held_t/i/b/c == -1 means no_ucp_match (not '0 = does not hold'), so pivot
 a1_client = read_a1().cache()
 a2_raw = read_a2_raw()
 
+# NULL clnt_no rows cannot join to anything downstream (UCP, cubes) and collapse
+# into one phantom "duplicate client" in the distinct-count (2026-08-02: 10 NULL
+# rows landed, one per bite - conversion artifact at landing, the Teradata SQL
+# itself excludes NULL ids). Count LOUDLY, drop, then assert uniqueness on the rest.
+_a1_nulls = a1_client.filter(F.col("clnt_no").isNull()).count()
+if _a1_nulls > 0:
+    print("WARN: dropping %d NULL-clnt_no rows from a1_client (unjoinable; landing "
+          "conversion artifact). If this number is ever more than a handful, investigate." % _a1_nulls)
+    a1_client = a1_client.filter(F.col("clnt_no").isNotNull()).cache()
+
 _a1_n = a1_client.count()
 _a1_dupes = _a1_n - a1_client.select("clnt_no").distinct().count()
 assert _a1_dupes == 0, "a1_client has %d duplicate clnt_no rows - bites did not partition disjointly" % _a1_dupes
@@ -1130,6 +1140,10 @@ def read_bcohort():
 
 
 cohort_b = read_bcohort().cache()
+_cohort_nulls = cohort_b.filter(F.col("clnt_no").isNull()).count()
+if _cohort_nulls > 0:
+    print("WARN: dropping %d NULL-clnt_no rows from cohort_b (unjoinable; landing artifact)." % _cohort_nulls)
+    cohort_b = cohort_b.filter(F.col("clnt_no").isNotNull()).cache()
 COHORT_B_N = cohort_b.count()
 _cohort_dupes = COHORT_B_N - cohort_b.select("clnt_no").distinct().count()
 assert _cohort_dupes == 0, "cohort_b has %d duplicate clnt_no - bites did not partition disjointly" % _cohort_dupes

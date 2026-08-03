@@ -17,19 +17,37 @@ _a1 = spark.read.parquet(A1_DIR + "*")
 print("total rows :", _a1.count())
 print("distinct   :", _a1.select("clnt_no").distinct().count())
 
+# FIRST suspect when "dup clients: 1" but the lookup tables come back empty:
+# NULL ids. All NULLs collapse into one distinct-count group ("1 dup client")
+# but a join can never match NULL to NULL, so every downstream lookup is empty.
+_nulls = _a1.filter(F.col("clnt_no").isNull()).count()
+print("NULL clnt_no rows:", _nulls,
+      "<- if this equals the excess-row count, case closed: unjoinable NULL ids,"
+      " the pipeline now drops them loudly (see Cell [6] WARN)." if _nulls else "")
+
 _dups = _a1.groupBy("clnt_no").agg(F.count("*").alias("n")).filter("n > 1")
 print("dup clients:", _dups.count())
 
-(_a1.withColumn("src_file", F.input_file_name())
-    .join(_dups.select("clnt_no"), "clnt_no")
-    .select("clnt_no", "src_file")
-    .orderBy("clnt_no")
-    .show(40, truncate=False))
+# collect() forces completion BEFORE printing - no lazy half-rendered tables,
+# safe to screenshot the moment text appears.
+_rows = (_a1.withColumn("src_file", F.input_file_name())
+         .join(_dups.select("clnt_no"), "clnt_no")
+         .select("clnt_no", "src_file")
+         .orderBy("clnt_no")
+         .collect())
+print("---- duplicated client rows (%d) ----" % len(_rows))
+for _r in _rows:
+    # print just the bite folder, not the full parquet path - that's the verdict column
+    _bite = [p for p in _r["src_file"].split("/") if p.startswith("bite_")]
+    print("clnt_no:", _r["clnt_no"], "| folder:", _bite[0] if _bite else _r["src_file"][-60:])
 
-# Bonus check - are the duplicated rows IDENTICAL in content (pure double-write)
-# or do they DIFFER (two genuinely different aggregations landed)? Identical
-# content = pure landing artifact, even safer to fix by re-pulling the bite.
+# Bonus check - identical copies or differing rows?
 _dup_rows = _a1.join(_dups.select("clnt_no"), "clnt_no")
-_identical = _dup_rows.distinct().groupBy("clnt_no").agg(F.count("*").alias("n_distinct"))
-_identical.groupBy("n_distinct").count().show()
-print("n_distinct=1 above means the duplicate rows are byte-identical copies.")
+_n_distinct = _dup_rows.distinct().count()
+_n_total = _dup_rows.count()
+print("dup rows total:", _n_total, "| distinct contents:", _n_distinct)
+print("=> identical copies (pure double-write)" if _n_distinct * 2 <= _n_total or _n_distinct == 1
+      else "=> contents DIFFER across copies - not a simple double-write")
+# also show the full duplicated rows so we can see WHAT differs, if anything:
+for _r in _dup_rows.orderBy("clnt_no").collect()[:12]:
+    print(dict(_r.asDict()))
