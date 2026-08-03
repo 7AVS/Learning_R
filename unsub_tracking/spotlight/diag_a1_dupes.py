@@ -14,8 +14,18 @@ from pyspark.sql import functions as F
 A1_DIR = "hdfs:///user/427966379/unsub_unified/a1_client_v1/"
 
 _a1 = spark.read.parquet(A1_DIR + "*")
+print("schema     :", [(f.name, f.dataType.simpleString()) for f in _a1.schema.fields][:4])
 print("total rows :", _a1.count())
 print("distinct   :", _a1.select("clnt_no").distinct().count())
+# per-bite-folder totals and distincts - localizes WHICH folder carries the excess:
+for _k in range(10):
+    try:
+        _b = spark.read.parquet(A1_DIR + "bite_%d" % _k)
+        print("  bite_%d: rows %d | distinct %d | schema clnt_no: %s"
+              % (_k, _b.count(), _b.select("clnt_no").distinct().count(),
+                 dict((f.name, f.dataType.simpleString()) for f in _b.schema.fields).get("clnt_no")))
+    except Exception as _e:
+        print("  bite_%d: unreadable (%s)" % (_k, type(_e).__name__))
 
 # FIRST suspect when "dup clients: 1" but the lookup tables come back empty:
 # NULL ids. All NULLs collapse into one distinct-count group ("1 dup client")
