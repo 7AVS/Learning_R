@@ -298,7 +298,11 @@ C_DIR = BASE + "c_month_mne_v%d/" % SCHEMA_VERSION
 BCOHORT_DIR = BASE + "b_cohort_v%d/" % SCHEMA_VERSION
 BDFP_DIR = BASE + "b_dfp_v%d/" % SCHEMA_VERSION
 BBHV_DIR = BASE + "b_bhv_v%d/" % SCHEMA_VERSION
-UCPA_DIR = BASE + "ucp_enriched_a_v%d/" % SCHEMA_VERSION   # bitten UCP-join output, Cell [5].
+UCPA_DIR = BASE + "ucp_enriched_a2_v%d/" % SCHEMA_VERSION  # bitten UCP-join output, Cell [5].
+# (a2, 2026-08-03: name bumped from ucp_enriched_a - the v1 dirs mixed landings from two code
+# vintages and carried a1 RAW accounting (10,439,806 incl 10 NULL-id rows) vs distinct base
+# (10,439,797); re-landing every bite under one code version, with the explicit NULL policy
+# below, removes all benign routes for that mismatch. Old v1 dirs are dead - ignore them.)
 
 OUT_DIR = BASE + ("out_smoke/" if SMOKE else "out/")
 PQ_DIR = OUT_DIR.rstrip("/") + "_parquet/"
@@ -873,8 +877,15 @@ ucp_sel = (_ucp_raw
            .select(*_UCP_COLS)
            .withColumn("clnt_no_long", F.col("CLNT_NO").cast("decimal(18,0)").cast("long")))
 
-base_ids_a = read_a1().select("clnt_no").withColumnRenamed("clnt_no", "clnt_no_long").distinct()
-_left_n = base_ids_a.count()   # single-table count, safe at full scale.
+_a1_for_base = read_a1().select("clnt_no")
+_base_nulls = _a1_for_base.filter(F.col("clnt_no").isNull()).count()
+if _base_nulls > 0:
+    print("WARN: base_ids_a drops", _base_nulls, "NULL-clnt_no rows (unjoinable; landing "
+          "artifact - same 10 rows Cell [6] guards). Distinct-count arithmetic: NULLs would "
+          "collapse to 1 phantom row and desync the post-loop total assert.")
+base_ids_a = (_a1_for_base.filter(F.col("clnt_no").isNotNull())
+              .withColumnRenamed("clnt_no", "clnt_no_long").distinct())
+_left_n = base_ids_a.count()   # single-table count, safe at full scale; NULL-free by construction.
 
 print("Sample clnt_no (a1_client, 5):", [r.clnt_no_long for r in base_ids_a.limit(5).collect()])
 print("Sample CLNT_NO (UCP, 5):", [r.clnt_no_long for r in ucp_sel.select("clnt_no_long").limit(5).collect()])
@@ -902,7 +913,7 @@ print("Pruned + enriched UCP (Personal, deduped, needed columns only) cached:", 
 # ---- Bite loop: the actual client-grain x client-grain join, done ~1 bite (~1.1M rows) at a
 # time. Resume-safe via _landed()/_write_spark_marker, same convention as every Teradata pull. ----
 for _bite in (range(1) if SMOKE else range(N_BITES)):
-    _bite_name = "ucp_enriched_a_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
+    _bite_name = "ucp_enriched_a2_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
     if _landed(_bite_name):
         print(_bite_name, ": already landed,", spark.read.parquet(BASE + _bite_name).count(),
               "rows - SKIP")
@@ -1092,7 +1103,7 @@ _a4_join_total = 0
 for _bite in (range(1) if SMOKE else range(N_BITES)):
     _a1_bite = a1_client.filter((F.abs(F.col("clnt_no")) % N_BITES) == _bite)
     _a1_bite_n = _a1_bite.count()
-    _ucp_bite_path = "ucp_enriched_a_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
+    _ucp_bite_path = "ucp_enriched_a2_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
     _ucp_bite = spark.read.parquet(BASE + _ucp_bite_path)
     _a4_src_bite = _a1_bite.join(_ucp_bite, "clnt_no", "left")
     _a4_bite_n = _a4_src_bite.count()
