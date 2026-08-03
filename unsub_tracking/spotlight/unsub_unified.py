@@ -44,17 +44,25 @@
 #    leavers_cards_nonmkt (2026-08-03c, ex-FWC and non-marketing subsets) + sum_emails_all /
 #    sum_emails_cards (per-profile email volume)
 #
-#  PIECE B (anchor 2025-08-31 HARDCODED, remeasure +12m = 2026-08-31, Cards-mailed cohort only,
-#  MARKETING-ONLY scope - CARDS_MKT_MNES/22, not the 32-mne CARDS_MNES flag - see Cell [12])
+#  PIECE B (build 2026-08-03e REDESIGN - "then vs now vs delta". Anchors 2025-06-30 ("then") and
+#  2026-06-30 ("now"), BOTH CLOSED as of this build's run date - the whole point: the comparison is
+#  computable NOW, no future-dated thinness, no regime/resume machinery (that machinery from the
+#  Aug-anchor build is retired, see Cell [18]). Cards-mailed cohort only, MARKETING-ONLY scope -
+#  CARDS_MKT_MNES/22, not the 32-mne CARDS_MNES flag - see Cell [12].)
 #  ---------------------------------------------------------------------------------------------
-#  cohort + leaver flags (any-list, cards subset), scoped  -> Cell [12] -> b_cohort_v2/ (landed)
-#  BEFORE pulling DFP/BHV, not post-hoc
-#  spend (DFP trailing-12m) at t0/t12, cohort-scoped        -> Cell [13] -> b_dfp_v2/ (landed)
-#  revolver/transactor at t0/t12, cohort-scoped              -> Cell [14] -> b_bhv_v2/ (landed)
-#  spend_tier x spend_tier_at_offset x usg_bhvr_seg x        -> Cell [15] -> b_before_after_cube.csv
-#  {stayers,leavers} x {t0,t12}  (spend_tier = held fixed at t0 terciles; spend_tier_at_offset =
-#  the SAME t0 cutpoints applied to the offset-appropriate spend value, t0 or p12 - answers the
-#  spend/tier trajectory question spend_tier alone cannot)
+#  cohort + leaver flags + cards_unsub_mne campaign dim    -> Cell [12]  -> b_cohort_v3/ (landed)
+#  scoped BEFORE pulling DFP/BHV/UCP, not post-hoc
+#  spend (3-month window around then/now), cohort-scoped    -> Cell [13]  -> b_dfp_v3/ (landed)
+#  revolver/transactor at then/now month-ends, cohort-scoped -> Cell [14]  -> b_bhv_v3/ (landed)
+#  UCP profitability + T/I/B/C holding at then/now snapshots -> Cell [14b] -> b_ucp_v3/ (landed)
+#  spend tier x tier_now x seg_then x seg_now x              -> Cell [15]  -> b_before_after_cube.csv
+#  {stayers, leavers(cards), leavers_ex_fwc}  (spend tier = held fixed at THEN terciles; tier_now =
+#  the SAME then-cutpoints applied to the now spend value - answers the spend/tier trajectory
+#  question spend tier alone cannot. KEEPS ITS NAME - Maya's heatmap source.)
+#  group x metric x period(then/now/delta) -> value          -> Cell [15b] -> b_delta_summary.csv
+#  long/pivot-ready: STAYERS, LEAVERS_ALL, one row-group per cards_unsub_mne with >=500 leavers,
+#  smaller ones pooled LEAVERS_OTHER - n_clients, spend_3mo avg+median, prof_annual avg+median,
+#  prod_cnt avg, pct_held T/I/B/C, pct_revolver/transactor/dormant, pct_no_ucp_match.
 #
 #  PIECE C (trailing 12 months, monthly, its own time axis — outside Windows A and B)
 #  ---------------------------------------------------------------------------------------------
@@ -63,8 +71,9 @@
 #
 #  DELIVERY
 #  ---------------------------------------------------------------------------------------------
-#  one xlsx bundling all seven CSVs above                   -> Cell [16] -> spotlight_unified.xlsx
+#  one xlsx bundling all eight CSVs above                   -> Cell [16] -> spotlight_unified.xlsx
 #  coverage / row-count self-check                          -> Cell [17] -> printed only
+#  auto-retirement of superseded HDFS dirs (v2/v1 Piece B)  -> Cell [18] -> hdfs dirs deleted
 #
 # ============================================================================================
 # TRAP LEDGER — which trap, guarded where (brief TRAPS section + AUDIT_2026-08-02.md)
@@ -101,13 +110,20 @@
 #     disposition, DAY) — evergreen id reuse      CAST(disposition_dt_tm AS DATE).
 #  8. Non-dated ids = residue                  -> Every date anchored on disposition_dt_tm; the
 #                                                 TREATMENT_ID is read only for its mnemonic.
-#  9. Piece B anchor floating to "now"         -> T0_ANCHOR_B / P12_ANCHOR_B are literal dates
-#     (spotlight2.py's defect #1)                 (2025-08-31 / 2026-08-31), never derived from
-#                                                 datetime.date.today() anywhere in Cell [0].
-#                                                 RUN_DATE (provenance stamp only) is the one place
-#                                                 today() is used, and it never feeds an anchor.
-#                                                 SAME FIX applied to Piece A's UCP snapshot
-#                                                 (red-team BLOCKER, this review): UCP_MONTH_A
+#  9. Piece B anchor floating to "now"         -> T0_ANCHOR_B / T1_ANCHOR_B are literal dates
+#     (spotlight2.py's defect #1)                 (2025-06-30 / 2026-06-30), never derived from
+#                                                 datetime.date.today() anywhere in Cell [0]. BOTH
+#                                                 are CLOSED months as of this build (2026-08-03e) -
+#                                                 the regime/resume machinery that guarded a
+#                                                 future-dated t12 (P12_CLOSE_DATE_B, _write_regime_
+#                                                 flag/_landed_b_offset) is DEAD CODE now that
+#                                                 neither anchor can be future-dated, and was
+#                                                 deleted this build (Cell [1]) - plain _landed()
+#                                                 markers suffice, same as every other pull in this
+#                                                 file. RUN_DATE (provenance stamp only) is the one
+#                                                 place today() is used, and it never feeds an
+#                                                 anchor. SAME FIX applied to Piece A's UCP snapshot
+#                                                 (red-team BLOCKER, prior review): UCP_MONTH_A
 #                                                 (Cell [0]) is HARDCODED to Window A close,
 #                                                 replacing Cell [5]'s prior date.today()-derived
 #                                                 "last closed month" anchor.
@@ -157,31 +173,33 @@
 #   spotlight2.py Cell [3].
 # - CR_CRD_RPTS_ACCT direct clnt_no (no DFP bridge needed) + SEG_PRECEDENCE / SEG_LABEL +
 #   raw-value probe — spotlight2.py Cell [4].
-# - Spend-tier tercile cut, held fixed at t0, zero-spend clients kept as zeros — spotlight2.py
-#   Cell [7].
+# - Spend-tier tercile cut, held fixed at the earlier period (t0 -> THEN, same method), zero-spend
+#   clients kept as zeros — spotlight2.py Cell [7].
 #
 # ============================================================================================
 # WHAT THIS FILE DOES NOT DO, AND WHY (stated up front, per house rule — never buried)
 # ============================================================================================
-# - NO UCP PULL FOR PIECE B. The brief's locked Piece B deliverable (Workstream-2 template:
-#   spend tier x revolver/transactor, single before/after pair) carries no UCP field. The task
-#   spec's general UCP hard-rule ("for Piece B the UCP snapshot month should be the anchor month
-#   if available") is addressed here rather than silently ignored: IF a later ask wants
-#   demographic context on Piece B's leavers, the anchor month 2025-08-31 is CONFIRMED inside the
-#   live UCP partition range (2023-12-31 -> 2026-06-30, references/ucp/gotchas.md #1,
-#   2026-07-27 probe) and Cell [5]'s UCP_MONTH pattern would apply unchanged with
-#   MONTH_END_DATE=2025-08-31. Not built because not asked — adding it now would be an
-#   unrequested column per house rule.
-# - Piece B's t12 remeasure (2026-08-31) is a FUTURE month as of this file's build date
-#   (2026-08-02). DFP/BHV bites for t12 will land thin-to-empty until that month closes — this is
-#   arithmetic, not a bug, and is asserted/printed loudly in Cells [13]/[14]/[15], never silently
-#   averaged away. Rerun this file after 2026-09-01 to pick up real t12 data.
 # - REGULATORY_MNES tagging (spotlight.py carried this) is dropped — no ask in the unified brief
 #   touches regulatory-campaign segmentation.
+# - RETIRED THIS BUILD (2026-08-03e, Piece B then->now->delta redesign — see Cell [18] for the
+#   mechanical cleanup):
+#   * The Aug-anchor design (T0_ANCHOR_B=2025-08-31, remeasure +12m=2026-08-31) is gone. That
+#     anchor pair always had a future-dated t12 as of any build before Sept 2026 — this build
+#     replaces it with two anchors that are BOTH already closed (2025-06-30 / 2026-06-30), so the
+#     comparison is real data now, not arithmetic thinness.
+#   * P12_CLOSE_DATE_B / _write_regime_flag / _current_regime / _landed_b_offset (the regime-aware
+#     resume machinery that let a September rerun detect "t12 just became real") are deleted —
+#     with both anchors closed there is nothing left for that machinery to guard against.
+#   * "NO UCP PULL FOR PIECE B" is retired too — this build adds one (Cell [14b], b_ucp_v3/):
+#     PROF_TOT_ANNUAL (an ANNUAL PROFITABILITY ESTIMATE, NOT a validated LTV figure — canon
+#     reference_ucp_canon.md) and T/I/B/C holding at both closed snapshots (UCP_MONTH_B0/B1, Cell
+#     [0]), confirmed inside the live UCP partition range (2023-12-31 -> 2026-06-30, references/
+#     ucp/gotchas.md #1).
 #
 # ENGINE MAP: Cells [1]-[4], [6b], [10]-[14] are Teradata-direct (DTZV01.*, D3CV12A.*, no catalog
-# prefix, teradatasql connector). Every other cell is PySpark (YARN, Lumina pre-initialized
-# session) reading landed parquet off HDFS. Neither engine follows Trino/Starburst syntax rules
+# prefix, teradatasql connector). Cell [14b] and Cell [15]/[15b] are PySpark reading HDFS parquet
+# (no new Teradata connection). Every other cell is PySpark (YARN, Lumina pre-initialized session)
+# reading landed parquet off HDFS. Neither engine follows Trino/Starburst syntax rules
 # (references/query_engine_guidelines.md) — that canon is for the federated engine, not used here.
 
 
@@ -327,59 +345,61 @@ WIN_C_CEIL = "2026-08-01"
 WIN_C_FLOOR = _months_before(WIN_C_CEIL, 12)   # "2025-08-01"
 MASTER_FLOOR_C = _months_before(WIN_C_FLOOR, 3)   # "2025-05-01" - matches spotlight.py's literal.
 
-# ---- WINDOW B - Piece B. Anchor HARDCODED - the fix for spotlight2.py's defect #1 (anchor
-# floated to "now"). Never derive these two dates from datetime.date.today(). ----
-T0_ANCHOR_B = datetime.date(2025, 8, 31)
-P12_ANCHOR_B = datetime.date(2026, 8, 31)
-T_OFFSETS_B = [0, 12]
-T_ANCHOR_B = {0: T0_ANCHOR_B, 12: P12_ANCHOR_B}
-T_TAG_B = {0: "t0", 12: "p12"}
-T_YM_B = {o: _ym(T_ANCHOR_B[o]) for o in T_OFFSETS_B}
-ANCHOR_DATES_SQL_B = ", ".join("DATE '%s'" % T_ANCHOR_B[o].isoformat() for o in T_OFFSETS_B)
-
-# P12_CLOSE_DATE_B - first day of the month AFTER P12_ANCHOR_B's month. NOT a window anchor (does
-# not feed any SQL floor/ceiling) - it is a RESUME-REGIME gate only: B_DFP/B_BHV bites pulled
-# before this date carry a legitimately future-dated/thin t12 (annual_spend_p12 etc.), so their
-# landed marker must not block a real re-pull once this date passes. Computed from the anchor, not
-# hand-typed - round-2 review blocker fix (Sept-rerun no-op).
-P12_CLOSE_DATE_B = _add_months(P12_ANCHOR_B.replace(day=1), 1)   # 2026-09-01
+# ---- WINDOW B - Piece B, REDESIGNED 2026-08-03e ("then vs now vs delta"). Both anchors HARDCODED
+# and BOTH CLOSED as of this build - the fix for spotlight2.py's defect #1 (anchor floated to
+# "now") plus the retirement of the Aug-anchor design's regime/resume machinery (Cell [1]): with
+# neither anchor able to be future-dated, plain _landed() markers are enough, same as every other
+# pull in this file. Never derive these two dates from datetime.date.today(). ----
+T0_ANCHOR_B = datetime.date(2025, 6, 30)   # "then" - closed.
+T1_ANCHOR_B = datetime.date(2026, 6, 30)   # "now" - closed as of this build's run date (2026-08-03).
+PERIODS_B = ["then", "now"]
+ANCHOR_B = {"then": T0_ANCHOR_B, "now": T1_ANCHOR_B}
+ANCHOR_DATES_SQL_B = ", ".join("DATE '%s'" % ANCHOR_B[p].isoformat() for p in PERIODS_B)
 
 # Cohort membership window: "clients mailed by CARDS_MKT_MNES (marketing-only) before the anchor" -
 # own floor, the repo hard floor (2024_data_floor memory), not derived from WIN_A/WIN_C.
 COHORT_B_FLOOR = "2024-01-01"
 assert datetime.date.fromisoformat(COHORT_B_FLOOR) >= datetime.date(2024, 1, 1), \
     "repo floor is 2024-01-01 - do not go below"
-ANCHOR_B_CEIL = (T0_ANCHOR_B + datetime.timedelta(days=1)).isoformat()   # "on or before anchor"
+ANCHOR_B_CEIL = (T0_ANCHOR_B + datetime.timedelta(days=1)).isoformat()   # "on or before anchor" (half-open, "2025-07-01")
 MASTER_FLOOR_B = _months_before(COHORT_B_FLOOR, 3)
 
-# Annual-spend lookback windows (12 calendar months ending at each Piece-B offset), computed, not
-# hand-typed - one mistake in a hand-typed 24-month IN-list is invisible until the totals are off.
-ANNUAL_LOOKBACK_MONTHS = 12
-ANNUAL_YMS_B = {
-    o: [_ym(_add_months(T_ANCHOR_B[o].replace(day=1), k))
-        for k in range(-(ANNUAL_LOOKBACK_MONTHS - 1), 1)]
-    for o in T_OFFSETS_B
-}
-SPEND_YMS_B = sorted(set(sum(ANNUAL_YMS_B.values(), [])) | set(T_YM_B.values()))
-SPEND_YMS_B_SQL = ", ".join(str(y) for y in SPEND_YMS_B)
-_spend_floor_date = min(_add_months(T_ANCHOR_B[o].replace(day=1), -(ANNUAL_LOOKBACK_MONTHS - 1))
-                        for o in T_OFFSETS_B)
-if _spend_floor_date < datetime.date(2024, 1, 1):
-    print("NOTE: computed DFP scan floor", _spend_floor_date, "is below the repo 2024-01-01 "
-          "floor - clamping. This shortens the t0 annual-spend lookback.")
-    _spend_floor_date = datetime.date(2024, 1, 1)
-    SPEND_YMS_B = [y for y in SPEND_YMS_B if y >= 202401]
-    SPEND_YMS_B_SQL = ", ".join(str(y) for y in SPEND_YMS_B)
-SPEND_FLOOR_B = _spend_floor_date.isoformat()
-SPEND_CEIL_B = (max(T_ANCHOR_B.values()) + datetime.timedelta(days=1)).isoformat()   # exclusive
+# Spend windows - Andre's order (2026-08-03e ask): a light 3-month window around EACH anchor, not a
+# trailing-12m lookback (the Aug-anchor design's ANNUAL_YMS_B/SPEND_YMS_B machinery is retired -
+# lighter windows need no lookback-months constant or repo-floor clamp). Hand-typed per Andre's
+# explicit spec, not derived, because these are the ask itself, not a computed consequence of it.
+SPEND_YMS_THEN = [202504, 202505, 202506]   # Apr-Jun 2025, around T0_ANCHOR_B.
+SPEND_YMS_NOW = [202604, 202605, 202606]    # Apr-Jun 2026, around T1_ANCHOR_B.
+SPEND_YMS_THEN_SQL = ", ".join(str(y) for y in SPEND_YMS_THEN)
+SPEND_YMS_NOW_SQL = ", ".join(str(y) for y in SPEND_YMS_NOW)
+_SPEND_YMS_B_ALL = sorted(set(SPEND_YMS_THEN) | set(SPEND_YMS_NOW))
+SPEND_YMS_B_SQL = ", ".join(str(y) for y in _SPEND_YMS_B_ALL)
+
+
+def _ym_to_month_start(ym):
+    return datetime.date(ym // 100, ym % 100, 1)
+
+
+SPEND_FLOOR_B = _ym_to_month_start(_SPEND_YMS_B_ALL[0]).isoformat()                       # "2025-04-01"
+SPEND_CEIL_B = _add_months(_ym_to_month_start(_SPEND_YMS_B_ALL[-1]), 1).isoformat()        # "2026-07-01" (exclusive)
+assert datetime.date.fromisoformat(SPEND_FLOOR_B) >= datetime.date(2024, 1, 1), \
+    "SPEND_FLOOR_B is below the repo 2024-01-01 floor - recheck SPEND_YMS_THEN/NOW"
+
+# UCP snapshot months - PIECE B (Cell [14b]). Same then/now anchors as B_COHORT/B_DFP/B_BHV.
+# Confirmed inside the live UCP partition range (2023-12-31 -> 2026-06-30, references/ucp/
+# gotchas.md #1, 2026-07-27 probe) - UCP_MONTH_B1 sits exactly at that range's upper edge.
+# UCP_MONTH_A (Piece A, Cell [0] above) is UNTOUCHED by this Piece-B redesign.
+UCP_MONTH_B0 = "2025-06-30"
+UCP_MONTH_B1 = "2026-06-30"
+UCP_MONTH_B = {"then": UCP_MONTH_B0, "now": UCP_MONTH_B1}
 
 # ---- Behaviour segment precedence - verbatim from spotlight2.py Cell [0] (UNVERIFIED U1/U3
 # there; unresolved here too - carried forward, not re-litigated). ----
 SEG_PRECEDENCE = [("Revolver", 1), ("Transactor", 2), ("Dormant", 3)]
 SEG_LABEL = {1: "Revolver", 2: "Transactor", 3: "Dormant", 4: "other_or_none", 0: "no_data"}
 
-# ---- Spend tiers - verbatim method from spotlight2.py Cell [7]: tercile of annual spend, cut
-# ONCE at t0, held fixed across every offset. ----
+# ---- Spend tiers - verbatim method from spotlight2.py Cell [7]: tercile of spend, cut ONCE at
+# the THEN anchor (spend_3mo_then), held fixed for the NOW-side comparison (tier_now). ----
 SPEND_TIER_QUANTILES = [1.0 / 3.0, 2.0 / 3.0]
 SPEND_TIER_REL_ERR = 0.01
 
@@ -396,7 +416,7 @@ SMOKE = True   # True -> bite 0 only (~10% of clients). Flip False for the full 
                # checking bite-0 shapes against the coverage table (brief's pre-run gate).
 N_BITES = 10   # MOD(ABS(CLNT_NO), N_BITES) - every Teradata-direct pull in this file.
 LAND_CHUNK_ROWS = 1_500_000   # rows per createDataFrame call - stays under Spark's 128MB RPC cap.
-RUN_PULLS = ["A1", "A2", "C", "B_COHORT", "B_DFP", "B_BHV"]   # restrict which pulls Cells run.
+RUN_PULLS = ["A1", "A2", "C", "B_COHORT", "B_DFP", "B_BHV", "B_UCP"]   # restrict which pulls Cells run.
 UCP_MATCH_FLOOR = 70.0   # catches a broken join key, not ordinary UCP attrition.
 
 # ---- Paths - HDFS only. Own namespace, does not collide with spotlight.py/spotlight2.py. ----
@@ -404,17 +424,24 @@ BASE = "hdfs:///user/427966379/unsub_unified/"      # reference_andre_hdfs_user_
 UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"           # references/ucp/README.md - personal only
 SCHEMA_VERSION = 1        # A2/C ONLY - their SQL has no CARDS_MNES dependency (verified 2026-08-03d
                            # while making this change), so a cards-list update never re-lands them.
-CARDS_SCHEMA_VERSION = 2  # A1/B_COHORT/B_DFP/B_BHV - bumped 2026-08-03d: CARDS_MNES scope change
-                           # (32-code flag) + ex-FWC/nonmkt twin columns changed these SQL blocks
-                           # and schemas. Kept SEPARATE from SCHEMA_VERSION so A2/C never re-land on
-                           # a cards-list-only change.
+CARDS_SCHEMA_VERSION = 2  # A1 ONLY (2026-08-03e: SPLIT from Piece B's version below). A-side is
+                           # UNTOUCHED by the Piece-B then/now/delta redesign - a1_client_v2 stays
+                           # exactly as landed, no re-pull, so CARDS_SCHEMA_VERSION must NOT move
+                           # in lockstep with Piece B's schema changes anymore.
+B_SCHEMA_VERSION = 3      # B_COHORT/B_DFP/B_BHV/B_UCP ONLY - bumped 2026-08-03e for the then/now/
+                           # delta redesign (new anchors, new columns, new UCP pull). Was unified
+                           # with CARDS_SCHEMA_VERSION (both =2) before this build; split so a
+                           # future Piece-B-only change never forces an A1 re-pull, and vice versa.
+                           # The old v2 B dirs (b_cohort_v2/b_dfp_v2/b_bhv_v2, Aug-anchor era) are
+                           # superseded by this split and auto-deleted by Cell [18].
 
 A1_DIR = BASE + "a1_client_v%d/" % CARDS_SCHEMA_VERSION
 A2_DIR = BASE + "a2_mne_v%d/" % SCHEMA_VERSION
 C_DIR = BASE + "c_month_mne_v%d/" % SCHEMA_VERSION
-BCOHORT_DIR = BASE + "b_cohort_v%d/" % CARDS_SCHEMA_VERSION
-BDFP_DIR = BASE + "b_dfp_v%d/" % CARDS_SCHEMA_VERSION
-BBHV_DIR = BASE + "b_bhv_v%d/" % CARDS_SCHEMA_VERSION
+BCOHORT_DIR = BASE + "b_cohort_v%d/" % B_SCHEMA_VERSION
+BDFP_DIR = BASE + "b_dfp_v%d/" % B_SCHEMA_VERSION
+BBHV_DIR = BASE + "b_bhv_v%d/" % B_SCHEMA_VERSION
+BUCP_DIR = BASE + "b_ucp_v%d/" % B_SCHEMA_VERSION   # NEW 2026-08-03e - dual UCP snapshot, Cell [14b].
 UCPA_DIR = BASE + "ucp_enriched_a3_v%d/" % SCHEMA_VERSION  # bitten UCP-join output, Cell [5].
 # (a3, 2026-08-03d: name bumped from ucp_enriched_a2 - upstream a1_client moved to
 # CARDS_SCHEMA_VERSION=2 for the cards-list scope change; new namespace avoids any ambiguity about
@@ -449,16 +476,14 @@ def _stamp(df, window_label, population_label):
 # BUILD STAMP - bump the tag on EVERY code change that gets pushed. This prints first so any
 # screenshot of any run is instantly attributable to the exact code version that produced it
 # (2026-08-03: three debugging rounds were spent on outputs from older code than assumed).
-PIPELINE_BUILD = ("build 2026-08-03d | CARDS_MNES now ALL 32 catalog mnes incl VIF (reg/ops/"
-                   "fulfillment stay IN, isolatable via ex-FWC/nonmkt twins); CARDS_MKT_MNES (22) "
-                   "marketing-only for Piece B's cohort; email sums in a3/a4; LOB dedup pull "
-                   "(5 groupings, Cell [6b]); landing v2 for A1/B_COHORT/B_DFP/B_BHV")
+PIPELINE_BUILD = ("build 2026-08-03e | Piece B then->now->delta (anchors 2025-06-30 -> 2026-06-30, "
+                   "both closed), campaign dim, dual UCP snapshots, auto-retirement")
 print("=" * 88)
 print("PIPELINE_BUILD:", PIPELINE_BUILD)
 print("=" * 88)
 print("CONFIG loaded | WIN_A:", WIN_A_FLOOR, "->", WIN_A_CEIL,
       "| WIN_C:", WIN_C_FLOOR, "->", WIN_C_CEIL,
-      "| ANCHOR_B:", T0_ANCHOR_B.isoformat(), "-> +12m ->", P12_ANCHOR_B.isoformat())
+      "| ANCHOR_B: then", T0_ANCHOR_B.isoformat(), "-> now", T1_ANCHOR_B.isoformat(), "(both closed)")
 print("SMOKE:", SMOKE, "| N_BITES:", N_BITES, "| CARDS_MNES:", len(CARDS_MNES), "| OUT_DIR:", OUT_DIR)
 
 
@@ -512,7 +537,8 @@ def _rowcount_marker_path(path):
     return path.rstrip("/") + "_ROWCOUNT"
     # NOTE: marker sits INSIDE the parent dir as a sibling of bite_K, so any data read
     # MUST use the single-char glob "bite_?" (matches bite_0..bite_9 ONLY, N_BITES=10),
-    # NEVER "bite_*" - that wildcard also matches bite_K_ROWCOUNT/_REGIME sidecars and
+    # NEVER "bite_*" - that wildcard also matches bite_K_ROWCOUNT sidecars (and, on any
+    # pre-2026-08-03e Piece-B dir still on HDFS, the now-retired _REGIME sidecar) and
     # silently adds one NULL-keyed row per bite to every union read. This exact bug
     # burned 2026-08-02/03 as phantom "9 duplicates" / NULL rows / assert mismatches.
 
@@ -536,56 +562,6 @@ def _landed(path):
         print("WARNING:", path, "- marker expects", _n_expected, "actual", _n_actual,
               "- partial write. Re-pulling this bite.")
         return False
-    return True
-
-
-def _regime_flag_path(path):
-    return path.rstrip("/") + "_REGIME"
-
-
-_REGIME_SCHEMA = StructType([StructField("regime", StringType(), False)])
-
-
-def _write_regime_flag(hdfs_path, regime):
-    """Stamps whether a B_DFP/B_BHV bite was pulled pre- or post- P12_CLOSE_DATE_B. Consulted by
-    _landed_b_offset() (round-2 review blocker fix) so a marker written PRE-close - when t12 is
-    legitimately future-dated/thin - doesn't silently block a real re-pull once the P12 month has
-    actually closed. hdfs_path is relative (no BASE prefix), matching _landed()'s convention."""
-    _sdf = spark.createDataFrame([(regime,)], schema=_REGIME_SCHEMA)
-    _sdf.coalesce(1).write.mode("overwrite").parquet(BASE + _regime_flag_path(hdfs_path))
-
-
-def _current_regime():
-    """post_close once P12_CLOSE_DATE_B has passed (t12 data can be real), pre_close before it
-    (t12 is arithmetic thinness by construction). This IS a date.today() read, deliberately - it
-    gates RESUME behaviour only, never a SQL window anchor (those stay hardcoded per Cell [0])."""
-    return "post_close" if datetime.date.today() >= P12_CLOSE_DATE_B else "pre_close"
-
-
-def _landed_b_offset(path):
-    """_landed() variant for B_DFP/B_BHV bites ONLY (Cells [13]/[14]) - these carry a t12/p12
-    value that is legitimately future-dated/thin before P12_CLOSE_DATE_B. A marker written
-    pre-close does NOT mean the bite is done for a post-close rerun: t12 needs a real pull once
-    the month has closed, so this forces a re-pull in exactly that transition. A pre-close rerun
-    (nothing has changed yet) still skips normally, same as every other bite in this file.
-    Round-2 review BLOCKER fix - without this, a September rerun silently keeps Sept t12 zeros."""
-    if not _landed(path):
-        return False
-    _now_regime = _current_regime()
-    try:
-        _stored_regime = spark.read.parquet(BASE + _regime_flag_path(path)).collect()[0]["regime"]
-    except Exception:
-        print(path, ": landed but no regime flag found (pre-retrofit landing, or the flag write "
-              "failed) - treating the stored regime as UNKNOWN and forcing a re-pull to be safe "
-              "(current run regime:", _now_regime + ").")
-        return False
-    if _stored_regime == "pre_close" and _now_regime == "post_close":
-        print(path, ": landed PRE-CLOSE (before", P12_CLOSE_DATE_B.isoformat(), ") but this run "
-              "is POST-CLOSE - t12 was future-dated/thin when this bite was pulled. Forcing "
-              "re-pull for a real t12 read.")
-        return False
-    print(path, ": already landed (stored regime:", _stored_regime, "| current run regime:",
-          _now_regime, ") -", spark.read.parquet(BASE + path).count(), "rows - SKIP")
     return True
 
 
@@ -1524,11 +1500,11 @@ print("ACCUMULATOR CHECK PASSED -", len(_material), "materially-active accounts,
       "MTD equals SUM(daily deltas) within 1pct on every one.")
 
 
-# %% [12] PULL B_COHORT - client-grain, cohort SCOPING pull. Defines the Piece-B population
-# (clients mailed by CARDS_MKT_MNES on/before the anchor) AND the leaver flags at anchor, in the
-# SAME pull that scopes it - this is the fix for spotlight2.py's defect #4 ("pulls bank-wide, cards
-# flag applied post-hoc"). The WHERE mailed_cards = 1 at the very end IS the scoping: only cohort
-# clients are landed, nothing bank-wide ever reaches HDFS.
+# %% [12] PULL B_COHORT (v3, 2026-08-03e redesign) - client-grain, cohort SCOPING pull. Defines
+# the Piece-B population (clients mailed by CARDS_MKT_MNES on/before T0_ANCHOR_B) AND the leaver
+# flags at anchor, in the SAME pull that scopes it - this is the fix for spotlight2.py's defect #4
+# ("pulls bank-wide, cards flag applied post-hoc"). The WHERE mailed_cards = 1 at the very end IS
+# the scoping: only cohort clients are landed, nothing bank-wide ever reaches HDFS.
 # MARKETING-ONLY SCOPE (2026-08-03d, Andre-overridable assumption, Cell [0]): mailed_cards /
 # cards_unsub_by_anchor use CARDS_MKT_MNES (22 mnes), NOT the 32-mne CARDS_MNES flag A1 uses - a
 # regulatory T&C notice or an operational remediation email is not campaign contact, and folding
@@ -1537,15 +1513,23 @@ print("ACCUMULATOR CHECK PASSED -", len(_material), "materially-active accounts,
 # LEAVER FLAG has its OWN window (COHORT_B_FLOOR -> anchor+1day), separate from Piece A/C's
 # windows - the fix for spotlight2.py's defect #2 ("do NOT reuse a flag computed over the full
 # year"). any_unsub_by_anchor is enterprise-wide (any mne); cards_unsub_by_anchor is the
-# marketing-cards subset; cards_ex_fwc_unsub_by_anchor (2026-08-03d) is the same subset minus FWC
-# (CARDS_MKT_EX_FWC, marketing basis - see the two-ex-FWC-sets comment in Cell [0]).
-# ENGINE: Teradata-direct.
+# marketing-cards subset; cards_ex_fwc_unsub_by_anchor is the same subset minus FWC (CARDS_MKT_EX_
+# FWC, marketing basis - see the two-ex-FWC-sets comment in Cell [0]).
+#
+# cards_unsub_mne (NEW 2026-08-03e) - the campaign dimension for Cell [15b]'s per-mne breakdown: the
+# MNE of the client's EARLIEST cards-marketing (cd=4, mne IN CARDS_MKT_MNES) unsub event on/before
+# the anchor, via ROW_NUMBER() PARTITION BY clnt_no ORDER BY dt ASC (same ranked-CTE-then-filter
+# pattern Cell [13]'s DFP pivot already uses, not QUALIFY - this file never uses QUALIFY, matching
+# the rest of its Teradata-direct SQL). NULL for anyone with cards_unsub_by_anchor = 0 (stayers, by
+# this artifact's definition - see Cell [15]/[15b] header for the STAYERS/LEAVERS_ALL scoping
+# assumption, Andre-overridable). ENGINE: Teradata-direct.
 
 BCOHORT_SCHEMA = StructType([
     StructField("clnt_no", LongType(), True),
     StructField("any_unsub_by_anchor", IntegerType(), True),
     StructField("cards_unsub_by_anchor", IntegerType(), True),
-    StructField("cards_ex_fwc_unsub_by_anchor", IntegerType(), True),   # NEW 2026-08-03d - marketing-basis ex-FWC twin
+    StructField("cards_ex_fwc_unsub_by_anchor", IntegerType(), True),
+    StructField("cards_unsub_mne", StringType(), True),   # NEW 2026-08-03e - campaign dim, NULL for stayers
 ])
 
 
@@ -1557,11 +1541,15 @@ def _prep_bcohort(pdf):
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
     for _c in ["any_unsub_by_anchor", "cards_unsub_by_anchor", "cards_ex_fwc_unsub_by_anchor"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int32")
+    # cards_unsub_mne - genuine NULL for stayers, never a sentinel string. Same None-not-NaN
+    # discipline as B_DFP's annual/spend NULLs (Cell [13]) so F.col(...).isNull() actually catches it.
+    pdf["cards_unsub_mne"] = pdf["cards_unsub_mne"].astype(object)
+    pdf.loc[pdf["cards_unsub_mne"].isna(), "cards_unsub_mne"] = None
     return pdf[[f.name for f in BCOHORT_SCHEMA.fields]]
 
 
 def land_bcohort_bite(bite):
-    name = "b_cohort_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
+    name = "b_cohort_v%d/bite_%d" % (B_SCHEMA_VERSION, bite)
     if _landed(name):
         print(name, ": already landed,", spark.read.parquet(BASE + name).count(), "rows - SKIP")
         return
@@ -1578,7 +1566,9 @@ def land_bcohort_bite(bite):
     joined AS (
         SELECT m.CLNT_NO AS clnt_no,
                SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
-               ek.disposition_cd AS disposition_cd
+               ek.disposition_cd AS disposition_cd,
+               ek.dt AS dt,
+               ek.TREATMENT_ID AS treatment_id
         FROM ek
         INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                     FROM DTZV01.VENDOR_FEEDBACK_MASTER
@@ -1595,10 +1585,27 @@ def land_bcohort_bite(bite):
                MAX(CASE WHEN disposition_cd = 4 AND mne IN (%(cards_ex_fwc)s) THEN 1 ELSE 0 END) AS cards_ex_fwc_unsub_by_anchor
         FROM joined
         GROUP BY clnt_no
+    ),
+    cards_unsub_ranked AS (
+        -- Deterministic tie-break (red-team Blocker 2): a client with two cards-marketing unsubs
+        -- on the SAME dt (calendar day, per the ek CTE's own dedup grain) needs a stable pick, not
+        -- whatever order Teradata happens to return - ORDER BY dt, then mne, then TREATMENT_ID
+        -- fully orders every row, so cards_unsub_mne is reproducible run-to-run.
+        SELECT clnt_no, mne,
+               ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY dt ASC, mne ASC, treatment_id ASC) AS rn
+        FROM joined
+        WHERE disposition_cd = 4 AND mne IN (%(cards)s)
+    ),
+    earliest_cards_unsub AS (
+        SELECT clnt_no, mne AS cards_unsub_mne
+        FROM cards_unsub_ranked
+        WHERE rn = 1
     )
-    SELECT clnt_no, any_unsub_by_anchor, cards_unsub_by_anchor, cards_ex_fwc_unsub_by_anchor
-    FROM client_flags
-    WHERE mailed_cards = 1
+    SELECT f.clnt_no, f.any_unsub_by_anchor, f.cards_unsub_by_anchor, f.cards_ex_fwc_unsub_by_anchor,
+           e.cards_unsub_mne
+    FROM client_flags f
+    LEFT JOIN earliest_cards_unsub e ON e.clnt_no = f.clnt_no
+    WHERE f.mailed_cards = 1
     """ % {"floor": COHORT_B_FLOOR, "ceil": ANCHOR_B_CEIL, "mfloor": MASTER_FLOOR_B, "tactic": TACTIC_ID_SQL,
            "n_bites": N_BITES, "bite": bite, "cards": CARDS_MKT_LIST_SQL,
            "cards_ex_fwc": CARDS_MKT_EX_FWC_LIST_SQL}
@@ -1614,6 +1621,36 @@ def land_bcohort_bite(bite):
 
 
 if "B_COHORT" in RUN_PULLS:
+    # ---- PRE-PULL PROBE (red-team guard, downgraded from Blocker to belt-and-braces check) - one
+    # cheap Teradata aggregate BEFORE the bite loop touches anything: do pre-anchor cards-marketing
+    # send events exist at all in this window? The 2026-08-03d run already proved they do (5.12M-
+    # client cohort from 2024+ sends), so this is expected to PASS and print the count + earliest
+    # date - it exists to catch a future regression (table access change, a broken shape filter, an
+    # empty mne list), not because this run doubts the population. ----
+    _precheck_sql = """
+    SELECT COUNT(*) AS n_sends, MIN(disposition_dt_tm) AS min_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT
+    WHERE disposition_cd = 1
+      AND disposition_dt_tm >= DATE '%(floor)s'
+      AND disposition_dt_tm <  DATE '%(ceil)s'
+      AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)%(tactic)s
+    """ % {"floor": COHORT_B_FLOOR, "ceil": ANCHOR_B_CEIL, "cards": CARDS_MKT_LIST_SQL, "tactic": TACTIC_ID_SQL}
+    _precheck_pdf = edw_pd(_precheck_sql)
+    _precheck_pdf.columns = [c.lower() for c in _precheck_pdf.columns]
+    _n_precheck = int(_precheck_pdf.iloc[0]["n_sends"]) if len(_precheck_pdf) else 0
+    _min_dt_precheck = _precheck_pdf.iloc[0]["min_dt"] if len(_precheck_pdf) else None
+    if _n_precheck == 0:
+        raise RuntimeError(
+            "PRE-PULL PROBE FAILED: zero pre-anchor cards-marketing send events (disposition_cd=1, "
+            "mne IN CARDS_MKT_MNES, shape-filtered) in %s -> %s - no pre-anchor cards send history, "
+            "check window vs data availability before running the bite loop. The 2026-08-03d run "
+            "proved these events exist (5.12M-client cohort from 2024+ sends), so a zero here means "
+            "something upstream changed (table access, TACTIC_ID_SQL, CARDS_MKT_MNES), not that the "
+            "cohort is legitimately empty." % (COHORT_B_FLOOR, ANCHOR_B_CEIL))
+    print("PRE-PULL PROBE OK | cards-marketing sends", COHORT_B_FLOOR, "->", ANCHOR_B_CEIL, "|",
+          _n_precheck, "events | earliest send:", _min_dt_precheck, "- expected to pass (2026-08-03d "
+          "already proved this population exists); this is a regression guard, not a discovery.")
+
     for _b in (range(1) if SMOKE else range(N_BITES)):
         land_bcohort_bite(_b)
     print("PULL B_COHORT done - landed at", BCOHORT_DIR + "*")
@@ -1635,8 +1672,8 @@ def read_bcohort():
 
 
 def read_bcohort_bite(bite):
-    """Single-bite read (not the 'bite_*' glob) - used by Cell [15]'s bite-looped panel build so
-    that cell never touches the full-scale cohort table at once."""
+    """Single-bite read (not the 'bite_*' glob) - used by Cells [14b]/[15]'s bite-looped builds so
+    those cells never touch the full-scale cohort table at once."""
     return _read_bite_or_empty(BCOHORT_DIR, bite, BCOHORT_SCHEMA).withColumn(
         "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
 
@@ -1651,16 +1688,25 @@ _cohort_dupes = COHORT_B_N - cohort_b.select("clnt_no").distinct().count()
 assert _cohort_dupes == 0, "cohort_b has %d duplicate clnt_no - bites did not partition disjointly" % _cohort_dupes
 print("COHORT B - Cards-mailed on/before", T0_ANCHOR_B.isoformat(), "|", COHORT_B_N, "clients, "
       "0 duplicates confirmed.")
-cohort_b.groupBy(F.when(F.col("any_unsub_by_anchor") == 1, "LEAVER").otherwise("STAYER").alias("bucket")).agg(
-    F.count("*").alias("clients"), F.sum("cards_unsub_by_anchor").alias("cards_unsub_subset")
+cohort_b.groupBy(F.when(F.col("cards_unsub_by_anchor") == 1, "LEAVER").otherwise("STAYER").alias("bucket")).agg(
+    F.count("*").alias("clients"), F.sum("any_unsub_by_anchor").alias("any_list_unsub_subset")
 ).show(truncate=False)
+_bcohort_unmapped = cohort_b.filter((F.col("cards_unsub_by_anchor") == 1) & F.col("cards_unsub_mne").isNull()).count()
+if _bcohort_unmapped > 0:
+    print("WARNING:", _bcohort_unmapped, "clients have cards_unsub_by_anchor=1 but cards_unsub_mne "
+          "IS NULL - the earliest-cards-unsub join in Cell [12] missed rows. Investigate before "
+          "trusting Cell [15b]'s per-mne breakdown.")
 
 
-# %% [13] PULL B_DFP - annual spend at t0 and t12, cohort-scoped via an embedded cohort CTE that
-# INNER JOINs DLY_FULL_PORTFOLIO BEFORE any aggregation - the scoping happens inside this ONE
-# Teradata statement, never post-hoc in Spark (fix for defect #4). The cohort CTE here is a CHEAP
-# cards-only send check (mirrors spotlight.py Pull C's cost profile), re-derived rather than
-# handed off from Cell [12] - keeps this cell self-contained and independently resumable.
+# %% [13] PULL B_DFP (v3, 2026-08-03e redesign) - 3-month spend around T0_ANCHOR_B ("then",
+# SPEND_YMS_THEN) and around T1_ANCHOR_B ("now", SPEND_YMS_NOW), cohort-scoped via an embedded
+# cohort CTE that INNER JOINs DLY_FULL_PORTFOLIO BEFORE any aggregation - the scoping happens
+# inside this ONE Teradata statement, never post-hoc in Spark (fix for defect #4). The cohort CTE
+# here is a CHEAP cards-only send check (mirrors spotlight.py Pull C's cost profile), re-derived
+# rather than handed off from Cell [12] - keeps this cell self-contained and independently
+# resumable. Both windows are NULL (never 0) when a client has zero DFP rows in that window - see
+# n_then_rows/n_now_rows below; a closed window can still be legitimately thin for a given client
+# (e.g. a closed account), and that must never silently read as "$0 spend".
 # ENGINE: Teradata-direct (D3CV12A.DLY_FULL_PORTFOLIO). One scan, ROW_NUMBER pivot, never
 # multi-scan (table_catalog_notes.md:147-152) - same pattern as spotlight2.py Cell [3].
 
@@ -1669,14 +1715,14 @@ assert "ACCUM_VALIDATED" in globals() and ACCUM_VALIDATED, "Run Cell [11] first.
 BDFP_SCHEMA = StructType([
     StructField("clnt_no", LongType(), True),
     StructField("n_accts_total", LongType(), True),
-    StructField("annual_spend_t0", DoubleType(), True),
-    StructField("annual_spend_p12", DoubleType(), True),
+    StructField("spend_3mo_then", DoubleType(), True),
+    StructField("spend_3mo_now", DoubleType(), True),
 ])
 
 
 def _cohort_cte_sql(bite):
-    """Cheap, cards-only cohort-membership CTE, shared text between the DFP and BHV pulls. Kept
-    as a Python function (not a stored SQL macro) so both pulls stay self-contained files.
+    """Cheap, cards-only cohort-membership CTE, shared text between the DFP/BHV/UCP pulls. Kept
+    as a Python function (not a stored SQL macro) so all pulls stay self-contained files.
     Half-open on the anchor (< ANCHOR_B_CEIL), matching Cell [12]'s own cohort pull - anchor-day
     off-by-one fix, was <= T0_ANCHOR_B which double-counted anchor-day events across the boundary.
     MARKETING-ONLY (2026-08-03d): uses CARDS_MKT_LIST_SQL, matching Cell [12]'s B_COHORT population
@@ -1707,17 +1753,17 @@ def _cohort_cte_sql(bite):
             "tactic": TACTIC_ID_SQL, "mfloor": MASTER_FLOOR_B, "n_bites": N_BITES, "bite": bite}
 
 
-_annual_case_t0 = "SUM(CASE WHEN ym IN (%s) THEN acct_month_spend ELSE 0 END)" % (
-    ", ".join(str(y) for y in ANNUAL_YMS_B[0]))
-_annual_case_p12 = "SUM(CASE WHEN ym IN (%s) THEN acct_month_spend ELSE 0 END)" % (
-    ", ".join(str(y) for y in ANNUAL_YMS_B[12]))
-# n_p12_rows - counts ACTUAL p12-month DFP rows (not spend dollars) per account. Round-2 review
-# BLOCKER fix: the account-level SUM(...ELSE 0) above cannot tell "no p12 data yet" apart from
-# "real $0 spend" - both look like 0. This count, summed at the client grain below, can: if a
-# client has ZERO p12-month rows across every account, annual_spend_p12 must come back NULL
-# (pre-close t12 arithmetic thinness), never 0.0. t0 needs no such guard (t0 is always fully past).
-_p12_row_count_case = "SUM(CASE WHEN ym IN (%s) THEN 1 ELSE 0 END)" % (
-    ", ".join(str(y) for y in ANNUAL_YMS_B[12]))
+_spend_case_then = "SUM(CASE WHEN ym IN (%s) THEN acct_month_spend ELSE 0 END)" % SPEND_YMS_THEN_SQL
+_spend_case_now = "SUM(CASE WHEN ym IN (%s) THEN acct_month_spend ELSE 0 END)" % SPEND_YMS_NOW_SQL
+# n_then_rows/n_now_rows - count ACTUAL then/now-window DFP rows (not spend dollars) per account.
+# The account-level SUM(...ELSE 0) above cannot tell "no DFP data this window" apart from "real $0
+# spend" - both look like 0. This count, summed at the client grain below, can: if a client has
+# ZERO then (or now) window rows across every account, spend_3mo_then (or _now) must come back
+# NULL, never 0.0 - both windows get this guard now (round-2 review BLOCKER fix originally applied
+# to t12 only; the then/now redesign needs it symmetrically since neither window is guaranteed to
+# be populated for every cohort client, e.g. a closed account).
+_then_row_count_case = "SUM(CASE WHEN ym IN (%s) THEN 1 ELSE 0 END)" % SPEND_YMS_THEN_SQL
+_now_row_count_case = "SUM(CASE WHEN ym IN (%s) THEN 1 ELSE 0 END)" % SPEND_YMS_NOW_SQL
 
 
 def _dfp_sql(bite):
@@ -1746,21 +1792,22 @@ def _dfp_sql(bite):
     ),
     acct_wide AS (
         SELECT clnt_no, acct_no,
-               %(annual_t0)s AS annual_spend_t0,
-               %(annual_p12)s AS annual_spend_p12,
-               %(p12_rows)s AS n_p12_rows
+               %(spend_then)s AS spend_3mo_then,
+               %(spend_now)s AS spend_3mo_now,
+               %(then_rows)s AS n_then_rows,
+               %(now_rows)s AS n_now_rows
         FROM acct_month
         GROUP BY clnt_no, acct_no
     )
     SELECT clnt_no,
        COUNT(*) AS n_accts_total,
-       SUM(annual_spend_t0) AS annual_spend_t0,
-       CASE WHEN SUM(n_p12_rows) = 0 THEN NULL ELSE SUM(annual_spend_p12) END AS annual_spend_p12
+       CASE WHEN SUM(n_then_rows) = 0 THEN NULL ELSE SUM(spend_3mo_then) END AS spend_3mo_then,
+       CASE WHEN SUM(n_now_rows) = 0 THEN NULL ELSE SUM(spend_3mo_now) END AS spend_3mo_now
     FROM acct_wide
     GROUP BY clnt_no
     """ % {"cohort_cte": _cohort_cte_sql(bite), "sfloor": SPEND_FLOOR_B, "sceil": SPEND_CEIL_B,
-           "yms": SPEND_YMS_B_SQL, "annual_t0": _annual_case_t0, "annual_p12": _annual_case_p12,
-           "p12_rows": _p12_row_count_case}
+           "yms": SPEND_YMS_B_SQL, "spend_then": _spend_case_then, "spend_now": _spend_case_now,
+           "then_rows": _then_row_count_case, "now_rows": _now_row_count_case}
 
 
 def _prep_bdfp(pdf):
@@ -1770,37 +1817,34 @@ def _prep_bdfp(pdf):
     assert _n_null == 0, "clnt_no has %d nulls" % _n_null
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
     pdf["n_accts_total"] = pd.to_numeric(pdf["n_accts_total"], errors="coerce").fillna(0).astype("int64")
-    pdf["annual_spend_t0"] = pd.to_numeric(pdf["annual_spend_t0"], errors="coerce").fillna(0.0).astype("float64")
-    # annual_spend_p12 - NO fillna (round-2 review BLOCKER fix). The SQL now emits a real SQL NULL
-    # when a client has zero p12-month DFP rows (pre-close t12 thinness) - fillna(0.0) here would
-    # silently turn that back into a fake "$0 spend", which Cell [15] then bands as "Low" instead
-    # of "untiered", poisoning the whole t12 slice. Preserve NaN as an explicit Python None (not a
-    # float NaN) so PySpark's schema-based row conversion writes it as a genuine parquet NULL,
-    # which F.col("spend_at_offset").isNull() in Cell [15] can actually catch - float NaN would
-    # NOT be caught by isNull() and would silently slip through as a non-null value.
-    pdf["annual_spend_p12"] = pd.to_numeric(pdf["annual_spend_p12"], errors="coerce")
-    _p12_isna = pdf["annual_spend_p12"].isna()
-    pdf["annual_spend_p12"] = pdf["annual_spend_p12"].astype(object)
-    pdf.loc[_p12_isna, "annual_spend_p12"] = None
+    # spend_3mo_then/spend_3mo_now - NO fillna on either (both windows get the NULL-preserving
+    # guard now, not just the offset-dependent one). The SQL emits a real SQL NULL when a client
+    # has zero rows in that window - fillna(0.0) here would silently turn that back into a fake
+    # "$0 spend", which Cell [15] then bands as "Low"/"untiered" incorrectly. Preserve as an
+    # explicit Python None (not float NaN) so PySpark's schema-based row conversion writes a
+    # genuine parquet NULL that F.col(...).isNull() in Cell [15] can actually catch - float NaN
+    # would NOT be caught by isNull() and would silently slip through as a non-null value.
+    for _c in ["spend_3mo_then", "spend_3mo_now"]:
+        pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce")
+        _isna = pdf[_c].isna()
+        pdf[_c] = pdf[_c].astype(object)
+        pdf.loc[_isna, _c] = None
     return pdf[[f.name for f in BDFP_SCHEMA.fields]]
 
 
 def land_bdfp_bite(bite):
-    path = "b_dfp_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
-    if _landed_b_offset(path):
+    path = "b_dfp_v%d/bite_%d" % (B_SCHEMA_VERSION, bite)
+    if _landed(path):
+        print(path, ": already landed,", spark.read.parquet(BASE + path).count(), "rows - SKIP")
         return
     pdf = edw_pd(_dfp_sql(bite))
     if len(pdf) == 0:
-        print(path, ": zero cohort clients with DFP rows in this bite - continuing (t12 is "
-              "future-dated for the whole cohort as of this build; t0 should not be thin).")
+        print(path, ": zero cohort clients with DFP rows in this bite - continuing.")
         return
     pdf = _prep_bdfp(pdf)
     nback = _write_chunks(pdf, BDFP_SCHEMA, path)
     assert nback == len(pdf), path + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
-    _regime = _current_regime()
-    _write_regime_flag(path, _regime)
-    print(path, ": landed", len(pdf), "rows (cohort-scoped, offsets t0/p12 pivoted, regime=",
-          _regime, "), readback", nback)
+    print(path, ": landed", len(pdf), "rows (cohort-scoped, then/now spend pivoted), readback", nback)
 
 
 if "B_DFP" in RUN_PULLS:
@@ -1830,42 +1874,45 @@ def read_bdfp_bite(bite):
         "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
 
 
-# %% [14] PULL B_BHV - revolver/transactor at t0 and t12 EXACT month-ends, cohort-scoped the same
-# way as Cell [13]. CR_CRD_RPTS_ACCT carries clnt_no directly - no DFP bridge needed (verbatim
-# finding from spotlight2.py Cell [4], D2). Raw-value probe runs first, same as spotlight2.py -
-# the rank mapping rests on values nobody has printed for THIS pull.
+# %% [14] PULL B_BHV (v3, 2026-08-03e redesign) - revolver/transactor at T0_ANCHOR_B ("then") and
+# T1_ANCHOR_B ("now") EXACT month-ends, cohort-scoped the same way as Cell [13]. CR_CRD_RPTS_ACCT
+# carries clnt_no directly - no DFP bridge needed (verbatim finding from spotlight2.py Cell [4],
+# D2). Raw-value probe runs first, same as spotlight2.py - the rank mapping rests on values nobody
+# has printed for THIS pull. Probed at BOTH anchors now (both are closed months with real data, not
+# just THEN) so a "now"-specific raw-value drift would be caught before it silently becomes
+# other_or_none downstream.
 # ENGINE: Teradata-direct (D3CV12A.CR_CRD_RPTS_ACCT).
 
 BBHV_SCHEMA = StructType([
     StructField("clnt_no", LongType(), True),
-    StructField("bhvr_rank_t0", IntegerType(), True),
-    StructField("bhvr_rank_p12", IntegerType(), True),
+    StructField("bhvr_rank_then", IntegerType(), True),
+    StructField("bhvr_rank_now", IntegerType(), True),
 ])
 
 _seg_case_sql = "\n                    ".join(
     "WHEN TRIM(r.usg_bhvr_seg_at_cyc_cd) = '%s' THEN %d" % (lbl, rk) for lbl, rk in SEG_PRECEDENCE)
 
 _probe_sql = """
-SELECT r.usg_bhvr_seg_at_cyc_cd AS raw_value, COUNT(*) AS accounts
+SELECT r.ME_DT AS me_dt, r.usg_bhvr_seg_at_cyc_cd AS raw_value, COUNT(*) AS accounts
 FROM D3CV12A.CR_CRD_RPTS_ACCT r
-WHERE r.ME_DT = DATE '%s'
-GROUP BY r.usg_bhvr_seg_at_cyc_cd
-ORDER BY accounts DESC
-""" % T0_ANCHOR_B.isoformat()
+WHERE r.ME_DT IN (%s)
+GROUP BY r.ME_DT, r.usg_bhvr_seg_at_cyc_cd
+ORDER BY r.ME_DT, accounts DESC
+""" % ANCHOR_DATES_SQL_B
 
 if "B_BHV" in RUN_PULLS:
     _probe = edw_pd(_probe_sql)
     _probe.columns = [c.lower() for c in _probe.columns]
-    print("BEHAVIOUR VALUE PROBE at ME_DT", T0_ANCHOR_B.isoformat(), "| grain: one row per raw "
-          "value |", len(_probe), "rows")
+    print("BEHAVIOUR VALUE PROBE at ME_DT IN (then=", T0_ANCHOR_B.isoformat(), ", now=",
+          T1_ANCHOR_B.isoformat(), ") | grain: one row per (me_dt, raw value) |", len(_probe), "rows")
     print(_probe.to_string(index=False))
     _expected = [lbl for lbl, _ in SEG_PRECEDENCE]
     _seen = [str(v).strip() for v in _probe["raw_value"].tolist()]
-    _unmapped = [v for v in _seen if v not in _expected and v not in ("", "None", "nan")]
+    _unmapped = sorted(set(v for v in _seen if v not in _expected and v not in ("", "None", "nan")))
     if _unmapped:
         print("WARNING: raw values not in SEG_PRECEDENCE, will read other_or_none:", _unmapped)
     else:
-        print("All raw values map cleanly onto SEG_PRECEDENCE", _expected)
+        print("All raw values (both anchors) map cleanly onto SEG_PRECEDENCE", _expected)
 else:
     print("Behaviour probe skipped - B_BHV not in RUN_PULLS")
 
@@ -1885,12 +1932,12 @@ def _bhv_sql(bite):
           AND r.clnt_no IS NOT NULL
     )
     SELECT clnt_no,
-       MIN(CASE WHEN me_dt = DATE '%(t0)s' THEN seg_rank END) AS bhvr_rank_t0,
-       MIN(CASE WHEN me_dt = DATE '%(p12)s' THEN seg_rank END) AS bhvr_rank_p12
+       MIN(CASE WHEN me_dt = DATE '%(t_then)s' THEN seg_rank END) AS bhvr_rank_then,
+       MIN(CASE WHEN me_dt = DATE '%(t_now)s' THEN seg_rank END) AS bhvr_rank_now
     FROM seg
     GROUP BY clnt_no
     """ % {"cohort_cte": _cohort_cte_sql(bite), "seg_case": _seg_case_sql, "anchors": ANCHOR_DATES_SQL_B,
-           "t0": T0_ANCHOR_B.isoformat(), "p12": P12_ANCHOR_B.isoformat()}
+           "t_then": T0_ANCHOR_B.isoformat(), "t_now": T1_ANCHOR_B.isoformat()}
 
 
 def _prep_bbhv(pdf):
@@ -1899,27 +1946,25 @@ def _prep_bbhv(pdf):
     _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
     assert _n_null == 0, "clnt_no has %d nulls" % _n_null
     pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
-    for _c in ["bhvr_rank_t0", "bhvr_rank_p12"]:
+    for _c in ["bhvr_rank_then", "bhvr_rank_now"]:
         pdf[_c] = pd.to_numeric(pdf[_c], errors="coerce").fillna(0).astype("int32")
     return pdf[[f.name for f in BBHV_SCHEMA.fields]]
 
 
 def land_bbhv_bite(bite):
-    path = "b_bhv_v%d/bite_%d" % (CARDS_SCHEMA_VERSION, bite)
-    if _landed_b_offset(path):
+    path = "b_bhv_v%d/bite_%d" % (B_SCHEMA_VERSION, bite)
+    if _landed(path):
+        print(path, ": already landed,", spark.read.parquet(BASE + path).count(), "rows - SKIP")
         return
     pdf = edw_pd(_bhv_sql(bite))
     if len(pdf) == 0:
-        print(path, ": zero cohort clients with a behaviour row in this bite - t0 should not be "
-              "thin (it is real past data); investigate if this keeps happening across bites.")
+        print(path, ": zero cohort clients with a behaviour row in this bite - both anchors are "
+              "real past data now; investigate if this keeps happening across bites.")
         return
     pdf = _prep_bbhv(pdf)
     nback = _write_chunks(pdf, BBHV_SCHEMA, path)
     assert nback == len(pdf), path + " HDFS readback mismatch: pulled %d, read back %d" % (len(pdf), nback)
-    _regime = _current_regime()
-    _write_regime_flag(path, _regime)
-    print(path, ": landed", len(pdf), "rows (cohort-scoped, offsets t0/p12 pivoted, regime=",
-          _regime, "), readback", nback)
+    print(path, ": landed", len(pdf), "rows (cohort-scoped, then/now behaviour pivoted), readback", nback)
 
 
 if "B_BHV" in RUN_PULLS:
@@ -1949,69 +1994,254 @@ def read_bbhv_bite(bite):
         "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
 
 
-# %% [15] PIECE B CUBE - spend_tier x spend_tier_at_offset x usg_bhvr_seg x {stayers, leavers} x
-# {t0, t12}, unique client counts. spend_tier is cut ONCE on annual_spend_t0 and HELD FIXED across
-# t0/t12 (re-cutting per period lets clients migrate tiers and the comparison stops meaning
-# anything - verbatim reasoning from spotlight2.py Cell [7]) - unchanged by this fix.
-# spend_tier_at_offset is NEW (red-team fix - annual_spend_p12 was landed in Cell [13] but never
-# used, so spend/tier trajectory was unanswerable): the offset-appropriate spend value
-# (annual_spend_t0 at t_offset=0, annual_spend_p12 at t_offset=12) banded against the SAME t0
-# cutpoints (_q1/_q2) - so "did this client's spend tier move" is now readable from the cube.
-# Counts only - no spend dollars in the CSV, same as spend_tier always was.
-# leavers_cards_unsub_subset rides beside leavers as the second column the brief asks for
-# (cards_unsub_by_anchor), not a new pivot dimension.
-# t12 (2026-08-31) is a FUTURE month as of this build (2026-08-02) - its rows will read thin/
-# no_data until rerun after that month closes. Printed loudly below, not hidden.
+# %% [14b] PULL B_UCP (NEW 2026-08-03e) - dual UCP snapshot join, PIECE B. Same OOM-safe discipline
+# as Cell [5]'s Piece-A UCP join: read + Personal-filter + column-prune + cache EACH snapshot month
+# ONCE (single-table transform, safe at full scale), then join to the cohort ~1 bite at a time (the
+# join is what blows up memory, not the single-table read). UCP_MONTH_B0/B1 (Cell [0]) are the SAME
+# then/now anchors as B_COHORT/B_DFP/B_BHV - 2025-06-30 and 2026-06-30, both confirmed inside the
+# live UCP partition range.
+# prof_then/prof_now = UCP's PROF_TOT_ANNUAL - an ANNUAL PROFITABILITY ESTIMATE, NOT a validated
+# LTV figure (canon: reference_ucp_canon.md) - left NULL (never coalesced to 0) on no-match, since
+# it is a continuous dollar estimate, not a count.
+# held_t/i/b/c_then/_now and prod_cnt_then/_now: 0/1 (T/I/B/C) or a 0-4 count, -1 = no UCP match
+# that snapshot (NEVER fold -1 into 0 downstream - same hard rule as Cell [5]'s Piece-A held_*).
+# ENGINE: PySpark (YARN) reading HDFS parquet - not Trino, not Teradata.
+
+BUCP_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("prof_then", DoubleType(), True),
+    StructField("prof_now", DoubleType(), True),
+    StructField("held_t_then", IntegerType(), True),
+    StructField("held_i_then", IntegerType(), True),
+    StructField("held_b_then", IntegerType(), True),
+    StructField("held_c_then", IntegerType(), True),
+    StructField("prod_cnt_then", IntegerType(), True),
+    StructField("held_t_now", IntegerType(), True),
+    StructField("held_i_now", IntegerType(), True),
+    StructField("held_b_now", IntegerType(), True),
+    StructField("held_c_now", IntegerType(), True),
+    StructField("prod_cnt_now", IntegerType(), True),
+])
+
+_TIBC_COLS_B = ["T_TOT_CNT", "I_TOT_CNT", "B_TOT_CNT", "C_TOT_CNT"]
+_UCP_COLS_B = ["CLNT_NO", "CLNT_TYP", "PROF_TOT_ANNUAL"] + _TIBC_COLS_B
+
+
+def _read_ucp_snapshot_b(month_str, tag):
+    """Single-table read+prune+enrich for one UCP snapshot month - safe at full scale (no join
+    yet), same pattern as Cell [5]'s ucp_sel/ucp_enriched. tag is 'then' or 'now', print-only."""
+    _path = UCP_BASE + "MONTH_END_DATE=" + month_str
+    _raw = spark.read.option("basePath", UCP_BASE).parquet(_path)
+    _missing = [c for c in _UCP_COLS_B if c not in _raw.columns]
+    assert not _missing, "UCP missing required columns at " + month_str + " (" + tag + "): " + str(_missing)
+    _held = [(F.coalesce(F.col(c), F.lit(0)) > 0).cast("int") for c in _TIBC_COLS_B]
+    _sel = (_raw
+            .filter(F.trim(F.col("CLNT_TYP")) == "Personal")
+            .select(*_UCP_COLS_B)
+            .withColumn("clnt_no_long", F.col("CLNT_NO").cast("decimal(18,0)").cast("long"))
+            .withColumn("prof", F.col("PROF_TOT_ANNUAL").cast("double"))
+            .withColumn("held_t", _held[0])
+            .withColumn("held_i", _held[1])
+            .withColumn("held_b", _held[2])
+            .withColumn("held_c", _held[3])
+            .withColumn("prod_cnt", (_held[0] + _held[1] + _held[2] + _held[3]))
+            .select("clnt_no_long", "prof", "held_t", "held_i", "held_b", "held_c", "prod_cnt")
+            .dropDuplicates(["clnt_no_long"])
+            .cache())
+    _n = _sel.count()
+    print("UCP snapshot (%s, %s) pruned + enriched + cached:" % (tag, month_str), _n, "rows.")
+    return _sel
+
+
+if "B_UCP" in RUN_PULLS:
+    _ucp_then_b = _read_ucp_snapshot_b(UCP_MONTH_B0, "then")
+    _ucp_now_b = _read_ucp_snapshot_b(UCP_MONTH_B1, "now")
+
+    for _bite in (range(1) if SMOKE else range(N_BITES)):
+        _bucp_name = "b_ucp_v%d/bite_%d" % (B_SCHEMA_VERSION, _bite)
+        if _landed(_bucp_name):
+            print(_bucp_name, ": already landed,", spark.read.parquet(BASE + _bucp_name).count(),
+                  "rows - SKIP")
+            continue
+        _cohort_bite_ucp = read_bcohort_bite(_bite).select("clnt_no")
+        _cohort_bite_n_ucp = _cohort_bite_ucp.count()
+        if _cohort_bite_n_ucp == 0:
+            print(_bucp_name, ": zero cohort clients in this bite - skipping (matches Cell [12]'s "
+                  "own zero-row skip for this bite).")
+            continue
+        _joined_then = (_cohort_bite_ucp
+                         .join(_ucp_then_b, F.col("clnt_no") == F.col("clnt_no_long"), "left")
+                         .select(F.col("clnt_no"),
+                                 F.col("prof").alias("prof_then"),
+                                 F.coalesce(F.col("held_t"), F.lit(-1)).alias("held_t_then"),
+                                 F.coalesce(F.col("held_i"), F.lit(-1)).alias("held_i_then"),
+                                 F.coalesce(F.col("held_b"), F.lit(-1)).alias("held_b_then"),
+                                 F.coalesce(F.col("held_c"), F.lit(-1)).alias("held_c_then"),
+                                 F.coalesce(F.col("prod_cnt"), F.lit(-1)).alias("prod_cnt_then")))
+        _joined_now = (_cohort_bite_ucp
+                       .join(_ucp_now_b, F.col("clnt_no") == F.col("clnt_no_long"), "left")
+                       .select(F.col("clnt_no"),
+                               F.col("prof").alias("prof_now"),
+                               F.coalesce(F.col("held_t"), F.lit(-1)).alias("held_t_now"),
+                               F.coalesce(F.col("held_i"), F.lit(-1)).alias("held_i_now"),
+                               F.coalesce(F.col("held_b"), F.lit(-1)).alias("held_b_now"),
+                               F.coalesce(F.col("held_c"), F.lit(-1)).alias("held_c_now"),
+                               F.coalesce(F.col("prod_cnt"), F.lit(-1)).alias("prod_cnt_now")))
+        _bucp_bite = _joined_then.join(_joined_now, "clnt_no", "inner")
+        _n_bucp_bite = _bucp_bite.count()
+        assert _n_bucp_bite == _cohort_bite_n_ucp, (
+            "b_ucp bite %d: %d rows after joining then+now UCP onto the cohort bite (%d clients) - "
+            "fan-out on a duplicate clnt_no_long within a UCP snapshot. Both snapshots were "
+            "dropDuplicates-deduped before this join; re-check that." % (_bite, _n_bucp_bite, _cohort_bite_n_ucp))
+        _bucp_bite.write.mode("overwrite").parquet(BASE + _bucp_name)
+        _n_back = spark.read.parquet(BASE + _bucp_name).count()
+        assert _n_back == _n_bucp_bite, "%s: wrote %d rows, read back %d" % (_bucp_name, _n_bucp_bite, _n_back)
+        _write_spark_marker(_bucp_name, _n_back)
+        print(_bucp_name, ": landed", _n_back, "rows (bite", _bite, "of", N_BITES, "), dual UCP snapshot joined.")
+
+    _ucp_then_b.unpersist()
+    _ucp_now_b.unpersist()
+    print("PULL B_UCP done - landed at", BUCP_DIR + "*")
+else:
+    print("PULL B_UCP skipped - not in RUN_PULLS")
+
+
+def read_bucp():
+    try:
+        sdf = spark.read.parquet(BUCP_DIR + "bite_?")
+    except Exception as _e:   # zero bites landed -> explained empty, not a crash
+        print("read_bucp: NO landed bites at", BUCP_DIR, "(%s)" % type(_e).__name__,
+              "- returning EMPTY frame. Downstream B cells report no_data, not crash.")
+        return spark.createDataFrame([], BUCP_SCHEMA)
+    missing = [c.name for c in BUCP_SCHEMA.fields if c.name not in sdf.columns]
+    if missing:
+        raise RuntimeError("b_ucp missing %s. Rerun Cell [14b]." % missing)
+    return sdf.withColumn("clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+def read_bucp_bite(bite):
+    """Single-bite read - used by Cell [15]'s bite-looped panel build."""
+    return _read_bite_or_empty(BUCP_DIR, bite, BUCP_SCHEMA).withColumn(
+        "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+# %% [15] PIECE B PANEL BUILD + b_before_after_cube (REDESIGNED 2026-08-03e, "then vs now vs
+# delta"). Replaces the old t_offset=0/12 long-table design: BOTH T0_ANCHOR_B ("then") and
+# T1_ANCHOR_B ("now") are already closed, so then/now sit as columns on the SAME per-client row
+# instead of stacked rows - no more thin/no_data future-month rows to explain away.
 #
-# usg_bhvr_seg_t0 (round-2 review ask) rides as an ADDITIONAL groupBy dim on every row - the
-# client's t0 segment, fixed, alongside the existing offset-dependent usg_bhvr_seg. On t0 rows the
-# two are identical by construction; on t12 rows (usg_bhvr_seg_t0, usg_bhvr_seg) is a Revolver ->
-# Transactor (etc.) flow pair, pivotable without a second cube. Existing columns unchanged.
+# GROUP BASIS (Andre-overridable assumption, logged here per house rule): this artifact's
+# stayers/leavers split is CARDS_UNSUB_BY_ANCHOR (marketing-cards unsub), not the enterprise-wide
+# any_unsub_by_anchor the Aug-anchor build used - cards_unsub_mne (Cell [12]) is only meaningful as
+# a campaign dimension for CARDS leavers, and the brief's "Anatomy of an Unsub" ask is about Cards.
+# A cohort client who unsubbed from a non-cards list only (any_unsub_by_anchor=1, cards_unsub_by_
+# anchor=0) reads as a STAYER in this specific pair of outputs - flagged loudly here, not buried.
 #
-# BITE RETROFIT (OOM fix): the panel build joins cohort_b x spend_tier x bhv_seg x dfp_wide -
-# three client-grain tables joined onto the cohort, x2 for the t0/t12 union - the same shape of
-# join that killed Cell [5]. cohort_b/dfp_wide/bhv_wide were ALREADY landed per-bite by Cells
-# [12]/[13]/[14] using the SAME MOD(ABS(CLNT_NO), N_BITES) predicate (same bite param threaded
-# through _cohort_cte_sql), so this reads each bite's subdir directly instead of the 'bite_*' glob
-# - no re-partitioning needed, the disjoint split already exists on HDFS. The spend-tier cutpoints
-# (_q1/_q2) MUST stay global (a per-bite tercile would not be comparable across bites), so those
-# are computed once from a single-table streaming read of the full dfp table (approxQuantile is a
-# bounded-memory distributed aggregate, not a join - safe to leave unbitten, same class as Cell
-# [10]'s c_raw). Each bite then produces a PARTIAL cube (additive counts); partials are unioned and
-# summed into the final cube after the loop.
+# BITE DISCIPLINE (same as Cells [5]/[9]/[14b]): cohort_bite x dfp_bite x bhv_bite x ucp_bite are
+# ALREADY landed under the SAME MOD(ABS(CLNT_NO), N_BITES) partition (Cells [12]/[13]/[14]/[14b] all
+# thread the same bite param through _cohort_cte_sql / the UCP join loop), so this reads each
+# bite's subdir directly - no re-partitioning, no full-scale client-grain join at once. The ONE
+# deviation from "never hold a full-scale client-grain frame": Cell [15b]'s exact median needs the
+# WHOLE cohort's row-level values, not just per-bite partial sums (sums compose across bites; a
+# median does not) - so this cell also unions a NARROW per-client panel (b_panel, ~20 small columns,
+# cached once) for Cell [15b] to aggregate in one pass. b_before_after_cube itself is still built
+# from additive PARTIAL cube sums, same as every other bitten cube in this file.
 # ENGINE: PySpark (YARN).
 
+_seg_label_expr_then = None
+for _rk in sorted(SEG_LABEL):
+    _c = F.col("bhvr_rank_then") == _rk
+    _seg_label_expr_then = (F.when(_c, F.lit(SEG_LABEL[_rk])) if _seg_label_expr_then is None
+                             else _seg_label_expr_then.when(_c, F.lit(SEG_LABEL[_rk])))
+_seg_then_expr = _seg_label_expr_then.otherwise(F.lit("no_data"))
+
+_seg_label_expr_now = None
+for _rk in sorted(SEG_LABEL):
+    _c = F.col("bhvr_rank_now") == _rk
+    _seg_label_expr_now = (F.when(_c, F.lit(SEG_LABEL[_rk])) if _seg_label_expr_now is None
+                            else _seg_label_expr_now.when(_c, F.lit(SEG_LABEL[_rk])))
+_seg_now_expr = _seg_label_expr_now.otherwise(F.lit("no_data"))
+
 dfp_wide_all = read_bdfp()   # single table, no join - safe at full scale, used ONLY for the
-                             # global quantile cut below.
-_tier_src = dfp_wide_all.select("clnt_no", "annual_spend_t0").distinct()
-_q1, _q2 = _tier_src.approxQuantile("annual_spend_t0", SPEND_TIER_QUANTILES, SPEND_TIER_REL_ERR)
-print("SPEND TIER CUT | annual spend trailing 12m ending", T0_ANCHOR_B.isoformat(),
-      "| cut ONCE (global, across all bites), held fixed at t0 and t12 | Low <=", round(_q1, 2),
-      "< Mid <=", round(_q2, 2), "< High")
-if _q1 == _q2:
-    print("WARNING: tercile cut points are identical - more than a third of the cohort shares the "
-          "same annual spend (likely zero). Read the tier as zero-vs-something, not three terciles.")
+                             # global THEN-side quantile cut below.
+_tier_src = dfp_wide_all.select("clnt_no", "spend_3mo_then").distinct()
+# Guarded quantile cut (red-team Blocker 3): approxQuantile can return fewer than 2 values (empty
+# input, or every value null) and a bare `_q1, _q2 = ...` unpack on that is an uncaught ValueError.
+# Pre-check the non-null count, then check the result shape - on EITHER failure, route to the
+# explained-empty path (_q1/_q2 stay None, _tier_expr below returns 'untiered' for every client)
+# instead of crashing the run.
+_q1, _q2 = None, None
+_tier_nonnull_n = _tier_src.filter(F.col("spend_3mo_then").isNotNull()).count()
+if _tier_nonnull_n > 0:
+    _q_result = _tier_src.approxQuantile("spend_3mo_then", SPEND_TIER_QUANTILES, SPEND_TIER_REL_ERR)
+    if len(_q_result) == 2:
+        _q1, _q2 = _q_result
 
-# seg-label CASE expressions - built once (data-independent), applied per bite in the loop below.
-_seg_label_expr = None
-for _rk in sorted(SEG_LABEL):
-    _t0c = F.col("bhvr_rank_t0") == _rk
-    _seg_label_expr = (F.when(_t0c, F.lit(SEG_LABEL[_rk])) if _seg_label_expr is None
-                       else _seg_label_expr.when(_t0c, F.lit(SEG_LABEL[_rk])))
-_seg_t0_expr = _seg_label_expr.otherwise(F.lit("no_data"))
+if _q1 is None or _q2 is None:
+    print("WARNING: spend tier cut could not be computed (%d non-null spend_3mo_then values, "
+          "approxQuantile returned %s) - EVERY client reads as 'untiered' this run for both tier "
+          "and tier_now. Investigate B_DFP (Cell [13]) before trusting the tier dims in "
+          "b_before_after_cube." % (_tier_nonnull_n, "no result" if _tier_nonnull_n == 0 else "an unexpected shape"))
+else:
+    print("SPEND TIER CUT | 3-month spend around", T0_ANCHOR_B.isoformat(), "(THEN window",
+          SPEND_YMS_THEN, ") | cut ONCE (global, cohort-wide, across all bites), held fixed for "
+          "tier_now | Low <=", round(_q1, 2), "< Mid <=", round(_q2, 2), "< High | NULL "
+          "spend_3mo_then -> 'untiered'.")
+    if _q1 == _q2:
+        print("WARNING: tercile cut points are identical - more than a third of the cohort shares "
+              "the same THEN spend (likely zero). Read the tier as zero-vs-something, not three terciles.")
 
-_seg_label_expr2 = None
-for _rk in sorted(SEG_LABEL):
-    _p12c = F.col("bhvr_rank_p12") == _rk
-    _seg_label_expr2 = (F.when(_p12c, F.lit(SEG_LABEL[_rk])) if _seg_label_expr2 is None
-                        else _seg_label_expr2.when(_p12c, F.lit(SEG_LABEL[_rk])))
-_seg_p12_expr = _seg_label_expr2.otherwise(F.lit("no_data"))
 
-_stay = F.col("any_unsub_by_anchor") == 0
-_leave = F.col("any_unsub_by_anchor") == 1
+def _tier_expr(spend_col):
+    if _q1 is None or _q2 is None:
+        return F.lit("untiered")
+    return (F.when(F.col(spend_col).isNull(), F.lit("untiered"))
+             .when(F.col(spend_col) <= _q1, F.lit("Low"))
+             .when(F.col(spend_col) <= _q2, F.lit("Mid"))
+             .otherwise(F.lit("High")))
 
-_b_partials = []
-_n_long_b_total = 0
+
+_PANEL_COLS = ["clnt_no", "group_tag", "spend_3mo_then", "spend_3mo_now", "tier", "tier_now",
+               "seg_then", "seg_now", "prof_then", "prof_now",
+               "held_t_then", "held_i_then", "held_b_then", "held_c_then",
+               "held_t_now", "held_i_now", "held_b_now", "held_c_now",
+               "prod_cnt_then", "prod_cnt_now",
+               "cards_unsub_by_anchor", "cards_ex_fwc_unsub_by_anchor"]
+
+_B_PANEL_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("group_tag", StringType(), True),
+    StructField("spend_3mo_then", DoubleType(), True),
+    StructField("spend_3mo_now", DoubleType(), True),
+    StructField("tier", StringType(), True),
+    StructField("tier_now", StringType(), True),
+    StructField("seg_then", StringType(), True),
+    StructField("seg_now", StringType(), True),
+    StructField("prof_then", DoubleType(), True),
+    StructField("prof_now", DoubleType(), True),
+    StructField("held_t_then", IntegerType(), True),
+    StructField("held_i_then", IntegerType(), True),
+    StructField("held_b_then", IntegerType(), True),
+    StructField("held_c_then", IntegerType(), True),
+    StructField("held_t_now", IntegerType(), True),
+    StructField("held_i_now", IntegerType(), True),
+    StructField("held_b_now", IntegerType(), True),
+    StructField("held_c_now", IntegerType(), True),
+    StructField("prod_cnt_then", IntegerType(), True),
+    StructField("prod_cnt_now", IntegerType(), True),
+    StructField("cards_unsub_by_anchor", IntegerType(), True),
+    StructField("cards_ex_fwc_unsub_by_anchor", IntegerType(), True),
+])   # empty-frame fallback schema (matches _PANEL_COLS order/types) - guards the "SMOKE mode, bite
+     # 0 pulled zero cohort clients" edge case so Cell [15]/[15b] print an explained empty panel
+     # instead of an IndexError on _b_panel_bites[0].
+
+_b_cube_partials = []
+_b_panel_bites = []
+_n_panel_total = 0
+_n_panel_expected = 0   # accumulated only over bites THIS RUN processes - mode-safe (SMOKE
+                        # processes bite 0 only; comparing vs full COHORT_B_N under SMOKE would be
+                        # the exact mode-blind assert that crashed the 2026-08-03 A4 run before it
+                        # was fixed - same fix applied here).
 for _bite in (range(1) if SMOKE else range(N_BITES)):
     _cohort_bite = read_bcohort_bite(_bite)
     _cohort_bite_n = _cohort_bite.count()
@@ -2019,145 +2249,338 @@ for _bite in (range(1) if SMOKE else range(N_BITES)):
         print("PIECE B bite", _bite, "of", N_BITES, ": zero cohort clients - skipping (matches "
               "Cell [12]'s own zero-row skip for this bite).")
         continue
+    _n_panel_expected += _cohort_bite_n
 
     _dfp_bite = read_bdfp_bite(_bite)
-    _bhv_bite = read_bbhv_bite(_bite)
+    _bhv_bite = (read_bbhv_bite(_bite)
+                 .withColumn("seg_then", _seg_then_expr)
+                 .withColumn("seg_now", _seg_now_expr))
+    _ucp_bite = read_bucp_bite(_bite)
 
-    _spend_tier_bite = (_dfp_bite.select("clnt_no", "annual_spend_t0").distinct()
-                         .withColumn("spend_tier",
-                                     F.when(F.col("annual_spend_t0") <= _q1, "Low")
-                                      .when(F.col("annual_spend_t0") <= _q2, "Mid")
-                                      .otherwise("High"))
-                         .select("clnt_no", "spend_tier"))
+    _panel_bite = (_cohort_bite
+                   .join(_dfp_bite.select("clnt_no", "spend_3mo_then", "spend_3mo_now"), "clnt_no", "left")
+                   .join(_bhv_bite.select("clnt_no", "seg_then", "seg_now"), "clnt_no", "left")
+                   .join(_ucp_bite, "clnt_no", "left")
+                   .withColumn("tier", _tier_expr("spend_3mo_then"))
+                   .withColumn("tier_now", _tier_expr("spend_3mo_now"))
+                   .withColumn("seg_then", F.coalesce(F.col("seg_then"), F.lit("no_data")))
+                   .withColumn("seg_now", F.coalesce(F.col("seg_now"), F.lit("no_data")))
+                   .withColumn("held_t_then", F.coalesce(F.col("held_t_then"), F.lit(-1)))
+                   .withColumn("held_i_then", F.coalesce(F.col("held_i_then"), F.lit(-1)))
+                   .withColumn("held_b_then", F.coalesce(F.col("held_b_then"), F.lit(-1)))
+                   .withColumn("held_c_then", F.coalesce(F.col("held_c_then"), F.lit(-1)))
+                   .withColumn("held_t_now", F.coalesce(F.col("held_t_now"), F.lit(-1)))
+                   .withColumn("held_i_now", F.coalesce(F.col("held_i_now"), F.lit(-1)))
+                   .withColumn("held_b_now", F.coalesce(F.col("held_b_now"), F.lit(-1)))
+                   .withColumn("held_c_now", F.coalesce(F.col("held_c_now"), F.lit(-1)))
+                   .withColumn("prod_cnt_then", F.coalesce(F.col("prod_cnt_then"), F.lit(-1)))
+                   .withColumn("prod_cnt_now", F.coalesce(F.col("prod_cnt_now"), F.lit(-1)))
+                   .withColumn("group_tag",
+                               F.when(F.col("cards_unsub_by_anchor") == 0, F.lit("STAYERS"))
+                                .otherwise(F.coalesce(F.col("cards_unsub_mne"), F.lit("LEAVERS_UNMAPPED"))))
+                   .select(*_PANEL_COLS))
 
-    _bhv_seg_bite = (_bhv_bite
-                      .withColumn("usg_bhvr_seg_t0", _seg_t0_expr)
-                      .withColumn("usg_bhvr_seg_p12", _seg_p12_expr)
-                      .select("clnt_no", "usg_bhvr_seg_t0", "usg_bhvr_seg_p12"))
+    _n_panel_bite = _panel_bite.count()
+    assert _n_panel_bite == _cohort_bite_n, (
+        "PIECE B bite %d: panel has %d rows, expected %d cohort clients - a join fanned out. "
+        "dfp/bhv/ucp bites are all supposed to be unique on clnt_no; re-check those."
+        % (_bite, _n_panel_bite, _cohort_bite_n))
+    _n_panel_total += _n_panel_bite
+    _b_panel_bites.append(_panel_bite)
 
-    # usg_bhvr_seg_t0 - FIXED dim (round-2 review ask, R/T flows): the client's t0 segment, joined
-    # onto every row regardless of offset - so t0 rows carry usg_bhvr_seg_t0 == usg_bhvr_seg (same
-    # source value) and t12 rows carry the client's t0 seg ALONGSIDE their own (offset-dependent)
-    # usg_bhvr_seg. Pivoting (usg_bhvr_seg_t0, usg_bhvr_seg) on t12 rows reads as a Revolver ->
-    # Transactor (etc.) flow matrix; existing columns are unchanged.
-    _bhv_seg_t0_fixed = _bhv_seg_bite.select("clnt_no", "usg_bhvr_seg_t0")
-
-    _long_t0_bite = (_cohort_bite
-                      .join(_spend_tier_bite, "clnt_no", "left")
-                      .join(_bhv_seg_bite.select("clnt_no", F.col("usg_bhvr_seg_t0").alias("usg_bhvr_seg")),
-                            "clnt_no", "left")
-                      .join(_dfp_bite.select("clnt_no", F.col("annual_spend_t0").alias("spend_at_offset")),
-                            "clnt_no", "left")
-                      .join(_bhv_seg_t0_fixed, "clnt_no", "left")
-                      .withColumn("t_offset", F.lit(0)))
-    _long_p12_bite = (_cohort_bite
-                       .join(_spend_tier_bite, "clnt_no", "left")   # tier HELD FIXED at t0
-                       .join(_bhv_seg_bite.select("clnt_no", F.col("usg_bhvr_seg_p12").alias("usg_bhvr_seg")),
-                             "clnt_no", "left")
-                       .join(_dfp_bite.select("clnt_no", F.col("annual_spend_p12").alias("spend_at_offset")),
-                             "clnt_no", "left")
-                       .join(_bhv_seg_t0_fixed, "clnt_no", "left")
-                       .withColumn("t_offset", F.lit(12)))
-
-    _long_b_bite = (_long_t0_bite.unionByName(_long_p12_bite)
-                     .withColumn("spend_tier", F.coalesce(F.col("spend_tier"), F.lit("untiered")))
-                     .withColumn("usg_bhvr_seg", F.coalesce(F.col("usg_bhvr_seg"), F.lit("no_data")))
-                     .withColumn("usg_bhvr_seg_t0", F.coalesce(F.col("usg_bhvr_seg_t0"), F.lit("no_data")))
-                     .withColumn("spend_tier_at_offset",
-                                 F.when(F.col("spend_at_offset").isNull(), F.lit("untiered"))
-                                  .when(F.col("spend_at_offset") <= _q1, F.lit("Low"))
-                                  .when(F.col("spend_at_offset") <= _q2, F.lit("Mid"))
-                                  .otherwise(F.lit("High"))))
-
-    _n_long_b_bite = _long_b_bite.count()
-    _n_expected_bite = _cohort_bite_n * len(T_OFFSETS_B)
-    assert _n_long_b_bite == _n_expected_bite, (
-        "PIECE B bite %d: long table has %d rows, expected %d (%d cohort clients x %d offsets) - a "
-        "join fanned out within this bite. dfp/bhv/cohort bites are all supposed to be unique on "
-        "clnt_no; re-check those." % (_bite, _n_long_b_bite, _n_expected_bite, _cohort_bite_n, len(T_OFFSETS_B)))
-    _n_long_b_total += _n_long_b_bite
-
-    _b_partials.append(
-        _long_b_bite
-        .groupBy("t_offset", "spend_tier", "spend_tier_at_offset", "usg_bhvr_seg", "usg_bhvr_seg_t0")
-        .agg(F.sum(F.when(_stay, 1).otherwise(0)).alias("stayers"),
-             F.sum(F.when(_leave, 1).otherwise(0)).alias("leavers"),
-             F.sum(F.when(_leave & (F.col("cards_unsub_by_anchor") == 1), 1)
-                   .otherwise(0)).alias("leavers_cards_unsub_subset"),
+    _b_cube_partials.append(
+        _panel_bite
+        .groupBy("tier", "tier_now", "seg_then", "seg_now")
+        .agg(F.sum(F.when(F.col("cards_unsub_by_anchor") == 0, 1).otherwise(0)).alias("stayers"),
+             F.sum(F.when(F.col("cards_unsub_by_anchor") == 1, 1).otherwise(0)).alias("leavers"),
+             F.sum(F.when(F.col("cards_ex_fwc_unsub_by_anchor") == 1, 1).otherwise(0)).alias("leavers_ex_fwc"),
              F.count("*").alias("clients_total")))
-    print("PIECE B bite", _bite, "of", N_BITES, ":", _cohort_bite_n, "cohort clients,",
-          _n_long_b_bite, "long rows, partial cube built.")
+    print("PIECE B bite", _bite, "of", N_BITES, ":", _cohort_bite_n, "cohort clients, panel + "
+          "partial cube built.")
 
-_n_expected_b = COHORT_B_N * len(T_OFFSETS_B)
-print("PIECE B LONG TABLE | grain: one row per (clnt_no, t_offset) | summed across bites:",
-      _n_long_b_total, "rows | expected", _n_expected_b, "(", COHORT_B_N, "cohort clients x",
-      len(T_OFFSETS_B), "offsets )")
-assert _n_long_b_total == _n_expected_b, (
-    "long_b total row count mismatch: %d vs %d expected - a bite filter missed rows, or a join "
-    "fanned out somewhere the per-bite assert didn't catch." % (_n_long_b_total, _n_expected_b))
+if SMOKE:
+    print("PIECE B PANEL SMOKE mode: bite 0 only -", _n_panel_total, "of", COHORT_B_N,
+          "cohort clients processed; full-coverage check runs on the SMOKE=False pass.")
+else:
+    assert _n_panel_total == COHORT_B_N, (
+        "PIECE B panel total (%d) != cohort_b (%d) - a bite filter missed rows, or a join fanned "
+        "out somewhere the per-bite assert didn't catch." % (_n_panel_total, COHORT_B_N))
+    print("PIECE B panel row-count guard: cohort_b", COHORT_B_N, "-> panel (summed across bites)",
+          _n_panel_total, "- no fan-out, full coverage confirmed.")
+assert _n_panel_total == _n_panel_expected, (
+    "PIECE B panel total (%d) != sum of processed-bite cohort counts (%d) - internal accounting "
+    "bug in the loop above." % (_n_panel_total, _n_panel_expected))
 
-_B_PARTIAL_SCHEMA = StructType([
-    StructField("t_offset", IntegerType(), True),
-    StructField("spend_tier", StringType(), True),
-    StructField("spend_tier_at_offset", StringType(), True),
-    StructField("usg_bhvr_seg", StringType(), True),
-    StructField("usg_bhvr_seg_t0", StringType(), True),
+if _b_panel_bites:
+    b_panel = _b_panel_bites[0]
+    for _p in _b_panel_bites[1:]:
+        b_panel = b_panel.unionByName(_p)
+else:
+    print("WARNING: every processed bite had zero cohort clients (COHORT_B_N=%d) - shipping an "
+          "EMPTY b_panel. Cell [15b]'s b_delta_summary will read as all-zero groups; investigate "
+          "before trusting this run." % COHORT_B_N)
+    b_panel = spark.createDataFrame([], schema=_B_PANEL_SCHEMA)
+b_panel = b_panel.cache()
+_n_b_panel_cached = b_panel.count()
+print("PIECE B PANEL | grain: one row per clnt_no |", _n_b_panel_cached, "rows cached (the ONE "
+      "full-scale row-level cache in Piece B - narrow columns only, needed for Cell [15b]'s exact "
+      "medians, which cannot be reassembled from partial-bite sums the way COUNT/SUM can).")
+
+_b_unmapped_n = b_panel.filter(F.col("group_tag") == "LEAVERS_UNMAPPED").count()
+if _b_unmapped_n > 0:
+    print("WARNING:", _b_unmapped_n, "cards leavers landed in the panel with cards_unsub_by_anchor"
+          "=1 but no cards_unsub_mne - Cell [12]'s earliest-unsub join missed them. They fall into "
+          "LEAVERS_UNMAPPED here rather than silently vanishing; investigate before trusting the "
+          "per-mne rows in Cell [15b].")
+
+_B_CUBE_PARTIAL_SCHEMA = StructType([
+    StructField("tier", StringType(), True),
+    StructField("tier_now", StringType(), True),
+    StructField("seg_then", StringType(), True),
+    StructField("seg_now", StringType(), True),
     StructField("stayers", LongType(), True),
     StructField("leavers", LongType(), True),
-    StructField("leavers_cards_unsub_subset", LongType(), True),
+    StructField("leavers_ex_fwc", LongType(), True),
     StructField("clients_total", LongType(), True),
 ])
 
-if _b_partials:
-    _b_union = _b_partials[0]
-    for _p in _b_partials[1:]:
-        _b_union = _b_union.unionByName(_p)
+if _b_cube_partials:
+    _b_cube_union = _b_cube_partials[0]
+    for _p in _b_cube_partials[1:]:
+        _b_cube_union = _b_cube_union.unionByName(_p)
 else:
     print("WARNING: every bite had zero cohort clients (COHORT_B_N=%d) - shipping an EMPTY "
           "b_before_after_cube. Investigate before trusting this run." % COHORT_B_N)
-    _b_union = spark.createDataFrame([], schema=_B_PARTIAL_SCHEMA)
+    _b_cube_union = spark.createDataFrame([], schema=_B_CUBE_PARTIAL_SCHEMA)
 
-b_before_after_cube = (_b_union
-                        .groupBy("t_offset", "spend_tier", "spend_tier_at_offset", "usg_bhvr_seg",
-                                 "usg_bhvr_seg_t0")
+# b_before_after_cube KEEPS ITS NAME (Maya's heatmap source). Schema note per house rule (additions
+# vs a meaning change must be flagged, never silently swapped): "spend_tier" -> "tier" and the old
+# "leavers"/"leavers_cards_unsub_subset" pairing are RENAMED/REPURPOSED this build, not additive -
+# the old design had one "leavers" (any-list) with a cards SUBSET column; this design's ONLY
+# leavers basis is cards_unsub_by_anchor (see the GROUP BASIS note above), so "leavers" here means
+# CARDS unsub, not any-list. tier_now/seg_now are genuinely NEW (additive) columns.
+b_before_after_cube = (_b_cube_union
+                        .groupBy("tier", "tier_now", "seg_then", "seg_now")
                         .agg(F.sum("stayers").alias("stayers"),
                              F.sum("leavers").alias("leavers"),
-                             F.sum("leavers_cards_unsub_subset").alias("leavers_cards_unsub_subset"),
+                             F.sum("leavers_ex_fwc").alias("leavers_ex_fwc"),
                              F.sum("clients_total").alias("clients_total"))
-                        .orderBy("t_offset", "spend_tier", "spend_tier_at_offset", "usg_bhvr_seg",
-                                 "usg_bhvr_seg_t0"))
+                        .orderBy("tier", "tier_now", "seg_then", "seg_now"))
 
 b_before_after_cube_stamped = _stamp(
     b_before_after_cube,
-    "anchor %s, remeasure +12m %s" % (T0_ANCHOR_B.isoformat(), P12_ANCHOR_B.isoformat()),
-    "Cards-mailed cohort as of anchor (n=%d)" % COHORT_B_N)
+    "then %s -> now %s (both closed)" % (T0_ANCHOR_B.isoformat(), T1_ANCHOR_B.isoformat()),
+    "Cards-marketing-mailed cohort as of anchor (n=%d)" % COHORT_B_N)
 
 b_pd = b_before_after_cube_stamped.toPandas()
-print("B_BEFORE_AFTER_CUBE | grain: one row per (t_offset, spend_tier, spend_tier_at_offset, "
-      "usg_bhvr_seg, usg_bhvr_seg_t0) | spend_tier = held fixed at t0 | spend_tier_at_offset = "
-      "t0/p12 spend banded on t0 cutpoints (trajectory) | usg_bhvr_seg_t0 = fixed t0 seg (R/T flow "
-      "pair with usg_bhvr_seg on t12 rows) | stayers/leavers COLUMNS, cards subset rides beside "
-      "leavers | %d rows" % len(b_pd))
+print("B_BEFORE_AFTER_CUBE | grain: one row per (tier, tier_now, seg_then, seg_now) | tier = held "
+      "fixed at THEN terciles | tier_now = NOW spend banded on the SAME then-cutpoints (trajectory) "
+      "| stayers/leavers(cards)/leavers_ex_fwc COLUMNS (cards_unsub_by_anchor basis - see GROUP "
+      "BASIS note above) | %d rows" % len(b_pd))
 print(b_pd.to_string(index=False))
-
-_p12_nodata_share = b_pd[b_pd["t_offset"] == 12]["clients_total"].sum()
-_t0_total = b_pd[b_pd["t_offset"] == 0]["clients_total"].sum()
-print("\nt12 (%s) coverage check: %d of %d cohort clients have a t12 row (spend_tier/usg_bhvr_seg "
-      "default to untiered/no_data where DFP/BHV had no row for that future month)."
-      % (P12_ANCHOR_B.isoformat(), _p12_nodata_share, _t0_total))
-if T0_ANCHOR_B <= datetime.date.today() < P12_ANCHOR_B:
-    print("t12 IS STILL IN THE FUTURE as of this run (today: %s) - t12 rows are arithmetic thinness, "
-          "not a real trend. Rerun this file after %s to get a real t12 read."
-          % (datetime.date.today().isoformat(), P12_ANCHOR_B.isoformat()))
 
 write_cube(b_before_after_cube_stamped, "b_before_after_cube")
 
 
-# %% [16] ONE FILE TO DOWNLOAD - bundle all seven CSVs into a single xlsx, one sheet each. Verbatim
+# %% [15b] b_delta_summary (NEW 2026-08-03e, red-team-hardened) - Andre's real deliverable:
+# STAYERS vs LEAVERS_ALL vs per-campaign leaver breakdown, then/now/delta, long/pivot-ready.
+# Two-pass grouping: cards_unsub_mne counts can only be evaluated for the >=500-leavers threshold
+# AFTER the whole cohort is known (never per-bite) - Cell [15] already built the full b_panel cache
+# for exactly this reason.
+#
+# GROUPS: STAYERS, LEAVERS_ALL, one row-group per cards_unsub_mne with >=500 leavers, LEAVERS_OTHER
+# (everything under the floor, pooled). LEAVERS_UNMAPPED (Cell [15]'s fallback group_tag for a cards
+# leaver whose cards_unsub_mne join came back NULL - see Cell [12]'s guard) is DELIBERATELY NEVER
+# folded into LEAVERS_OTHER: it stays its OWN visible row-group if any such clients exist, small or
+# not, because pooling a data-quality gap into "small campaigns" would hide it (red-team W3 -
+# transparency about the mapping gap matters more here than a clean small-group list).
+#
+# METRICS: n_clients (period='n/a'); spend_monthly avg+median (see the /3 note below); prof_annual
+# avg+median; prod_cnt avg (no median, per spec); pct_held_t/i/b/c (denominator = UCP-MATCHED
+# clients only, held_*!=-1 - folding the -1 no-match sentinel into the denominator would understate
+# holding, same hard rule as Cell [5]); pct_revolver/transactor/dormant (denominator = clients with
+# a real seg, excludes 'no_data'); pct_no_ucp_match (denominator = ALL clients in the group, numer =
+# held_t_then/now == -1); pct_no_dfp_match (red-team W2 - separate from the UCP match rate: share of
+# the group with spend_3mo_then/now IS NULL, i.e. zero DFP rows for that whole window, denominator =
+# ALL clients in the group). delta = now-value minus then-value, computed on the aggregate (not a
+# per-client delta distribution) - "delta where meaningful" means n_clients gets no delta row.
+#
+# spend_monthly_avg/median (red-team W5, Andre's wording governs): the panel's spend_3mo_then/now
+# columns (Cell [15], unchanged) are a 3-CALENDAR-MONTH SUM, not a monthly figure - this summary
+# divides by 3 to report AVG MONTHLY card spend, so it reads next to prof_annual without a mental
+# unit conversion. avg(X)/3 == avg(X/3) and, because dividing by a positive constant is a strictly
+# increasing transform, median(X)/3 == median(X/3) too - so dividing the already-computed
+# then/now/delta aggregate is mathematically identical to dividing every per-client value first.
+# CAVEAT, stated not hidden: a client with a DFP row in only 1-2 of the 3 months (account opened/
+# closed mid-window) still gets spend_3mo_then = SUM of whichever months had data (Cell [13]'s SQL
+# only emits NULL when ALL THREE months are absent), so dividing that partial sum by a flat 3
+# UNDERSTATES their true average-monthly spend. This is a documented approximation, not a bug.
+#
+# Medians use percentile_approx (Spark's standard approximate percentile - NOT exact) computed in
+# ONE pass over the FULL b_panel (Cell [15]'s bite-looped union, cached once) - bite-safe by
+# construction: every bite's rows are already inside b_panel before this cell runs, so the
+# aggregate sees the whole cohort regardless of N_BITES, it just isn't a mathematically exact
+# percentile (red-team W4 - "exact medians" in the prior build's comment overstated what
+# percentile_approx guarantees; corrected here).
+# ENGINE: PySpark (YARN), reusing b_panel from Cell [15] - no new EDW connection, no new HDFS pull.
+
+_mne_counts_rows = (b_panel.filter(F.col("group_tag") != "STAYERS")
+                    .groupBy("group_tag").agg(F.count("*").alias("n")).collect())
+_mne_counts = {r["group_tag"]: r["n"] for r in _mne_counts_rows}
+_MNE_LEAVER_FLOOR = 500
+_unmapped_present = "LEAVERS_UNMAPPED" in _mne_counts
+_mne_counts_real = {m: n for m, n in _mne_counts.items() if m != "LEAVERS_UNMAPPED"}
+_big_mnes = sorted([m for m, n in _mne_counts_real.items() if n >= _MNE_LEAVER_FLOOR])
+_small_mnes = sorted([m for m, n in _mne_counts_real.items() if n < _MNE_LEAVER_FLOOR])
+print("PIECE B DELTA SUMMARY GROUPING | leaver cards_unsub_mne counts:", _mne_counts)
+print("  >=", _MNE_LEAVER_FLOOR, "leavers (own row-group):", _big_mnes)
+print("  <", _MNE_LEAVER_FLOOR, "leavers (pooled LEAVERS_OTHER):", _small_mnes)
+if _unmapped_present:
+    print("  LEAVERS_UNMAPPED present (%d clients) - kept as its OWN row-group, NOT pooled into "
+          "LEAVERS_OTHER (transparency about the Cell [12] mapping gap)." % _mne_counts["LEAVERS_UNMAPPED"])
+
+
+def _pct(numer, denom):
+    return None if not denom else 100.0 * numer / denom
+
+
+def _group_metrics_rows(df_scoped, group_label):
+    """One Spark aggregation pass over df_scoped (already filtered to this group). Returns a list
+    of (group, metric, period, value) tuples in long format."""
+    _agg = df_scoped.agg(
+        F.count("*").alias("n_clients"),
+        F.avg("spend_3mo_then").alias("spend_avg_then"), F.avg("spend_3mo_now").alias("spend_avg_now"),
+        F.expr("percentile_approx(spend_3mo_then, 0.5)").alias("spend_med_then"),
+        F.expr("percentile_approx(spend_3mo_now, 0.5)").alias("spend_med_now"),
+        F.avg("prof_then").alias("prof_avg_then"), F.avg("prof_now").alias("prof_avg_now"),
+        F.expr("percentile_approx(prof_then, 0.5)").alias("prof_med_then"),
+        F.expr("percentile_approx(prof_now, 0.5)").alias("prof_med_now"),
+        F.avg(F.when(F.col("prod_cnt_then") != -1, F.col("prod_cnt_then"))).alias("prodcnt_avg_then"),
+        F.avg(F.when(F.col("prod_cnt_now") != -1, F.col("prod_cnt_now"))).alias("prodcnt_avg_now"),
+        F.sum(F.when(F.col("held_t_then") == 1, 1).otherwise(0)).alias("t_then_yes"),
+        F.sum(F.when(F.col("held_t_then") != -1, 1).otherwise(0)).alias("t_then_matched"),
+        F.sum(F.when(F.col("held_t_now") == 1, 1).otherwise(0)).alias("t_now_yes"),
+        F.sum(F.when(F.col("held_t_now") != -1, 1).otherwise(0)).alias("t_now_matched"),
+        F.sum(F.when(F.col("held_i_then") == 1, 1).otherwise(0)).alias("i_then_yes"),
+        F.sum(F.when(F.col("held_i_then") != -1, 1).otherwise(0)).alias("i_then_matched"),
+        F.sum(F.when(F.col("held_i_now") == 1, 1).otherwise(0)).alias("i_now_yes"),
+        F.sum(F.when(F.col("held_i_now") != -1, 1).otherwise(0)).alias("i_now_matched"),
+        F.sum(F.when(F.col("held_b_then") == 1, 1).otherwise(0)).alias("b_then_yes"),
+        F.sum(F.when(F.col("held_b_then") != -1, 1).otherwise(0)).alias("b_then_matched"),
+        F.sum(F.when(F.col("held_b_now") == 1, 1).otherwise(0)).alias("b_now_yes"),
+        F.sum(F.when(F.col("held_b_now") != -1, 1).otherwise(0)).alias("b_now_matched"),
+        F.sum(F.when(F.col("held_c_then") == 1, 1).otherwise(0)).alias("c_then_yes"),
+        F.sum(F.when(F.col("held_c_then") != -1, 1).otherwise(0)).alias("c_then_matched"),
+        F.sum(F.when(F.col("held_c_now") == 1, 1).otherwise(0)).alias("c_now_yes"),
+        F.sum(F.when(F.col("held_c_now") != -1, 1).otherwise(0)).alias("c_now_matched"),
+        F.sum(F.when(F.col("seg_then") == "Revolver", 1).otherwise(0)).alias("seg_then_revolver"),
+        F.sum(F.when(F.col("seg_then") == "Transactor", 1).otherwise(0)).alias("seg_then_transactor"),
+        F.sum(F.when(F.col("seg_then") == "Dormant", 1).otherwise(0)).alias("seg_then_dormant"),
+        F.sum(F.when(F.col("seg_then") != "no_data", 1).otherwise(0)).alias("seg_then_known"),
+        F.sum(F.when(F.col("seg_now") == "Revolver", 1).otherwise(0)).alias("seg_now_revolver"),
+        F.sum(F.when(F.col("seg_now") == "Transactor", 1).otherwise(0)).alias("seg_now_transactor"),
+        F.sum(F.when(F.col("seg_now") == "Dormant", 1).otherwise(0)).alias("seg_now_dormant"),
+        F.sum(F.when(F.col("seg_now") != "no_data", 1).otherwise(0)).alias("seg_now_known"),
+        F.sum(F.when(F.col("held_t_then") == -1, 1).otherwise(0)).alias("no_ucp_match_then"),
+        F.sum(F.when(F.col("held_t_now") == -1, 1).otherwise(0)).alias("no_ucp_match_now"),
+        F.sum(F.when(F.col("spend_3mo_then").isNull(), 1).otherwise(0)).alias("no_dfp_match_then"),
+        F.sum(F.when(F.col("spend_3mo_now").isNull(), 1).otherwise(0)).alias("no_dfp_match_now"),
+    ).collect()[0].asDict()
+
+    _n = _agg["n_clients"]
+    rows = [(group_label, "n_clients", "n/a", float(_n))]
+
+    def _emit(metric, then_v, now_v):
+        rows.append((group_label, metric, "then", then_v))
+        rows.append((group_label, metric, "now", now_v))
+        if then_v is not None and now_v is not None:
+            rows.append((group_label, metric, "delta", now_v - then_v))
+
+    # spend_monthly_avg/median - 3-month SUM (panel, unchanged) / 3. See header CAVEAT: partial-
+    # window clients (DFP row in only 1-2 of 3 months) understate here, documented not hidden.
+    _spend_avg_then_m = _agg["spend_avg_then"] / 3.0 if _agg["spend_avg_then"] is not None else None
+    _spend_avg_now_m = _agg["spend_avg_now"] / 3.0 if _agg["spend_avg_now"] is not None else None
+    _spend_med_then_m = _agg["spend_med_then"] / 3.0 if _agg["spend_med_then"] is not None else None
+    _spend_med_now_m = _agg["spend_med_now"] / 3.0 if _agg["spend_med_now"] is not None else None
+    _emit("spend_monthly_avg", _spend_avg_then_m, _spend_avg_now_m)
+    _emit("spend_monthly_median", _spend_med_then_m, _spend_med_now_m)
+    _emit("prof_annual_avg", _agg["prof_avg_then"], _agg["prof_avg_now"])
+    _emit("prof_annual_median", _agg["prof_med_then"], _agg["prof_med_now"])
+    _emit("prod_cnt_avg", _agg["prodcnt_avg_then"], _agg["prodcnt_avg_now"])
+    _emit("pct_held_t", _pct(_agg["t_then_yes"], _agg["t_then_matched"]), _pct(_agg["t_now_yes"], _agg["t_now_matched"]))
+    _emit("pct_held_i", _pct(_agg["i_then_yes"], _agg["i_then_matched"]), _pct(_agg["i_now_yes"], _agg["i_now_matched"]))
+    _emit("pct_held_b", _pct(_agg["b_then_yes"], _agg["b_then_matched"]), _pct(_agg["b_now_yes"], _agg["b_now_matched"]))
+    _emit("pct_held_c", _pct(_agg["c_then_yes"], _agg["c_then_matched"]), _pct(_agg["c_now_yes"], _agg["c_now_matched"]))
+    _emit("pct_revolver", _pct(_agg["seg_then_revolver"], _agg["seg_then_known"]), _pct(_agg["seg_now_revolver"], _agg["seg_now_known"]))
+    _emit("pct_transactor", _pct(_agg["seg_then_transactor"], _agg["seg_then_known"]), _pct(_agg["seg_now_transactor"], _agg["seg_now_known"]))
+    _emit("pct_dormant", _pct(_agg["seg_then_dormant"], _agg["seg_then_known"]), _pct(_agg["seg_now_dormant"], _agg["seg_now_known"]))
+    _emit("pct_no_ucp_match", _pct(_agg["no_ucp_match_then"], _n), _pct(_agg["no_ucp_match_now"], _n))
+    _emit("pct_no_dfp_match", _pct(_agg["no_dfp_match_then"], _n), _pct(_agg["no_dfp_match_now"], _n))
+    return rows
+
+
+_delta_rows = []
+_stayers_scope = b_panel.filter(F.col("group_tag") == "STAYERS")
+_leavers_scope = b_panel.filter(F.col("group_tag") != "STAYERS")
+_delta_rows += _group_metrics_rows(_stayers_scope, "STAYERS")
+_delta_rows += _group_metrics_rows(_leavers_scope, "LEAVERS_ALL")
+for _mne in _big_mnes:
+    _delta_rows += _group_metrics_rows(_leavers_scope.filter(F.col("group_tag") == _mne), _mne)
+if _small_mnes:
+    _delta_rows += _group_metrics_rows(
+        _leavers_scope.filter(F.col("group_tag").isin(_small_mnes)), "LEAVERS_OTHER")
+if _unmapped_present:
+    _delta_rows += _group_metrics_rows(
+        _leavers_scope.filter(F.col("group_tag") == "LEAVERS_UNMAPPED"), "LEAVERS_UNMAPPED")
+
+_stayers_n = next(v for g, m, p, v in _delta_rows if g == "STAYERS" and m == "n_clients")
+_leavers_all_n = next(v for g, m, p, v in _delta_rows if g == "LEAVERS_ALL" and m == "n_clients")
+assert int(_stayers_n + _leavers_all_n) == _n_b_panel_cached, (
+    "STAYERS (%d) + LEAVERS_ALL (%d) != panel total (%d) - group_tag assignment missed rows."
+    % (_stayers_n, _leavers_all_n, _n_b_panel_cached))
+_per_mne_n = sum(v for g, m, p, v in _delta_rows if g in _big_mnes and m == "n_clients")
+_other_n = sum(v for g, m, p, v in _delta_rows if g == "LEAVERS_OTHER" and m == "n_clients")
+_unmapped_n = sum(v for g, m, p, v in _delta_rows if g == "LEAVERS_UNMAPPED" and m == "n_clients")
+assert int(_per_mne_n + _other_n + _unmapped_n) == int(_leavers_all_n), (
+    "per-mne rows (%d) + LEAVERS_OTHER (%d) + LEAVERS_UNMAPPED (%d) != LEAVERS_ALL (%d) - the "
+    ">=500 threshold split (or the unmapped carve-out) lost or double-counted clients."
+    % (_per_mne_n, _other_n, _unmapped_n, _leavers_all_n))
+print("b_delta_summary group-total cross-check OK: STAYERS + LEAVERS_ALL == panel total (%d); "
+      "per-mne + LEAVERS_OTHER + LEAVERS_UNMAPPED == LEAVERS_ALL (%d)."
+      % (_n_b_panel_cached, int(_leavers_all_n)))
+
+_delta_pdf = pd.DataFrame(_delta_rows, columns=["group", "metric", "period", "value"])
+_delta_pdf["value"] = _delta_pdf["value"].astype(object)
+_delta_pdf.loc[_delta_pdf["value"].isna(), "value"] = None
+
+_B_DELTA_SCHEMA = StructType([
+    StructField("group", StringType(), True),
+    StructField("metric", StringType(), True),
+    StructField("period", StringType(), True),
+    StructField("value", DoubleType(), True),
+])
+b_delta_summary = spark.createDataFrame(_delta_pdf, schema=_B_DELTA_SCHEMA)
+b_delta_summary_stamped = _stamp(
+    b_delta_summary,
+    "then %s -> now %s (both closed)" % (T0_ANCHOR_B.isoformat(), T1_ANCHOR_B.isoformat()),
+    "Cards-marketing-mailed cohort: STAYERS + LEAVERS_ALL + per-cards_unsub_mne (>=%d) + "
+    "LEAVERS_OTHER + LEAVERS_UNMAPPED (visible, not pooled)" % _MNE_LEAVER_FLOOR)
+
+b_delta_pd = b_delta_summary_stamped.toPandas()
+print("B_DELTA_SUMMARY | grain: one row per (group, metric, period) | long/pivot-ready | groups:",
+      sorted(set(r[0] for r in _delta_rows)), "|", len(b_delta_pd), "rows")
+print(b_delta_pd.to_string(index=False))
+
+write_cube(b_delta_summary_stamped, "b_delta_summary")
+
+
+# %% [16] ONE FILE TO DOWNLOAD - bundle all eight CSVs into a single xlsx, one sheet each. Verbatim
 # pattern from spotlight.py Cell [7]: HDFS is the durable output, this is a delivery convenience.
-# TOLERATES a missing/empty b_before_after_cube (pre-Sept-2026 runs, before t12 closes, or any
-# other cube landing thin/empty): the filter below drops empty frames from the workbook and NAMES
-# every dropped sheet below it, so the run never crashes on a thin cube - it ships what exists.
+# TOLERATES a missing/empty cube (e.g. a SMOKE-only bite that pulled zero cohort clients): the
+# filter below drops empty frames from the workbook and NAMES every dropped sheet below it, so the
+# run never crashes on a thin cube - it ships what exists. Both Piece-B anchors are closed as of
+# this build, so b_before_after_cube/b_delta_summary are no longer expected to be thin on a normal
+# non-SMOKE run the way the old t12-future-dated design was.
 # ENGINE: PySpark driver + pandas. No new EDW connection.
 
 import os
@@ -2189,15 +2612,16 @@ else:
         "a3_contact_cube": a3_pd,
         "a4_profile_cube": a4_pd,
         "b_before_after_cube": b_pd,
+        "b_delta_summary": b_delta_pd,
         "c_monthly_curve": c_pd,
     }
     _sheets_dropped = [k for k, v in _sheets.items() if v is None or len(v) == 0]
     _sheets = {k: v for k, v in _sheets.items() if v is not None and len(v) > 0}
     if _sheets_dropped:
         print("WARN: dropping", len(_sheets_dropped), "empty sheet(s) from the workbook, shipping "
-              "the rest -", _sheets_dropped, "- expected for b_before_after_cube before",
-              P12_ANCHOR_B.isoformat(), "closes; investigate any OTHER name on this list before "
-              "shipping.")
+              "the rest -", _sheets_dropped, "- both Piece-B anchors are closed this build, so an "
+              "empty b_before_after_cube/b_delta_summary here means a real problem (empty cohort, "
+              "join fan-out caught upstream), not future-month thinness - investigate before shipping.")
     _xlsx = os.path.join(LOCAL_OUT, "unsub_unified_cubes.xlsx")
     _bundle_names = []          # whatever actually got written - xlsx or fallback CSVs
     try:
@@ -2248,6 +2672,7 @@ _summary = [
     ("A3", "a3_contact_cube.csv", len(a3_pd)),
     ("A4", "a4_profile_cube.csv", len(a4_pd)),
     ("B", "b_before_after_cube.csv", len(b_pd)),
+    ("B2", "b_delta_summary.csv", len(b_delta_pd)),
     ("C", "c_monthly_curve.csv", len(c_pd)),
 ]
 for _piece, _fname, _n in _summary:
@@ -2259,4 +2684,80 @@ print("Cohort B size (Cards-mailed on/before", T0_ANCHOR_B.isoformat(), "):", CO
 print("If SMOKE is True, every count above is roughly a tenth of reality (bite 0 only, 10% of "
       "clients by MOD(ABS(clnt_no), 10)) - do not report these numbers. Flip SMOKE to False in "
       "Cell [0] and rerun once bite-0 shapes match the coverage table in the file header.")
-print("All six deliverables land under:", OUT_DIR)
+print("All eight deliverables land under:", OUT_DIR)
+
+
+# %% [18] AUTO-RETIREMENT (NEW 2026-08-03e) - deletes HDFS dirs superseded by this build's Piece-B
+# then/now/delta redesign (b_cohort_v2/b_dfp_v2/b_bhv_v2, the Aug-anchor/regime-era Piece B) and any
+# leftover *_v1 dirs from earlier landings (a1_client_v1, b_cohort_v1, b_dfp_v1, b_bhv_v1,
+# ucp_enriched_a2_v1, ucp_enriched_a_v1, ucp_enriched_a). ALWAYS runs (not gated by RUN_PULLS or
+# SMOKE) - this is Andre's "your code doesn't know how to replace" fix: versioning now retires its
+# own predecessors instead of leaving dead HDFS dirs for the next person to trip over.
+#
+# REFUSE-TO-DELETE GUARD: before deleting ANYTHING, re-probe THIS build's own CURRENT outputs
+# (.limit(1) on each landed dir) for EVERY family that has a predecessor in _RETIRE_LIST below -
+# not just the three Piece-B v3 dirs. a1_client_v1 and the ucp_enriched_a* v1 dirs are also on the
+# deletion list, so their current replacements (A1_DIR = a1_client_v2, UCPA_DIR =
+# ucp_enriched_a3_v1) are probed too (red-team W1: the guard must protect every family the deletion
+# list touches, never rely on Run-All cell ordering having already landed them this session). If
+# any probe fails, this run's replacement is not actually in place, and deleting the predecessor
+# would destroy the only good copy - deletion is skipped (loudly) in that case, not forced through.
+# Under SMOKE=True the probe only confirms bite 0 landed (that is all a SMOKE run pulls) - printed
+# explicitly below so a SMOKE run's retirement isn't mistaken for a full-population confirmation.
+
+_RETIRE_GUARD_DIRS = [
+    ("b_cohort_v%d" % B_SCHEMA_VERSION, BCOHORT_DIR),
+    ("b_dfp_v%d" % B_SCHEMA_VERSION, BDFP_DIR),
+    ("b_bhv_v%d" % B_SCHEMA_VERSION, BBHV_DIR),
+    ("b_ucp_v%d" % B_SCHEMA_VERSION, BUCP_DIR),
+    ("a1_client_v%d" % CARDS_SCHEMA_VERSION, A1_DIR),          # protects a1_client_v1 deletion below
+    ("ucp_enriched_a3_v%d" % SCHEMA_VERSION, UCPA_DIR),        # protects ucp_enriched_a2_v1/a_v1/a deletion below
+]
+_retire_guard_ok = True
+for _name, _dir in _RETIRE_GUARD_DIRS:
+    try:
+        _n_probe = spark.read.parquet(_dir + "bite_?").limit(1).count()
+        if _n_probe == 0:
+            print("RETIREMENT GUARD: %s has no readable rows at %s - refusing to delete anything "
+                  "this run until the v3 replacement is confirmed landed." % (_name, _dir))
+            _retire_guard_ok = False
+        else:
+            print("RETIREMENT GUARD: %s readable at %s - OK." % (_name, _dir))
+    except Exception as _e:
+        print("RETIREMENT GUARD: %s NOT readable at %s (%s) - refusing to delete anything this "
+              "run." % (_name, _dir, type(_e).__name__))
+        _retire_guard_ok = False
+if _retire_guard_ok and SMOKE:
+    print("RETIREMENT GUARD NOTE: SMOKE=True - the probes above only confirm bite 0 landed, not "
+          "the full population. Deletion will proceed anyway (Andre's spec: readability, not "
+          "population coverage, is the guard) - flip SMOKE=False and rerun before trusting a full "
+          "non-SMOKE report off these outputs.")
+
+_RETIRE_LIST = [
+    "b_cohort_v2", "b_dfp_v2", "b_bhv_v2",              # Aug-anchor/regime-era Piece B, superseded
+    "a1_client_v1", "b_cohort_v1", "b_dfp_v1", "b_bhv_v1",
+    "ucp_enriched_a2_v1", "ucp_enriched_a_v1", "ucp_enriched_a",
+]
+
+if not _retire_guard_ok:
+    print("AUTO-RETIREMENT SKIPPED ENTIRELY - this run's own v3 outputs did not pass the "
+          "readability probe above. Nothing was deleted. Re-run Cells [12]-[15b] to land v3 "
+          "properly, then re-run this cell.")
+else:
+    print("AUTO-RETIREMENT - deleting superseded HDFS dirs (v3 outputs confirmed readable above):")
+    for _old in _RETIRE_LIST:
+        _old_path = BASE + _old + "/"
+        _exists = True
+        try:
+            spark.read.parquet(_old_path + "bite_?").limit(1).count()
+        except Exception:
+            _exists = False
+        if not _exists:
+            print("  SKIP (not present):", _old_path)
+            continue
+        _rc = _sp.run(["hdfs", "dfs", "-rm", "-r", "-skipTrash", _old_path],
+                       capture_output=True, text=True)
+        if _rc.returncode == 0:
+            print("  DELETED:", _old_path)
+        else:
+            print("  FAILED to delete", _old_path, "-", _rc.stderr.strip()[:300])
