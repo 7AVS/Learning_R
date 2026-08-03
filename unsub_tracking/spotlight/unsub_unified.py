@@ -325,6 +325,13 @@ def _stamp(df, window_label, population_label):
               .withColumn("smoke_run", F.lit(1 if SMOKE else 0)))
 
 
+# BUILD STAMP - bump the tag on EVERY code change that gets pushed. This prints first so any
+# screenshot of any run is instantly attributable to the exact code version that produced it
+# (2026-08-03: three debugging rounds were spent on outputs from older code than assumed).
+PIPELINE_BUILD = "build 2026-08-03a | 68c5b1b bite_? glob fix - markers no longer read as data"
+print("=" * 88)
+print("PIPELINE_BUILD:", PIPELINE_BUILD)
+print("=" * 88)
 print("CONFIG loaded | WIN_A:", WIN_A_FLOOR, "->", WIN_A_CEIL,
       "| WIN_C:", WIN_C_FLOOR, "->", WIN_C_CEIL,
       "| ANCHOR_B:", T0_ANCHOR_B.isoformat(), "-> +12m ->", P12_ANCHOR_B.isoformat())
