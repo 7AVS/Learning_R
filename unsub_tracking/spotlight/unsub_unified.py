@@ -379,6 +379,11 @@ def edw_pd(sql, chunksize=1_000_000):
 
 def _rowcount_marker_path(path):
     return path.rstrip("/") + "_ROWCOUNT"
+    # NOTE: marker sits INSIDE the parent dir as a sibling of bite_K, so any data read
+    # MUST use the single-char glob "bite_?" (matches bite_0..bite_9 ONLY, N_BITES=10),
+    # NEVER "bite_*" - that wildcard also matches bite_K_ROWCOUNT/_REGIME sidecars and
+    # silently adds one NULL-keyed row per bite to every union read. This exact bug
+    # burned 2026-08-02/03 as phantom "9 duplicates" / NULL rows / assert mismatches.
 
 
 def _landed(path):
@@ -630,7 +635,7 @@ else:
 
 
 def read_a1():
-    sdf = spark.read.parquet(A1_DIR + "bite_*")
+    sdf = spark.read.parquet(A1_DIR + "bite_?")
     missing = [c.name for c in A1_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("a1_client missing %s. Rerun Cell [2]." % missing)
@@ -722,7 +727,7 @@ else:
 
 
 def read_a2_raw():
-    sdf = spark.read.parquet(A2_DIR + "bite_*")
+    sdf = spark.read.parquet(A2_DIR + "bite_?")
     missing = [c.name for c in A2_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("a2_mne missing %s. Rerun Cell [3]." % missing)
@@ -828,7 +833,7 @@ else:
 
 
 def read_c_raw():
-    sdf = spark.read.parquet(C_DIR + "bite_*")
+    sdf = spark.read.parquet(C_DIR + "bite_?")
     missing = [c.name for c in C_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("c_month_mne missing %s. Rerun Cell [4]." % missing)
@@ -861,7 +866,7 @@ def read_c_raw():
 # ENGINE: PySpark (YARN) reading HDFS parquet - not Trino, not Teradata.
 
 try:
-    _a1_probe_n = spark.read.parquet(A1_DIR + "bite_*").limit(1).count()
+    _a1_probe_n = spark.read.parquet(A1_DIR + "bite_?").limit(1).count()
 except Exception:
     _a1_probe_n = 0
 if _a1_probe_n == 0:
@@ -953,7 +958,7 @@ for _bite in (range(1) if SMOKE else range(N_BITES)):
 
 ucp_enriched.unpersist()
 
-ucp_enriched_a = spark.read.parquet(UCPA_DIR + "bite_*")
+ucp_enriched_a = spark.read.parquet(UCPA_DIR + "bite_?")
 _n_ucp_a = ucp_enriched_a.count()
 print("Cell [5] done - ucp_enriched_a landed (bitten) at", UCPA_DIR, "|", _n_ucp_a, "rows")
 assert _n_ucp_a == _left_n, (
@@ -1341,7 +1346,7 @@ else:
 
 
 def read_bcohort():
-    sdf = spark.read.parquet(BCOHORT_DIR + "bite_*")
+    sdf = spark.read.parquet(BCOHORT_DIR + "bite_?")
     missing = [c.name for c in BCOHORT_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_cohort missing %s. Rerun Cell [12]." % missing)
@@ -1521,7 +1526,7 @@ else:
 
 
 def read_bdfp():
-    sdf = spark.read.parquet(BDFP_DIR + "bite_*")
+    sdf = spark.read.parquet(BDFP_DIR + "bite_?")
     missing = [c.name for c in BDFP_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_dfp missing %s. Rerun Cell [13]." % missing)
@@ -1635,7 +1640,7 @@ else:
 
 
 def read_bbhv():
-    sdf = spark.read.parquet(BBHV_DIR + "bite_*")
+    sdf = spark.read.parquet(BBHV_DIR + "bite_?")
     missing = [c.name for c in BBHV_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_bhv missing %s. Rerun Cell [14]." % missing)

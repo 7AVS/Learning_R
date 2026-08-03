@@ -13,7 +13,10 @@ from pyspark.sql import functions as F
 
 A1_DIR = "hdfs:///user/427966379/unsub_unified/a1_client_v1/"
 
-_a1 = spark.read.parquet(A1_DIR + "*")
+# "bite_?" NOT "*"/"bite_*": the _ROWCOUNT/_REGIME sidecar files live inside the dir
+# and match wider globs, adding one NULL-keyed row per bite - the root cause found
+# 2026-08-03. Reading with "*" below would reproduce exactly the phantom rows.
+_a1 = spark.read.parquet(A1_DIR + "bite_?")
 print("schema     :", [(f.name, f.dataType.simpleString()) for f in _a1.schema.fields][:4])
 print("total rows :", _a1.count())
 print("distinct   :", _a1.select("clnt_no").distinct().count())
