@@ -328,7 +328,7 @@ def _stamp(df, window_label, population_label):
 # BUILD STAMP - bump the tag on EVERY code change that gets pushed. This prints first so any
 # screenshot of any run is instantly attributable to the exact code version that produced it
 # (2026-08-03: three debugging rounds were spent on outputs from older code than assumed).
-PIPELINE_BUILD = "build 2026-08-03b | isin tuple->list fix in Cell [6]; glob fix confirmed working"
+PIPELINE_BUILD = "build 2026-08-03c | SMOKE-aware A4 guard; empty-B-read guards; zip path quoting - full static sweep applied"
 print("=" * 88)
 print("PIPELINE_BUILD:", PIPELINE_BUILD)
 print("=" * 88)
@@ -1125,9 +1125,13 @@ write_cube(a3_contact_cube_stamped, "a3_contact_cube")
 
 _a4_partials = []
 _a4_join_total = 0
+_a4_expected = 0   # sum of a1-bite counts over the bites THIS RUN processes - the mode-correct
+                   # comparison base (SMOKE processes bite 0 only; comparing vs full _a1_n under
+                   # SMOKE was a mode-blind assert that crashed the 2026-08-03 run).
 for _bite in (range(1) if SMOKE else range(N_BITES)):
     _a1_bite = a1_client.filter((F.abs(F.col("clnt_no")) % N_BITES) == _bite)
     _a1_bite_n = _a1_bite.count()
+    _a4_expected += _a1_bite_n
     _ucp_bite_path = "ucp_enriched_a2_v%d/bite_%d" % (SCHEMA_VERSION, _bite)
     _ucp_bite = spark.read.parquet(BASE + _ucp_bite_path)
     _a4_src_bite = _a1_bite.join(_ucp_bite, "clnt_no", "left")
@@ -1147,11 +1151,18 @@ for _bite in (range(1) if SMOKE else range(N_BITES)):
              F.count("*").alias("clients_total")))
     print("A4 bite", _bite, "of", N_BITES, ": joined", _a4_bite_n, "clients, no fan-out, partial cube built.")
 
-assert _a4_join_total == _a1_n, (
-    "a4 join total across bites is %d but a1_client has %d - a bite filter missed rows (check the "
-    "MOD/ABS partition expression matches a1_client's own client universe)." % (_a4_join_total, _a1_n))
-print("A4 join row-count guard: a1_client", _a1_n, "-> a4_src (summed across bites)",
-      _a4_join_total, "- no fan-out, confirmed.")
+assert _a4_join_total == _a4_expected, (
+    "a4 join total across processed bites is %d but those bites' a1_client rows sum to %d - "
+    "fan-out or dropped rows inside the bite loop." % (_a4_join_total, _a4_expected))
+if SMOKE:
+    print("A4 SMOKE mode: bite 0 only -", _a4_join_total, "of", _a1_n, "a1 clients processed; "
+          "full-coverage check runs on the SMOKE=False pass.")
+else:
+    assert _a4_expected == _a1_n, (
+        "a4 full run covered %d a1 rows but a1_client has %d - the MOD/ABS bite partition missed "
+        "clients." % (_a4_expected, _a1_n))
+    print("A4 join row-count guard: a1_client", _a1_n, "-> a4_src (summed across bites)",
+          _a4_join_total, "- no fan-out, full coverage confirmed.")
 
 _a4_union = _a4_partials[0]
 for _p in _a4_partials[1:]:
@@ -1355,7 +1366,12 @@ else:
 
 
 def read_bcohort():
-    sdf = spark.read.parquet(BCOHORT_DIR + "bite_?")
+    try:
+        sdf = spark.read.parquet(BCOHORT_DIR + "bite_?")
+    except Exception as _e:   # zero bites landed (all-empty pulls) -> explained empty, not a crash
+        print("read_bcohort: NO landed bites at", BCOHORT_DIR, "(%s)" % type(_e).__name__,
+              "- returning EMPTY cohort. Downstream B cells will report no_data, not crash.")
+        return spark.createDataFrame([], BCOHORT_SCHEMA)
     missing = [c.name for c in BCOHORT_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_cohort missing %s. Rerun Cell [12]." % missing)
@@ -1535,7 +1551,12 @@ else:
 
 
 def read_bdfp():
-    sdf = spark.read.parquet(BDFP_DIR + "bite_?")
+    try:
+        sdf = spark.read.parquet(BDFP_DIR + "bite_?")
+    except Exception as _e:   # zero bites landed -> explained empty, not a crash
+        print("read_bdfp: NO landed bites at", BDFP_DIR, "(%s)" % type(_e).__name__,
+              "- returning EMPTY frame. Downstream B cells report no_data, not crash.")
+        return spark.createDataFrame([], BDFP_SCHEMA)
     missing = [c.name for c in BDFP_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_dfp missing %s. Rerun Cell [13]." % missing)
@@ -1649,7 +1670,12 @@ else:
 
 
 def read_bbhv():
-    sdf = spark.read.parquet(BBHV_DIR + "bite_?")
+    try:
+        sdf = spark.read.parquet(BBHV_DIR + "bite_?")
+    except Exception as _e:   # zero bites landed -> explained empty, not a crash
+        print("read_bbhv: NO landed bites at", BBHV_DIR, "(%s)" % type(_e).__name__,
+              "- returning EMPTY frame. Downstream B cells report no_data, not crash.")
+        return spark.createDataFrame([], BBHV_SCHEMA)
     missing = [c.name for c in BBHV_SCHEMA.fields if c.name not in sdf.columns]
     if missing:
         raise RuntimeError("b_bhv missing %s. Rerun Cell [14]." % missing)
@@ -1937,7 +1963,7 @@ else:
 
     # zip whatever exists - xlsx or the fallback CSVs - so ONE DOWNLOAD always prints.
     _zip = os.path.join(LOCAL_OUT, "unsub_unified_cubes.zip")
-    _sp.run("cd %s && rm -f unsub_unified_cubes.zip && zip -rq unsub_unified_cubes.zip %s"
+    _sp.run("cd '%s' && rm -f unsub_unified_cubes.zip && zip -rq unsub_unified_cubes.zip %s"
             % (LOCAL_OUT, " ".join("'%s'" % n for n in _bundle_names)), shell=True)
     if os.path.exists(_zip):
         print("ONE DOWNLOAD:", _zip, "|", round(os.path.getsize(_zip) / 1048576.0, 1), "MB",
