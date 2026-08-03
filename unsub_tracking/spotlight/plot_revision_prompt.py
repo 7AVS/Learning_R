@@ -222,6 +222,25 @@ T6. Kill the dual-axis combo chart (senders bars + rate diamonds); use the
 T7. Export final charts as PNGs from the notebook; full source tables
     printed under each chart; re-render the FWC timing-check panel in full.
 
+## ROUND 3 - POLISH (2026-08-03, after review of the rebuilt set)
+The redesigns landed and the arithmetic audits clean. Final touches only:
+P1. Q3: print raw counts (unsubs/denominator) beside every rate; give the two
+    bottom rate panels a MATCHED y-axis; recolor the rate bars neutral (grey)
+    - red currently means "unsubs group" in the top row and "rate" below,
+    same color two meanings.
+P2. Q4: restore the legend on the Product Mix panel; one shared x-range for
+    all three panels; fixed axis floor so no bar extends past the tick range.
+P3. Q5: add a light caution on Mid/Dormant (57 events) - one thin-flag tier
+    is not enough; cap thin-cell rates at 2 decimals (0.315% on n=9 is false
+    precision - print "~0.3%").
+P4. Verify the subplots(4,1) code vs the rendered 2x2 layout - stale render
+    or intentional reshape; make code match output.
+P5. Deliver the three ordered exhibits still unseen: (a) the FWC timing panel
+    fully rendered; (b) the LOB dedup five totals printed LARGE as the
+    denominator card (enterprise / all-cards / marketing / ex-FIFA /
+    non-marketing unique clients); (c) the suppression-gap histogram (days
+    between a repeat unsubscriber's first and second unsub).
+
 ## AFTER APPLYING: rebuild all plots, re-print the full source tables
 under each, then STOP and show the revised set for review BEFORE building
 the HTML page. The HTML build then follows the exploration-page prompt
