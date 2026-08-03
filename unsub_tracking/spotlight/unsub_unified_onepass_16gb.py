@@ -1,23 +1,23 @@
 # =============================================================================
-# unsub_unified_local.py - ONE-PASS variant (pre-bite-loop, commit d4d84dc).
+# unsub_unified_onepass_16gb.py - ONE-PASS variant (pre-bite-loop, commit d4d84dc).
 # Runs the UCP join and cube builds in single full-scale Spark actions:
 # needs a BIG pod (16GB+). Died with OOM on a 4GB pod at Cell [5].
 # NOT a YARN file - both variants run on the local kernel; the sibling
-# unsub_unified_yarn.py is the bite-looped variant that fits 4GB.
+# unsub_unified.py is the bite-looped variant that fits any pod size.
 #
-# KNOWN GAPS vs unsub_unified_yarn.py (round-2 red-team fixes are NOT here):
+# KNOWN GAPS vs unsub_unified.py (round-2 red-team fixes are NOT here):
 #   1. Piece B t12: annual_spend_p12 lands FAKE ZEROS pre-September -> t12
 #      spend tier reads "Low" for everyone (poisoned slice, not honest
 #      "untiered").
 #   2. Piece B markers have no pre/post-close regime flag -> a September
 #      rerun SKIPS the t12 re-pull entirely (permanent no-op).
 #   3. No CARDS_TOTAL_UNIQUE_CLIENTS row in a1_mne_share (cards ratio is
-#      an upper bound here, exact in the yarn file).
+#      an upper bound here, exact in unsub_unified.py).
 #   4. No usg_bhvr_seg_t0 dim -> R/T flows not pivotable, mixes only.
 # => USE THIS FILE FOR: Pieces A + C and the 16GB one-pass UCP test.
 # => DO NOT ship Piece B numbers from this file, and do NOT let this file
 #    land B_DFP/B_BHV bites (its markers lack the regime flag and would
-#    confuse the yarn file's resume logic on shared HDFS dirs).
+#    confuse unsub_unified.py's resume logic on shared HDFS dirs).
 # =============================================================================
 
 # unsub_tracking/spotlight/unsub_unified.py
