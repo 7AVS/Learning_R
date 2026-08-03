@@ -125,64 +125,94 @@ misleading top points (POT, CEC); (c) print the full 17-row source table
 in the notebook output - 16 of 17 rows were invisible in review; every
 pixel-read number must be checkable; (d) G4 label.
 
-## ROUND 2 ORDERS (2026-08-03, review of the revised full set)
+## ROUND 2 — ANDRE'S REVIEW (2026-08-03). Overrides anything conflicting above.
+Apply on the NEW 03d CSVs (7 files incl a1_lob_dedup.csv). Items tagged (A) are
+Andre's direct orders; (R) are technical-review items that still stand.
 
-Round-1 orders were verified applied - good. These are the remaining fixes,
-found by a second full review. Apply ON THE NEW 03d CSVs (7 files incl
-a1_lob_dedup.csv) once the full run lands - not on the old data.
+### VOICE — applies to every title, axis, caption (A)
+V1. Plain, precise, few words. Never a complicated word for a simple concept.
+    BANNED: "attributed" (say "unsubs" / "unsubscriptions"), "any-list" (say
+    "unsubscribed from any RBC email" vs "from a Cards campaign"), "upper
+    bounds", "multi-list overlap", "heavier-mailed clients" (say "clients who
+    received more emails"), "leaver" without definition, "prevalence" where
+    "unsub rate" works.
+    The overlap caveat, said plainly: "One person can unsubscribe from several
+    campaigns - campaign counts add to 146,706 but there are 109,431 unique
+    people." Write it exactly that simply wherever it applies.
+V2. EVERY section states its measurement window in the title or first line -
+    and ANNOUNCES when the window changes from the previous section (monthly
+    Aug-Jun -> recent Jan-Apr -> anchor Aug-2025+12m). These transitions will
+    be walked through with peers; they must be self-evident.
+V3. Number formatting everywhere: thousands commas; abbreviate 1.2M / 450K on
+    axes and labels. Annotations must never overlap other text (Q1 currently
+    does). Axis titles and units consistent across ALL charts.
 
-R2-1. **Reliability encoding.** No CIs exist anywhere. Minimum: (a) heatmap
-  cells with thin n get muted/hatched color regardless of rate - color must
-  not scream "severe" on n=1.9K as loudly as on n=620K; flag the whole
-  Dormant COLUMN as thin, not just one cell; (b) on any rate ranking that
-  spans wildly different denominators (Q2 rate panel: 12K vs 4.2M), add
-  Wilson 95% CI whiskers or drop sub-50k rows to a separate "small base"
-  table.
-R2-2. **One rate format everywhere, including TABLES.** The M0/M-cards
-  tables print bare decimals (0.188) beside %-formatted tables (0.11%) -
-  a reader will read 0.188 as 18.8%. Every rate cell and axis carries %.
-R2-3. **Window-mismatch rule (the FNI case).** A campaign can have
-  in-window unsubs with zero in-window sends (unsubs from PRIOR sends -
-  real, not a bug). Rule: a rate is computed ONLY when sends and unsubs
-  share the window; otherwise show volume + tag "unsubs from pre-window
-  sends", rate = n/a. Apply globally; FNI is the known instance.
-R2-4. **PBA send spikes 202603 + 202606 (7.9M/8.4M vs ~1M other months):**
-  investigate BEFORE charting any monthly trend - which PBA MNEs, real
-  burst or double-count? Report the answer.
-R2-5. **Q6 robustness check (required):** recompute the Cards share-of-
-  events peak EXCLUDING the immature months (202606-202607) and confirm
-  the ~17.6% Apr peak stands independent of the shrinking denominator.
-  State the result on-chart.
-R2-6. **Q6 chart 1:** stacked-subset bar again - replace with two clean
-  series (enterprise volume line + cards volume line) or grouped bars;
-  make the immature-month marking a hard visual break (hatch + axis note),
-  not opacity alone.
-R2-7. **Q4 age/tenure:** cards bars are crushed on the shared axis - the
-  "4-7yr peak" is invisible. Give cards its own panel or print value
-  labels on every cards bar.
-R2-8. **Q4 TIBC:** add the cards-list series (the panel is enterprise-only
-  - the cards mandate is missing); sort bars by value; key the colors; and
-  drop the word "only" from the title - two other combos sit in the same
-  band.
-R2-9. **Action-type monthly trend:** raw counts invite the volume-artifact
-  read. Add the monthly SENDS for FWC (or plot monthly unsub rate %) so
-  the Feb-Apr spike is shown per-send, not just per-calendar; small
-  series (Onboard/Attract/Deepen) get their own scale or panel.
-R2-10. **KILL the dual-axis combo chart (senders bars + rate diamonds on
-  two x-axes).** Highest misread risk in the set - PCQ's rate diamond
-  visually lands at FWC's volume. Use the existing two-panel pattern
-  (volume panel + rate panel). Fix truncated MNE labels; label any log
-  axis "log scale".
-R2-11. Explicit zeros: Operational prints "0 unsubs (n=540)" - blank bar
-  reads as missing data. Also check Attract's 0.58%: if its campaigns
-  started mid-window, the shorter exposure inflates the rate - verify
-  against first-send dates and caption if so.
-R2-12. **Deliverable hygiene:** export every final chart as PNG from the
-  notebook (no phone photos - a screen-overlay icon currently blocks data
-  points in three captures); print every source table in full under its
-  chart; re-render the FWC timing-check panel fully visible (it was cut
-  off - and it is now a headline exhibit: "unsubs track send waves with
-  0-1 month lag").
+### STRUCTURE — the narrative arc stays as built (A)
+Panoramic (enterprise by LOB) -> zoom to Cards monthly -> enterprise by MNE
+(top offenders) -> volume-vs-rate context -> frequency -> profile -> Piece B
+-> curve. Keep it. UNKNOWN LOB rows stay visible (mapping gap is known;
+Andre resolves the mapping separately - do not silently drop them).
+
+### PER-SECTION ORDERS
+S1 (Cards monthly zoom) (A): the line time series does not work for reading
+   individual campaigns through the year. Replace with a HEATMAP: rows = Cards
+   MNEs, cols = months, cell = unsubs (or rate %) - one glance shows who
+   spiked when. Optionally small-multiples for the top 5 MNEs. Propose both,
+   pick what reads best.
+S2 (Q1 top offenders) (A): fine as a bar chart; fix voice (V1), state the
+   window (V2), fix the overlapping annotation, plain-words overlap caveat.
+S3 (Q3 frequency) (A - REDESIGN): current panels unclear. Must state: emails
+   counted Jan-Apr only (same window as the unsubs); say explicitly which
+   emails the x-axis counts (all RBC vs Cards emails) on each panel. NEW
+   primary view: DISTRIBUTION COMPARISON - for clients who unsubscribed from
+   a Cards campaign vs clients who stayed, what share of each group received
+   1-2 / 3-5 / 6-10 / 11+ emails (side-by-side bars or the representation
+   ratio). Answers Andre's question directly: "do unsubscribers get more mail
+   than stayers?" Rate-by-bucket becomes the secondary panel. Data exists in
+   a3 (stayers + leavers per bucket).
+S4 (Q4 profile) (A - REDESIGN): the shared-axis grouped bars fail (Cards
+   crushed) and the story is incomplete without the baseline. New pattern per
+   dimension (age, tenure, TIBC): the REPRESENTATION RATIO view - share of
+   unsubscribers in a band DIVIDED BY share of stayers in that band, diverging
+   bars around 1.0 (the pattern from unsub_value_exploration.html Andre
+   endorsed). This answers "is young unsub just because we mail young people"
+   by construction. Build it at two zoom levels: (a) Cards vs enterprise,
+   (b) WITHIN Cards by MNE for the top Cards campaigns. Keep stayers as the
+   baseline everywhere. TIBC panel rebuilt this way too (current one is
+   wrong: enterprise-only, unsorted, overclaimed title). Be selective - the
+   best 3-4 charts, not every possible cut.
+S5 (Q5 / Piece B) (A - SIMPLIFY): drop the any-RBC-email lens from the
+   DISPLAY (keep in data). Follow ONLY: Cards-mailed cohort, split into
+   CARDS-CAMPAIGN UNSUBSCRIBERS vs stayers. State on-chart: tier (High/Mid/
+   Low spend) and segment (Revolver/Transactor/Dormant) are measured AT THE
+   ANCHOR (Aug 2025); the same clients get re-measured Aug 2026 (available
+   after 2026-08-31 - one clean sentence, not a warning wall). TWO heatmaps
+   max: (1) Cards unsub rate % per tier x segment cell, n printed in-cell,
+   thin cells muted; (2) where the unsubscribers SIT - each cell's share of
+   all cards unsubscribers (the "how big is each box" view). Kill the third.
+S6 (Q6 curve) (A): keep - it works. Make axis labels/scales consistent
+   across the Q6 panels. (R) still required: recompute the share peak
+   excluding immature months 202606-202607 and state on-chart that the peak
+   survives (or doesn't).
+S7 (action-type deep dive): keep, per-send rates (R2-9 logic), plain words.
+
+### TECHNICAL ITEMS THAT STAND (R)
+T1. Reliability: mute/hatch thin heatmap cells (whole Dormant column);
+    Wilson CIs or a separate small-base table where denominators differ
+    wildly (12K vs 4.2M).
+T2. One rate format everywhere INCLUDING tables: percent with % sign, 2
+    decimals. No bare decimals (0.188 reads as 18.8%).
+T3. Window-mismatch rule: no rate where sends and unsubs come from different
+    windows (the FNI case: 0 in-window sends, 2,281 unsubs from earlier
+    sends - show volume + "unsubs from earlier sends", rate = n/a).
+T4. Investigate the PBA send spikes (202603: 7.9M, 202606: 8.4M vs ~1M
+    normal) before charting monthly trends; report the cause.
+T5. Explicit zeros ("0 unsubs, n=540"), no blank bars. Check Attract's rate
+    for short-window inflation vs first-send dates.
+T6. Kill the dual-axis combo chart (senders bars + rate diamonds); use the
+    two-panel pattern. Label log axes "log scale". Fix truncated labels.
+T7. Export final charts as PNGs from the notebook; full source tables
+    printed under each chart; re-render the FWC timing-check panel in full.
 
 ## AFTER APPLYING: rebuild all plots, re-print the full source tables
 under each, then STOP and show the revised set for review BEFORE building
