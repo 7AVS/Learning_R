@@ -18,3 +18,5 @@
 # Allow value_capture interchange-contract README (xlsx stays untracked)
 !value_capture/README.md
 .aider*
+__pycache__/
+*.pyc
