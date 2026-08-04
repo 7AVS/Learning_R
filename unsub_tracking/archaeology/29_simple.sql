@@ -45,9 +45,12 @@ CREATE VOLATILE TABLE vt_after AS (
 COLLECT STATISTICS ON vt_after COLUMN (consumer_id_hashed);
 
 -- STEP 3: final 4-row table — counts only, no percentages
+-- clients_* = distinct clients; emails_* = email count at (client, tactic, day) grain; any = same + other
+-- campaigns, deduped; 3m/6m/12m are cumulative windows from each client's own unsub date.
 WITH jul_sends AS (
-    -- distinct (consumer,TREATMENT_ID,day) sends of each in-scope MNE during July 2025 itself
-    SELECT mne, COUNT(*) AS emails_sent_jul25
+    -- distinct (consumer,TREATMENT_ID,day) sends of each in-scope MNE in July 2025 itself, to ALL clients
+    -- (cohort context, not restricted to the unsub cohort)
+    SELECT mne, COUNT(*) AS jul25_sends_all_clients
     FROM (
         SELECT DISTINCT
             consumer_id_hashed, TREATMENT_ID, CAST(disposition_dt_tm AS DATE) AS dt,
@@ -63,30 +66,34 @@ WITH jul_sends AS (
     GROUP BY 1
 ),
 cohort AS (
-    SELECT unsub_mne, COUNT(DISTINCT consumer_id_hashed) AS clients_unsub_jul25
+    SELECT unsub_mne, COUNT(DISTINCT consumer_id_hashed) AS clients_unsubscribed_jul25
     FROM vt_anchor
     GROUP BY 1
 ),
 recontact AS (
     SELECT
         unsub_mne,
-        COUNT(DISTINCT CASE WHEN send_dt < ADD_MONTHS(unsub_dt, 3) THEN consumer_id_hashed END) AS recontacted_3m,
-        COUNT(DISTINCT CASE WHEN send_dt < ADD_MONTHS(unsub_dt, 6) THEN consumer_id_hashed END) AS recontacted_6m,
-        COUNT(DISTINCT consumer_id_hashed)                                                       AS recontacted_12m,
-        COUNT(DISTINCT CASE WHEN send_mne = unsub_mne  THEN consumer_id_hashed END)              AS same_campaign_12m,
-        COUNT(DISTINCT CASE WHEN send_mne <> unsub_mne THEN consumer_id_hashed END)              AS other_campaign_12m
+        COUNT(DISTINCT CASE WHEN send_dt < ADD_MONTHS(unsub_dt, 3) THEN consumer_id_hashed END) AS clients_recontact_any_3m,
+        COUNT(DISTINCT CASE WHEN send_dt < ADD_MONTHS(unsub_dt, 6) THEN consumer_id_hashed END) AS clients_recontact_any_6m,
+        COUNT(DISTINCT consumer_id_hashed)                                                       AS clients_recontact_any_12m,
+        COUNT(DISTINCT CASE WHEN send_mne = unsub_mne  THEN consumer_id_hashed END)              AS clients_recontact_same_12m,
+        COUNT(DISTINCT CASE WHEN send_mne <> unsub_mne THEN consumer_id_hashed END)              AS clients_recontact_other_12m,
+        COUNT(CASE WHEN send_mne = unsub_mne  THEN 1 END)                                        AS emails_recd_same_camp_12m,
+        COUNT(CASE WHEN send_mne <> unsub_mne THEN 1 END)                                        AS emails_recd_other_camp_12m
     FROM vt_after
     GROUP BY 1
 )
 SELECT
-    c.unsub_mne,
-    COALESCE(j.emails_sent_jul25, 0)  AS emails_sent_jul25,
-    c.clients_unsub_jul25,
-    COALESCE(r.recontacted_3m, 0)     AS recontacted_3m,
-    COALESCE(r.recontacted_6m, 0)     AS recontacted_6m,
-    COALESCE(r.recontacted_12m, 0)    AS recontacted_12m,
-    COALESCE(r.same_campaign_12m, 0)  AS same_campaign_12m,
-    COALESCE(r.other_campaign_12m, 0) AS other_campaign_12m
+    c.unsub_mne                                AS unsub_campaign,
+    COALESCE(j.jul25_sends_all_clients, 0)      AS jul25_sends_all_clients,
+    c.clients_unsubscribed_jul25,
+    COALESCE(r.clients_recontact_any_3m, 0)     AS clients_recontact_any_3m,
+    COALESCE(r.clients_recontact_any_6m, 0)     AS clients_recontact_any_6m,
+    COALESCE(r.clients_recontact_any_12m, 0)    AS clients_recontact_any_12m,
+    COALESCE(r.clients_recontact_same_12m, 0)   AS clients_recontact_same_12m,
+    COALESCE(r.clients_recontact_other_12m, 0)  AS clients_recontact_other_12m,
+    COALESCE(r.emails_recd_same_camp_12m, 0)    AS emails_recd_same_camp_12m,
+    COALESCE(r.emails_recd_other_camp_12m, 0)   AS emails_recd_other_camp_12m
 FROM cohort c
 LEFT JOIN jul_sends j ON j.mne = c.unsub_mne
 LEFT JOIN recontact r ON r.unsub_mne = c.unsub_mne
