@@ -1013,7 +1013,17 @@ for ordinary links. 4 (unsub) = completed, submitted opt-outs only — an abando
 visit (link clicked, options shown, no submit) writes NOTHING (Andre n=1, week-old, feed
 proven same-day so latency excluded; consistent with span diagnostic).
 
-**Disposition-4 trigger — RESOLVED for the abandoned path (2026-08-05, n=1):** clicking the
+**Campaign-side suppression basis (2026-08-05, CRV tech spec, Andre's screenshot):** email
+eligibility for campaign selection = DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL flags
+(deliverable_em_addr_ind='Y', cpc1012_ind='N', email_kill_clnt_ind='N',
+valid_em_addr_ind='Y', SPAM_COMPLAINT_EM_IND='N', CFS_CLNT_IND='N', %que_EMContactEligible)
+AND NOT in DG6V01.CPC_CLNT_PREF_CHC with CLNT_CONSENT_TYP=5002 on PREF_ID IN (1002,1006)
+(red-text later addition). READ: selection consults CPC (1012 flag + 1002/1006 direct) and
+spam complaints (≈disposition 6) — NO visible ingestion of SFMC list unsubs (disposition 4).
+If email_kill_clnt_ind doesn't carry them, the suppression gap is ARCHITECTURAL: list unsubs
+never reach campaign eligibility, so every new campaign re-selects the client. UNKNOWN: who
+feeds email_kill_clnt_ind; what PREF_ID 1006 is (blank=Yes per standards). Testable: flag
+rates on CIDM_CHANNEL_ELIG_EM_DTL for unsubbed vs non-unsubbed clients. clicking the
 email's unsubscribe link and viewing the options page WITHOUT submitting writes nothing
 (no 3, no 4 — week-old event, same-day feed proven, latency excluded). So a 4 requires
 completing the flow. STILL OPEN: which list gets written when the page offers 2+ options
