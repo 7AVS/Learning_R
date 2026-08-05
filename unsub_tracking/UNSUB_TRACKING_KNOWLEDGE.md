@@ -967,6 +967,16 @@ cause" caveat is needed.
 Pack 20's "86% same-day" never showed a mechanism — same day with different timestamps is one
 person working through an inbox.
 
+**Re-proven at time-SPAN grain 2026-08-05** (`spotlight/diag_unsub_fanout_timestamps.sql`,
+Jan–Apr 2026): distinct-timestamp counting alone could not exclude a batch writer staggering
+rows by ms, so the test was redone on the span between first and last unsub row of each
+multi-treatment client-day. Result: **91.8% of cross-campaign days spread over 1 min–hours**
+(24,061 client-days at 1–60 min + 5,710 over 1 hour, of 32,422); batch-like writes (0s or
+<1 min) are 8.2% cross-campaign, 4.3% single-campaign. Timestamps are event-time, not load
+stamps (they spread within days). Separate deliberate clicks per list is the mechanism;
+per-campaign attribution and the repeat-unsub ("suppression gap") reading stand. For
+precision-critical multi-campaign counts, the ≤1-min slice (~8%) is the conservative shave.
+
 ## 20.6 Send-to-unsub lag — set the window from this, do not guess
 
 Per day, not per bucket: 23,118 (same day) → 8,233 → 4,052 → 3,243 → 2,620 → 2,298 → 476 (30+).
