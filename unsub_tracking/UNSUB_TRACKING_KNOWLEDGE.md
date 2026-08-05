@@ -1013,16 +1013,6 @@ for ordinary links. 4 (unsub) = completed, submitted opt-outs only — an abando
 visit (link clicked, options shown, no submit) writes NOTHING (Andre n=1, week-old, feed
 proven same-day so latency excluded; consistent with span diagnostic).
 
-**SOURCE_EVNT_ID structure (2026-08-05, Andre's side-by-side pull):** EVENT.SOURCE_EVNT_ID
-is a single numeric send id; MASTER.SOURCE_EVNT_ID is a pipe-delimited vendor composite
-whose FIRST segment equals EVENT's id (7/7 overlapping rows verified; 2- and 3-segment
-variants exist, e.g. `4171242|57432655`, `4174158|43|1552909` — ExactTarget-style
-JobID|Batch/ListID|SubscriberID). A per-SEND join (finer than hash+treatment; disambiguates
-re-sends of the same treatment) = parse STRTOK(m.SOURCE_EVNT_ID,'|',1) into a VOLATILE
-TABLE with PRIMARY INDEX + COLLECT STATS, then integer-join to EVENT.SOURCE_EVNT_ID. Never
-join on the STRTOK inline. Preflight before first use: EVENT id constant across a send's
-journey stages; first-segment uniqueness per (hash, treatment).
-
 **Campaign-side suppression basis (2026-08-05, CRV tech spec, Andre's screenshot):** email
 eligibility for campaign selection = DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL flags
 (deliverable_em_addr_ind='Y', cpc1012_ind='N', email_kill_clnt_ind='N',
