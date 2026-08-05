@@ -992,6 +992,17 @@ Three consequences:
 3. **Per-list is behavioral fact**: sampled clients kept receiving (and opening) other lists
    after unsubscribing — which is exactly why repeat unsubs exist.
 
+**Independent production confirmation (2026-08-05, internal `EmailMetricsWriter` Scala job
+found via Confluence):** the bank's own metrics pipeline maps disposition 1–6 exactly as our
+canon (incl. 5=hard_bounce, 6=complaint) and joins EVENT↔MASTER on the same keys
+(consumer_id_hashed + treatment_id, hash cast to string both sides). Two new facts:
+(1) monthly-partitioned **HDFS parquet copies of both tables** exist in the dig metrics
+platform (`ParquetUtils.load("VENDOR_FEEDBACK_MASTER", "yyyymm*")`; disposition_dt_tm stored
+as epoch millis there) — an alternate, possibly faster substrate; (2) that job does **NOT
+dedupe MASTER's card-grain duplication** before the join — internal email-activity metrics
+built on it may run ~11% hot vs our deduped counts; check before reconciling our numbers
+against any internal dashboard. It documents nothing about what triggers a disposition 4.
+
 **OPEN (2026-08-05): the exact trigger of disposition 4 is UNVERIFIED.** Candidates: the
 unsub link click in the email, the preference-page Submit, or a mail-client one-click
 unsubscribe. Also unverified: when the page offers 2+ options, whether the logged list is
