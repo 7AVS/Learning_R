@@ -1003,14 +1003,22 @@ dedupe MASTER's card-grain duplication** before the join — internal email-acti
 built on it may run ~11% hot vs our deduped counts; check before reconciling our numbers
 against any internal dashboard. It documents nothing about what triggers a disposition 4.
 
-**OPEN (2026-08-05): the exact trigger of disposition 4 is UNVERIFIED.** Candidates: the
-unsub link click in the email, the preference-page Submit, or a mail-client one-click
-unsubscribe. Also unverified: when the page offers 2+ options, whether the logged list is
-the chosen one or the source email's, and whether the broad "promotional emails from RBC"
-option writes to multiple lists. Single-subject experiment in flight:
-`spotlight/diag_unsub_self_test.sql` (Andre clicked without submitting; feed checked next
-day, then a deliberate submit). Until it lands, treat disposition 4 as "deliberate opt-out
-action" — do not claim which click it was.
+**Disposition reliability, verified per-signal 2026-08-05 (Andre self-record + trails):**
+1 (sent) = reliable, same-day capture, load stamp corroborates. 2 (opened) = UNTRUSTWORTHY
+BOTH DIRECTIONS — machine/proxy prefetch writes opens no human did (observed: open 20s after
+a 21:55 send), and real human opens can be absorbed by provider image caches (observed:
+Andre's real AUS open absent while his other opens exist). NEVER build behavior claims on
+disposition 2. 3 (clicked) = unsub links typically excluded from click tracking; untested
+for ordinary links. 4 (unsub) = completed, submitted opt-outs only — an abandoned unsub-page
+visit (link clicked, options shown, no submit) writes NOTHING (Andre n=1, week-old, feed
+proven same-day so latency excluded; consistent with span diagnostic).
+
+**Disposition-4 trigger — RESOLVED for the abandoned path (2026-08-05, n=1):** clicking the
+email's unsubscribe link and viewing the options page WITHOUT submitting writes nothing
+(no 3, no 4 — week-old event, same-day feed proven, latency excluded). So a 4 requires
+completing the flow. STILL OPEN: which list gets written when the page offers 2+ options
+(chosen vs source email's), and whether the broad "promotional emails from RBC" option
+fans to multiple lists — channel-owner question or a deliberate submit test.
 
 ## 20.6 Send-to-unsub lag — set the window from this, do not guess
 
