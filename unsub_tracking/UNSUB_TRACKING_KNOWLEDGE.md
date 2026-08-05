@@ -992,6 +992,15 @@ Three consequences:
 3. **Per-list is behavioral fact**: sampled clients kept receiving (and opening) other lists
    after unsubscribing — which is exactly why repeat unsubs exist.
 
+**OPEN (2026-08-05): the exact trigger of disposition 4 is UNVERIFIED.** Candidates: the
+unsub link click in the email, the preference-page Submit, or a mail-client one-click
+unsubscribe. Also unverified: when the page offers 2+ options, whether the logged list is
+the chosen one or the source email's, and whether the broad "promotional emails from RBC"
+option writes to multiple lists. Single-subject experiment in flight:
+`spotlight/diag_unsub_self_test.sql` (Andre clicked without submitting; feed checked next
+day, then a deliberate submit). Until it lands, treat disposition 4 as "deliberate opt-out
+action" — do not claim which click it was.
+
 ## 20.6 Send-to-unsub lag — set the window from this, do not guess
 
 Per day, not per bucket: 23,118 (same day) → 8,233 → 4,052 → 3,243 → 2,620 → 2,298 → 476 (30+).
