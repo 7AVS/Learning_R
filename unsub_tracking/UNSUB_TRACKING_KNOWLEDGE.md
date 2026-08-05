@@ -977,6 +977,21 @@ stamps (they spread within days). Separate deliberate clicks per list is the mec
 per-campaign attribution and the repeat-unsub ("suppression gap") reading stand. For
 precision-critical multi-campaign counts, the ≤1-min slice (~8%) is the conservative shave.
 
+**Mechanism confirmed via client journeys + the live unsub page 2026-08-05**
+(`spotlight/diag_unsub_client_journeys.sql` + Andre's screenshots of the RBC unsubscribe
+page): the unsub link lands on a preference page with per-list radio options (e.g.
+"E-Newsletter – Rewards", "Accounts & Packages", "promotional emails from RBC Royal Bank").
+Three consequences:
+1. **MNE-level attribution is valid** — each list unsub is a deliberate per-list choice
+   (observed: two campaigns unsubbed 19 seconds apart = one page visit, two choices; so even
+   sub-minute cross-campaign pairs are partly human, and the 8.2% shave is an upper bound).
+2. **Treatment/wave-level attribution is LOOSE** — the unsub is logged against the list's
+   recent treatment(s), not necessarily an email the client opened: observed unsub tagged to
+   a 2-month-old send with no open row, and one list unsub writing to 2 treatments of that
+   list. Do not build wave-level unsub joins; send-to-unsub lag (§20.6) inherits this noise.
+3. **Per-list is behavioral fact**: sampled clients kept receiving (and opening) other lists
+   after unsubscribing — which is exactly why repeat unsubs exist.
+
 ## 20.6 Send-to-unsub lag — set the window from this, do not guess
 
 Per day, not per bucket: 23,118 (same day) → 8,233 → 4,052 → 3,243 → 2,620 → 2,298 → 476 (30+).
