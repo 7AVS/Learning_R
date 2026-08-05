@@ -1,18 +1,24 @@
 -- diag_unsub_fanout_timestamps.sql — ONE DECISION: when a client shows
--- unsubs on 2+ deployments the same day, is that ONE write moment
--- (mechanical fan-out) or SEPARATE moments (separate client actions)?
+-- unsubs on 2+ deployments the same day, is that ONE mechanical write
+-- (fan-out) or SEPARATE client actions?
 -- Teradata-direct. Window: Jan-Apr 2026.
--- Read: ts_pattern 'one write moment' dominating => fan-out, our
--- repeat-unsub interpretation is wrong. 'each its own moment' => real
--- separate actions. If single-campaign days ALSO all collapse to one
--- moment, disposition_dt_tm may be a batch stamp and this test is void.
+--
+-- Distinct-timestamp counting is NOT enough (a batch writer can stagger
+-- rows by milliseconds), so this buckets the TIME SPAN between the
+-- first and last unsub row of the client-day:
+--   0s / under 1 min        => batch-like: mechanical fan-out
+--   1-60 min / over 1 hour  => human-like: separate deliberate actions
+-- Read cross-campaign vs single-campaign rows separately: fan-out that
+-- stays within a campaign's own waves only inflates event counts;
+-- fan-out that crosses campaigns breaks per-campaign attribution.
 
 SELECT
     CASE WHEN n_mne >= 2 THEN 'cross-campaign day'
          ELSE 'single-campaign day' END AS day_type,
-    CASE WHEN n_ts = 1 THEN 'one write moment'
-         WHEN n_ts = n_treat THEN 'each its own moment'
-         ELSE 'mixed' END AS ts_pattern,
+    CASE WHEN span_sec = 0       THEN '1: 0s single moment'
+         WHEN span_sec < 60      THEN '2: under 1 min'
+         WHEN span_sec < 3600    THEN '3: 1-60 min'
+         ELSE                         '4: over 1 hour' END AS spread,
     COUNT(*) AS client_days,
     SUM(n_treat) AS unsub_rows
 FROM (
@@ -20,7 +26,12 @@ FROM (
            CAST(disposition_dt_tm AS DATE) AS d,
            COUNT(DISTINCT SUBSTR(TREATMENT_ID, 8, 3)) AS n_mne,
            COUNT(DISTINCT TREATMENT_ID) AS n_treat,
-           COUNT(DISTINCT disposition_dt_tm) AS n_ts
+           MAX(EXTRACT(HOUR FROM disposition_dt_tm) * 3600
+             + EXTRACT(MINUTE FROM disposition_dt_tm) * 60
+             + EXTRACT(SECOND FROM disposition_dt_tm))
+         - MIN(EXTRACT(HOUR FROM disposition_dt_tm) * 3600
+             + EXTRACT(MINUTE FROM disposition_dt_tm) * 60
+             + EXTRACT(SECOND FROM disposition_dt_tm)) AS span_sec
     FROM DTZV01.VENDOR_FEEDBACK_EVENT
     WHERE disposition_cd = 4
       AND disposition_dt_tm >= DATE '2026-01-01'
