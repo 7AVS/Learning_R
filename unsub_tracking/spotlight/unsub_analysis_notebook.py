@@ -281,11 +281,12 @@ else:
                                font=dict(color=C_POS if d >= 0 else C_LINE, size=13))
     fig.update_yaxes(range=[0, _ymax * 1.38])
     fig.update_yaxes(title_text="avg annual profit estimate ($, UCP)", row=1, col=1)
-    fig.update_layout(barmode="group", template="plotly_white", height=520,
-        title=("PROFIT CHECK: Did unsubscribers' profit really grow? Same data, two ways of counting<br>"
-               "<sup>(a) drops clients who vanished by 2026 · (b) keeps every June-2025 client, "
-               "vanished count as $0 now — (b) is the reported basis</sup>"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1))
+    fig.update_layout(barmode="group", template="plotly_white", height=580,
+        margin=dict(t=200),
+        title=dict(text=("PROFIT CHECK: Did unsubscribers' profit really grow? Same data, two ways of counting<br>"
+                         "<sup>(a) drops clients who vanished by 2026 · (b) keeps every June-2025 client, "
+                         "vanished count as $0 now — (b) is the reported basis</sup>"), y=0.97),
+        legend=dict(orientation="h", yanchor="bottom", y=1.10, xanchor="left", x=0.0))
     fig.show()
     print("HOW TO READ: panel (a) is the original math - it silently drops"
           " clients who vanished by 2026. Panel (b) keeps every June-2025"
@@ -346,22 +347,27 @@ else:
     xg = [g.upper() for g in grps]
     m_now = [float(led.loc[g, "matched_now"]) for g in grps]
     v_now = [float(led.loc[g, "vanished_now"]) for g in grps]
-    fig.add_trace(go.Bar(name="still found in Jun 2026", x=xg, y=m_now,
-                         marker_color=C_THEN), row=1, col=2)
-    fig.add_trace(go.Bar(name="vanished by Jun 2026", x=xg, y=v_now, base=m_now,
-                         marker_color=C_LINE), row=1, col=2)
+    # ledger: DIRECT labels, no legend entries — keeps the figure legend
+    # to panel-1's two series only (no mixed 4-series legend)
+    fig.add_trace(go.Bar(x=xg, y=m_now, marker_color="#899299", showlegend=False,
+                         text=[f"still found<br>{compact_n(v)}" for v in m_now],
+                         textposition="inside", insidetextanchor="middle"),
+                  row=1, col=2)
+    fig.add_trace(go.Bar(x=xg, y=v_now, base=m_now, marker_color=C_LINE,
+                         showlegend=False), row=1, col=2)
     for i, g in enumerate(grps):
         mt = float(led.loc[g, "matched_then"])
         fig.add_annotation(x=xg[i], y=m_now[i] + v_now[i],
                            text=f"<b>vanished: {v_now[i]:,.0f} ({v_now[i] / mt * 100:.1f}%)</b>",
-                           showarrow=False, yshift=16,
+                           showarrow=False, yshift=18,
                            font=dict(color=C_LINE, size=11), row=1, col=2)
     fig.update_yaxes(tickformat="~s", row=1, col=2)
-    fig.update_layout(barmode="group", template="plotly_white", height=560,
-        margin=dict(t=150),
-        title=("ATTRITION: Do unsubscribers leave more? "
-               "<sup>(descriptive — groups not matched)</sup>"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.14, xanchor="right", x=1))
+    fig.update_layout(barmode="group", template="plotly_white", height=600,
+        margin=dict(t=190),
+        title=dict(text=("ATTRITION: Do unsubscribers leave more? "
+                         "<sup>(descriptive — groups not matched)</sup>"), y=0.97),
+        legend=dict(orientation="h", yanchor="bottom", y=1.10,
+                    xanchor="left", x=0.0))
     fig.show()
     print("HOW TO READ: left = among cardholders, exit is modestly higher"
           " for leavers on both cuts. Right = at whole-relationship level"
