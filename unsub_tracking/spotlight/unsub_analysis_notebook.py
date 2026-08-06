@@ -28,19 +28,24 @@ BASE = os.path.expanduser("~/unsub_unified_out/")            # pod local
 # BASE = r"\\maple.fg.rbc.com\...\Cards\Unsubs\output"       # laptop share
 USE_HDFS = "spark" in globals()
 
-def load_cube(fname, **read_csv_kwargs):
-    """HDFS-first (pod), local-CSV fallback. Returns pandas."""
-    if USE_HDFS:
-        try:
-            pdf = (spark.read.csv(HDFS_OUT + fname, header=True,
-                                  inferSchema=True).toPandas())
-            print(f"  {fname:28s} <- HDFS ({len(pdf):,} rows)")
+def load_cube(fname, alts=(), **read_csv_kwargs):
+    """HDFS-first (pod), local-CSV fallback. `alts` = alternate filenames
+    tried in order after `fname` (naming differs between copies)."""
+    for cand in (fname,) + tuple(alts):
+        if USE_HDFS:
+            try:
+                pdf = (spark.read.csv(HDFS_OUT + cand, header=True,
+                                      inferSchema=True).toPandas())
+                print(f"  {cand:28s} <- HDFS ({len(pdf):,} rows)")
+                return pdf
+            except Exception as e:
+                print(f"  {cand:28s} HDFS miss ({type(e).__name__}) -> local")
+        if os.path.exists(os.path.join(BASE, cand)):
+            pdf = pd.read_csv(os.path.join(BASE, cand), **read_csv_kwargs)
+            print(f"  {cand:28s} <- local ({len(pdf):,} rows)")
             return pdf
-        except Exception as e:
-            print(f"  {fname:28s} HDFS miss ({type(e).__name__}) -> local")
-    pdf = pd.read_csv(os.path.join(BASE, fname), **read_csv_kwargs)
-    print(f"  {fname:28s} <- local ({len(pdf):,} rows)")
-    return pdf
+        print(f"  {cand:28s} not in {BASE} -> next candidate")
+    raise FileNotFoundError(f"none of {(fname,) + tuple(alts)} found on HDFS or in {BASE}")
 
 SMALL_BASE = 10_000   # G3 small-base guard
 
@@ -61,10 +66,13 @@ print(f"Loading cubes (USE_HDFS={USE_HDFS}):")
 _frames = {}
 for view, fname in [("a1", "a1_mne_share.csv"), ("a1_lob", "a1_lob_dedup.csv"),
                     ("a2", "a2_mne_rates.csv"), ("a3", "a3_contact_cube.csv"),
-                    ("a4", "a4_profile_cube.csv"), ("b", "b_before_after_cube.csv"),
-                    ("mapping", "mapping_mne.csv")]:
+                    ("a4", "a4_profile_cube.csv"), ("b", "b_before_after_cube.csv")]:
     _frames[view] = load_cube(fname)
     con.register(view, _frames[view])
+# mapping file: Andre's pod copy is named "mapping Mne.csv" (space, capital
+# M) — try that first, underscore variant as fallback.
+_frames["mapping"] = load_cube("mapping Mne.csv", alts=("mapping_mne.csv",))
+con.register("mapping", _frames["mapping"])
 
 _cdf = load_cube("c_monthly_curve.csv", encoding="latin-1", on_bad_lines="skip")
 # The landed CSV carries provenance/audit columns beyond the 4 analytical
