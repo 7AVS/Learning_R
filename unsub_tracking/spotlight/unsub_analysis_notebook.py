@@ -725,7 +725,7 @@ if not os.path.exists(COMBO_CSV):
         SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
         FROM DTZV01.VENDOR_FEEDBACK_MASTER
         WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
-    ), cm AS (
+    ), per_mne AS (
         SELECT i.CLNT_NO, e.mne,
                MAX(e.sent) AS sent, MAX(e.unsub) AS unsub
         FROM ev e
@@ -739,7 +739,7 @@ if not os.path.exists(COMBO_CSV):
                TRIM(TRAILING '+' FROM (XMLAGG(CASE WHEN sent = 1
                     THEN TRIM(mne) || '+' END ORDER BY mne) (VARCHAR(600)))) AS combo,
                MAX(unsub) AS unsub_any
-        FROM cm
+        FROM per_mne
         GROUP BY 1
     )
     SELECT combo, COUNT(*) AS clients, SUM(unsub_any) AS unsubs
