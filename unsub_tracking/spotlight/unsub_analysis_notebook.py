@@ -586,12 +586,13 @@ else:
                                                 r["mailed_loy"]), axis=1)
     ov = ov.set_index("segment").reindex(SEG_ORDER).dropna(subset=["clients"])
     n_tot = int(ov["clients"].sum())
-    small = ov[ov["clients"] < n_tot * 0.005]
-    if len(small):
-        print("dropped from charts (<0.5% of total):",
-              {s_: int(v) for s_, v in small["clients"].items()})
-    ov = ov[ov["clients"] >= n_tot * 0.005]
-    segs = [s_ for s_ in SEG_ORDER if s_ in ov.index]
+    KEEP = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only", "All three"]
+    hidden = ov[~ov.index.isin(KEEP)]
+    if len(hidden):
+        print("not shown (partial combos, per Andre 2026-08-06):",
+              {s_: int(v) for s_, v in hidden["clients"].items()})
+    ov = ov[ov.index.isin(KEEP)]
+    segs = [s_ for s_ in KEEP if s_ in ov.index]
     xcats = [f"{s_}<br>n = {int(ov.loc[s_, 'clients']):,}" for s_ in segs]
 
     def scoped(col, flag):
@@ -661,14 +662,23 @@ else:
     mc.loc[mc["mne"] == "FWC", "lob"] = "FIFA"
     _lc = dict(lob_colors); _lc["FIFA"] = C_NOW
     mc = mc[mc["clients_mailed"] > 0].copy()
-    mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
-    mc["label_mne"] = np.where(mc["clients_mailed"] < SMALL_BASE,
-                               mc["mne"] + " △", mc["mne"])
-    singles = [s_ for s_ in ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only"]
-               if s_ in set(mc["segment"])]
-    fig = make_subplots(rows=1, cols=len(singles), subplot_titles=singles)
-    for ci, seg in enumerate(singles, start=1):
-        top = (mc[mc["segment"] == seg]
+    # panel groups (Andre 2026-08-06): FIFA is NOT its own panel — it is a
+    # bar (orange) inside the Cards-side panel. Panels:
+    #   "Cards side only" = clients with NO loyalty mail (cards and/or FIFA)
+    #   "Loyalty only"    = clients with loyalty mail only
+    mc["panel"] = np.where(mc["mailed_loy"] == 0, "Cards side only (incl FIFA)",
+                  np.where((mc["mailed_cards"] == 0) & (mc["mailed_fwc"] == 0),
+                           "Loyalty only", "mixed"))
+    pm_ = (mc[mc["panel"] != "mixed"]
+           .groupby(["panel", "mne", "lob"], as_index=False)
+           [["clients_mailed", "clients_unsub"]].sum())
+    pm_["unsub_rate"] = pm_["clients_unsub"] / pm_["clients_mailed"] * 100
+    pm_["label_mne"] = np.where(pm_["clients_mailed"] < SMALL_BASE,
+                                pm_["mne"] + " △", pm_["mne"])
+    panels = ["Cards side only (incl FIFA)", "Loyalty only"]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=panels)
+    for ci, seg in enumerate(panels, start=1):
+        top = (pm_[pm_["panel"] == seg]
                .sort_values("clients_mailed", ascending=True).tail(10))
         fig.add_trace(go.Bar(
             x=top["clients_mailed"], y=top["label_mne"], orientation="h",
@@ -679,34 +689,96 @@ else:
         fig.update_xaxes(tickformat="~s", row=1, col=ci,
                          range=[0, float(top["clients_mailed"].max()) * 1.6])
     fig.update_layout(
-        title=("WHICH programs — single-exposure groups, Jan-Apr 2026<br>"
+        title=("WHICH programs — single-side groups, Jan-Apr 2026<br>"
                "<sup>label = clients mailed · that program's unsub rate within the group | "
                "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed</sup>"),
         template="plotly_white", height=460, margin=dict(t=110))
     fig.show()
 
-# %% [8] Program composition — the COMBINED groups (own figure)
-if not _caches_current():
-    print("SKIP: run cell [5] first.")
+# %% [8] TOP 10 PROGRAM COMBINATIONS (Andre 2026-08-06) — which exact
+# program SETS do clients receive, and how does each combo unsub?
+# Own small pull (one query x 10 bites) cached to pm_overlap_combos.csv;
+# the other three caches stay valid — this never forces their re-pull.
+COMBO_CSV = os.path.join(BASE, "pm_overlap_combos.csv")
+if not os.path.exists(COMBO_CSV):
+    import getpass
+    import teradatasql
+    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
+    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
+    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
+    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
+    _sql_combo = """
+    WITH ev AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND disposition_cd IN (1, 4)
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
+        GROUP BY 1, 2, 3
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
+    ), cm AS (
+        SELECT i.CLNT_NO, e.mne,
+               MAX(e.sent) AS sent, MAX(e.unsub) AS unsub
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1, 2
+    ), cl AS (
+        SELECT CLNT_NO,
+               TRIM(TRAILING '+' FROM (XMLAGG(CASE WHEN sent = 1
+                    THEN TRIM(mne) || '+' END ORDER BY mne) (VARCHAR(600)))) AS combo,
+               MAX(unsub) AS unsub_any
+        FROM cm
+        GROUP BY 1
+    )
+    SELECT combo, COUNT(*) AS clients, SUM(unsub_any) AS unsubs
+    FROM cl
+    WHERE combo IS NOT NULL
+    GROUP BY 1
+    HAVING COUNT(*) >= 50
+    """
+    if "EDW" not in globals():
+        _u = input("Enter your username: ")
+        _p = getpass.getpass("Enter your password: ")
+        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                                  user=_u, password=_p, logmech="LDAP")
+    parts_c = []
+    for bite in range(10):
+        parts_c.append(pd.read_sql(
+            _sql_combo % {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}, EDW))
+        print(f"combo bite {bite}: {len(parts_c[-1]):,} combo rows")
+    combos_df = (pd.concat(parts_c).groupby("combo", as_index=False).sum())
+    combos_df.to_csv(COMBO_CSV, index=False)
+    print(f"WROTE {COMBO_CSV} ({len(combos_df):,} combos)")
 else:
-    combos = [s_ for s_ in ["Cards+Loyalty", "Cards+FIFA", "FIFA+Loyalty", "All three"]
-              if s_ in set(mc["segment"])]
-    fig = make_subplots(rows=1, cols=len(combos), subplot_titles=combos)
-    for ci, seg in enumerate(combos, start=1):
-        top = (mc[mc["segment"] == seg]
-               .sort_values("clients_mailed", ascending=True).tail(10))
-        fig.add_trace(go.Bar(
-            x=top["clients_mailed"], y=top["label_mne"], orientation="h",
-            marker_color=[_lc.get(l, "#899299") for l in top["lob"]],
-            text=[f"{compact_n(v)} mailed · {compact_n(u)} unsubs ({r:.2f}%)"
-                  for v, u, r in zip(top["clients_mailed"], top["clients_unsub"],
-                                     top["unsub_rate"])],
-            textposition="outside", cliponaxis=False, showlegend=False), row=1, col=ci)
-        fig.update_xaxes(tickformat="~s", row=1, col=ci,
-                         range=[0, float(top["clients_mailed"].max()) * 1.9])
-    fig.update_layout(
-        title=("WHICH programs — combined-exposure groups, Jan-Apr 2026<br>"
-               "<sup>label = clients mailed · unsubs · rate, all within the group | "
-               "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed</sup>"),
-        template="plotly_white", height=460, margin=dict(t=110))
-    fig.show()
+    print(f"CACHED: {COMBO_CSV} exists.")
+
+cb = pd.read_csv(COMBO_CSV)
+cb["n_programs"] = cb["combo"].str.count(r"\+") + 1
+cb["unsub_rate"] = cb["unsubs"] / cb["clients"] * 100
+top = (cb[cb["n_programs"] >= 2]
+       .sort_values("clients", ascending=False).head(10)
+       .sort_values("clients", ascending=True))
+fig = go.Figure(go.Bar(
+    x=top["clients"], y=top["combo"], orientation="h",
+    marker_color=C_THEN,
+    text=[f"{compact_n(v)} clients · {r:.2f}%"
+          for v, r in zip(top["clients"], top["unsub_rate"])],
+    textposition="outside", cliponaxis=False))
+fig.update_xaxes(tickformat="~s", range=[0, float(top["clients"].max()) * 1.5])
+fig.update_layout(template="plotly_white", height=480, margin=dict(t=110),
+    title=("TOP 10 PROGRAM COMBINATIONS (2+ programs) — clients mailed, Jan-Apr 2026<br>"
+           "<sup>combo = the exact set of Cards/FIFA/Loyalty programs that delivered to the client · "
+           "label = clients · % who unsubscribed from any of these lists | combos <50 clients/bite excluded</sup>"))
+fig.show()
