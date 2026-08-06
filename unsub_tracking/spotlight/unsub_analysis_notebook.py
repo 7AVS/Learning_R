@@ -509,20 +509,30 @@ else:
     has_vol = "emails_cards" in ov.columns
     fig, axes = plt.subplots(1, 2, figsize=(14, 6),
                              gridspec_kw={"width_ratios": [1, 1.15]})
-    # PANEL 1 — the headline: one bar per group, % who unsubscribed at all.
-    # Unsub counted on the two LOBs' lists (for a single-LOB group that is
-    # effectively its own lists; cross-LOB trace explained in footnote).
+    # PANEL 1 — the headline, CLEAN ATTRIBUTION (Andre 2026-08-06): each
+    # group's unsub rate counts ONLY its own LOB's lists. Cards-only ->
+    # Cards-list unsubs; Loyalty-only -> Loyalty-list unsubs; Both -> the
+    # two scoped rates side by side. No union, no cross-scope bars.
     x = np.arange(len(order))
-    either = ov["unsub_either"] / ov["clients"] * 100
-    axes[0].bar(x, either, 0.55, color=C_THEN)
-    for xi, r_ in zip(x, either):
-        axes[0].text(xi, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
-                     fontsize=11, fontweight="bold")
+    r_co = ov.loc["Cards only", "unsub_cards"] / ov.loc["Cards only", "clients"] * 100
+    r_lo = ov.loc["Loyalty only", "unsub_loy"] / ov.loc["Loyalty only", "clients"] * 100
+    r_bc = ov.loc["Both", "unsub_cards"] / ov.loc["Both", "clients"] * 100
+    r_bl = ov.loc["Both", "unsub_loy"] / ov.loc["Both", "clients"] * 100
+    wb = 0.34
+    bars = [(0.0, r_co, lob_colors["CARDS"]),
+            (1.0, r_lo, lob_colors["LOYALTY"]),
+            (2.0 - wb/2, r_bc, lob_colors["CARDS"]),
+            (2.0 + wb/2, r_bl, lob_colors["LOYALTY"])]
+    for bx, bv, bc_ in bars:
+        axes[0].bar(bx, bv, wb, color=bc_)
+        axes[0].text(bx, bv + 0.02, f"{bv:.2f}%", ha="center", va="bottom",
+                     fontsize=10.5, fontweight="bold")
+    _ymax0 = max(b[1] for b in bars) * 1.3
+    axes[0].set_ylim(0, _ymax0)
     axes[0].set_xticks(x)
     axes[0].set_xticklabels([f"{s}\nn = {int(ov.loc[s, 'clients']):,}" for s in order])
-    axes[0].set_ylim(0, either.max() * 1.3)
-    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom a Cards or Loyalty list, Jan-Apr")
-    axes[0].set_title("HEADLINE — of each group,\nhow many unsubscribed?",
+    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom THAT LOB's lists, Jan-Apr")
+    axes[0].set_title("HEADLINE — clean attribution:\nunsubs counted only on the group's own lists",
                       fontweight="bold", fontsize=11, pad=8)
     # PANEL 2 — exposure: how much mail each group actually received
     if has_vol:
@@ -563,11 +573,11 @@ else:
         "the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED email to the client in the window.",
         fontsize=11.5, fontweight="bold")
     fig.text(0.01, 0.015,
-             "Unsub is counted on the two LOBs' lists. A 'Cards only' client can still show a trace of Loyalty-list "
-             "unsubs (0.02-0.07%): the group is set by mail DELIVERED Jan-Apr, but a client can act in-window on an "
-             "email sent BEFORE the window, and one preference-page visit can close several lists (verified 2026-08-05).",
+             "CLEAN ATTRIBUTION: a group's unsub rate counts ONLY unsubscribes on that LOB's own lists — a Cards-only "
+             "client closing a Loyalty list is NOT counted (and vice versa). 'Both' shows its two scoped rates "
+             "side by side. Dark blue = Cards lists, tundra = Loyalty lists — same colors both panels.",
              fontsize=8, style="italic", ha="left")
     plt.tight_layout(rect=[0, 0.06, 1, 0.85]); plt.show()
-    print("HOW TO READ: left = share of each exclusive group that"
-          " unsubscribed. Right = how much mail each group received -"
-          " the volume context for judging the left panel.")
+    print("HOW TO READ: left = each group's unsub rate on ITS OWN lists"
+          " (Both = two scoped rates). Right = how much mail each group"
+          " received - the volume context for the left panel.")
