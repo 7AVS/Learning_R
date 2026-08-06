@@ -157,6 +157,54 @@ ax.set_title("S1: Cards MNE x Month — Unsub Counts (Cards LOB, mapping file)\n
              fontweight="bold")
 plt.tight_layout(); plt.show()
 
+# %% [markdown]
+# ---
+# # Stakeholder follow-up — three asks (2026-08-06)
+#
+# Feedback on the spotlight asked us to narrow focus to three things:
+#
+# 1. **Loyalty x Cards overlap** — is unsub% higher when a client gets both
+#    Loyalty and Cards mail vs one alone? *Status: pending — needs one new
+#    client-grain pull keyed on the LOYALTY rows of the mapping file. Not
+#    in this notebook yet.*
+# 2. **Attrition** — do unsubscribers leave Cards and/or the bank more
+#    than stayers? *Answered below (cell [PM-2]).*
+# 3. **Profit population check** — the original then->now profit compared
+#    only clients present at BOTH anchors. If more leavers than stayers
+#    drop out between anchors, the surviving remnant is better-selected
+#    and the comparison is biased. *Answered below (cell [PM-1]) by
+#    holding the THEN population fixed.*
+#
+# **Definitions used throughout** (same as the delta section):
+# cohort = 4,783,193 clients mailed by a Cards campaign on/before
+# Jun 30 2025 · "leaver" = client with a Cards-marketing unsubscribe by
+# that anchor (NOT account closure, NOT attrition) · then = Jun 30 2025,
+# now = Jun 30 2026 · profit = UCP annual estimate · clients with no UCP
+# match are shown explicitly, never silently dropped.
+
+# %% [markdown]
+# ## PM-1 — Profit, recomputed on a fixed population
+#
+# **The concern (verbatim logic):** "then" population 4MM at $800 vs
+# "now" 3MM at $1,000 is not a fair comparison — the missing 1MM took
+# their profit with them.
+#
+# **What we did:** kept the THEN population fixed and computed the "now"
+# average two ways: **(a) survivors only** — the original basis, shown
+# for transparency; **(b) population-fixed** — clients who vanished from
+# UCP by "now" stay in the denominator at $0.
+#
+# **Result (run 2026-08-06):** the finding survives the correction.
+# Population-fixed: leavers $550 -> $688 (**+$138, +25.1%**), stayers
+# $795 -> $982 (**+$187, +23.6%**). Profit rises for both groups on both
+# bases; the survivors-only basis was mildly inflating both (the vanished
+# averaged only $134 leaver / $183 stayer — low-value clients). Basis (b)
+# is the number we report going forward.
+#
+# **What the check DID surface:** leavers vanish from UCP at **5.9% vs
+# 2.6%** for stayers (2.2x) — see the ledger chart. That is a real
+# difference in who disappears, and it feeds the attrition answer below.
+
 # %% [3] PM ask #3 — profit, three bases (needs pm_asks_results.csv)
 # (a) survivors-only = published basis; (b) population-fixed, vanished at
 # $0 now = the PM's requested basis; delta shown for both. G2: n labeled.
@@ -197,6 +245,25 @@ else:
                  "UCP-matched clients; no-match shown in ledger below",
                  fontsize=11, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
+
+# %% [markdown]
+# ## PM-2 — Do unsubscribers leave more? Yes, on every cut.
+#
+# Base: clients holding the card category at "then". Two exits measured:
+# **lost the card category** (still visible in UCP, no cards now) and
+# **vanished from UCP entirely** (no record at "now" — a left-the-bank
+# PROXY; confirming true bank exit needs a relationship-status source we
+# don't have in this data).
+#
+# **Result (run 2026-08-06):** leavers lose the card category at
+# **1.91% vs 1.63%** for stayers (x1.17) and vanish at **1.74% vs 1.30%**
+# (x1.34) — combined ~3.7% vs ~2.9%. At the whole-relationship level the
+# gap is wider: 5.9% vs 2.6% vanished (ledger). Unsubscribers are not
+# just going deaf — a measurably larger share of them is drifting out.
+#
+# **Caveat that stays attached:** descriptive, not causal. Leavers skew
+# younger and 4-7yr tenure; some of this gap is who they are, not what
+# the unsubscribe did. Groups are not matched here.
 
 # %% [4] PM ask #2 — card attrition + population ledger (needs pm CSV)
 if not HAS_PM:
