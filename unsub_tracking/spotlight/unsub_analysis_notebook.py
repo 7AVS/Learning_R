@@ -419,9 +419,16 @@ else:
 
 # %% [5] OVERLAP pull — one aggregated cube, cached to CSV (pod + Teradata)
 OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
-if os.path.exists(OVERLAP_CSV):
-    print(f"CACHED: {OVERLAP_CSV} exists - no Teradata pull. Delete it to re-pull.")
+_ALL_CACHES = [OVERLAP_CSV,
+               os.path.join(BASE, "pm_overlap_detail.csv"),
+               os.path.join(BASE, "pm_overlap_mne.csv")]
+if all(os.path.exists(p) for p in _ALL_CACHES):
+    print("CACHED: all three overlap caches exist - no Teradata pull needed.")
 else:
+    for _p in _ALL_CACHES:      # stale/partial cache set -> rebuild all three
+        if os.path.exists(_p):
+            os.remove(_p)
+            print(f"removed stale cache {_p}")
     import getpass
     import teradatasql
     lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, TRIM(LOB_Manual) AS lob FROM mapping").df()
