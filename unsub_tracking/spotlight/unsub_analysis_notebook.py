@@ -55,6 +55,14 @@ C_NOW  = "#FCA311"   # Sunburst
 C_LINE = "#B00020"   # Red (secondary) — per Andre 2026-08-06, was Sky blue
 C_POS  = "#AABA0A"   # Apple
 
+# LOB colour map (same scheme as the local analysis notebook)
+lob_colors = {
+    "CARDS": "#003168", "LOYALTY": "#87AFBF", "PSI": "#AABA0A",
+    "PBA": "#FFC72C", "COMMERCIAL": "#588886", "RBC_BANK": "#51B5E0",
+    "UNKNOWN": "#899299", "HEF": "#FCA311", "AUTO": "#B8A970",
+    "INS": "#C1B5A5", "PL": "#6F6E6F",
+}
+
 def compact_n(v):
     v = float(v)
     if abs(v) >= 1_000_000: return f"{v/1_000_000:.1f}M"
@@ -177,7 +185,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
 
 # %% [markdown]
 # ---
-# # Stakeholder follow-up — three asks (2026-08-06)
+# # Stakeholder follow-up — the three asks from the 2026-08-06 feedback email
 #
 # Feedback on the spotlight asked us to narrow focus to three things:
 #
@@ -186,11 +194,11 @@ plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
 #    client-grain pull keyed on the LOYALTY rows of the mapping file. Not
 #    in this notebook yet.*
 # 2. **Attrition** — do unsubscribers leave Cards and/or the bank more
-#    than stayers? *Answered below (cell [PM-2]).*
+#    than stayers? *Answered below (cell [ATTRITION]).*
 # 3. **Profit population check** — the original then->now profit compared
 #    only clients present at BOTH anchors. If more leavers than stayers
 #    drop out between anchors, the surviving remnant is better-selected
-#    and the comparison is biased. *Answered below (cell [PM-1]) by
+#    and the comparison is biased. *Answered below (cell [PROFIT CHECK]) by
 #    holding the THEN population fixed.*
 #
 # **Definitions used throughout** (same as the delta section):
@@ -201,7 +209,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
 # match are shown explicitly, never silently dropped.
 
 # %% [markdown]
-# ## PM-1 — Profit, recomputed on a fixed population
+# ## PROFIT CHECK — Profit, recomputed on a fixed population
 #
 # **The question this answers:** "did profit really grow for
 # unsubscribers, or did the comparison quietly drop the clients who
@@ -229,7 +237,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
 #
 # **What the check DID surface:** leavers VANISH from the profitability
 # data at **5.9% vs 2.6%** for stayers — 2.2x. Who disappears differs
-# even though the profit of those who stay does not. That feeds PM-2.
+# even though the profit of those who stay does not. That feeds ATTRITION.
 
 # %% [3] PM ask #3 — profit, three bases (needs pm_asks_results.csv)
 # (a) survivors-only = published basis; (b) population-fixed, vanished at
@@ -272,17 +280,19 @@ else:
     for ax in axes:
         ax.set_ylim(0, ymax * 1.32)   # headroom so labels never collide
     axes[0].set_ylabel("avg annual profit estimate ($, UCP)")
-    axes[0].legend(frameon=False, loc="upper left")
-    fig.suptitle("PM-1: Did unsubscribers' profit really grow? Same data, two ways of counting",
+    _h, _l = axes[0].get_legend_handles_labels()
+    fig.legend(_h, _l, loc="upper right", frameon=False, fontsize=9,
+               ncol=2, bbox_to_anchor=(0.99, 0.90))   # OUTSIDE the axes - never over bars
+    fig.suptitle("PROFIT CHECK: Did unsubscribers' profit really grow? Same data, two ways of counting",
                  fontsize=12.5, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.94]); plt.show()
+    plt.tight_layout(rect=[0, 0, 1, 0.85]); plt.show()
     print("HOW TO READ: panel (a) is the original math - it silently drops"
           " clients who vanished by 2026. Panel (b) keeps every June-2025"
           " client; vanished ones count as $0 now. The story holds in (b):"
           " both groups grow, leavers slightly faster in % terms.")
 
 # %% [markdown]
-# ## PM-2 — Do unsubscribers actually leave more? Yes, on every cut.
+# ## ATTRITION — Do unsubscribers actually leave more? Yes, on every cut.
 #
 # **The question this answers:** "unsubscribing is annoying but free —
 # does anything REAL follow it? Do these clients drop their card, or the
@@ -297,7 +307,7 @@ else:
 # (2) and (3) happen for unsubscribers vs everyone else.
 #
 # **Left chart** = those two exit rates, unsubscribers (leavers) vs
-# stayers. **Right chart** = the population ledger behind PM-1: of each
+# stayers. **Right chart** = the population ledger behind PROFIT CHECK: of each
 # group's June-2025 clients, how many were still findable in June 2026
 # vs vanished — the raw counts the percentages come from.
 #
@@ -351,13 +361,13 @@ else:
         axes[1].text(i, bot[i], f"vanished: {vn:,.0f}\n({vn / mt * 100:.1f}%)",
                      ha="center", va="bottom", fontsize=9, fontweight="bold", color=C_LINE)
     axes[1].set_ylim(0, bot.max() * 1.25)
-    axes[1].set_title("Where each group's Jun-2025 clients ended up\n(the counts behind PM-1's fix)",
+    axes[1].set_title("Where each group's Jun-2025 clients ended up\n(the counts behind PROFIT CHECK's fix)",
                       fontweight="bold", fontsize=11, pad=8)
     axes[1].yaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
     axes[1].legend(frameon=False, fontsize=8.5, loc="center right")
     for a in axes:
         a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
-    fig.suptitle("PM-2: Do unsubscribers leave more? (descriptive — groups not matched)",
+    fig.suptitle("ATTRITION: Do unsubscribers leave more? (descriptive — groups not matched)",
                  fontsize=12.5, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
     print("HOW TO READ: left = among cardholders, exit is modestly higher"
@@ -365,7 +375,7 @@ else:
           " leavers vanish at 5.9% vs 2.6% - 2.2x the stayer rate.")
 
 # %% [markdown]
-# ## PM-3 — Loyalty x Cards overlap: is unsub% higher when a client gets both?
+# ## OVERLAP — Loyalty x Cards overlap: is unsub% higher when a client gets both?
 #
 # **The question this answers:** "does receiving BOTH Loyalty and Cards
 # mail come with more unsubscribing than receiving just one?"
@@ -407,7 +417,7 @@ else:
 # the server), 10 client-number bites for spool safety, result cached to
 # pm_overlap_results.csv — Teradata is touched once, ever.
 
-# %% [5] PM-3 pull — one aggregated cube, cached to CSV (pod + Teradata)
+# %% [5] OVERLAP pull — one aggregated cube, cached to CSV (pod + Teradata)
 OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
 if os.path.exists(OVERLAP_CSV):
     print(f"CACHED: {OVERLAP_CSV} exists - no Teradata pull. Delete it to re-pull.")
@@ -444,7 +454,11 @@ else:
                MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
                MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy,
                MAX(CASE WHEN e.mne IN (%(cards)s) AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_cards,
-               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy,
+               SUM(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_cards,
+               SUM(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_loy,
+               COUNT(DISTINCT CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN e.mne END) AS mnes_cards,
+               COUNT(DISTINCT CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN e.mne END) AS mnes_loy
         FROM ev e
         INNER JOIN ids i
            ON i.consumer_id_hashed = e.consumer_id_hashed
@@ -456,7 +470,11 @@ else:
            COUNT(*) AS clients,
            SUM(unsub_cards) AS unsub_cards,
            SUM(unsub_loy) AS unsub_loy,
-           SUM(CASE WHEN unsub_cards = 1 OR unsub_loy = 1 THEN 1 ELSE 0 END) AS unsub_either
+           SUM(CASE WHEN unsub_cards = 1 OR unsub_loy = 1 THEN 1 ELSE 0 END) AS unsub_either,
+           SUM(emails_cards) AS emails_cards,
+           SUM(emails_loy) AS emails_loy,
+           SUM(mnes_cards) AS sum_mnes_cards,
+           SUM(mnes_loy) AS sum_mnes_loy
     FROM cl
     GROUP BY 1, 2
     """
@@ -475,7 +493,7 @@ else:
     print(f"WROTE {OVERLAP_CSV}:")
     print(ov)
 
-# %% [6] PM-3 chart — unsub% by overlap segment (self-explanatory build)
+# %% [6] OVERLAP chart — unsub% by overlap segment (self-explanatory build)
 if not os.path.exists(OVERLAP_CSV):
     print("SKIP: run cell [5] on the pod first (needs Teradata once).")
 else:
@@ -488,9 +506,12 @@ else:
     ov = ov.set_index("segment").reindex(order)
     n_tot = int(ov["clients"].sum())
 
+    has_vol = "emails_cards" in ov.columns
     fig, axes = plt.subplots(1, 2, figsize=(14, 6),
-                             gridspec_kw={"width_ratios": [1, 1.3]})
-    # PANEL 1 — the headline: one bar per group, % who unsubscribed at all
+                             gridspec_kw={"width_ratios": [1, 1.15]})
+    # PANEL 1 — the headline: one bar per group, % who unsubscribed at all.
+    # Unsub counted on the two LOBs' lists (for a single-LOB group that is
+    # effectively its own lists; cross-LOB trace explained in footnote).
     x = np.arange(len(order))
     either = ov["unsub_either"] / ov["clients"] * 100
     axes[0].bar(x, either, 0.55, color=C_THEN)
@@ -500,40 +521,53 @@ else:
     axes[0].set_xticks(x)
     axes[0].set_xticklabels([f"{s}\nn = {int(ov.loc[s, 'clients']):,}" for s in order])
     axes[0].set_ylim(0, either.max() * 1.3)
-    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom ANY list (Cards or Loyalty), Jan-Apr")
-    axes[0].set_title("HEADLINE — one bar per client group:\nhow many unsubscribed at all?",
+    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom a Cards or Loyalty list, Jan-Apr")
+    axes[0].set_title("HEADLINE — of each group,\nhow many unsubscribed?",
                       fontweight="bold", fontsize=11, pad=8)
-    # PANEL 2 — the detail: which list type they closed
-    w = 0.38
-    for off, col, colr, lab in [(-w/2, "unsub_cards", C_THEN, "closed a Cards list"),
-                                (w/2, "unsub_loy", C_LINE, "closed a Loyalty list")]:
-        rate = ov[col] / ov["clients"] * 100
-        axes[1].bar(x + off, rate, w, color=colr, label=lab)
-        for xi, r_ in zip(x + off, rate):
-            axes[1].text(xi, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
-                         fontsize=9.5, fontweight="bold")
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(order)
-    axes[1].set_ylim(0, either.max() * 1.3)   # same scale as headline panel
-    axes[1].set_title("DETAIL — same groups, split by\nWHICH list type they closed",
-                      fontweight="bold", fontsize=11, pad=8)
-    axes[1].legend(frameon=False, fontsize=9)
+    # PANEL 2 — exposure: how much mail each group actually received
+    if has_vol:
+        w = 0.38
+        ec = ov["emails_cards"] / ov["clients"]
+        el = ov["emails_loy"] / ov["clients"]
+        mc = ov["sum_mnes_cards"] / ov["clients"]
+        ml = ov["sum_mnes_loy"] / ov["clients"]
+        b1 = axes[1].bar(x - w/2, ec, w, color=lob_colors["CARDS"], label="Cards emails")
+        b2 = axes[1].bar(x + w/2, el, w, color=lob_colors["LOYALTY"], label="Loyalty emails")
+        for xi, (v, m) in zip(x - w/2, zip(ec, mc)):
+            if v > 0:
+                axes[1].text(xi, v + 0.05, f"{v:.1f}\n({m:.1f} programs)",
+                             ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+        for xi, (v, m) in zip(x + w/2, zip(el, ml)):
+            if v > 0:
+                axes[1].text(xi, v + 0.05, f"{v:.1f}\n({m:.1f} programs)",
+                             ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(order)
+        axes[1].set_ylim(0, max(ec.max(), el.max()) * 1.35)
+        axes[1].set_ylabel("avg delivered emails per client, Jan-Apr")
+        axes[1].set_title("EXPOSURE — how much mail did each\ngroup get? (avg emails; distinct programs)",
+                          fontweight="bold", fontsize=11, pad=8)
+    else:
+        axes[1].axis("off")
+        axes[1].text(0.5, 0.5, "Exposure panel needs the re-pull:\ndelete pm_overlap_results.csv\nand rerun cell [5] once.",
+                     ha="center", va="center", fontsize=11)
     for a in axes:
         a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
+    handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", frameon=False,
+                   fontsize=9, bbox_to_anchor=(0.99, 0.90))
     fig.suptitle(
-        "PM-3: Does getting BOTH Loyalty and Cards mail come with more unsubscribing?  —  Jan-Apr 2026\n"
+        "OVERLAP: Does getting BOTH Loyalty and Cards mail come with more unsubscribing?  —  Jan-Apr 2026\n"
         f"Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed enterprise-wide;\n"
         "the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED email to the client in the window.",
         fontsize=11.5, fontweight="bold")
     fig.text(0.01, 0.015,
-             "Why 'Cards only' shows a small Loyalty-list bar (and vice versa): the group is set by mail DELIVERED "
-             "Jan-Apr, but a client can act in-window on an email from BEFORE the window, and one visit to the "
-             "preference page can close several lists (both mechanics verified 2026-08-05). Those trace bars "
-             "(0.02-0.07%) measure exactly that.",
+             "Unsub is counted on the two LOBs' lists. A 'Cards only' client can still show a trace of Loyalty-list "
+             "unsubs (0.02-0.07%): the group is set by mail DELIVERED Jan-Apr, but a client can act in-window on an "
+             "email sent BEFORE the window, and one preference-page visit can close several lists (verified 2026-08-05).",
              fontsize=8, style="italic", ha="left")
-    plt.tight_layout(rect=[0, 0.06, 1, 0.86]); plt.show()
-    print("HOW TO READ, in one breath: split everyone mailed by these two"
-          " LOBs into three exclusive groups; the left panel says what share"
-          " of each group unsubscribed from anything; the right panel says"
-          " which list type they closed. Both-group clients unsub LESS than"
-          " Loyalty-only clients - the overlap does not show compounding.")
+    plt.tight_layout(rect=[0, 0.06, 1, 0.85]); plt.show()
+    print("HOW TO READ: left = share of each exclusive group that"
+          " unsubscribed. Right = how much mail each group received -"
+          " the volume context for judging the left panel.")
