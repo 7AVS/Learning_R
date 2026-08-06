@@ -323,6 +323,10 @@ else:
 # **Definitions:** mailed = >=1 delivered send (disposition 1) from that
 # LOB's mnemonics in-window · unsub = >=1 unsubscribe (disposition 4) on
 # that scope in-window · rates shown with their n (mailed clients).
+#
+# **Caveat that stays attached:** who receives both LOBs' mail is not
+# random (targeting selects them) — a higher "Both" rate describes the
+# overlap population, it does not prove the overlap causes unsubs.
 
 # %% [5] PM-3 pull — one aggregated cube, cached to CSV (pod + Teradata)
 OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
