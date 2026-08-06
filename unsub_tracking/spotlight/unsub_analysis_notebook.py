@@ -18,9 +18,29 @@ pd.set_option("display.width", 160)
 pd.set_option("display.max_columns", 20)
 pd.set_option("display.max_rows", 60)
 
-# --- pick ONE base folder (pod / local) -------------------------------
-BASE = os.path.expanduser("~/unsub_unified_out/")            # pod
-# BASE = r"\\maple.fg.rbc.com\...\Cards\Unsubs\output"       # local share
+# --- data sources ------------------------------------------------------
+# On the pod (Spark kernel) the loader reads the HDFS copies the pipeline
+# landed; anywhere else it falls back to the CSV folder automatically.
+# Small derived files (pm_asks_results, pm_overlap cache) always live in
+# the local folder.
+HDFS_OUT = "hdfs:///user/427966379/unsub_unified/out/"
+BASE = os.path.expanduser("~/unsub_unified_out/")            # pod local
+# BASE = r"\\maple.fg.rbc.com\...\Cards\Unsubs\output"       # laptop share
+USE_HDFS = "spark" in globals()
+
+def load_cube(fname, **read_csv_kwargs):
+    """HDFS-first (pod), local-CSV fallback. Returns pandas."""
+    if USE_HDFS:
+        try:
+            pdf = (spark.read.csv(HDFS_OUT + fname, header=True,
+                                  inferSchema=True).toPandas())
+            print(f"  {fname:28s} <- HDFS ({len(pdf):,} rows)")
+            return pdf
+        except Exception as e:
+            print(f"  {fname:28s} HDFS miss ({type(e).__name__}) -> local")
+    pdf = pd.read_csv(os.path.join(BASE, fname), **read_csv_kwargs)
+    print(f"  {fname:28s} <- local ({len(pdf):,} rows)")
+    return pdf
 
 SMALL_BASE = 10_000   # G3 small-base guard
 
@@ -37,18 +57,21 @@ def compact_n(v):
     return f"{v:.0f}"
 
 con = duckdb.connect()
+print(f"Loading cubes (USE_HDFS={USE_HDFS}):")
+_frames = {}
 for view, fname in [("a1", "a1_mne_share.csv"), ("a1_lob", "a1_lob_dedup.csv"),
                     ("a2", "a2_mne_rates.csv"), ("a3", "a3_contact_cube.csv"),
                     ("a4", "a4_profile_cube.csv"), ("b", "b_before_after_cube.csv"),
                     ("mapping", "mapping_mne.csv")]:
-    con.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_csv_auto('{os.path.join(BASE, fname)}')")
+    _frames[view] = load_cube(fname)
+    con.register(view, _frames[view])
 
-_cdf = pd.read_csv(os.path.join(BASE, "c_monthly_curve.csv"),
-                   encoding="latin-1", on_bad_lines="skip")
+_cdf = load_cube("c_monthly_curve.csv", encoding="latin-1", on_bad_lines="skip")
 _cdf.columns = ["mne", "ym", "sends", "unsubs_attributed"]
+_cdf["ym"] = _cdf["ym"].astype(str).str.strip()
 _cdf["sends"] = pd.to_numeric(_cdf["sends"], errors="coerce")
 _cdf["unsubs_attributed"] = pd.to_numeric(_cdf["unsubs_attributed"], errors="coerce")
-con.execute("CREATE OR REPLACE VIEW c AS SELECT * FROM _cdf")
+con.register("c", _cdf)
 
 # pm_asks_results.csv exists only after spotlight/pm_asks_recompute.py has
 # run once in the pod — guard so this notebook still works without it.
