@@ -1,6 +1,6 @@
 # unsub_analysis_notebook.py — repo-owned rebuild of the CSV analysis
 # notebook. SELF-CONTAINED: cold start needs only (1) Python with duckdb,
-# pandas, numpy, matplotlib; (2) the delivered CSVs in ONE folder. Runs on
+# pandas, numpy, plotly; (2) the delivered CSVs in ONE folder. Runs on
 # the pod (jovyan) or a local machine — set BASE below, nothing else.
 # Chart conventions follow spotlight/plot_revision_prompt.py G1-G8:
 # percent format w/ 2 decimals, n on every rate, small-base guard <10k,
@@ -11,8 +11,9 @@ import os
 import duckdb
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 pd.set_option("display.width", 160)
 pd.set_option("display.max_columns", 20)
@@ -155,33 +156,34 @@ mpos = range(len(months))
 ymax_sends = df0["sends"].max() * 1.1
 ymax_rate = df0["unsub_per_email_pct"].max() * 1.1
 
-fig, axes = plt.subplots(3, 2, figsize=(16, 14), sharex=True, sharey=True)
-axes = axes.flatten()
-for ax, lob in zip(axes, lob_order):
+_titles, _subs = [], {}
+for lob in lob_order:
     sub = df0[df0["lob_manual"] == lob].set_index("ym").reindex(months)
-    ax.bar(mpos, sub["sends"].fillna(0), color=C_THEN, alpha=0.7, edgecolor="white")
+    _subs[lob] = sub
     tot_s, tot_u = sub["sends"].sum(), sub["unsubs"].sum()
-    ax.set_title(f"{lob}  (total sends: {compact_n(tot_s)} | avg unsub rate: "
-                 f"{tot_u * 100.0 / tot_s:.2f}%)", fontweight="bold")
-    ax.set_ylabel("Sends"); ax.set_ylim(0, ymax_sends)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x/1e6:.1f}M"))
-    ax.tick_params(axis="y", labelleft=True)
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    ax2 = ax.twinx()
-    ax2.plot(mpos, sub["unsub_per_email_pct"], color=C_LINE, marker="o",
-             linewidth=1.8, markersize=4)
-    ax2.set_ylim(0, ymax_rate)
-    ax2.set_ylabel("Unsubs per email %", color=C_LINE, fontsize=8)
-    ax2.tick_params(axis="y", colors=C_LINE)
-    ax2.spines["top"].set_visible(False)
-for i in range(len(lob_order), len(axes)):
-    axes[i].set_visible(False)
-for ax in axes[:len(lob_order)]:
-    ax.set_xticks(list(mpos)); ax.set_xticklabels(months, rotation=45, fontsize=8)
-fig.suptitle("Q0: Monthly Sends and Unsub Rate by LOB — Aug 2025 to Jun 2026\n"
-             "(bars = delivered emails; line = unsubs per delivered email %  |  "
-             "LOB from Andre's mapping file)", fontsize=12, fontweight="bold", y=0.995)
-plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
+    _titles.append(f"{lob}  (total sends: {compact_n(tot_s)} | "
+                   f"avg unsub rate: {tot_u * 100.0 / tot_s:.2f}%)")
+fig = make_subplots(rows=3, cols=2, subplot_titles=_titles,
+                    specs=[[{"secondary_y": True}] * 2 for _ in range(3)],
+                    shared_xaxes=True, vertical_spacing=0.09)
+for i, lob in enumerate(lob_order):
+    r, c = i // 2 + 1, i % 2 + 1
+    sub = _subs[lob]
+    fig.add_trace(go.Bar(x=months, y=sub["sends"].fillna(0), marker_color=C_THEN,
+                         opacity=0.75, showlegend=False), row=r, col=c)
+    fig.add_trace(go.Scatter(x=months, y=sub["unsub_per_email_pct"],
+                             mode="lines+markers", line=dict(color=C_LINE, width=2),
+                             marker=dict(size=5), showlegend=False),
+                  row=r, col=c, secondary_y=True)
+    fig.update_yaxes(range=[0, ymax_sends], row=r, col=c, secondary_y=False,
+                     tickformat="~s")
+    fig.update_yaxes(range=[0, ymax_rate], row=r, col=c, secondary_y=True,
+                     color=C_LINE, showgrid=False)
+fig.update_layout(template="plotly_white", height=950,
+    title=("Q0: Monthly Sends and Unsub Rate by LOB — Aug 2025 to Jun 2026<br>"
+           "<sup>bars = delivered emails · red line = unsubs per delivered email % · "
+           "LOB from Andre's mapping file</sup>"))
+fig.show()
 
 # %% [markdown]
 # ---
@@ -250,42 +252,41 @@ else:
            .pivot_table(index=["table", "grp"], columns="metric",
                         values="value", aggfunc="first"))
     prof = pmw.loc["profit_three_ways"]
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=True)
-    ymax = 0
-    for ax, (label, then_col, now_col) in zip(axes, [
-            ("(a) ORIGINAL basis — survivors only", "avg_then_survivors", "avg_now_survivors"),
-            ("(b) FIXED basis — everyone kept, vanished = $0", "avg_then_all", "avg_now_zerofill")]):
-        grps = ["stayer", "leaver"]
-        x = np.arange(len(grps)); w = 0.36
-        thin = [prof.loc[g, then_col] for g in grps]
-        now = [prof.loc[g, now_col] for g in grps]
-        ax.bar(x - w/2, thin, w, color=C_THEN, label="avg profit Jun 2025")
-        ax.bar(x + w/2, now, w, color=C_NOW, label="avg profit Jun 2026")
-        for xi, (t, n) in zip(x, zip(thin, now)):
-            ax.text(xi - w/2, t + 12, f"${t:,.0f}", ha="center", va="bottom",
-                    fontsize=9, fontweight="bold")
-            ax.text(xi + w/2, n + 12, f"${n:,.0f}", ha="center", va="bottom",
-                    fontsize=9, fontweight="bold")
-            d, dp = n - t, (n - t) / t * 100
-            ax.text(xi, max(t, n) * 1.16,
-                    f"{'+' if d >= 0 else ''}${d:,.0f}  ({dp:+.1f}%)",
-                    ha="center", fontsize=10.5,
-                    color=C_POS if d >= 0 else C_LINE, fontweight="bold")
-        ymax = max(ymax, max(now + thin))
-        ns = [int(prof.loc[g, "n_then_matched"]) for g in grps]
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"{g.upper()}\nn = {n:,}" for g, n in zip(grps, ns)])
-        ax.set_title(label, fontweight="bold", fontsize=11, pad=10)
-        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    for ax in axes:
-        ax.set_ylim(0, ymax * 1.32)   # headroom so labels never collide
-    axes[0].set_ylabel("avg annual profit estimate ($, UCP)")
-    _h, _l = axes[0].get_legend_handles_labels()
-    fig.legend(_h, _l, loc="upper right", frameon=False, fontsize=9,
-               ncol=2, bbox_to_anchor=(0.99, 0.90))   # OUTSIDE the axes - never over bars
-    fig.suptitle("PROFIT CHECK: Did unsubscribers' profit really grow? Same data, two ways of counting",
-                 fontsize=12.5, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.85]); plt.show()
+    grps = ["stayer", "leaver"]
+    ns = [int(prof.loc[g, "n_then_matched"]) for g in grps]
+    xlabels = [f"{g.upper()}<br>n = {n:,}" for g, n in zip(grps, ns)]
+    bases = [("(a) ORIGINAL basis — survivors only", "avg_then_survivors", "avg_now_survivors"),
+             ("(b) FIXED basis — everyone kept, vanished = $0", "avg_then_all", "avg_now_zerofill")]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=[b[0] for b in bases],
+                        shared_yaxes=True)
+    _ymax = 0.0
+    for ci, (_, tc, nc) in enumerate(bases, start=1):
+        thin = [float(prof.loc[g, tc]) for g in grps]
+        now = [float(prof.loc[g, nc]) for g in grps]
+        _ymax = max(_ymax, *thin, *now)
+        fig.add_trace(go.Bar(name="avg profit Jun 2025", x=xlabels, y=thin,
+                             marker_color=C_THEN, text=[f"${t:,.0f}" for t in thin],
+                             textposition="outside", showlegend=(ci == 1)),
+                      row=1, col=ci)
+        fig.add_trace(go.Bar(name="avg profit Jun 2026", x=xlabels, y=now,
+                             marker_color=C_NOW, text=[f"${n_:,.0f}" for n_ in now],
+                             textposition="outside", showlegend=(ci == 1)),
+                      row=1, col=ci)
+        for xi in range(len(grps)):
+            d = now[xi] - thin[xi]
+            dp = d / thin[xi] * 100
+            fig.add_annotation(x=xlabels[xi], y=max(thin[xi], now[xi]) * 1.2,
+                               text=f"<b>{'+' if d >= 0 else ''}${d:,.0f}  ({dp:+.1f}%)</b>",
+                               showarrow=False, row=1, col=ci,
+                               font=dict(color=C_POS if d >= 0 else C_LINE, size=13))
+    fig.update_yaxes(range=[0, _ymax * 1.38])
+    fig.update_yaxes(title_text="avg annual profit estimate ($, UCP)", row=1, col=1)
+    fig.update_layout(barmode="group", template="plotly_white", height=520,
+        title=("PROFIT CHECK: Did unsubscribers' profit really grow? Same data, two ways of counting<br>"
+               "<sup>(a) drops clients who vanished by 2026 · (b) keeps every June-2025 client, "
+               "vanished count as $0 now — (b) is the reported basis</sup>"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1))
+    fig.show()
     print("HOW TO READ: panel (a) is the original math - it silently drops"
           " clients who vanished by 2026. Panel (b) keeps every June-2025"
           " client; vanished ones count as $0 now. The story holds in (b):"
@@ -326,50 +327,41 @@ if not HAS_PM:
 else:
     led = pmw.loc["population_ledger"]
     att = pmw.loc["card_attrition"]
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
-    # LEFT — exit rates among June-2025 cardholders
     grps = ["stayer", "leaver"]
-    lost = [att.loc[g, "lost_cards_now"] / att.loc[g, "held_cards_then"] * 100 for g in grps]
-    van  = [att.loc[g, "vanished_from_ucp_now"] / att.loc[g, "held_cards_then"] * 100 for g in grps]
-    x = np.arange(len(grps)); w = 0.36
-    axes[0].bar(x - w/2, lost, w, color=C_THEN, label="no cards anymore (still a client)")
-    axes[0].bar(x + w/2, van, w, color=C_LINE, label="gone from the data (left-bank PROXY)")
-    for xi, (l, v) in zip(x, zip(lost, van)):
-        axes[0].text(xi - w/2, l + 0.03, f"{l:.2f}%", ha="center", va="bottom",
-                     fontsize=9.5, fontweight="bold")
-        axes[0].text(xi + w/2, v + 0.03, f"{v:.2f}%", ha="center", va="bottom",
-                     fontsize=9.5, fontweight="bold")
+    lost = [float(att.loc[g, "lost_cards_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
+    van  = [float(att.loc[g, "vanished_from_ucp_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
     ns = [int(att.loc[g, "held_cards_then"]) for g in grps]
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels([f"{g.upper()}\nheld cards Jun 2025: n = {n:,}"
-                             for g, n in zip(grps, ns)])
-    axes[0].set_ylim(0, max(lost + van) * 1.35)
-    axes[0].set_ylabel("% of Jun-2025 cardholders")
-    axes[0].set_title("Of clients who HAD cards in Jun 2025,\nwho exited by Jun 2026?",
-                      fontweight="bold", fontsize=11, pad=8)
-    axes[0].legend(frameon=False, fontsize=8.5, loc="upper left")
-    # RIGHT — the ledger: where each group's Jun-2025 clients ended up
-    bot = np.zeros(2)
-    for col, colr, lab in [("matched_now", C_THEN, "still found in Jun 2026"),
-                           ("vanished_now", C_LINE, "vanished by Jun 2026")]:
-        vals = [float(led.loc[g, col]) for g in grps]
-        axes[1].bar([g.upper() for g in grps], vals, bottom=bot, color=colr, label=lab)
-        bot += np.array(vals)
+    xl = [f"{g.upper()}<br>held cards Jun 2025: n = {n:,}" for g, n in zip(grps, ns)]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=[
+        "Of clients who HAD cards in Jun 2025,<br>who exited by Jun 2026?",
+        "Where each group's Jun-2025 clients ended up<br>(the counts behind PROFIT CHECK's fix)"])
+    fig.add_trace(go.Bar(name="no cards anymore (still a client)", x=xl, y=lost,
+                         marker_color=C_THEN, text=[f"{v:.2f}%" for v in lost],
+                         textposition="outside"), row=1, col=1)
+    fig.add_trace(go.Bar(name="gone from the data (left-bank PROXY)", x=xl, y=van,
+                         marker_color=C_LINE, text=[f"{v:.2f}%" for v in van],
+                         textposition="outside"), row=1, col=1)
+    fig.update_yaxes(range=[0, max(lost + van) * 1.4], row=1, col=1,
+                     title_text="% of Jun-2025 cardholders")
+    xg = [g.upper() for g in grps]
+    m_now = [float(led.loc[g, "matched_now"]) for g in grps]
+    v_now = [float(led.loc[g, "vanished_now"]) for g in grps]
+    fig.add_trace(go.Bar(name="still found in Jun 2026", x=xg, y=m_now,
+                         marker_color=C_THEN), row=1, col=2)
+    fig.add_trace(go.Bar(name="vanished by Jun 2026", x=xg, y=v_now, base=m_now,
+                         marker_color=C_LINE), row=1, col=2)
     for i, g in enumerate(grps):
         mt = float(led.loc[g, "matched_then"])
-        vn = float(led.loc[g, "vanished_now"])
-        axes[1].text(i, bot[i], f"vanished: {vn:,.0f}\n({vn / mt * 100:.1f}%)",
-                     ha="center", va="bottom", fontsize=9, fontweight="bold", color=C_LINE)
-    axes[1].set_ylim(0, bot.max() * 1.25)
-    axes[1].set_title("Where each group's Jun-2025 clients ended up\n(the counts behind PROFIT CHECK's fix)",
-                      fontweight="bold", fontsize=11, pad=8)
-    axes[1].yaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
-    axes[1].legend(frameon=False, fontsize=8.5, loc="center right")
-    for a in axes:
-        a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
-    fig.suptitle("ATTRITION: Do unsubscribers leave more? (descriptive — groups not matched)",
-                 fontsize=12.5, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
+        fig.add_annotation(x=xg[i], y=m_now[i] + v_now[i],
+                           text=f"<b>vanished: {v_now[i]:,.0f} ({v_now[i] / mt * 100:.1f}%)</b>",
+                           showarrow=False, yshift=16,
+                           font=dict(color=C_LINE, size=11), row=1, col=2)
+    fig.update_yaxes(tickformat="~s", row=1, col=2)
+    fig.update_layout(barmode="group", template="plotly_white", height=520,
+        title=("ATTRITION: Do unsubscribers leave more? "
+               "<sup>(descriptive — groups not matched)</sup>"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1))
+    fig.show()
     print("HOW TO READ: left = among cardholders, exit is modestly higher"
           " for leavers on both cuts. Right = at whole-relationship level"
           " leavers vanish at 5.9% vs 2.6% - 2.2x the stayer rate.")
@@ -566,77 +558,60 @@ else:
     n_tot = int(ov["clients"].sum())
 
     has_vol = "emails_cards" in ov.columns
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6),
-                             gridspec_kw={"width_ratios": [1, 1.15]})
-    # PANEL 1 — the headline, CLEAN ATTRIBUTION (Andre 2026-08-06): each
-    # group's unsub rate counts ONLY its own LOB's lists. Cards-only ->
-    # Cards-list unsubs; Loyalty-only -> Loyalty-list unsubs; Both -> the
-    # two scoped rates side by side. No union, no cross-scope bars.
-    x = np.arange(len(order))
+    # CLEAN ATTRIBUTION (Andre 2026-08-06): each group's unsub rate counts
+    # ONLY its own LOB's lists; Both shows its two scoped rates.
     r_co = ov.loc["Cards only", "unsub_cards"] / ov.loc["Cards only", "clients"] * 100
     r_lo = ov.loc["Loyalty only", "unsub_loy"] / ov.loc["Loyalty only", "clients"] * 100
     r_bc = ov.loc["Both", "unsub_cards"] / ov.loc["Both", "clients"] * 100
     r_bl = ov.loc["Both", "unsub_loy"] / ov.loc["Both", "clients"] * 100
-    wb = 0.34
-    bars = [(0.0, r_co, lob_colors["CARDS"]),
-            (1.0, r_lo, lob_colors["LOYALTY"]),
-            (2.0 - wb/2, r_bc, lob_colors["CARDS"]),
-            (2.0 + wb/2, r_bl, lob_colors["LOYALTY"])]
-    for bx, bv, bc_ in bars:
-        axes[0].bar(bx, bv, wb, color=bc_)
-        axes[0].text(bx, bv + 0.02, f"{bv:.2f}%", ha="center", va="bottom",
-                     fontsize=10.5, fontweight="bold")
-    _ymax0 = max(b[1] for b in bars) * 1.3
-    axes[0].set_ylim(0, _ymax0)
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels([f"{s}\nn = {int(ov.loc[s, 'clients']):,}" for s in order])
-    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom THAT LOB's lists, Jan-Apr")
-    axes[0].set_title("HEADLINE — clean attribution:\nunsubs counted only on the group's own lists",
-                      fontweight="bold", fontsize=11, pad=8)
-    # PANEL 2 — exposure: how much mail each group actually received
+    xcats = [f"{s}<br>n = {int(ov.loc[s, 'clients']):,}" for s in order]
+    cards_scope = [r_co, None, r_bc]
+    loy_scope = [None, r_lo, r_bl]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=[
+        "HEADLINE — clean attribution:<br>unsubs counted only on the group's own lists",
+        "EXPOSURE — how much mail did each group get?<br>(avg emails; distinct programs)"])
+    fig.add_trace(go.Bar(name="Cards lists", x=xcats, y=cards_scope,
+                         marker_color=lob_colors["CARDS"],
+                         text=[f"{v:.2f}%" if v is not None else "" for v in cards_scope],
+                         textposition="outside"), row=1, col=1)
+    fig.add_trace(go.Bar(name="Loyalty lists", x=xcats, y=loy_scope,
+                         marker_color=lob_colors["LOYALTY"],
+                         text=[f"{v:.2f}%" if v is not None else "" for v in loy_scope],
+                         textposition="outside"), row=1, col=1)
+    fig.update_yaxes(range=[0, max(r_co, r_lo, r_bc, r_bl) * 1.35], row=1, col=1,
+                     title_text="% of group's clients who unsubscribed<br>from THAT LOB's lists, Jan-Apr")
     if has_vol:
-        w = 0.38
         ec = ov["emails_cards"] / ov["clients"]
         el = ov["emails_loy"] / ov["clients"]
-        mc = ov["sum_mnes_cards"] / ov["clients"]
-        ml = ov["sum_mnes_loy"] / ov["clients"]
-        b1 = axes[1].bar(x - w/2, ec, w, color=lob_colors["CARDS"], label="Cards emails")
-        b2 = axes[1].bar(x + w/2, el, w, color=lob_colors["LOYALTY"], label="Loyalty emails")
-        for xi, (v, m) in zip(x - w/2, zip(ec, mc)):
-            if v > 0:
-                axes[1].text(xi, v + 0.05, f"{v:.1f}\n({m:.1f} programs)",
-                             ha="center", va="bottom", fontsize=8.5, fontweight="bold")
-        for xi, (v, m) in zip(x + w/2, zip(el, ml)):
-            if v > 0:
-                axes[1].text(xi, v + 0.05, f"{v:.1f}\n({m:.1f} programs)",
-                             ha="center", va="bottom", fontsize=8.5, fontweight="bold")
-        axes[1].set_xticks(x)
-        axes[1].set_xticklabels(order)
-        axes[1].set_ylim(0, max(ec.max(), el.max()) * 1.35)
-        axes[1].set_ylabel("avg delivered emails per client, Jan-Apr")
-        axes[1].set_title("EXPOSURE — how much mail did each\ngroup get? (avg emails; distinct programs)",
-                          fontweight="bold", fontsize=11, pad=8)
+        mcnt = ov["sum_mnes_cards"] / ov["clients"]
+        mlnt = ov["sum_mnes_loy"] / ov["clients"]
+        fig.add_trace(go.Bar(name="Cards emails", x=xcats, y=ec,
+                             marker_color=lob_colors["CARDS"], showlegend=False,
+                             text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
+                                   for v, m in zip(ec, mcnt)],
+                             textposition="outside"), row=1, col=2)
+        fig.add_trace(go.Bar(name="Loyalty emails", x=xcats, y=el,
+                             marker_color=lob_colors["LOYALTY"], showlegend=False,
+                             text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
+                                   for v, m in zip(el, mlnt)],
+                             textposition="outside"), row=1, col=2)
+        fig.update_yaxes(range=[0, max(ec.max(), el.max()) * 1.4], row=1, col=2,
+                         title_text="avg delivered emails per client, Jan-Apr")
     else:
-        axes[1].axis("off")
-        axes[1].text(0.5, 0.5, "Exposure panel needs the re-pull:\ndelete pm_overlap_results.csv\nand rerun cell [5] once.",
-                     ha="center", va="center", fontsize=11)
-    for a in axes:
-        a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
-    handles, labels = axes[1].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="upper right", frameon=False,
-                   fontsize=9, bbox_to_anchor=(0.99, 0.90))
-    fig.suptitle(
-        "OVERLAP: Does getting BOTH Loyalty and Cards mail come with more unsubscribing?  —  Jan-Apr 2026\n"
-        f"Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed enterprise-wide;\n"
-        "the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED email to the client in the window.",
-        fontsize=11.5, fontweight="bold")
-    fig.text(0.01, 0.015,
-             "CLEAN ATTRIBUTION: a group's unsub rate counts ONLY unsubscribes on that LOB's own lists — a Cards-only "
-             "client closing a Loyalty list is NOT counted (and vice versa). 'Both' shows its two scoped rates "
-             "side by side. Dark blue = Cards lists, tundra = Loyalty lists — same colors both panels.",
-             fontsize=8, style="italic", ha="left")
-    plt.tight_layout(rect=[0, 0.06, 1, 0.85]); plt.show()
+        fig.add_annotation(x=0.78, y=0.5, xref="paper", yref="paper", showarrow=False,
+                           text="Exposure panel needs the re-pull:<br>rerun cell [5] once.")
+    fig.update_layout(barmode="group", template="plotly_white", height=560,
+        title=("OVERLAP: Does getting BOTH Loyalty and Cards mail come with more unsubscribing? — Jan-Apr 2026<br>"
+               f"<sup>Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed "
+               "enterprise-wide; the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED "
+               "email in the window.</sup>"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1))
+    fig.add_annotation(x=0, y=-0.16, xref="paper", yref="paper", showarrow=False,
+                       align="left", font=dict(size=10, color="#555"),
+                       text=("<i>CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that LOB's own lists — "
+                             "a Cards-only client closing a Loyalty list is NOT counted (and vice versa). "
+                             "Dark blue = Cards lists, tundra = Loyalty lists — same colors both panels.</i>"))
+    fig.show()
     print("HOW TO READ: left = each group's unsub rate on ITS OWN lists"
           " (Both = two scoped rates). Right = how much mail each group"
           " received - the volume context for the left panel.")
@@ -651,15 +626,6 @@ else:
 # Jan-Apr). Needs pm_overlap_detail.csv (the cell-[5] re-pull).
 
 # %% [7] Program-count distribution per group
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    HAS_PLOTLY = True
-except ImportError:
-    HAS_PLOTLY = False
-    print("plotly not installed (pip install plotly from artifactory) - "
-          "falling back to matplotlib.")
-
 DETAIL_CSV = os.path.join(BASE, "pm_overlap_detail.csv")
 if not os.path.exists(DETAIL_CSV):
     print("SKIP: pm_overlap_detail.csv missing - delete pm_overlap_results.csv "
@@ -677,35 +643,18 @@ else:
             .unstack(fill_value=0).reindex(["Cards only", "Loyalty only", "Both"]))
     share = dist.div(dist.sum(axis=1), axis=0) * 100
     print(dist)
-    if HAS_PLOTLY:
-        long = share.reset_index().melt(id_vars="segment",
-                                        var_name="programs", value_name="share")
-        fig = px.bar(long, x="segment", y="share", color="programs",
-                     color_discrete_sequence=["#003168", "#51B5E0", "#87AFBF", "#FCA311"],
-                     text=long["share"].map(lambda v: f"{v:.0f}%" if v >= 3 else ""),
-                     title=("How many DISTINCT programs mailed each client? — Jan-Apr 2026<br>"
-                            "<sup>share of each group's clients by number of programs "
-                            "(their own Cards/Loyalty scope) · groups mutually exclusive</sup>"))
-        fig.update_layout(barmode="stack", yaxis_title="% of group's clients",
-                          xaxis_title="", legend_title="programs",
-                          template="plotly_white", height=480)
-        fig.show()
-    else:
-        fig, ax = plt.subplots(figsize=(9, 5))
-        bot = np.zeros(len(share))
-        cols = ["#003168", "#51B5E0", "#87AFBF", "#FCA311"]
-        for cix, pb in enumerate([c for c in ["1", "2", "3", "4+"] if c in share.columns]):
-            ax.bar(share.index, share[pb], bottom=bot, color=cols[cix], label=f"{pb} programs")
-            for i, v in enumerate(share[pb]):
-                if v >= 3:
-                    ax.text(i, bot[i] + v/2, f"{v:.0f}%", ha="center", va="center",
-                            fontsize=9, color="white", fontweight="bold")
-            bot += share[pb].values
-        ax.set_ylabel("% of group's clients"); ax.legend(frameon=False)
-        ax.set_title("How many DISTINCT programs mailed each client? — Jan-Apr 2026",
-                     fontweight="bold")
-        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-        plt.tight_layout(); plt.show()
+    long = share.reset_index().melt(id_vars="segment",
+                                    var_name="programs", value_name="share")
+    fig = px.bar(long, x="segment", y="share", color="programs",
+                 color_discrete_sequence=["#003168", "#51B5E0", "#87AFBF", "#FCA311"],
+                 text=long["share"].map(lambda v: f"{v:.0f}%" if v >= 3 else ""),
+                 title=("How many DISTINCT programs mailed each client? — Jan-Apr 2026<br>"
+                        "<sup>share of each group's clients by number of programs "
+                        "(their own Cards/Loyalty scope) · groups mutually exclusive</sup>"))
+    fig.update_layout(barmode="stack", yaxis_title="% of group's clients",
+                      xaxis_title="", legend_title="programs",
+                      template="plotly_white", height=480)
+    fig.show()
 
 # %% [markdown]
 # ## OVERLAP deep-dive B — WHICH programs are these?
@@ -731,38 +680,25 @@ else:
         [["mne", "lob"]])
     mc["mne"] = mc["mne"].str.strip()
     mc = mc.merge(lobmap, on="mne", how="left")
+    mc = mc[mc["clients_mailed"] > 0].copy()   # drop cross-scope unsub-only rows (inf%)
     mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
+    mc.loc[mc["clients_mailed"] < SMALL_BASE, "mne"] = (
+        mc.loc[mc["clients_mailed"] < SMALL_BASE, "mne"] + " △")  # small-base badge
     segs = ["Cards only", "Loyalty only", "Both"]
-    if HAS_PLOTLY:
-        from plotly.subplots import make_subplots
-        fig = make_subplots(rows=1, cols=3, subplot_titles=segs, shared_yaxes=False)
-        for ci, seg in enumerate(segs, start=1):
-            top = (mc[mc["segment"] == seg]
-                   .sort_values("clients_mailed", ascending=True).tail(12))
-            fig.add_trace(go.Bar(
-                x=top["clients_mailed"], y=top["mne"], orientation="h",
-                marker_color=[lob_colors.get(l, "#899299") for l in top["lob"]],
-                text=[f"{v:,.0f} · {r:.2f}%" for v, r in
-                      zip(top["clients_mailed"], top["unsub_rate"])],
-                textposition="outside", showlegend=False), row=1, col=ci)
-        fig.update_layout(
-            title=("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026<br>"
-                   "<sup>label = clients mailed · that program's unsub rate within the group | "
-                   "color: dark blue = Cards LOB, tundra = Loyalty LOB</sup>"),
-            template="plotly_white", height=520)
-        fig.show()
-    else:
-        fig, axes = plt.subplots(1, 3, figsize=(16, 6))
-        for ax, seg in zip(axes, segs):
-            top = (mc[mc["segment"] == seg]
-                   .sort_values("clients_mailed", ascending=True).tail(12))
-            ax.barh(top["mne"], top["clients_mailed"],
-                    color=[lob_colors.get(l, "#899299") for l in top["lob"]])
-            for y_, (v, r_) in enumerate(zip(top["clients_mailed"], top["unsub_rate"])):
-                ax.text(v, y_, f" {compact_n(v)} · {r_:.2f}%", va="center", fontsize=7.5)
-            ax.set_title(seg, fontweight="bold")
-            ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-        fig.suptitle("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026\n"
-                     "label = clients mailed · that program's unsub rate within the group",
-                     fontweight="bold", fontsize=11)
-        plt.tight_layout(rect=[0, 0, 1, 0.9]); plt.show()
+    fig = make_subplots(rows=1, cols=3, subplot_titles=segs, shared_yaxes=False)
+    for ci, seg in enumerate(segs, start=1):
+        top = (mc[mc["segment"] == seg]
+               .sort_values("clients_mailed", ascending=True).tail(12))
+        fig.add_trace(go.Bar(
+            x=top["clients_mailed"], y=top["mne"], orientation="h",
+            marker_color=[lob_colors.get(l, "#899299") for l in top["lob"]],
+            text=[f"{v:,.0f} · {r:.2f}%" for v, r in
+                  zip(top["clients_mailed"], top["unsub_rate"])],
+            textposition="outside", showlegend=False), row=1, col=ci)
+        fig.update_xaxes(tickformat="~s", row=1, col=ci)
+    fig.update_layout(
+        title=("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026<br>"
+               "<sup>label = clients mailed · that program's unsub rate within the group | "
+               "color: dark blue = Cards LOB, tundra = Loyalty LOB | △ = <10K mailed (small base)</sup>"),
+        template="plotly_white", height=520)
+    fig.show()
