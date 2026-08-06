@@ -266,11 +266,11 @@ else:
         _ymax = max(_ymax, *thin, *now)
         fig.add_trace(go.Bar(name="avg profit Jun 2025", x=xlabels, y=thin,
                              marker_color=C_THEN, text=[f"${t:,.0f}" for t in thin],
-                             textposition="outside", showlegend=(ci == 1)),
+                             textposition="outside", cliponaxis=False, showlegend=(ci == 1)),
                       row=1, col=ci)
         fig.add_trace(go.Bar(name="avg profit Jun 2026", x=xlabels, y=now,
                              marker_color=C_NOW, text=[f"${n_:,.0f}" for n_ in now],
-                             textposition="outside", showlegend=(ci == 1)),
+                             textposition="outside", cliponaxis=False, showlegend=(ci == 1)),
                       row=1, col=ci)
         for xi in range(len(grps)):
             d = now[xi] - thin[xi]
@@ -337,10 +337,10 @@ else:
         "Where each group's Jun-2025 clients ended up<br>(the counts behind PROFIT CHECK's fix)"])
     fig.add_trace(go.Bar(name="no cards anymore (still a client)", x=xl, y=lost,
                          marker_color=C_THEN, text=[f"{v:.2f}%" for v in lost],
-                         textposition="outside"), row=1, col=1)
+                         textposition="outside", cliponaxis=False), row=1, col=1)
     fig.add_trace(go.Bar(name="gone from the data (left-bank PROXY)", x=xl, y=van,
                          marker_color=C_LINE, text=[f"{v:.2f}%" for v in van],
-                         textposition="outside"), row=1, col=1)
+                         textposition="outside", cliponaxis=False), row=1, col=1)
     fig.update_yaxes(range=[0, max(lost + van) * 1.4], row=1, col=1,
                      title_text="% of Jun-2025 cardholders")
     xg = [g.upper() for g in grps]
@@ -357,10 +357,11 @@ else:
                            showarrow=False, yshift=16,
                            font=dict(color=C_LINE, size=11), row=1, col=2)
     fig.update_yaxes(tickformat="~s", row=1, col=2)
-    fig.update_layout(barmode="group", template="plotly_white", height=520,
+    fig.update_layout(barmode="group", template="plotly_white", height=560,
+        margin=dict(t=150),
         title=("ATTRITION: Do unsubscribers leave more? "
                "<sup>(descriptive — groups not matched)</sup>"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1))
+        legend=dict(orientation="h", yanchor="bottom", y=1.14, xanchor="right", x=1))
     fig.show()
     print("HOW TO READ: left = among cardholders, exit is modestly higher"
           " for leavers on both cuts. Right = at whole-relationship level"
@@ -573,11 +574,11 @@ else:
     fig.add_trace(go.Bar(name="Cards lists", x=xcats, y=cards_scope,
                          marker_color=lob_colors["CARDS"],
                          text=[f"{v:.2f}%" if v is not None else "" for v in cards_scope],
-                         textposition="outside"), row=1, col=1)
+                         textposition="outside", cliponaxis=False), row=1, col=1)
     fig.add_trace(go.Bar(name="Loyalty lists", x=xcats, y=loy_scope,
                          marker_color=lob_colors["LOYALTY"],
                          text=[f"{v:.2f}%" if v is not None else "" for v in loy_scope],
-                         textposition="outside"), row=1, col=1)
+                         textposition="outside", cliponaxis=False), row=1, col=1)
     fig.update_yaxes(range=[0, max(r_co, r_lo, r_bc, r_bl) * 1.35], row=1, col=1,
                      title_text="% of group's clients who unsubscribed<br>from THAT LOB's lists, Jan-Apr")
     if has_vol:
@@ -589,23 +590,24 @@ else:
                              marker_color=lob_colors["CARDS"], showlegend=False,
                              text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
                                    for v, m in zip(ec, mcnt)],
-                             textposition="outside"), row=1, col=2)
+                             textposition="outside", cliponaxis=False), row=1, col=2)
         fig.add_trace(go.Bar(name="Loyalty emails", x=xcats, y=el,
                              marker_color=lob_colors["LOYALTY"], showlegend=False,
                              text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
                                    for v, m in zip(el, mlnt)],
-                             textposition="outside"), row=1, col=2)
+                             textposition="outside", cliponaxis=False), row=1, col=2)
         fig.update_yaxes(range=[0, max(ec.max(), el.max()) * 1.4], row=1, col=2,
                          title_text="avg delivered emails per client, Jan-Apr")
     else:
         fig.add_annotation(x=0.78, y=0.5, xref="paper", yref="paper", showarrow=False,
                            text="Exposure panel needs the re-pull:<br>rerun cell [5] once.")
-    fig.update_layout(barmode="group", template="plotly_white", height=560,
+    fig.update_layout(barmode="group", template="plotly_white", height=620,
+        margin=dict(t=160, b=110),
         title=("OVERLAP: Does getting BOTH Loyalty and Cards mail come with more unsubscribing? — Jan-Apr 2026<br>"
                f"<sup>Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed "
                "enterprise-wide; the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED "
                "email in the window.</sup>"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1))
+        legend=dict(orientation="h", yanchor="bottom", y=1.16, xanchor="right", x=1))
     fig.add_annotation(x=0, y=-0.16, xref="paper", yref="paper", showarrow=False,
                        align="left", font=dict(size=10, color="#555"),
                        text=("<i>CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that LOB's own lists — "
@@ -694,8 +696,9 @@ else:
             marker_color=[lob_colors.get(l, "#899299") for l in top["lob"]],
             text=[f"{v:,.0f} · {r:.2f}%" for v, r in
                   zip(top["clients_mailed"], top["unsub_rate"])],
-            textposition="outside", showlegend=False), row=1, col=ci)
-        fig.update_xaxes(tickformat="~s", row=1, col=ci)
+            textposition="outside", cliponaxis=False, showlegend=False), row=1, col=ci)
+        fig.update_xaxes(tickformat="~s", row=1, col=ci,
+                         range=[0, float(top["clients_mailed"].max()) * 1.45])
     fig.update_layout(
         title=("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026<br>"
                "<sup>label = clients mailed · that program's unsub rate within the group | "
