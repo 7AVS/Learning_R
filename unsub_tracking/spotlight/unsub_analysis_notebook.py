@@ -377,10 +377,12 @@ else:
 # Jan-Apr 2026 we look at each client's DELIVERED emails (disposition 1
 # rows — the send records we verified are written same-day and
 # completely). If every delivered email in the window came from Cards
-# mnemonics only -> bucket "Cards only". Only Loyalty mnemonics ->
-# "Loyalty only". At least one of each -> "Both". Cards/Loyalty
-# membership = the LOB_Manual column of the mapping file, same as every
-# other chart here.
+# mnemonics only -> "Cards only". Only Loyalty -> "Loyalty only".
+# FIFA (FWC) is ISOLATED as its own exposure (Andre 2026-08-06): its 2.9M
+# blast would otherwise swamp the Cards read. Groups are every combination
+# of the three exposures (Cards ex-FIFA / FIFA / Loyalty); tiny groups
+# (<0.5% of total) are dropped from charts with a printed note.
+# Cards/Loyalty membership = the LOB_Manual column of the mapping file.
 #
 # **"Cards only" does NOT mean the client gets no other mail.** They may
 # receive PSI, PBA, insurance, anything else — the buckets only describe
@@ -410,25 +412,34 @@ else:
 # the server), 10 client-number bites for spool safety, result cached to
 # pm_overlap_results.csv — Teradata is touched once, ever.
 
-# %% [5] OVERLAP pull — one aggregated cube, cached to CSV (pod + Teradata)
+# %% [5] OVERLAP pull v2 — FIFA isolated; three caches; auto-invalidates
 OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
 _ALL_CACHES = [OVERLAP_CSV,
                os.path.join(BASE, "pm_overlap_detail.csv"),
                os.path.join(BASE, "pm_overlap_mne.csv")]
-if all(os.path.exists(p) for p in _ALL_CACHES):
-    print("CACHED: all three overlap caches exist - no Teradata pull needed.")
+
+def _caches_current():
+    if not all(os.path.exists(p) for p in _ALL_CACHES):
+        return False
+    try:                      # schema check: v2 carries the FIFA flag
+        return "mailed_fwc" in pd.read_csv(OVERLAP_CSV, nrows=0).columns
+    except Exception:
+        return False
+
+if _caches_current():
+    print("CACHED: all three overlap caches exist (v2 schema) - no Teradata pull.")
 else:
-    for _p in _ALL_CACHES:      # stale/partial cache set -> rebuild all three
+    for _p in _ALL_CACHES:
         if os.path.exists(_p):
             os.remove(_p)
             print(f"removed stale cache {_p}")
     import getpass
     import teradatasql
-    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, TRIM(LOB_Manual) AS lob FROM mapping").df()
-    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]))
+    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
+    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
     LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
     assert CARDS_L and LOY_L, f"mapping gave cards={len(CARDS_L)} loyalty={len(LOY_L)} - STOP"
-    print(f"mapping: {len(CARDS_L)} CARDS mnes, {len(LOY_L)} LOYALTY mnes")
+    print(f"mapping: {len(CARDS_L)} CARDS mnes (ex-FWC), FWC isolated, {len(LOY_L)} LOYALTY mnes")
     _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
 
     _sql = """
@@ -443,7 +454,7 @@ else:
           AND disposition_cd IN (1, 4)
           AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
           AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, %(loy)s)
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
         GROUP BY 1, 2, 3
     ), ids AS (
         SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
@@ -452,10 +463,13 @@ else:
     ), cl AS (
         SELECT i.CLNT_NO,
                MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
                MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy,
                MAX(CASE WHEN e.mne IN (%(cards)s) AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_fwc,
                MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy,
                SUM(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_cards,
+               SUM(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_fwc,
                SUM(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_loy,
                COUNT(DISTINCT CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN e.mne END) AS mnes_cards,
                COUNT(DISTINCT CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN e.mne END) AS mnes_loy
@@ -466,18 +480,20 @@ else:
         WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
         GROUP BY 1
     )
-    SELECT mailed_cards, mailed_loy, mnes_cards, mnes_loy,
+    SELECT mailed_cards, mailed_fwc, mailed_loy, mnes_cards, mnes_loy,
            COUNT(*) AS clients,
            SUM(unsub_cards) AS unsub_cards,
+           SUM(unsub_fwc) AS unsub_fwc,
            SUM(unsub_loy) AS unsub_loy,
-           SUM(CASE WHEN unsub_cards = 1 OR unsub_loy = 1 THEN 1 ELSE 0 END) AS unsub_either,
+           SUM(CASE WHEN unsub_cards = 1 OR unsub_fwc = 1 OR unsub_loy = 1
+                    THEN 1 ELSE 0 END) AS unsub_any,
            SUM(emails_cards) AS emails_cards,
+           SUM(emails_fwc) AS emails_fwc,
            SUM(emails_loy) AS emails_loy
     FROM cl
-    GROUP BY 1, 2, 3, 4
+    GROUP BY 1, 2, 3, 4, 5
     """
 
-    # second query: WHICH programs each group received (bucket x mnemonic)
     _sql_mne = """
     WITH ev AS (
         SELECT consumer_id_hashed, TREATMENT_ID,
@@ -490,7 +506,7 @@ else:
           AND disposition_cd IN (1, 4)
           AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
           AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, %(loy)s)
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
         GROUP BY 1, 2, 3
     ), ids AS (
         SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
@@ -499,6 +515,7 @@ else:
     ), cl AS (
         SELECT i.CLNT_NO,
                MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
                MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy
         FROM ev e
         INNER JOIN ids i
@@ -507,7 +524,7 @@ else:
         WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
         GROUP BY 1
     )
-    SELECT c2.mailed_cards, c2.mailed_loy, e.mne,
+    SELECT c2.mailed_cards, c2.mailed_fwc, c2.mailed_loy, e.mne,
            COUNT(DISTINCT CASE WHEN e.sent = 1 THEN i.CLNT_NO END) AS clients_mailed,
            COUNT(DISTINCT CASE WHEN e.unsub = 1 THEN i.CLNT_NO END) AS clients_unsub
     FROM ev e
@@ -515,7 +532,7 @@ else:
        ON i.consumer_id_hashed = e.consumer_id_hashed
       AND i.TREATMENT_ID = e.TREATMENT_ID
     INNER JOIN cl c2 ON c2.CLNT_NO = i.CLNT_NO
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
     """
     _u = input("Enter your username: ")
     _p = getpass.getpass("Enter your password: ")
@@ -527,181 +544,163 @@ else:
         parts.append(pd.read_sql(_sql % kw, EDW))
         parts_mne.append(pd.read_sql(_sql_mne % kw, EDW))
         print(f"bite {bite} done: {parts[-1]['clients'].sum():,.0f} clients")
+    _FLAGS = ["mailed_cards", "mailed_fwc", "mailed_loy"]
     detail = (pd.concat(parts)
-              .groupby(["mailed_cards", "mailed_loy", "mnes_cards", "mnes_loy"],
-                       as_index=False).sum())
+              .groupby(_FLAGS + ["mnes_cards", "mnes_loy"], as_index=False).sum())
     detail.to_csv(os.path.join(BASE, "pm_overlap_detail.csv"), index=False)
     mne_cube = (pd.concat(parts_mne)
-                .groupby(["mailed_cards", "mailed_loy", "mne"], as_index=False).sum())
+                .groupby(_FLAGS + ["mne"], as_index=False).sum())
     mne_cube.to_csv(os.path.join(BASE, "pm_overlap_mne.csv"), index=False)
-    # aggregate 4-row cube for the headline/exposure chart (schema-stable)
     agg = detail.copy()
     agg["sum_mnes_cards"] = agg["mnes_cards"] * agg["clients"]
     agg["sum_mnes_loy"] = agg["mnes_loy"] * agg["clients"]
-    ov = (agg.groupby(["mailed_cards", "mailed_loy"], as_index=False)
-          [["clients", "unsub_cards", "unsub_loy", "unsub_either",
-            "emails_cards", "emails_loy", "sum_mnes_cards", "sum_mnes_loy"]].sum())
+    ov = (agg.groupby(_FLAGS, as_index=False)
+          [["clients", "unsub_cards", "unsub_fwc", "unsub_loy", "unsub_any",
+            "emails_cards", "emails_fwc", "emails_loy",
+            "sum_mnes_cards", "sum_mnes_loy"]].sum())
     ov.to_csv(OVERLAP_CSV, index=False)
     print(f"WROTE {OVERLAP_CSV} + pm_overlap_detail.csv + pm_overlap_mne.csv:")
     print(ov)
 
-# %% [6] OVERLAP chart — unsub% by overlap segment (self-explanatory build)
-if not os.path.exists(OVERLAP_CSV):
-    print("SKIP: run cell [5] on the pod first (needs Teradata once).")
+# %% [6] OVERLAP chart v2 — FIFA isolated, clean scoped attribution
+SEG_ORDER = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only",
+             "Cards+FIFA", "Cards+Loyalty", "FIFA+Loyalty", "All three"]
+def seg_name(c, f, l):
+    return {(1, 0, 0): "Cards only (ex-FIFA)", (0, 1, 0): "FIFA only",
+            (0, 0, 1): "Loyalty only", (1, 1, 0): "Cards+FIFA",
+            (1, 0, 1): "Cards+Loyalty", (0, 1, 1): "FIFA+Loyalty",
+            (1, 1, 1): "All three"}.get((int(c), int(f), int(l)))
+
+if not _caches_current():
+    print("SKIP: run cell [5] first (needs Teradata once).")
 else:
     ov = pd.read_csv(OVERLAP_CSV)
-    ov = ov[(ov["mailed_cards"] == 1) | (ov["mailed_loy"] == 1)]
-    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
-    ov["segment"] = ov.apply(lambda r: segname.get(
-        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
-    order = ["Cards only", "Loyalty only", "Both"]
-    ov = ov.set_index("segment").reindex(order)
+    ov = ov[(ov[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
+    ov["segment"] = ov.apply(lambda r: seg_name(r["mailed_cards"], r["mailed_fwc"],
+                                                r["mailed_loy"]), axis=1)
+    ov = ov.set_index("segment").reindex(SEG_ORDER).dropna(subset=["clients"])
     n_tot = int(ov["clients"].sum())
+    small = ov[ov["clients"] < n_tot * 0.005]
+    if len(small):
+        print("dropped from charts (<0.5% of total):",
+              {s_: int(v) for s_, v in small["clients"].items()})
+    ov = ov[ov["clients"] >= n_tot * 0.005]
+    segs = [s_ for s_ in SEG_ORDER if s_ in ov.index]
+    xcats = [f"{s_}<br>n = {int(ov.loc[s_, 'clients']):,}" for s_ in segs]
 
-    has_vol = "emails_cards" in ov.columns
-    # CLEAN ATTRIBUTION (Andre 2026-08-06): each group's unsub rate counts
-    # ONLY its own LOB's lists; Both shows its two scoped rates.
-    r_co = ov.loc["Cards only", "unsub_cards"] / ov.loc["Cards only", "clients"] * 100
-    r_lo = ov.loc["Loyalty only", "unsub_loy"] / ov.loc["Loyalty only", "clients"] * 100
-    r_bc = ov.loc["Both", "unsub_cards"] / ov.loc["Both", "clients"] * 100
-    r_bl = ov.loc["Both", "unsub_loy"] / ov.loc["Both", "clients"] * 100
-    xcats = [f"{s}<br>n = {int(ov.loc[s, 'clients']):,}" for s in order]
-    cards_scope = [r_co, None, r_bc]
-    loy_scope = [None, r_lo, r_bl]
+    def scoped(col, flag):
+        return [float(ov.loc[s_, col] / ov.loc[s_, "clients"] * 100)
+                if ov.loc[s_, flag] == 1 else None for s_ in segs]
+    _scope_style = [("unsub_cards", "mailed_cards", "Cards lists (ex-FIFA)", lob_colors["CARDS"]),
+                    ("unsub_fwc", "mailed_fwc", "FIFA list", C_NOW),
+                    ("unsub_loy", "mailed_loy", "Loyalty lists", lob_colors["LOYALTY"])]
     fig = make_subplots(rows=1, cols=2, subplot_titles=[
         "HEADLINE — clean attribution:<br>unsubs counted only on the group's own lists",
-        "EXPOSURE — how much mail did each group get?<br>(avg emails; distinct programs)"])
-    fig.add_trace(go.Bar(name="Cards lists", x=xcats, y=cards_scope,
-                         marker_color=lob_colors["CARDS"],
-                         text=[f"{v:.2f}%" if v is not None else "" for v in cards_scope],
-                         textposition="outside", cliponaxis=False), row=1, col=1)
-    fig.add_trace(go.Bar(name="Loyalty lists", x=xcats, y=loy_scope,
-                         marker_color=lob_colors["LOYALTY"],
-                         text=[f"{v:.2f}%" if v is not None else "" for v in loy_scope],
-                         textposition="outside", cliponaxis=False), row=1, col=1)
-    fig.update_yaxes(range=[0, max(r_co, r_lo, r_bc, r_bl) * 1.35], row=1, col=1,
-                     title_text="% of group's clients who unsubscribed<br>from THAT LOB's lists, Jan-Apr")
-    if has_vol:
-        ec = ov["emails_cards"] / ov["clients"]
-        el = ov["emails_loy"] / ov["clients"]
-        mcnt = ov["sum_mnes_cards"] / ov["clients"]
-        mlnt = ov["sum_mnes_loy"] / ov["clients"]
-        fig.add_trace(go.Bar(name="Cards emails", x=xcats, y=ec,
-                             marker_color=lob_colors["CARDS"], showlegend=False,
-                             text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
-                                   for v, m in zip(ec, mcnt)],
+        "EXPOSURE — avg delivered emails per client"])
+    _hmax = 0.0
+    for col, flag, nm, colr in _scope_style:
+        vals = scoped(col, flag)
+        _hmax = max([_hmax] + [v for v in vals if v is not None])
+        fig.add_trace(go.Bar(name=nm, x=xcats, y=vals, marker_color=colr,
+                             text=[f"{v:.2f}%" if v is not None else "" for v in vals],
+                             textposition="outside", cliponaxis=False), row=1, col=1)
+    fig.update_yaxes(range=[0, _hmax * 1.4], row=1, col=1,
+                     title_text="% of group's clients who unsubscribed<br>from THAT scope's lists, Jan-Apr")
+    for col, flag, nm, colr in [("emails_cards", "mailed_cards", "Cards emails", lob_colors["CARDS"]),
+                                ("emails_fwc", "mailed_fwc", "FIFA emails", C_NOW),
+                                ("emails_loy", "mailed_loy", "Loyalty emails", lob_colors["LOYALTY"])]:
+        vals = [float(ov.loc[s_, col] / ov.loc[s_, "clients"])
+                if ov.loc[s_, flag] == 1 else None for s_ in segs]
+        fig.add_trace(go.Bar(name=nm, x=xcats, y=vals, marker_color=colr, showlegend=False,
+                             text=[f"{v:.1f}" if v is not None else "" for v in vals],
                              textposition="outside", cliponaxis=False), row=1, col=2)
-        fig.add_trace(go.Bar(name="Loyalty emails", x=xcats, y=el,
-                             marker_color=lob_colors["LOYALTY"], showlegend=False,
-                             text=[f"{v:.1f}<br>({m:.1f} programs)" if v > 0 else ""
-                                   for v, m in zip(el, mlnt)],
-                             textposition="outside", cliponaxis=False), row=1, col=2)
-        fig.update_yaxes(range=[0, max(ec.max(), el.max()) * 1.4], row=1, col=2,
-                         title_text="avg delivered emails per client, Jan-Apr")
-    else:
-        fig.add_annotation(x=0.78, y=0.5, xref="paper", yref="paper", showarrow=False,
-                           text="Exposure panel needs the re-pull:<br>rerun cell [5] once.")
-    fig.update_layout(barmode="group", template="plotly_white", height=620,
-        margin=dict(t=160, b=110),
-        title=("OVERLAP: Does getting BOTH Loyalty and Cards mail come with more unsubscribing? — Jan-Apr 2026<br>"
-               f"<sup>Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed "
-               "enterprise-wide; the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED "
-               "email in the window.</sup>"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.16, xanchor="right", x=1))
-    fig.add_annotation(x=0, y=-0.16, xref="paper", yref="paper", showarrow=False,
+    fig.update_yaxes(title_text="avg delivered emails per client, Jan-Apr", row=1, col=2)
+    fig.update_layout(barmode="group", template="plotly_white", height=640,
+        margin=dict(t=170, b=120),
+        title=("OVERLAP (FIFA isolated): unsub rate by mail-exposure group — Jan-Apr 2026<br>"
+               f"<sup>Groups are MUTUALLY EXCLUSIVE clients (each counted once; sum = {n_tot:,} of ~10.4M "
+               "mailed enterprise-wide). Group = which exposures (Cards ex-FIFA / FIFA / Loyalty) "
+               "DELIVERED email in the window.</sup>"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.18, xanchor="right", x=1))
+    fig.add_annotation(x=0, y=-0.20, xref="paper", yref="paper", showarrow=False,
                        align="left", font=dict(size=10, color="#555"),
-                       text=("<i>CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that LOB's own lists — "
-                             "a Cards-only client closing a Loyalty list is NOT counted (and vice versa). "
-                             "Dark blue = Cards lists, tundra = Loyalty lists — same colors both panels.</i>"))
-    fig.show()
-    print("HOW TO READ: left = each group's unsub rate on ITS OWN lists"
-          " (Both = two scoped rates). Right = how much mail each group"
-          " received - the volume context for the left panel.")
-
-# %% [markdown]
-# ## OVERLAP deep-dive A — how many programs did each client really get?
-#
-# The exposure panel's "avg 1.1 programs" is a mixture: most clients got
-# exactly one program's mail, a minority got several. This chart shows the
-# real split: within each group, the share of clients who received mail
-# from 1 / 2 / 3 / 4+ DISTINCT programs (their own two-LOB scope,
-# Jan-Apr). Needs pm_overlap_detail.csv (the cell-[5] re-pull).
-
-# %% [7] Program-count distribution per group
-DETAIL_CSV = os.path.join(BASE, "pm_overlap_detail.csv")
-if not os.path.exists(DETAIL_CSV):
-    print("SKIP: pm_overlap_detail.csv missing - delete pm_overlap_results.csv "
-          "and rerun cell [5] once (it now writes all three caches).")
-else:
-    det = pd.read_csv(DETAIL_CSV)
-    det = det[(det["mailed_cards"] == 1) | (det["mailed_loy"] == 1)].copy()
-    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
-    det["segment"] = det.apply(lambda r: segname.get(
-        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
-    det["n_programs"] = (det["mnes_cards"] + det["mnes_loy"]).clip(lower=1)
-    det["prog_bin"] = det["n_programs"].map(
-        lambda v: "1" if v == 1 else ("2" if v == 2 else ("3" if v == 3 else "4+")))
-    dist = (det.groupby(["segment", "prog_bin"])["clients"].sum()
-            .unstack(fill_value=0).reindex(["Cards only", "Loyalty only", "Both"]))
-    share = dist.div(dist.sum(axis=1), axis=0) * 100
-    print(dist)
-    long = share.reset_index().melt(id_vars="segment",
-                                    var_name="programs", value_name="share")
-    fig = px.bar(long, x="segment", y="share", color="programs",
-                 color_discrete_sequence=["#003168", "#51B5E0", "#87AFBF", "#FCA311"],
-                 text=long["share"].map(lambda v: f"{v:.0f}%" if v >= 3 else ""),
-                 title=("How many DISTINCT programs mailed each client? — Jan-Apr 2026<br>"
-                        "<sup>share of each group's clients by number of programs "
-                        "(their own Cards/Loyalty scope) · groups mutually exclusive</sup>"))
-    fig.update_layout(barmode="stack", yaxis_title="% of group's clients",
-                      xaxis_title="", legend_title="programs",
-                      template="plotly_white", height=480)
+                       text=("<i>CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that scope's own "
+                             "lists. Navy = Cards ex-FIFA, orange = FIFA, tundra = Loyalty — same colors "
+                             "both panels.</i>"))
     fig.show()
 
 # %% [markdown]
-# ## OVERLAP deep-dive B — WHICH programs are these?
+# ## OVERLAP deep-dive — WHICH programs, group by group
 #
-# Same groups, opened up by mnemonic: distinct clients mailed per program
-# within each group (top 12 per group), colored by LOB, with each
-# program's same-scope unsub rate labeled. Needs pm_overlap_mne.csv.
+# Single-exposure groups first (top programs, clients mailed · that
+# program's unsub rate within the group), then the combined groups get
+# their own figure with mailed AND unsub counts per program. Numbers
+# abbreviated (K/M). △ = <10K mailed (small base). FIFA colored orange.
 
-# %% [8] Program (mnemonic) composition per group
+# %% [7] Program composition — single-exposure groups
 MNE_CSV = os.path.join(BASE, "pm_overlap_mne.csv")
-if not os.path.exists(MNE_CSV):
-    print("SKIP: pm_overlap_mne.csv missing - delete pm_overlap_results.csv "
-          "and rerun cell [5] once.")
+if not _caches_current():
+    print("SKIP: run cell [5] first.")
 else:
     mc = pd.read_csv(MNE_CSV)
-    mc = mc[(mc["mailed_cards"] == 1) | (mc["mailed_loy"] == 1)].copy()
-    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
-    mc["segment"] = mc.apply(lambda r: segname.get(
-        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
+    mc = mc[(mc[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
+    mc["segment"] = mc.apply(lambda r: seg_name(r["mailed_cards"], r["mailed_fwc"],
+                                                r["mailed_loy"]), axis=1)
     lobmap = (_frames["mapping"].assign(
-        mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].str.strip(),
-        lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].str.strip())
+        mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].astype(str).str.strip(),
+        lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].astype(str).str.strip().str.upper())
         [["mne", "lob"]])
-    mc["mne"] = mc["mne"].str.strip()
+    mc["mne"] = mc["mne"].astype(str).str.strip()
     mc = mc.merge(lobmap, on="mne", how="left")
-    mc = mc[mc["clients_mailed"] > 0].copy()   # drop cross-scope unsub-only rows (inf%)
+    mc.loc[mc["mne"] == "FWC", "lob"] = "FIFA"
+    _lc = dict(lob_colors); _lc["FIFA"] = C_NOW
+    mc = mc[mc["clients_mailed"] > 0].copy()
     mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
-    mc.loc[mc["clients_mailed"] < SMALL_BASE, "mne"] = (
-        mc.loc[mc["clients_mailed"] < SMALL_BASE, "mne"] + " △")  # small-base badge
-    segs = ["Cards only", "Loyalty only", "Both"]
-    fig = make_subplots(rows=1, cols=3, subplot_titles=segs, shared_yaxes=False)
-    for ci, seg in enumerate(segs, start=1):
+    mc["label_mne"] = np.where(mc["clients_mailed"] < SMALL_BASE,
+                               mc["mne"] + " △", mc["mne"])
+    singles = [s_ for s_ in ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only"]
+               if s_ in set(mc["segment"])]
+    fig = make_subplots(rows=1, cols=len(singles), subplot_titles=singles)
+    for ci, seg in enumerate(singles, start=1):
         top = (mc[mc["segment"] == seg]
-               .sort_values("clients_mailed", ascending=True).tail(12))
+               .sort_values("clients_mailed", ascending=True).tail(10))
         fig.add_trace(go.Bar(
-            x=top["clients_mailed"], y=top["mne"], orientation="h",
-            marker_color=[lob_colors.get(l, "#899299") for l in top["lob"]],
-            text=[f"{v:,.0f} · {r:.2f}%" for v, r in
+            x=top["clients_mailed"], y=top["label_mne"], orientation="h",
+            marker_color=[_lc.get(l, "#899299") for l in top["lob"]],
+            text=[f"{compact_n(v)} · {r:.2f}%" for v, r in
                   zip(top["clients_mailed"], top["unsub_rate"])],
             textposition="outside", cliponaxis=False, showlegend=False), row=1, col=ci)
         fig.update_xaxes(tickformat="~s", row=1, col=ci,
-                         range=[0, float(top["clients_mailed"].max()) * 1.45])
+                         range=[0, float(top["clients_mailed"].max()) * 1.6])
     fig.update_layout(
-        title=("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026<br>"
+        title=("WHICH programs — single-exposure groups, Jan-Apr 2026<br>"
                "<sup>label = clients mailed · that program's unsub rate within the group | "
-               "color: dark blue = Cards LOB, tundra = Loyalty LOB | △ = <10K mailed (small base)</sup>"),
-        template="plotly_white", height=520)
+               "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed</sup>"),
+        template="plotly_white", height=460, margin=dict(t=110))
+    fig.show()
+
+# %% [8] Program composition — the COMBINED groups (own figure)
+if not _caches_current():
+    print("SKIP: run cell [5] first.")
+else:
+    combos = [s_ for s_ in ["Cards+Loyalty", "Cards+FIFA", "FIFA+Loyalty", "All three"]
+              if s_ in set(mc["segment"])]
+    fig = make_subplots(rows=1, cols=len(combos), subplot_titles=combos)
+    for ci, seg in enumerate(combos, start=1):
+        top = (mc[mc["segment"] == seg]
+               .sort_values("clients_mailed", ascending=True).tail(10))
+        fig.add_trace(go.Bar(
+            x=top["clients_mailed"], y=top["label_mne"], orientation="h",
+            marker_color=[_lc.get(l, "#899299") for l in top["lob"]],
+            text=[f"{compact_n(v)} mailed · {compact_n(u)} unsubs ({r:.2f}%)"
+                  for v, u, r in zip(top["clients_mailed"], top["clients_unsub"],
+                                     top["unsub_rate"])],
+            textposition="outside", cliponaxis=False, showlegend=False), row=1, col=ci)
+        fig.update_xaxes(tickformat="~s", row=1, col=ci,
+                         range=[0, float(top["clients_mailed"].max()) * 1.9])
+    fig.update_layout(
+        title=("WHICH programs — combined-exposure groups, Jan-Apr 2026<br>"
+               "<sup>label = clients mailed · unsubs · rate, all within the group | "
+               "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed</sup>"),
+        template="plotly_white", height=460, margin=dict(t=110))
     fig.show()
