@@ -303,3 +303,122 @@ else:
     for a in axes:
         a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
     plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## PM-3 — Loyalty x Cards overlap: is unsub% higher when a client gets both?
+#
+# **The ask:** compare unsub% for clients mailed by BOTH Loyalty and Cards
+# vs Cards-only vs Loyalty-only (Jan-Apr 2026).
+#
+# **Method:** no banked table holds client x mnemonic grain (the pipeline
+# collapses it server-side by design), and the source vendor tables live
+# in Teradata, not HDFS — so the fastest correct path on the pod is ONE
+# aggregated Teradata pull that returns an 8-number cube; nothing
+# client-grain ever leaves the server. Loyalty / Cards definitions come
+# from the mapping file's LOB_Manual column (Andre's mapping) — the same
+# definition every other chart in this notebook uses. The pull runs in
+# 10 client-number bites (spool safety) and caches its result to
+# pm_overlap_results.csv — reruns and local runs never touch Teradata.
+#
+# **Definitions:** mailed = >=1 delivered send (disposition 1) from that
+# LOB's mnemonics in-window · unsub = >=1 unsubscribe (disposition 4) on
+# that scope in-window · rates shown with their n (mailed clients).
+
+# %% [5] PM-3 pull — one aggregated cube, cached to CSV (pod + Teradata)
+OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
+if os.path.exists(OVERLAP_CSV):
+    print(f"CACHED: {OVERLAP_CSV} exists - no Teradata pull. Delete it to re-pull.")
+else:
+    import getpass
+    import teradatasql
+    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, TRIM(LOB_Manual) AS lob FROM mapping").df()
+    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]))
+    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
+    assert CARDS_L and LOY_L, f"mapping gave cards={len(CARDS_L)} loyalty={len(LOY_L)} - STOP"
+    print(f"mapping: {len(CARDS_L)} CARDS mnes, {len(LOY_L)} LOYALTY mnes")
+    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
+
+    _sql = """
+    WITH ev AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND disposition_cd IN (1, 4)
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, %(loy)s)
+        GROUP BY 1, 2, 3
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
+    ), cl AS (
+        SELECT i.CLNT_NO,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_cards,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT mailed_cards, mailed_loy,
+           COUNT(*) AS clients,
+           SUM(unsub_cards) AS unsub_cards,
+           SUM(unsub_loy) AS unsub_loy,
+           SUM(CASE WHEN unsub_cards = 1 OR unsub_loy = 1 THEN 1 ELSE 0 END) AS unsub_either
+    FROM cl
+    GROUP BY 1, 2
+    """
+    _u = input("Enter your username: ")
+    _p = getpass.getpass("Enter your password: ")
+    EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                              user=_u, password=_p, logmech="LDAP")
+    parts = []
+    for bite in range(10):
+        q = _sql % {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}
+        parts.append(pd.read_sql(q, EDW))
+        print(f"bite {bite} done: {parts[-1]['clients'].sum():,.0f} clients")
+    ov = (pd.concat(parts)
+          .groupby(["mailed_cards", "mailed_loy"], as_index=False).sum())
+    ov.to_csv(OVERLAP_CSV, index=False)
+    print(f"WROTE {OVERLAP_CSV}:")
+    print(ov)
+
+# %% [6] PM-3 chart — unsub% by overlap segment
+if not os.path.exists(OVERLAP_CSV):
+    print("SKIP: run cell [5] on the pod first (needs Teradata once).")
+else:
+    ov = pd.read_csv(OVERLAP_CSV)
+    ov = ov[(ov["mailed_cards"] == 1) | (ov["mailed_loy"] == 1)]
+    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
+    ov["segment"] = ov.apply(lambda r: segname.get(
+        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
+    order = ["Cards only", "Loyalty only", "Both"]
+    ov = ov.set_index("segment").reindex(order)
+    x = np.arange(len(order)); w = 0.27
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    for off, col, colr, lab in [(-w, "unsub_cards", C_THEN, "unsub on a Cards list"),
+                                (0.0, "unsub_loy", C_LINE, "unsub on a Loyalty list"),
+                                (w, "unsub_either", C_NOW, "unsub on either")]:
+        rate = ov[col] / ov["clients"] * 100
+        ax.bar(x + off, rate, w, color=colr, label=lab)
+        for xi, r_ in zip(x + off, rate):
+            ax.text(xi, r_, f"{r_:.2f}%", ha="center", va="bottom",
+                    fontsize=8.5, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{s}\n(n={int(ov.loc[s, 'clients']):,})" for s in order])
+    ax.set_ylabel("unsubscribed in window (% of mailed clients)")
+    ax.set_title("PM-3: Unsub rate by Loyalty x Cards mail overlap — Jan-Apr 2026\n"
+                 "mailed = >=1 delivered send from that LOB (mapping file) | "
+                 "unsub = >=1 list unsubscribe in window", fontweight="bold", fontsize=11)
+    ax.legend(frameon=False)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    plt.tight_layout(); plt.show()
