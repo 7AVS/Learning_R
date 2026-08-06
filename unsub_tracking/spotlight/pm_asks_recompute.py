@@ -76,3 +76,41 @@ print("READ: (a) avg_now_survivors - avg_then_survivors = old claim;"
 )).show()
 print("READ: rates = lost/held and vanished/held, leaver vs stayer."
       " Descriptive, not causal (unsubbers skew younger / 4-7yr tenure).")
+
+# ---------------------------------------------------------------- Cell 5
+# EXPORT for local plotting: the three tables above, stacked long
+# (table, grp, metric, value) into ONE small CSV (~40 rows) in
+# ~/unsub_unified_out/. Download it and plot locally - no pod needed
+# after this.
+import os, pandas as pd
+
+def _long(sdf, table):
+    pdf = sdf.toPandas()
+    out = pdf.melt(id_vars=["grp"], var_name="metric", value_name="value")
+    out.insert(0, "table", table)
+    return out
+
+_ledger = (j.groupBy("grp").agg(
+    F.count("*").alias("clients_then_pop"),
+    F.sum(F.when(F.col("prof_then").isNotNull(), 1).otherwise(0)).alias("matched_then"),
+    F.sum(F.when(F.col("prof_now").isNotNull(), 1).otherwise(0)).alias("matched_now"),
+    F.sum(F.when(F.col("prof_then").isNotNull() & F.col("prof_now").isNull(), 1)
+           .otherwise(0)).alias("vanished_now")))
+_prof = (j.filter(F.col("prof_then").isNotNull()).groupBy("grp").agg(
+    F.count("*").alias("n_then_matched"),
+    F.avg("prof_then").alias("avg_then_all"),
+    F.avg(F.when(F.col("prof_now").isNotNull(), F.col("prof_then"))).alias("avg_then_survivors"),
+    F.avg("prof_now").alias("avg_now_survivors"),
+    F.avg(F.coalesce(F.col("prof_now"), F.lit(0.0))).alias("avg_now_zerofill"),
+    F.avg(F.when(F.col("prof_now").isNull(), F.col("prof_then"))).alias("avg_then_of_vanished")))
+_att = (j.filter(F.col("held_c_then") == 1).groupBy("grp").agg(
+    F.count("*").alias("held_cards_then"),
+    F.sum(F.when(F.col("held_c_now") == 0, 1).otherwise(0)).alias("lost_cards_now"),
+    F.sum(F.when(F.col("held_c_now") == -1, 1).otherwise(0)).alias("vanished_from_ucp_now")))
+
+_out = pd.concat([_long(_ledger, "population_ledger"),
+                  _long(_prof, "profit_three_ways"),
+                  _long(_att, "card_attrition")], ignore_index=True)
+_dest = os.path.expanduser("~/unsub_unified_out/pm_asks_results.csv")
+_out.to_csv(_dest, index=False)
+print(f"WROTE {_dest} ({len(_out)} rows) - download this for local plotting.")
