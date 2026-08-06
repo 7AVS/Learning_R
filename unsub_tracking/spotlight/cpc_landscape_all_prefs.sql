@@ -29,3 +29,16 @@ WHERE CLNT_CONSENT_TYP = 5002
   AND CHG_TMSTMP >= TIMESTAMP '2026-01-01 00:00:00'
 GROUP BY 1, 2
 ORDER BY no_writes_2026 DESC;
+
+-- [3] MONTHLY CUBE: new log events per month per gate, 2024+ (long
+--     format, pivot in Excel). all_writes = any state; no_writes = 5002.
+SELECT EXTRACT(YEAR FROM CHG_TMSTMP) * 100
+     + EXTRACT(MONTH FROM CHG_TMSTMP) AS ym,
+       PREF_ID,
+       COUNT(*) AS all_writes,
+       SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS no_writes,
+       COUNT(DISTINCT CLNT_NO) AS clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE CHG_TMSTMP >= TIMESTAMP '2024-01-01 00:00:00'
+GROUP BY 1, 2
+ORDER BY 1, 2;
