@@ -52,7 +52,7 @@ SMALL_BASE = 10_000   # G3 small-base guard
 # RBC brand palette (Section 4.2 Charts and Graphs)
 C_THEN = "#003168"   # Dark Blue
 C_NOW  = "#FCA311"   # Sunburst
-C_LINE = "#51B5E0"   # Sky
+C_LINE = "#B00020"   # Red (secondary) — per Andre 2026-08-06, was Sky blue
 C_POS  = "#AABA0A"   # Apple
 
 def compact_n(v):
@@ -175,34 +175,6 @@ fig.suptitle("Q0: Monthly Sends and Unsub Rate by LOB — Aug 2025 to Jun 2026\n
              "LOB from Andre's mapping file)", fontsize=12, fontweight="bold", y=0.995)
 plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.show()
 
-# %% [2] S1 — Cards MNE x month heatmap (unsub counts, Cards LOB mapping)
-s1 = """
-SELECT TRIM(c.mne) AS mne, c.ym, SUM(c.unsubs_attributed) AS unsubs
-FROM c JOIN mapping m ON TRIM(c.mne) = TRIM(m.MNEMONIC)
-WHERE TRIM(m.LOB_Manual) = 'CARDS'
-  AND c.ym BETWEEN '202508' AND '202606'
-GROUP BY 1, 2
-"""
-df1 = con.execute(s1).df()
-piv = (df1.pivot(index="mne", columns="ym", values="unsubs")
-       .fillna(0).astype(int))
-piv = piv.loc[piv.sum(axis=1).sort_values(ascending=False).index]
-
-fig, ax = plt.subplots(figsize=(14, 0.45 * len(piv) + 2))
-im = ax.imshow(piv.values, aspect="auto", cmap="YlOrRd")
-ax.set_xticks(range(len(piv.columns))); ax.set_xticklabels(piv.columns, rotation=45, fontsize=8)
-ax.set_yticks(range(len(piv.index)));  ax.set_yticklabels(piv.index, fontsize=8)
-for r in range(piv.shape[0]):
-    for cix in range(piv.shape[1]):
-        v = piv.values[r, cix]
-        if v > 0:
-            ax.text(cix, r, compact_n(v), ha="center", va="center", fontsize=6.5,
-                    color="white" if v > piv.values.max() * 0.6 else "#333")
-ax.set_title("S1: Cards MNE x Month — Unsub Counts (Cards LOB, mapping file)\n"
-             "Aug 2025 to Jun 2026 | One glance: who spiked when",
-             fontweight="bold")
-plt.tight_layout(); plt.show()
-
 # %% [markdown]
 # ---
 # # Stakeholder follow-up — three asks (2026-08-06)
@@ -231,25 +203,33 @@ plt.tight_layout(); plt.show()
 # %% [markdown]
 # ## PM-1 — Profit, recomputed on a fixed population
 #
-# **The concern (verbatim logic):** "then" population 4MM at $800 vs
-# "now" 3MM at $1,000 is not a fair comparison — the missing 1MM took
-# their profit with them.
+# **The question this answers:** "did profit really grow for
+# unsubscribers, or did the comparison quietly drop the clients who
+# left?"
 #
-# **What we did:** kept the THEN population fixed and computed the "now"
-# average two ways: **(a) survivors only** — the original basis, shown
-# for transparency; **(b) population-fixed** — clients who vanished from
-# UCP by "now" stay in the denominator at $0.
+# **Explain it like I'm five:** picture 100 leavers in June 2025,
+# averaging $550 profit each. A year later, 6 of the 100 no longer
+# appear in the bank's profitability data at all. The ORIGINAL number
+# averaged only the 94 still present — like grading a class after the
+# failing students dropped out. The FIXED number keeps all 100 in the
+# denominator: the 6 who vanished count as $0 now. If the "growth" was
+# just dropouts leaving, the fixed number exposes it.
 #
-# **Result (run 2026-08-06):** the finding survives the correction.
-# Population-fixed: leavers $550 -> $688 (**+$138, +25.1%**), stayers
-# $795 -> $982 (**+$187, +23.6%**). Profit rises for both groups on both
-# bases; the survivors-only basis was mildly inflating both (the vanished
-# averaged only $134 leaver / $183 stayer — low-value clients). Basis (b)
-# is the number we report going forward.
+# **What each bar pair below means:** left panel (a) = the original,
+# survivors-only math, shown so the correction is visible. Right panel
+# (b) = the fixed math — this is the number we report. Each pair: dark
+# blue = June 2025 average, orange = June 2026 average; the delta above
+# each pair shows the change in $ AND %.
 #
-# **What the check DID surface:** leavers vanish from UCP at **5.9% vs
-# 2.6%** for stayers (2.2x) — see the ledger chart. That is a real
-# difference in who disappears, and it feeds the attrition answer below.
+# **Result (run 2026-08-06):** the finding survives. Population-fixed:
+# leavers $550 -> $688 (**+$138 = +25.1%**), stayers $795 -> $982
+# (**+$187 = +23.6%**). Profit rises for both groups either way; the old
+# basis was mildly flattering both (the vanished were low-value: $134
+# leaver / $183 stayer averages). Report basis (b).
+#
+# **What the check DID surface:** leavers VANISH from the profitability
+# data at **5.9% vs 2.6%** for stayers — 2.2x. Who disappears differs
+# even though the profit of those who stay does not. That feeds PM-2.
 
 # %% [3] PM ask #3 — profit, three bases (needs pm_asks_results.csv)
 # (a) survivors-only = published basis; (b) population-fixed, vanished at
@@ -262,54 +242,73 @@ else:
            .pivot_table(index=["table", "grp"], columns="metric",
                         values="value", aggfunc="first"))
     prof = pmw.loc["profit_three_ways"]
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=True)
+    ymax = 0
     for ax, (label, then_col, now_col) in zip(axes, [
-            ("(a) survivors only — published basis", "avg_then_survivors", "avg_now_survivors"),
-            ("(b) population-fixed — vanished at $0", "avg_then_all", "avg_now_zerofill")]):
+            ("(a) ORIGINAL basis — survivors only", "avg_then_survivors", "avg_now_survivors"),
+            ("(b) FIXED basis — everyone kept, vanished = $0", "avg_then_all", "avg_now_zerofill")]):
         grps = ["stayer", "leaver"]
-        x = np.arange(len(grps)); w = 0.38
+        x = np.arange(len(grps)); w = 0.36
         thin = [prof.loc[g, then_col] for g in grps]
         now = [prof.loc[g, now_col] for g in grps]
-        ax.bar(x - w/2, thin, w, color=C_THEN, label="then (Jun 2025)")
-        ax.bar(x + w/2, now, w, color=C_NOW, label="now (Jun 2026)")
+        ax.bar(x - w/2, thin, w, color=C_THEN, label="avg profit Jun 2025")
+        ax.bar(x + w/2, now, w, color=C_NOW, label="avg profit Jun 2026")
         for xi, (t, n) in zip(x, zip(thin, now)):
-            ax.text(xi - w/2, t, f"${t:,.0f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-            ax.text(xi + w/2, n, f"${n:,.0f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-            d = n - t
-            ax.text(xi, max(t, n) * 1.08, f"Δ {'+' if d >= 0 else ''}${d:,.0f}",
-                    ha="center", fontsize=10, color=C_POS if d >= 0 else "#B00020",
-                    fontweight="bold")
+            ax.text(xi - w/2, t + 12, f"${t:,.0f}", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold")
+            ax.text(xi + w/2, n + 12, f"${n:,.0f}", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold")
+            d, dp = n - t, (n - t) / t * 100
+            ax.text(xi, max(t, n) * 1.16,
+                    f"{'+' if d >= 0 else ''}${d:,.0f}  ({dp:+.1f}%)",
+                    ha="center", fontsize=10.5,
+                    color=C_POS if d >= 0 else C_LINE, fontweight="bold")
+        ymax = max(ymax, max(now + thin))
         ns = [int(prof.loc[g, "n_then_matched"]) for g in grps]
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{g}\n(n={n:,})" for g, n in zip(grps, ns)])
-        ax.set_title(label, fontweight="bold", fontsize=10)
+        ax.set_xticklabels([f"{g.upper()}\nn = {n:,}" for g, n in zip(grps, ns)])
+        ax.set_title(label, fontweight="bold", fontsize=11, pad=10)
         ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    for ax in axes:
+        ax.set_ylim(0, ymax * 1.32)   # headroom so labels never collide
     axes[0].set_ylabel("avg annual profit estimate ($, UCP)")
-    axes[0].legend(frameon=False)
-    fig.suptitle("PM ask: profit then->now on two population bases — stayers vs leavers\n"
-                 "'leaver' = Cards-marketing unsub by Jun 30 2025 anchor, NOT attrition | "
-                 "UCP-matched clients; no-match shown in ledger below",
-                 fontsize=11, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
+    axes[0].legend(frameon=False, loc="upper left")
+    fig.suptitle("PM-1: Did unsubscribers' profit really grow? Same data, two ways of counting",
+                 fontsize=12.5, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.94]); plt.show()
+    print("HOW TO READ: panel (a) is the original math - it silently drops"
+          " clients who vanished by 2026. Panel (b) keeps every June-2025"
+          " client; vanished ones count as $0 now. The story holds in (b):"
+          " both groups grow, leavers slightly faster in % terms.")
 
 # %% [markdown]
-# ## PM-2 — Do unsubscribers leave more? Yes, on every cut.
+# ## PM-2 — Do unsubscribers actually leave more? Yes, on every cut.
 #
-# Base: clients holding the card category at "then". Two exits measured:
-# **lost the card category** (still visible in UCP, no cards now) and
-# **vanished from UCP entirely** (no record at "now" — a left-the-bank
-# PROXY; confirming true bank exit needs a relationship-status source we
-# don't have in this data).
+# **The question this answers:** "unsubscribing is annoying but free —
+# does anything REAL follow it? Do these clients drop their card, or the
+# bank, more than everyone else?"
 #
-# **Result (run 2026-08-06):** leavers lose the card category at
-# **1.91% vs 1.63%** for stayers (x1.17) and vanish at **1.74% vs 1.30%**
-# (x1.34) — combined ~3.7% vs ~2.9%. At the whole-relationship level the
-# gap is wider: 5.9% vs 2.6% vanished (ledger). Unsubscribers are not
-# just going deaf — a measurably larger share of them is drifting out.
+# **Explain it like I'm five:** take everyone who HAD a credit card in
+# June 2025. Look again in June 2026. Three things can be true: (1) still
+# has cards; (2) still visible in the data but the card category is gone
+# = "lost cards"; (3) not in the data at all anymore = "vanished" — our
+# closest available signal for "left the bank" (labeled a PROXY because
+# this dataset has no official account-closure field). Compare how often
+# (2) and (3) happen for unsubscribers vs everyone else.
+#
+# **Left chart** = those two exit rates, unsubscribers (leavers) vs
+# stayers. **Right chart** = the population ledger behind PM-1: of each
+# group's June-2025 clients, how many were still findable in June 2026
+# vs vanished — the raw counts the percentages come from.
+#
+# **Result (run 2026-08-06):** leavers exit more on both cuts — lost
+# cards **1.91% vs 1.63%** (x1.17), vanished **1.74% vs 1.30%** (x1.34);
+# combined ~3.7% vs ~2.9%. At the whole-relationship level (any client,
+# not just cardholders): vanished **5.9% vs 2.6%** — 2.2x.
 #
 # **Caveat that stays attached:** descriptive, not causal. Leavers skew
-# younger and 4-7yr tenure; some of this gap is who they are, not what
-# the unsubscribe did. Groups are not matched here.
+# younger / 4-7yr tenure; part of the gap is who they are, not what the
+# unsubscribe did. Groups are not matched here.
 
 # %% [4] PM ask #2 — card attrition + population ledger (needs pm CSV)
 if not HAS_PM:
@@ -317,62 +316,96 @@ if not HAS_PM:
 else:
     led = pmw.loc["population_ledger"]
     att = pmw.loc["card_attrition"]
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    # left: attrition rates
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    # LEFT — exit rates among June-2025 cardholders
     grps = ["stayer", "leaver"]
     lost = [att.loc[g, "lost_cards_now"] / att.loc[g, "held_cards_then"] * 100 for g in grps]
     van  = [att.loc[g, "vanished_from_ucp_now"] / att.loc[g, "held_cards_then"] * 100 for g in grps]
-    x = np.arange(len(grps)); w = 0.38
-    axes[0].bar(x - w/2, lost, w, color=C_THEN, label="lost card category (visible in UCP)")
-    axes[0].bar(x + w/2, van, w, color=C_NOW, label="vanished from UCP (left-bank PROXY)")
+    x = np.arange(len(grps)); w = 0.36
+    axes[0].bar(x - w/2, lost, w, color=C_THEN, label="no cards anymore (still a client)")
+    axes[0].bar(x + w/2, van, w, color=C_LINE, label="gone from the data (left-bank PROXY)")
     for xi, (l, v) in zip(x, zip(lost, van)):
-        axes[0].text(xi - w/2, l, f"{l:.2f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
-        axes[0].text(xi + w/2, v, f"{v:.2f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+        axes[0].text(xi - w/2, l + 0.03, f"{l:.2f}%", ha="center", va="bottom",
+                     fontsize=9.5, fontweight="bold")
+        axes[0].text(xi + w/2, v + 0.03, f"{v:.2f}%", ha="center", va="bottom",
+                     fontsize=9.5, fontweight="bold")
     ns = [int(att.loc[g, "held_cards_then"]) for g in grps]
     axes[0].set_xticks(x)
-    axes[0].set_xticklabels([f"{g}\n(held cards then, n={n:,})" for g, n in zip(grps, ns)])
-    axes[0].set_ylabel("% of card-holders at then")
-    axes[0].set_title("Card attrition Jun 2025 -> Jun 2026\n(descriptive - groups differ in age/tenure mix)",
-                      fontweight="bold", fontsize=10)
-    axes[0].legend(frameon=False, fontsize=8)
-    # right: ledger
+    axes[0].set_xticklabels([f"{g.upper()}\nheld cards Jun 2025: n = {n:,}"
+                             for g, n in zip(grps, ns)])
+    axes[0].set_ylim(0, max(lost + van) * 1.35)
+    axes[0].set_ylabel("% of Jun-2025 cardholders")
+    axes[0].set_title("Of clients who HAD cards in Jun 2025,\nwho exited by Jun 2026?",
+                      fontweight="bold", fontsize=11, pad=8)
+    axes[0].legend(frameon=False, fontsize=8.5, loc="upper left")
+    # RIGHT — the ledger: where each group's Jun-2025 clients ended up
     bot = np.zeros(2)
-    for col, colr, lab in [("matched_now", C_THEN, "matched at now"),
-                           ("vanished_now", C_NOW, "vanished by now"),]:
-        vals = [led.loc[g, col] for g in grps]
-        axes[1].bar(grps, vals, bottom=bot, color=colr, label=lab)
-        bot += np.array(vals, dtype=float)
-    axes[1].set_title("Population ledger (then-cohort, UCP-matched)\nthe survivorship the (a) basis hides",
-                      fontweight="bold", fontsize=10)
+    for col, colr, lab in [("matched_now", C_THEN, "still found in Jun 2026"),
+                           ("vanished_now", C_LINE, "vanished by Jun 2026")]:
+        vals = [float(led.loc[g, col]) for g in grps]
+        axes[1].bar([g.upper() for g in grps], vals, bottom=bot, color=colr, label=lab)
+        bot += np.array(vals)
+    for i, g in enumerate(grps):
+        mt = float(led.loc[g, "matched_then"])
+        vn = float(led.loc[g, "vanished_now"])
+        axes[1].text(i, bot[i], f"vanished: {vn:,.0f}\n({vn / mt * 100:.1f}%)",
+                     ha="center", va="bottom", fontsize=9, fontweight="bold", color=C_LINE)
+    axes[1].set_ylim(0, bot.max() * 1.25)
+    axes[1].set_title("Where each group's Jun-2025 clients ended up\n(the counts behind PM-1's fix)",
+                      fontweight="bold", fontsize=11, pad=8)
     axes[1].yaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
-    axes[1].legend(frameon=False, fontsize=8)
+    axes[1].legend(frameon=False, fontsize=8.5, loc="center right")
     for a in axes:
         a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
-    plt.tight_layout(); plt.show()
+    fig.suptitle("PM-2: Do unsubscribers leave more? (descriptive — groups not matched)",
+                 fontsize=12.5, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
+    print("HOW TO READ: left = among cardholders, exit is modestly higher"
+          " for leavers on both cuts. Right = at whole-relationship level"
+          " leavers vanish at 5.9% vs 2.6% - 2.2x the stayer rate.")
 
 # %% [markdown]
 # ## PM-3 — Loyalty x Cards overlap: is unsub% higher when a client gets both?
 #
-# **The ask:** compare unsub% for clients mailed by BOTH Loyalty and Cards
-# vs Cards-only vs Loyalty-only (Jan-Apr 2026).
+# **The question this answers:** "does receiving BOTH Loyalty and Cards
+# mail come with more unsubscribing than receiving just one?"
 #
-# **Method:** no banked table holds client x mnemonic grain (the pipeline
-# collapses it server-side by design), and the source vendor tables live
-# in Teradata, not HDFS — so the fastest correct path on the pod is ONE
-# aggregated Teradata pull that returns an 8-number cube; nothing
-# client-grain ever leaves the server. Loyalty / Cards definitions come
-# from the mapping file's LOB_Manual column (Andre's mapping) — the same
-# definition every other chart in this notebook uses. The pull runs in
-# 10 client-number bites (spool safety) and caches its result to
-# pm_overlap_results.csv — reruns and local runs never touch Teradata.
+# **Explain it like I'm five — how a client lands in a bucket:** for
+# Jan-Apr 2026 we look at each client's DELIVERED emails (disposition 1
+# rows — the send records we verified are written same-day and
+# completely). If every delivered email in the window came from Cards
+# mnemonics only -> bucket "Cards only". Only Loyalty mnemonics ->
+# "Loyalty only". At least one of each -> "Both". Cards/Loyalty
+# membership = the LOB_Manual column of the mapping file, same as every
+# other chart here.
 #
-# **Definitions:** mailed = >=1 delivered send (disposition 1) from that
-# LOB's mnemonics in-window · unsub = >=1 unsubscribe (disposition 4) on
-# that scope in-window · rates shown with their n (mailed clients).
+# **"Cards only" does NOT mean the client gets no other mail.** They may
+# receive PSI, PBA, insurance, anything else — the buckets only describe
+# exposure to these TWO LOBs, inside this 4-month window. Given how
+# heavily clients are cross-mailed, expect "Both" to be a large bucket —
+# the bucket sizes (n on the axis) are themselves a finding.
 #
-# **Caveat that stays attached:** who receives both LOBs' mail is not
-# random (targeting selects them) — a higher "Both" rate describes the
-# overlap population, it does not prove the overlap causes unsubs.
+# **What "unsubscribed" means here:** >=1 disposition-4 row in-window on
+# that scope's lists. Per the 2026-08-05 verification: a disposition 4
+# is a COMPLETED, deliberate per-list opt-out (abandoned attempts write
+# nothing; same-day multi-list rows are separate deliberate choices
+# ~92% of the time). One client unsubbing 3 Cards lists counts ONCE
+# (client-level flag, no event inflation).
+#
+# **Red-team notes (why a higher "Both" bar alone proves nothing):**
+# 1. VOLUME confound — "Both" clients get more total email; more
+#    exposure alone raises unsub chances.
+# 2. SELECTION — targeting chooses who gets both (e.g. engaged Avion
+#    cardholders); those people differ from single-LOB clients.
+# 3. WINDOW truncation — a client mailed Loyalty in December but not in
+#    Jan-Apr reads "Cards only" here. Buckets are window-relative.
+# This chart answers the PM's DESCRIPTIVE question (is the rate higher
+# in the overlap?). Separating volume vs synergy vs selection would be
+# a follow-up design, not this chart.
+#
+# **Mechanics:** one aggregated Teradata pull (client grain never leaves
+# the server), 10 client-number bites for spool safety, result cached to
+# pm_overlap_results.csv — Teradata is touched once, ever.
 
 # %% [5] PM-3 pull — one aggregated cube, cached to CSV (pod + Teradata)
 OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
