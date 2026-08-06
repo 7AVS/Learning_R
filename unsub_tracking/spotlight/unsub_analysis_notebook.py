@@ -67,11 +67,26 @@ for view, fname in [("a1", "a1_mne_share.csv"), ("a1_lob", "a1_lob_dedup.csv"),
     con.register(view, _frames[view])
 
 _cdf = load_cube("c_monthly_curve.csv", encoding="latin-1", on_bad_lines="skip")
-_cdf.columns = ["mne", "ym", "sends", "unsubs_attributed"]
+# The landed CSV carries provenance/audit columns beyond the 4 analytical
+# ones (G8: provenance ignored). Select by name, never blind-rename.
+def _pick(cols, *needles):
+    hits = [c2 for c2 in cols if any(n in c2.lower() for n in needles)]
+    assert hits, f"c_monthly_curve: no column matching {needles} in {list(cols)} - STOP"
+    return hits[0]
+_cols = _cdf.columns
+_cdf = _cdf.rename(columns={
+    _pick(_cols, "mne"): "mne",
+    _pick(_cols, "ym", "month"): "ym",
+    _pick(_cols, "send", "deliver"): "sends",
+    _pick(_cols, "unsub"): "unsubs_attributed",
+})[["mne", "ym", "sends", "unsubs_attributed"]]
 _cdf["ym"] = _cdf["ym"].astype(str).str.strip()
 _cdf["sends"] = pd.to_numeric(_cdf["sends"], errors="coerce")
 _cdf["unsubs_attributed"] = pd.to_numeric(_cdf["unsubs_attributed"], errors="coerce")
 con.register("c", _cdf)
+print("c columns used:", dict(zip(["mne", "ym", "sends", "unsubs_attributed"],
+      [_pick(_cols, "mne"), _pick(_cols, "ym", "month"),
+       _pick(_cols, "send", "deliver"), _pick(_cols, "unsub")])))
 
 # pm_asks_results.csv exists only after spotlight/pm_asks_recompute.py has
 # run once in the pod — guard so this notebook still works without it.
