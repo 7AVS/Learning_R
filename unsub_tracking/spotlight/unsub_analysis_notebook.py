@@ -475,7 +475,7 @@ else:
     print(f"WROTE {OVERLAP_CSV}:")
     print(ov)
 
-# %% [6] PM-3 chart — unsub% by overlap segment
+# %% [6] PM-3 chart — unsub% by overlap segment (self-explanatory build)
 if not os.path.exists(OVERLAP_CSV):
     print("SKIP: run cell [5] on the pod first (needs Teradata once).")
 else:
@@ -486,22 +486,54 @@ else:
         (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
     order = ["Cards only", "Loyalty only", "Both"]
     ov = ov.set_index("segment").reindex(order)
-    x = np.arange(len(order)); w = 0.27
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    for off, col, colr, lab in [(-w, "unsub_cards", C_THEN, "unsub on a Cards list"),
-                                (0.0, "unsub_loy", C_LINE, "unsub on a Loyalty list"),
-                                (w, "unsub_either", C_NOW, "unsub on either")]:
+    n_tot = int(ov["clients"].sum())
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6),
+                             gridspec_kw={"width_ratios": [1, 1.3]})
+    # PANEL 1 — the headline: one bar per group, % who unsubscribed at all
+    x = np.arange(len(order))
+    either = ov["unsub_either"] / ov["clients"] * 100
+    axes[0].bar(x, either, 0.55, color=C_THEN)
+    for xi, r_ in zip(x, either):
+        axes[0].text(xi, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
+                     fontsize=11, fontweight="bold")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels([f"{s}\nn = {int(ov.loc[s, 'clients']):,}" for s in order])
+    axes[0].set_ylim(0, either.max() * 1.3)
+    axes[0].set_ylabel("% of the group's clients who unsubscribed\nfrom ANY list (Cards or Loyalty), Jan-Apr")
+    axes[0].set_title("HEADLINE — one bar per client group:\nhow many unsubscribed at all?",
+                      fontweight="bold", fontsize=11, pad=8)
+    # PANEL 2 — the detail: which list type they closed
+    w = 0.38
+    for off, col, colr, lab in [(-w/2, "unsub_cards", C_THEN, "closed a Cards list"),
+                                (w/2, "unsub_loy", C_LINE, "closed a Loyalty list")]:
         rate = ov[col] / ov["clients"] * 100
-        ax.bar(x + off, rate, w, color=colr, label=lab)
+        axes[1].bar(x + off, rate, w, color=colr, label=lab)
         for xi, r_ in zip(x + off, rate):
-            ax.text(xi, r_, f"{r_:.2f}%", ha="center", va="bottom",
-                    fontsize=8.5, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{s}\n(n={int(ov.loc[s, 'clients']):,})" for s in order])
-    ax.set_ylabel("unsubscribed in window (% of mailed clients)")
-    ax.set_title("PM-3: Unsub rate by Loyalty x Cards mail overlap — Jan-Apr 2026\n"
-                 "mailed = >=1 delivered send from that LOB (mapping file) | "
-                 "unsub = >=1 list unsubscribe in window", fontweight="bold", fontsize=11)
-    ax.legend(frameon=False)
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    plt.tight_layout(); plt.show()
+            axes[1].text(xi, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
+                         fontsize=9.5, fontweight="bold")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(order)
+    axes[1].set_ylim(0, either.max() * 1.3)   # same scale as headline panel
+    axes[1].set_title("DETAIL — same groups, split by\nWHICH list type they closed",
+                      fontweight="bold", fontsize=11, pad=8)
+    axes[1].legend(frameon=False, fontsize=9)
+    for a in axes:
+        a.spines["top"].set_visible(False); a.spines["right"].set_visible(False)
+    fig.suptitle(
+        "PM-3: Does getting BOTH Loyalty and Cards mail come with more unsubscribing?  —  Jan-Apr 2026\n"
+        f"Groups are MUTUALLY EXCLUSIVE clients (each counted once, sum = {n_tot:,} of the ~10.4M mailed enterprise-wide;\n"
+        "the rest got neither LOB's mail). Group = which of the two LOBs DELIVERED email to the client in the window.",
+        fontsize=11.5, fontweight="bold")
+    fig.text(0.01, 0.015,
+             "Why 'Cards only' shows a small Loyalty-list bar (and vice versa): the group is set by mail DELIVERED "
+             "Jan-Apr, but a client can act in-window on an email from BEFORE the window, and one visit to the "
+             "preference page can close several lists (both mechanics verified 2026-08-05). Those trace bars "
+             "(0.02-0.07%) measure exactly that.",
+             fontsize=8, style="italic", ha="left")
+    plt.tight_layout(rect=[0, 0.06, 1, 0.86]); plt.show()
+    print("HOW TO READ, in one breath: split everyone mailed by these two"
+          " LOBs into three exclusive groups; the left panel says what share"
+          " of each group unsubscribed from anything; the right panel says"
+          " which list type they closed. Both-group clients unsub LESS than"
+          " Loyalty-only clients - the overlap does not show compounding.")
