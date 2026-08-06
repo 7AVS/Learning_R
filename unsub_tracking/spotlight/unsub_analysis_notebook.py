@@ -466,31 +466,83 @@ else:
         WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
         GROUP BY 1
     )
-    SELECT mailed_cards, mailed_loy,
+    SELECT mailed_cards, mailed_loy, mnes_cards, mnes_loy,
            COUNT(*) AS clients,
            SUM(unsub_cards) AS unsub_cards,
            SUM(unsub_loy) AS unsub_loy,
            SUM(CASE WHEN unsub_cards = 1 OR unsub_loy = 1 THEN 1 ELSE 0 END) AS unsub_either,
            SUM(emails_cards) AS emails_cards,
-           SUM(emails_loy) AS emails_loy,
-           SUM(mnes_cards) AS sum_mnes_cards,
-           SUM(mnes_loy) AS sum_mnes_loy
+           SUM(emails_loy) AS emails_loy
     FROM cl
-    GROUP BY 1, 2
+    GROUP BY 1, 2, 3, 4
+    """
+
+    # second query: WHICH programs each group received (bucket x mnemonic)
+    _sql_mne = """
+    WITH ev AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND disposition_cd IN (1, 4)
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, %(loy)s)
+        GROUP BY 1, 2, 3
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
+    ), cl AS (
+        SELECT i.CLNT_NO,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT c2.mailed_cards, c2.mailed_loy, e.mne,
+           COUNT(DISTINCT CASE WHEN e.sent = 1 THEN i.CLNT_NO END) AS clients_mailed,
+           COUNT(DISTINCT CASE WHEN e.unsub = 1 THEN i.CLNT_NO END) AS clients_unsub
+    FROM ev e
+    INNER JOIN ids i
+       ON i.consumer_id_hashed = e.consumer_id_hashed
+      AND i.TREATMENT_ID = e.TREATMENT_ID
+    INNER JOIN cl c2 ON c2.CLNT_NO = i.CLNT_NO
+    GROUP BY 1, 2, 3
     """
     _u = input("Enter your username: ")
     _p = getpass.getpass("Enter your password: ")
     EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
                               user=_u, password=_p, logmech="LDAP")
-    parts = []
+    parts, parts_mne = [], []
     for bite in range(10):
-        q = _sql % {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}
-        parts.append(pd.read_sql(q, EDW))
+        kw = {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}
+        parts.append(pd.read_sql(_sql % kw, EDW))
+        parts_mne.append(pd.read_sql(_sql_mne % kw, EDW))
         print(f"bite {bite} done: {parts[-1]['clients'].sum():,.0f} clients")
-    ov = (pd.concat(parts)
-          .groupby(["mailed_cards", "mailed_loy"], as_index=False).sum())
+    detail = (pd.concat(parts)
+              .groupby(["mailed_cards", "mailed_loy", "mnes_cards", "mnes_loy"],
+                       as_index=False).sum())
+    detail.to_csv(os.path.join(BASE, "pm_overlap_detail.csv"), index=False)
+    mne_cube = (pd.concat(parts_mne)
+                .groupby(["mailed_cards", "mailed_loy", "mne"], as_index=False).sum())
+    mne_cube.to_csv(os.path.join(BASE, "pm_overlap_mne.csv"), index=False)
+    # aggregate 4-row cube for the headline/exposure chart (schema-stable)
+    agg = detail.copy()
+    agg["sum_mnes_cards"] = agg["mnes_cards"] * agg["clients"]
+    agg["sum_mnes_loy"] = agg["mnes_loy"] * agg["clients"]
+    ov = (agg.groupby(["mailed_cards", "mailed_loy"], as_index=False)
+          [["clients", "unsub_cards", "unsub_loy", "unsub_either",
+            "emails_cards", "emails_loy", "sum_mnes_cards", "sum_mnes_loy"]].sum())
     ov.to_csv(OVERLAP_CSV, index=False)
-    print(f"WROTE {OVERLAP_CSV}:")
+    print(f"WROTE {OVERLAP_CSV} + pm_overlap_detail.csv + pm_overlap_mne.csv:")
     print(ov)
 
 # %% [6] OVERLAP chart — unsub% by overlap segment (self-explanatory build)
@@ -581,3 +633,129 @@ else:
     print("HOW TO READ: left = each group's unsub rate on ITS OWN lists"
           " (Both = two scoped rates). Right = how much mail each group"
           " received - the volume context for the left panel.")
+
+# %% [markdown]
+# ## OVERLAP deep-dive A — how many programs did each client really get?
+#
+# The exposure panel's "avg 1.1 programs" is a mixture: most clients got
+# exactly one program's mail, a minority got several. This chart shows the
+# real split: within each group, the share of clients who received mail
+# from 1 / 2 / 3 / 4+ DISTINCT programs (their own two-LOB scope,
+# Jan-Apr). Needs pm_overlap_detail.csv (the cell-[5] re-pull).
+
+# %% [7] Program-count distribution per group
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    HAS_PLOTLY = True
+except ImportError:
+    HAS_PLOTLY = False
+    print("plotly not installed (pip install plotly from artifactory) - "
+          "falling back to matplotlib.")
+
+DETAIL_CSV = os.path.join(BASE, "pm_overlap_detail.csv")
+if not os.path.exists(DETAIL_CSV):
+    print("SKIP: pm_overlap_detail.csv missing - delete pm_overlap_results.csv "
+          "and rerun cell [5] once (it now writes all three caches).")
+else:
+    det = pd.read_csv(DETAIL_CSV)
+    det = det[(det["mailed_cards"] == 1) | (det["mailed_loy"] == 1)].copy()
+    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
+    det["segment"] = det.apply(lambda r: segname.get(
+        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
+    det["n_programs"] = (det["mnes_cards"] + det["mnes_loy"]).clip(lower=1)
+    det["prog_bin"] = det["n_programs"].map(
+        lambda v: "1" if v == 1 else ("2" if v == 2 else ("3" if v == 3 else "4+")))
+    dist = (det.groupby(["segment", "prog_bin"])["clients"].sum()
+            .unstack(fill_value=0).reindex(["Cards only", "Loyalty only", "Both"]))
+    share = dist.div(dist.sum(axis=1), axis=0) * 100
+    print(dist)
+    if HAS_PLOTLY:
+        long = share.reset_index().melt(id_vars="segment",
+                                        var_name="programs", value_name="share")
+        fig = px.bar(long, x="segment", y="share", color="programs",
+                     color_discrete_sequence=["#003168", "#51B5E0", "#87AFBF", "#FCA311"],
+                     text=long["share"].map(lambda v: f"{v:.0f}%" if v >= 3 else ""),
+                     title=("How many DISTINCT programs mailed each client? — Jan-Apr 2026<br>"
+                            "<sup>share of each group's clients by number of programs "
+                            "(their own Cards/Loyalty scope) · groups mutually exclusive</sup>"))
+        fig.update_layout(barmode="stack", yaxis_title="% of group's clients",
+                          xaxis_title="", legend_title="programs",
+                          template="plotly_white", height=480)
+        fig.show()
+    else:
+        fig, ax = plt.subplots(figsize=(9, 5))
+        bot = np.zeros(len(share))
+        cols = ["#003168", "#51B5E0", "#87AFBF", "#FCA311"]
+        for cix, pb in enumerate([c for c in ["1", "2", "3", "4+"] if c in share.columns]):
+            ax.bar(share.index, share[pb], bottom=bot, color=cols[cix], label=f"{pb} programs")
+            for i, v in enumerate(share[pb]):
+                if v >= 3:
+                    ax.text(i, bot[i] + v/2, f"{v:.0f}%", ha="center", va="center",
+                            fontsize=9, color="white", fontweight="bold")
+            bot += share[pb].values
+        ax.set_ylabel("% of group's clients"); ax.legend(frameon=False)
+        ax.set_title("How many DISTINCT programs mailed each client? — Jan-Apr 2026",
+                     fontweight="bold")
+        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+        plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## OVERLAP deep-dive B — WHICH programs are these?
+#
+# Same groups, opened up by mnemonic: distinct clients mailed per program
+# within each group (top 12 per group), colored by LOB, with each
+# program's same-scope unsub rate labeled. Needs pm_overlap_mne.csv.
+
+# %% [8] Program (mnemonic) composition per group
+MNE_CSV = os.path.join(BASE, "pm_overlap_mne.csv")
+if not os.path.exists(MNE_CSV):
+    print("SKIP: pm_overlap_mne.csv missing - delete pm_overlap_results.csv "
+          "and rerun cell [5] once.")
+else:
+    mc = pd.read_csv(MNE_CSV)
+    mc = mc[(mc["mailed_cards"] == 1) | (mc["mailed_loy"] == 1)].copy()
+    segname = {(1, 0): "Cards only", (0, 1): "Loyalty only", (1, 1): "Both"}
+    mc["segment"] = mc.apply(lambda r: segname.get(
+        (int(r["mailed_cards"]), int(r["mailed_loy"]))), axis=1)
+    lobmap = (_frames["mapping"].assign(
+        mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].str.strip(),
+        lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].str.strip())
+        [["mne", "lob"]])
+    mc["mne"] = mc["mne"].str.strip()
+    mc = mc.merge(lobmap, on="mne", how="left")
+    mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
+    segs = ["Cards only", "Loyalty only", "Both"]
+    if HAS_PLOTLY:
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=3, subplot_titles=segs, shared_yaxes=False)
+        for ci, seg in enumerate(segs, start=1):
+            top = (mc[mc["segment"] == seg]
+                   .sort_values("clients_mailed", ascending=True).tail(12))
+            fig.add_trace(go.Bar(
+                x=top["clients_mailed"], y=top["mne"], orientation="h",
+                marker_color=[lob_colors.get(l, "#899299") for l in top["lob"]],
+                text=[f"{v:,.0f} · {r:.2f}%" for v, r in
+                      zip(top["clients_mailed"], top["unsub_rate"])],
+                textposition="outside", showlegend=False), row=1, col=ci)
+        fig.update_layout(
+            title=("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026<br>"
+                   "<sup>label = clients mailed · that program's unsub rate within the group | "
+                   "color: dark blue = Cards LOB, tundra = Loyalty LOB</sup>"),
+            template="plotly_white", height=520)
+        fig.show()
+    else:
+        fig, axes = plt.subplots(1, 3, figsize=(16, 6))
+        for ax, seg in zip(axes, segs):
+            top = (mc[mc["segment"] == seg]
+                   .sort_values("clients_mailed", ascending=True).tail(12))
+            ax.barh(top["mne"], top["clients_mailed"],
+                    color=[lob_colors.get(l, "#899299") for l in top["lob"]])
+            for y_, (v, r_) in enumerate(zip(top["clients_mailed"], top["unsub_rate"])):
+                ax.text(v, y_, f" {compact_n(v)} · {r_:.2f}%", va="center", fontsize=7.5)
+            ax.set_title(seg, fontweight="bold")
+            ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+        fig.suptitle("WHICH programs mailed each group — clients mailed per mnemonic, Jan-Apr 2026\n"
+                     "label = clients mailed · that program's unsub rate within the group",
+                     fontweight="bold", fontsize=11)
+        plt.tight_layout(rect=[0, 0, 1, 0.9]); plt.show()
