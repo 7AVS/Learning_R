@@ -110,9 +110,13 @@ CARDS_LOB_DEDUP   = int(lob_dedup.loc[lob_dedup["label"] == "CARDS_LOB_ALL",  "u
 CARDS_EX_FWC_DEDUP = int(lob_dedup.loc[lob_dedup["label"] == "CARDS_EX_FWC",  "unique_unsub_clients"].iloc[0])
 
 # ONE campaign -> ONE color everywhere: LOB color; FWC always FIFA orange
+_lobcol = next((c for c in _frames["mapping"].columns
+                if c.strip().upper() == "LOB_MANUAL"),
+               [c for c in _frames["mapping"].columns if "LOB" in c.upper()][0])
+print(f"LOB column used for colors: {_lobcol!r}")
 _lobmap_df = (_frames["mapping"].assign(
     mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].astype(str).str.strip(),
-    lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].astype(str).str.strip().str.upper())
+    lob=lambda d: d[_lobcol].astype(str).str.strip().str.upper())
     [["mne", "lob"]])
 MNE_LOB = dict(zip(_lobmap_df["mne"], _lobmap_df["lob"]))
 def mne_color(mne):
@@ -215,7 +219,10 @@ for ax, d_, val, ttl in [(ax1, d1a.iloc[::-1], "unsubs_attributed", "Top 10 by V
         ax.text(v, y_, lab + f"  (n = {compact_n(n_)})", va="center", fontsize=8)
     ax.set_title(ttl, fontweight="bold"); style_ax(ax)
     ax.set_xlim(0, d_[val].max() * 1.35)
-    ax.xaxis.set_major_formatter(fmt_compact)
+    if val == "unsubs_attributed":
+        ax.xaxis.set_major_formatter(fmt_compact)
+    else:
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v_, _: f"{v_:.1f}%"))
 pcq_in_both = "PCQ" in set(d1a["mne"]) and "PCQ" in set(d1b["mne"])
 fig.suptitle("Q1: Who Concentrates Unsubs — Volume vs Rate, Jan to Apr 2026"
              + ("\n(PCQ is the only Cards-pod campaign in BOTH top-10s)" if pcq_in_both else ""),
@@ -268,6 +275,16 @@ rest = curve["enterprise_unsubs"] - curve["cards_unsubs"]
 ax.bar(x, curve["cards_unsubs"], color=C_LINE, label="Cards LOB (mapping file)")
 ax.bar(x, rest, bottom=curve["cards_unsubs"], color=C_THEN, alpha=0.75,
        label="Rest of Enterprise")
+_f0, _f1 = list(curve["ym"]).index("202602"), list(curve["ym"]).index("202604")
+ax.axvspan(_f0 - 0.45, _f1 + 0.45, color=lob_colors["FIFA"], alpha=0.15)
+_ytop = float(curve["enterprise_unsubs"].max())
+ax.text((_f0 + _f1) / 2, _ytop * 1.02, "FIFA window", ha="center",
+        fontsize=9, color="#B36B00", fontweight="bold")
+_imm = list(curve["ym"]).index("202606")
+ax.axvspan(_imm - 0.45, len(curve) - 0.55, color="#999999", alpha=0.15)
+ax.text(_imm + 0.5, _ytop * 1.02, "immature\n(bridge lag)", ha="center",
+        fontsize=8, color="#666")
+ax.set_ylim(0, _ytop * 1.12)
 ax.set_xticks(list(x)); ax.set_xticklabels(curve["ym"], rotation=45, fontsize=8)
 ax.yaxis.set_major_formatter(fmt_compact)
 ax.set_ylabel("unsub events per month")
@@ -290,8 +307,9 @@ for xi, p_ in enumerate(curve["cards_pct"]):
                 fontsize=8, ha="center")
 ax.axhline(mature_avg, color="#999", linestyle="--", linewidth=1)
 ax.text(0, mature_avg + 0.2, f"mature avg {mature_avg:.1f}%", fontsize=8)
+ax.set_ylim(0, curve["cards_pct"].max() * 1.28)
 ax.annotate(f"peak {peak_pct:.1f}%", (list(curve["ym"]).index(peak_month), peak_pct),
-            textcoords="offset points", xytext=(0, 18), fontsize=10,
+            textcoords="offset points", xytext=(0, 10), fontsize=10,
             fontweight="bold", color=C_LINE, ha="center")
 ax.set_xticks(list(x)); ax.set_xticklabels(curve["ym"], rotation=45, fontsize=8)
 ax.set_ylabel("Cards share of monthly unsub events (%)")
@@ -356,7 +374,8 @@ cards_action["label"] = cards_action.apply(action_label, axis=1)
 d_ = cards_action.iloc[::-1]
 fig, ax = plt.subplots(figsize=(11, 5))
 ax.barh(d_["label"], d_["total_unsubs"],
-        color=[colors_at.get(a, "#899299") for a in d_["action_type"]])
+        color=[lob_colors["FIFA"] if l_ == "FWC (FIFA)" else colors_at.get(a, "#899299")
+               for l_, a in zip(d_["label"], d_["action_type"])])
 for y_, v in enumerate(d_["total_unsubs"]):
     ax.text(v, y_, f" {compact_n(v)}", va="center", fontsize=9, fontweight="bold")
 ax.set_xlim(0, d_["total_unsubs"].max() * 1.2)
@@ -367,7 +386,8 @@ plt.tight_layout(); plt.show()
 # %% [9] Q3b — rate by action type
 fig, ax = plt.subplots(figsize=(11, 5))
 ax.barh(d_["label"], d_["unsub_rate_pct"],
-        color=[colors_at.get(a, "#899299") for a in d_["action_type"]])
+        color=[lob_colors["FIFA"] if l_ == "FWC (FIFA)" else colors_at.get(a, "#899299")
+               for l_, a in zip(d_["label"], d_["action_type"])])
 for y_, (r_, n_) in enumerate(zip(d_["unsub_rate_pct"], d_["total_senders"])):
     badge = " ⚠" if n_ < SMALL_BASE else ""
     ax.text(r_, y_, f" {r_:.2f}%  (n = {compact_n(n_)}){badge}", va="center", fontsize=9)
@@ -439,6 +459,13 @@ plt.tight_layout(); plt.show()
 # %% [markdown]
 # ## Q4: Contact Frequency — Jan to Apr 2026
 # Cards-email view. Survivorship caveat: selection, not treatment effect.
+# KNOWN LIMITATION (Andre 2026-08-06): "1-2 emails" = emails WITHIN the
+# window, not the client's first-ever contact — long-standing recipients
+# can appear in the 1-2 bucket. Planned fix: extend the pipeline's a3
+# cube with a pre-window lookback (e.g. emails in the prior 3 months) so
+# "new to campaign" is identified properly. Pipeline lives in
+# spotlight/unsub_unified.py — nothing lost. Same caveat applies to the
+# OVERLAP exposure panel.
 
 # %% [14] Q4 — distribution + rate by bucket
 df4 = con.execute("""
@@ -874,9 +901,10 @@ if HAS_PM:
     ax.set_ylim(0, (np.array(m_now) + np.array(g_now)).max() * 1.25)
     ax.yaxis.set_major_formatter(fmt_compact)
     ax.tick_params(axis="x", labelsize=8.5)
-    ax.set_title("ATTRITION: Where each group's Jun-2025 clients ended up by Jun 2026\n"
-                 "(whole relationship, not just cards — the counts behind PROFIT CHECK's fix)",
-                 fontweight="bold")
+    ax.set_title("Where each group's Jun-2025 clients ended up by Jun 2026\n"
+                 "WHOLE MAILED COHORT — includes clients with NO card (acquisition\n"
+                 "audiences); this is relationship presence, NOT card attrition",
+                 fontweight="bold", fontsize=10)
     style_ax(ax)
     plt.tight_layout(); plt.show()
 
@@ -994,7 +1022,8 @@ for xi, r_ in d1.iterrows():
             color=C_POS if r_["spend_delta"] >= 0 else C_LINE, fontweight="bold")
 ax.set_ylim(0, d1[["spend_then", "spend_now"]].values.max() * 1.3)
 ax.set_xticks(xg)
-ax.set_xticklabels([f"{g}\n(n = {compact_n(n_)})" for g, n_ in zip(d1["group"], d1["n"])])
+ax.set_xticklabels([f"{g}\ncohort n = {compact_n(n_)}\n(avg over DFP-matched cardholders only)"
+                    for g, n_ in zip(d1["group"], d1["n"])], fontsize=8.5)
 ax.set_ylabel("avg monthly card spend ($, DFP-matched)")
 ax.legend(frameon=False); style_ax(ax)
 ax.set_title("D1: Average Monthly Card Spend — Then vs Now\n"
@@ -1002,45 +1031,9 @@ ax.set_title("D1: Average Monthly Card Spend — Then vs Now\n"
              fontweight="bold")
 plt.tight_layout(); plt.show()
 
-# %% [23] D2a — annual profitability (avg vs median skew check)
-d2 = pd.DataFrame({
-    "group": grps_d,
-    "prof_avg_then": [get_val(g, "prof_annual_avg", "then") for g in grps_d],
-    "prof_avg_now": [get_val(g, "prof_annual_avg", "now") for g in grps_d],
-    "prof_med_then": [get_val(g, "prof_annual_median", "then") for g in grps_d],
-    "prof_med_now": [get_val(g, "prof_annual_median", "now") for g in grps_d],
-})
-d2["avg_delta_pct"] = (d2["prof_avg_now"] - d2["prof_avg_then"]) / d2["prof_avg_then"] * 100
-d2["med_delta_pct"] = (d2["prof_med_now"] - d2["prof_med_then"]) / d2["prof_med_then"] * 100
-display(d2)
-_l = d2[d2["group"] == "LEAVERS_ALL"].iloc[0]
-diverges = abs(_l["avg_delta_pct"] - _l["med_delta_pct"]) > 20
-lead = ("prof_med_then", "prof_med_now") if diverges else ("prof_avg_then", "prof_avg_now")
-ttl = ("D2a: Annual Profitability (MEDIAN)\nleading with median — tail outliers inflate average"
-       if diverges else "D2a: Annual Profitability (average)\navg and median consistent")
-print("Avg and median diverge - leading with MEDIAN." if diverges
-      else "Avg and median broadly consistent - leading with AVERAGE.")
-
-# %% [23b] D2a chart
-fig, ax = plt.subplots(figsize=(9, 5.5))
-for xi, r_ in d2.iterrows():
-    t, n_ = r_[lead[0]], r_[lead[1]]
-    ax.bar(xi - 0.18, t, 0.36, color=C_THEN)
-    ax.bar(xi + 0.18, n_, 0.36, color=C_NOW)
-    ax.text(xi - 0.18, t, f"${t:,.0f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-    ax.text(xi + 0.18, n_, f"${n_:,.0f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-    d_ = n_ - t
-    ax.text(xi, max(t, n_) * 1.12, f"{'+' if d_ >= 0 else ''}${d_:,.0f} ({d_ / t * 100:+.1f}%)",
-            ha="center", fontsize=10, fontweight="bold",
-            color=C_POS if d_ >= 0 else C_LINE)
-ax.set_ylim(0, d2[[lead[0], lead[1]]].values.max() * 1.3)
-ax.set_xticks(range(2))
-ax.set_xticklabels([f"{g}\n(n = {compact_n(get_n(g))})" for g in grps_d])
-ax.set_ylabel("annual profit estimate ($, UCP)")
-ax.legend(handles=[Patch(color=C_THEN, label="Then (Jun 2025)"),
-                   Patch(color=C_NOW, label="Now (Jun 2026)")], frameon=False)
-ax.set_title(ttl, fontweight="bold"); style_ax(ax)
-plt.tight_layout(); plt.show()
+# %% [markdown]
+# D2a (annual profitability) DROPPED per Andre 2026-08-06 — duplicate
+# of PROFIT CHECK above. Median-skew check lives in git history.
 
 # %% [24] D2b — product count (categories held)
 pc = pd.DataFrame({
@@ -1119,19 +1112,31 @@ def q5_chart(df_, order, ttl, fname_note=""):
     d_any = rep_ratio(df_, "unsubs_any")
     d_crd = rep_ratio(df_, "unsubs_cards")
     if order:
-        d_any = d_any.set_index("band").reindex([o for o in order if o in set(d_any["band"])]).reset_index()
-        d_crd = d_crd.set_index("band").reindex([o for o in order if o in set(d_crd["band"])]).reset_index()
+        bands = [o for o in order if o in set(d_any["band"])]
+        extras = sorted(set(d_any["band"]) - set(bands))   # never drop silently
+        if extras:
+            print(f"extra bands appended (not in standard order): {extras}")
+        bands = bands + extras
+        d_any = d_any.set_index("band").reindex(bands).reset_index()
+        d_crd = d_crd.set_index("band").reindex(bands).reset_index()
     else:
-        d_any = d_any.sort_values("clients", ascending=False).head(8).iloc[::-1]
+        # TIBC: top 12 combos by unsub volume (Andre's original LIMIT 12)
+        d_any = d_any.sort_values("unsubs_any", ascending=False).head(12).iloc[::-1]
         d_crd = d_crd.set_index("band").reindex(d_any["band"]).reset_index()
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots(figsize=(9, max(5.5, len(d_any) * 0.5)))
     hh = 0.35; yy = np.arange(len(d_any))
-    ax.barh(yy + hh/2, d_any["ratio"], hh, color=C_THEN, label="Any RBC unsub")
-    ax.barh(yy - hh/2, d_crd["ratio"], hh, color=C_LINE, label="Cards unsub")
+    # DIVERGING bars around 1.0 (Andre's original style): bar = ratio - 1,
+    # anchored left=1, so over-represented grows right, under grows left
+    ax.barh(yy + hh/2, d_any["ratio"] - 1, hh, left=1, color=C_THEN,
+            alpha=0.7, label="Any RBC unsub")
+    ax.barh(yy - hh/2, d_crd["ratio"] - 1, hh, left=1, color=C_NOW,
+            alpha=0.9, label="Cards unsub")
     for y_, (ra, rc) in enumerate(zip(d_any["ratio"], d_crd["ratio"])):
-        ax.text(ra, y_ + hh/2, f" {ra:.2f}", va="center", fontsize=8)
-        ax.text(rc, y_ - hh/2, f" {rc:.2f}", va="center", fontsize=8)
-    ax.axvline(1.0, color="#666", linewidth=1)
+        ax.text(ra + (0.01 if ra >= 1 else -0.01), y_ + hh/2, f"{ra:.2f}",
+                va="center", ha="left" if ra >= 1 else "right", fontsize=8)
+        ax.text(rc + (0.01 if rc >= 1 else -0.01), y_ - hh/2, f"{rc:.2f}",
+                va="center", ha="left" if rc >= 1 else "right", fontsize=8)
+    ax.axvline(1.0, color="black", linewidth=0.8)
     ax.set_yticks(yy)
     ax.set_yticklabels([f"{b} (n = {compact_n(c_)})"
                         for b, c_ in zip(d_any["band"], d_any["clients"])], fontsize=8.5)
@@ -1156,4 +1161,86 @@ q5_chart(q5_ten, TEN_ORDER,
 
 # %% [25d] Q5c chart — by product mix
 q5_chart(q5_tibc, None,
-         "Q5c: Representation Ratio by Product Mix (TIBC) — Jan to Apr 2026\n(top 8 combos by clients)")
+         "Q5c: Representation Ratio by Product Mix (TIBC) — Jan to Apr 2026\n(top 12 combos by unsub volume)")
+
+# %% [markdown]
+# ## D5: Behavior Migration — where did each then-segment end up?
+# (Andre's original cell, restored.) Rows sum to 100%. Italic = <500
+# clients (muted).
+
+# %% [26] D5 — behavior migration matrices
+b_cube = _frames["b"]
+seg_keep = ['Revolver', 'Transactor', 'Dormant']
+cube_filt = b_cube[b_cube['seg_then'].isin(seg_keep) & b_cube['seg_now'].isin(seg_keep)].copy()
+excluded_stayers_n = int(b_cube[~b_cube['seg_then'].isin(seg_keep)]['stayers'].sum())
+excluded_leavers_n = int(b_cube[~b_cube['seg_then'].isin(seg_keep)]['leavers'].sum())
+stay_mat = cube_filt.pivot_table(index='seg_then', columns='seg_now', values='stayers', aggfunc='sum').fillna(0)
+leave_mat = cube_filt.pivot_table(index='seg_then', columns='seg_now', values='leavers', aggfunc='sum').fillna(0)
+stay_mat = stay_mat.reindex(index=seg_keep, columns=seg_keep, fill_value=0)
+leave_mat = leave_mat.reindex(index=seg_keep, columns=seg_keep, fill_value=0)
+stay_share = stay_mat.div(stay_mat.sum(axis=1).replace(0, np.nan), axis=0) * 100
+leave_share = leave_mat.div(leave_mat.sum(axis=1).replace(0, np.nan), axis=0) * 100
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+vmax = max(stay_share.values.max(), leave_share.values.max())
+for ax, share, cnt, ttl in [
+        (axes[0], stay_share, stay_mat, f'STAYERS (n={compact_n(stay_mat.values.sum())})'),
+        (axes[1], leave_share, leave_mat, f'LEAVERS_ALL (n={compact_n(leave_mat.values.sum())})')]:
+    im = ax.imshow(share.values, cmap='Blues', aspect='auto', vmin=0, vmax=vmax)
+    ax.set_xticks(range(3)); ax.set_xticklabels(seg_keep)
+    ax.set_yticks(range(3)); ax.set_yticklabels(seg_keep)
+    for i in range(3):
+        for j in range(3):
+            s_val = share.values[i, j]; c_val = int(cnt.values[i, j])
+            muted = c_val < 500
+            color = 'grey' if muted else ('white' if s_val > vmax * 0.6 else 'black')
+            ax.text(j, i, f"{s_val:.1f}%\n(n={c_val:,})", ha='center', va='center',
+                    fontsize=9, color=color, fontstyle='italic' if muted else 'normal')
+    ax.set_title(ttl, fontweight='bold')
+    ax.set_xlabel('Segment now (Jun 2026)'); ax.set_ylabel('Segment then (Jun 2025)')
+fig.suptitle('D5: Behavior Migration - Where did each then-segment end up?\n'
+             'Rows sum to 100%. Italic = <500 clients (muted).',
+             fontweight='bold', fontsize=11)
+plt.tight_layout(); plt.show()
+print(f'Excludes other/no_data segments: {excluded_stayers_n:,} stayers, '
+      f'{excluded_leavers_n:,} leavers in excluded seg_then categories.')
+
+# %% [markdown]
+# ## D6: Tier(then) x Segment(then) — leaver rate and count
+# (Andre's original cell, restored — the requested template.)
+
+# %% [27] D6 — tier x segment heatmap
+tier_keep = ['High', 'Mid', 'Low']
+maya6 = b_cube.groupby(['tier', 'seg_then'], as_index=False)[['leavers', 'stayers']].sum()
+maya6['base'] = maya6['leavers'] + maya6['stayers']
+maya6['leaver_rate_pct'] = np.where(maya6['base'] > 0,
+                                    maya6['leavers'] * 100.0 / maya6['base'], np.nan)
+maya_filt = maya6[maya6['tier'].isin(tier_keep) & maya6['seg_then'].isin(seg_keep)]
+excl_tier_n = int(maya6[~maya6['tier'].isin(tier_keep)]['leavers'].sum())
+excl_tier_labels = sorted(maya6[~maya6['tier'].isin(tier_keep)]['tier'].unique().tolist())
+total_leavers_d6 = int(b_cube['leavers'].sum())
+excl_pct = excl_tier_n * 100.0 / total_leavers_d6 if total_leavers_d6 > 0 else 0
+p_rate = maya_filt.pivot(index='tier', columns='seg_then', values='leaver_rate_pct')
+p_cnt = maya_filt.pivot(index='tier', columns='seg_then', values='leavers')
+p_rate = p_rate.reindex(index=tier_keep, columns=seg_keep)
+p_cnt = p_cnt.reindex(index=tier_keep, columns=seg_keep)
+fig, ax = plt.subplots(figsize=(8, 4))
+im = ax.imshow(p_rate.values, cmap='Reds', aspect='auto')
+ax.set_xticks(range(len(seg_keep))); ax.set_xticklabels(seg_keep)
+ax.set_yticks(range(len(tier_keep))); ax.set_yticklabels(tier_keep)
+rate_max = np.nanmax(p_rate.values)
+for i in range(len(tier_keep)):
+    for j in range(len(seg_keep)):
+        rv = p_rate.values[i, j]; lv = p_cnt.values[i, j]
+        txt = 'n/a' if pd.isna(rv) else f"{rv:.2f}%\n(n={int(lv):,})"
+        ax.text(j, i, txt, ha='center', va='center', fontsize=9,
+                color='white' if (pd.notna(rv) and rv > rate_max * 0.55) else 'black')
+plt.colorbar(im, ax=ax, label='Leaver rate %', shrink=0.8)
+ax.set_title('D6 (requested template): Tier(then) x Segment(then) - leaver rate and count\n'
+             'High/Mid/Low x Revolver/Transactor/Dormant only',
+             fontweight='bold', fontsize=10)
+ax.set_xlabel('Segment then (Jun 2025)'); ax.set_ylabel('Tier then (Jun 2025)')
+plt.tight_layout(); plt.show()
+print(f'Total leavers in cohort: {total_leavers_d6:,}')
+print(f'Shown in D6 (High/Mid/Low tiers): {total_leavers_d6 - excl_tier_n:,} '
+      f'({(total_leavers_d6 - excl_tier_n) * 100 / total_leavers_d6:.1f}%)')
+print(f'Excluded (tiers {excl_tier_labels}): {excl_tier_n:,} ({excl_pct:.1f}%)')
