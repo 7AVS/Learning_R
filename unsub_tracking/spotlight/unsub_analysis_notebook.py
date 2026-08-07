@@ -1276,6 +1276,74 @@ q5_chart(q5_tibc, None,
          "Q5c: Representation Ratio by Product Mix (TIBC) — Jan to Apr 2026\n(top 12 combos by unsub volume)")
 
 # %% [markdown]
+# ## Q5 RATE VERSIONS (candidates — originals kept above for side-by-side)
+# Same cube, same bands, but plots the plain unsub RATE per band
+# (unsubs / clients, %) instead of the representation ratio. Dashed lines =
+# overall rate per series. Annotation = rate and rate-index vs overall
+# (rate ÷ overall rate — near-identical to the rep ratio at these low rates).
+# Caveat carried on chart: Cards series is denominated on ALL RBC-mailed
+# clients, not Cards-mailed only.
+
+# %% [25e] Q5 rate-version helper
+def q5_rate_chart(df_, order, ttl):
+    d_ = df_[~df_["band"].astype(str).str.contains("no_ucp", case=False, na=False)].copy()
+    d_["rate_any"] = d_["unsubs_any"] / d_["clients"] * 100
+    d_["rate_crd"] = d_["unsubs_cards"] / d_["clients"] * 100
+    ov_any = d_["unsubs_any"].sum() / d_["clients"].sum() * 100
+    ov_crd = d_["unsubs_cards"].sum() / d_["clients"].sum() * 100
+    if order:
+        bands = [o for o in order if o in set(d_["band"])]
+        extras = sorted(set(d_["band"]) - set(bands))   # never drop silently
+        if extras:
+            print(f"extra bands appended (not in standard order): {extras}")
+        d_ = d_.set_index("band").reindex(bands + extras).reset_index()
+    else:
+        # TIBC: same top-12-by-unsub-volume selection/order as the original chart
+        d_ = d_.sort_values("unsubs_any", ascending=False).head(12).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(9, max(5.5, len(d_) * 0.55)))
+    hh = 0.35; yy = np.arange(len(d_))
+    ax.barh(yy + hh/2, d_["rate_any"], hh, color=C_THEN, alpha=0.7,
+            label="Any RBC unsub rate")
+    ax.barh(yy - hh/2, d_["rate_crd"], hh, color=C_NOW, alpha=0.9,
+            label="Cards unsub rate")
+    for y_, r_ in d_.reset_index(drop=True).iterrows():
+        ax.text(r_["rate_any"] + 0.015, y_ + hh/2,
+                f"{r_['rate_any']:.2f}%  ({r_['rate_any']/ov_any:.2f}x)",
+                va="center", fontsize=8)
+        ax.text(r_["rate_crd"] + 0.015, y_ - hh/2,
+                f"{r_['rate_crd']:.2f}%  ({r_['rate_crd']/ov_crd:.2f}x)",
+                va="center", fontsize=8)
+    ax.axvline(ov_any, color=C_THEN, linewidth=0.9, linestyle="--")
+    ax.axvline(ov_crd, color=C_NOW, linewidth=0.9, linestyle="--")
+    ax.text(ov_any, len(d_) - 0.3, f" overall {ov_any:.2f}%", color=C_THEN,
+            fontsize=7.5, ha="left", va="bottom")
+    ax.text(ov_crd, -0.45, f" overall {ov_crd:.2f}%", color=C_NOW,
+            fontsize=7.5, ha="left", va="top")
+    ax.set_yticks(yy)
+    ax.set_yticklabels([f"{b} (n = {compact_n(c_)})"
+                        for b, c_ in zip(d_["band"], d_["clients"])], fontsize=8.5)
+    ax.set_xlabel("Unsub rate, % of mailed clients (label: rate and x vs overall)")
+    ax.set_xlim(0, d_["rate_any"].max() * 1.35)
+    ax.set_title(ttl, fontweight="bold"); style_ax(ax)
+    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    plt.tight_layout(); plt.show()
+
+# %% [25f] Q5a RATE version — by age
+q5_rate_chart(q5_age, AGE_ORDER,
+              "Q5a v2: Unsub RATE by Age — Jan to Apr 2026\n"
+              "(Cards series denominated on all RBC-mailed clients, not Cards-mailed)")
+
+# %% [25g] Q5b RATE version — by tenure
+q5_rate_chart(q5_ten, TEN_ORDER,
+              "Q5b v2: Unsub RATE by Tenure — Jan to Apr 2026\n"
+              "(Cards series denominated on all RBC-mailed clients, not Cards-mailed)")
+
+# %% [25h] Q5c RATE version — by product mix
+q5_rate_chart(q5_tibc, None,
+              "Q5c v2: Unsub RATE by Product Mix (TIBC) — Jan to Apr 2026\n"
+              "(same top-12-by-volume combos as original; Cards series on all RBC-mailed)")
+
+# %% [markdown]
 # ## D5: Behavior Migration — where did each then-segment end up?
 # (Andre's original cell, restored.) Rows sum to 100%. Italic = <500
 # clients (muted).
