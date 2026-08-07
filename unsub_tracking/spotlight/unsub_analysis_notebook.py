@@ -204,6 +204,8 @@ FROM a2 WHERE a2.senders >= {SMALL_BASE} ORDER BY unsub_rate_pct DESC LIMIT 10
 """
 d1a, d1b = con.execute(q1a).df(), con.execute(q1b).df()
 display(d1a); display(d1b)
+
+# %% [2b] Q1 chart
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 for ax, d_, val, ttl in [(ax1, d1a.iloc[::-1], "unsubs_attributed", "Top 10 by Volume"),
                          (ax2, d1b.iloc[::-1], "unsub_rate_pct", "Top 10 by Rate % (senders >= 10K)")]:
@@ -251,6 +253,13 @@ peak_month = mature.loc[mature["cards_pct"].idxmax(), "ym"]
 mature_avg = mature["cards_pct"].mean()
 display(curve)
 print(f"Peak Cards share (mature months only): {peak_pct:.1f}% in {peak_month}")
+fwc_timing = con.execute("""
+SELECT c.ym, SUM(c.sends) AS fwc_sends, SUM(c.unsubs_attributed) AS fwc_unsubs
+FROM c WHERE TRIM(c.mne) = 'FWC' AND c.ym BETWEEN '202508' AND '202607'
+GROUP BY 1 ORDER BY 1""").df()
+display(fwc_timing)
+print("Note: Cards deduped unique-person share (20.5%) is a different basis "
+      "(unique clients, not events).")
 
 # %% [4] Q2a — monthly unsub events, Cards share stacked
 fig, ax = plt.subplots(figsize=(13, 5.5))
@@ -290,15 +299,8 @@ ax.set_title(f"Q2b: Cards unsub share peaked at ~{peak_pct:.0f}% in {peak_month}
              "coinciding with the FIFA campaign (FWC)", fontweight="bold")
 style_ax(ax)
 plt.tight_layout(); plt.show()
-print("Note: Cards deduped unique-person share (20.5%) is a different basis "
-      "(unique clients, not events) - not shown here.")
 
-# %% [6] Q2c — FWC timing check
-fwc_timing = con.execute("""
-SELECT c.ym, SUM(c.sends) AS fwc_sends, SUM(c.unsubs_attributed) AS fwc_unsubs
-FROM c WHERE TRIM(c.mne) = 'FWC' AND c.ym BETWEEN '202508' AND '202607'
-GROUP BY 1 ORDER BY 1""").df()
-display(fwc_timing)
+# %% [6] Q2c — FWC timing check (chart only; table in Q2 data cell)
 fig, ax = plt.subplots(figsize=(13, 5.5))
 xf = range(len(fwc_timing))
 ax.bar(xf, fwc_timing["fwc_sends"], color=mne_color("FWC"), alpha=0.85,
@@ -452,6 +454,8 @@ dist = df4[df4["bucket"] != "0"].copy()
 dist["pct_of_unsubs"] = dist["unsubs_cards"] / dist["unsubs_cards"].sum() * 100
 dist["pct_of_stayers"] = dist["stayers"] / dist["stayers"].sum() * 100
 dist["rate_pct"] = dist["unsubs_cards"] / dist["clients"] * 100
+
+# %% [14b] Q4 chart
 fig, (axl, axr) = plt.subplots(1, 2, figsize=(14, 5.5))
 xb = np.arange(len(dist)); w = 0.38
 axl.bar(xb - w/2, dist["pct_of_stayers"], w, color=C_THEN, label="stayers")
@@ -618,7 +622,8 @@ def seg_name(c, f, l):
             (1, 0, 1): "Cards+Loyalty", (0, 1, 1): "FIFA+Loyalty",
             (1, 1, 1): "All three"}.get((int(c), int(f), int(l)))
 
-if not _caches_current():
+OVERLAP_READY = _caches_current()
+if not OVERLAP_READY:
     print("SKIP: run the OVERLAP pull cell first (needs Teradata once).")
 else:
     ov = pd.read_csv(OVERLAP_CSV)
@@ -634,6 +639,11 @@ else:
               {s_: int(v) for s_, v in hidden["clients"].items()})
     ovk = ov[ov.index.isin(KEEP)]
     segs = [s_ for s_ in KEEP if s_ in ovk.index]
+    display(ovk.reset_index()[["segment", "clients", "unsub_cards", "unsub_fwc",
+                               "unsub_loy", "unsub_any"]])
+
+# %% [16b] OVERLAP chart (chart only)
+if OVERLAP_READY:
     scope_style = [("unsub_cards", "mailed_cards", "emails_cards",
                     "Cards lists (ex-FIFA)", lob_colors["CARDS"]),
                    ("unsub_fwc", "mailed_fwc", "emails_fwc", "FIFA list",
@@ -783,6 +793,8 @@ cb["unsub_rate"] = cb["unsubs"] / cb["clients"] * 100
 top = (cb[cb["n_programs"] >= 2]
        .sort_values("clients", ascending=False).head(10)
        .sort_values("clients", ascending=True))
+
+# %% [18b] TOP 10 combinations chart
 fig, ax = plt.subplots(figsize=(11, 5.5))
 ax.barh(top["combo"], top["clients"], color=C_THEN)
 for y_, (v, r_) in enumerate(zip(top["clients"], top["unsub_rate"])):
@@ -821,6 +833,10 @@ else:
     ns_a = [int(att.loc[g, "held_cards_then"]) for g in grps]
     glabel = {"stayer": "STAYERS — no Cards unsub by Jun 30 2025",
               "leaver": "LEAVERS — unsubscribed from Cards\nmarketing email by Jun 30 2025"}
+    display(att); display(led)
+
+# %% [19b] ATTRITION chart 1 — exit rates
+if HAS_PM:
     fig, ax = plt.subplots(figsize=(10, 5.5))
     xg = np.arange(2); w = 0.36
     ax.bar(xg - w/2, lost, w, color=C_THEN, label="lost cards (no card category, still a client)")
@@ -840,6 +856,8 @@ else:
     ax.legend(frameon=False, fontsize=8.5, loc="upper left"); style_ax(ax)
     plt.tight_layout(); plt.show()
 
+# %% [19c] ATTRITION chart 2 — where everyone ended up
+if HAS_PM:
     m_now = [float(led.loc[g, "matched_now"]) for g in grps]
     g_now = [float(led.loc[g, "vanished_now"]) for g in grps]
     fig, ax = plt.subplots(figsize=(9, 5.5))
@@ -958,6 +976,9 @@ d1 = pd.DataFrame({
 d1["spend_delta"] = d1["spend_now"] - d1["spend_then"]
 d1["delta_pct"] = d1["spend_delta"] / d1["spend_then"] * 100
 display(d1)
+print("Excludes LEAVERS_OTHER (not shown). DFP no-match higher for leavers.")
+
+# %% [22b] D1 chart
 fig, ax = plt.subplots(figsize=(9, 5.5))
 xg = np.arange(2); w = 0.36
 ax.bar(xg - w/2, d1["spend_then"], w, color=C_THEN, label="Then (Jun 2025)")
@@ -980,7 +1001,6 @@ ax.set_title("D1: Average Monthly Card Spend — Then vs Now\n"
              "(Cards products only; DFP-matched clients; delta = now minus then)",
              fontweight="bold")
 plt.tight_layout(); plt.show()
-print("Excludes LEAVERS_OTHER (not shown). DFP no-match higher for leavers.")
 
 # %% [23] D2a — annual profitability (avg vs median skew check)
 d2 = pd.DataFrame({
@@ -1000,6 +1020,8 @@ ttl = ("D2a: Annual Profitability (MEDIAN)\nleading with median — tail outlier
        if diverges else "D2a: Annual Profitability (average)\navg and median consistent")
 print("Avg and median diverge - leading with MEDIAN." if diverges
       else "Avg and median broadly consistent - leading with AVERAGE.")
+
+# %% [23b] D2a chart
 fig, ax = plt.subplots(figsize=(9, 5.5))
 for xi, r_ in d2.iterrows():
     t, n_ = r_[lead[0]], r_[lead[1]]
@@ -1027,6 +1049,8 @@ pc = pd.DataFrame({
     "now": [get_val(g, "prod_cnt_avg", "now") for g in grps_d],
 })
 display(pc)
+
+# %% [24b] D2b chart
 fig, ax = plt.subplots(figsize=(9, 5.5))
 for xi, r_ in pc.iterrows():
     ax.bar(xi - 0.18, r_["then"], 0.36, color=C_THEN)
@@ -1120,10 +1144,16 @@ AGE_ORDER = ["<25", "25-34", "35-49", "50-64", "65+"]
 TEN_ORDER = ["<1yr", "1-3yr", "4-7yr", "8-15yr", "16yr+"]
 print("age bands in data:", sorted(q5_age["band"].astype(str).unique()))
 print("tenure bands in data:", sorted(q5_ten["band"].astype(str).unique()))
+print(f"Excludes {no_ucp_n:,} clients with no UCP match ({no_ucp_pct:.1f}%).")
+
+# %% [25b] Q5a chart — by age
 q5_chart(q5_age, AGE_ORDER,
          "Q5a: Representation Ratio by Age — Jan to Apr 2026\n(>1 = over-represented among unsubs)")
+
+# %% [25c] Q5b chart — by tenure
 q5_chart(q5_ten, TEN_ORDER,
          "Q5b: Representation Ratio by Tenure — Jan to Apr 2026\n(reference: Cards unsubs peak at 4-7yr)")
+
+# %% [25d] Q5c chart — by product mix
 q5_chart(q5_tibc, None,
          "Q5c: Representation Ratio by Product Mix (TIBC) — Jan to Apr 2026\n(top 8 combos by clients)")
-print(f"Excludes {no_ucp_n:,} clients with no UCP match ({no_ucp_pct:.1f}%).")
