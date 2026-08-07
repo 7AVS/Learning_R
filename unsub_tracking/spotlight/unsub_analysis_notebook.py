@@ -450,7 +450,8 @@ plt.tight_layout(rect=[0, 0.05, 1, 0.93]); plt.show()
 q4b_sql = """
 SELECT n_emails_cards_bucket AS bucket,
        SUM(clients_total) AS clients, SUM(stayers) AS stayers,
-       SUM(unsubs_any) AS unsubs_any, SUM(unsubs_cards) AS unsubs_cards
+       SUM(leavers) AS unsubs_any,
+       SUM(leavers_cards_unsub_subset) AS unsubs_cards
 FROM a3 GROUP BY 1
 ORDER BY CASE bucket WHEN '0' THEN 0 WHEN '1-2' THEN 1 WHEN '3-5' THEN 2
                      WHEN '6-10' THEN 3 WHEN '11+' THEN 4 ELSE 9 END
@@ -497,7 +498,8 @@ def _band_pull(band_col, extra_where=""):
     return con.execute(f"""
     SELECT {band_col} AS band,
            SUM(clients_total) AS clients, SUM(stayers) AS stayers,
-           SUM(unsubs_any) AS unsubs_any, SUM(unsubs_cards) AS unsubs_cards
+           SUM(leavers) AS unsubs_any,
+           SUM(leavers_cards_unsub) AS unsubs_cards
     FROM a4 {extra_where} GROUP BY 1""").df()
 
 q5_age = _band_pull("age_band")
@@ -505,7 +507,8 @@ q5_ten = _band_pull("tenure_band")
 q5_tibc = con.execute("""
 SELECT held_t, held_i, held_b, held_c,
        SUM(clients_total) AS clients, SUM(stayers) AS stayers,
-       SUM(unsubs_any) AS unsubs_any, SUM(unsubs_cards) AS unsubs_cards
+       SUM(leavers) AS unsubs_any,
+       SUM(leavers_cards_unsub) AS unsubs_cards
 FROM a4 GROUP BY 1, 2, 3, 4""").df()
 print("--- BY AGE BAND (incl no_ucp_match) ---"); display(q5_age)
 print("--- BY TENURE BAND ---"); display(q5_ten)
@@ -572,28 +575,30 @@ print(f"Excludes {no_ucp_n:,} clients with no UCP match ({no_ucp_pct:.1f}%).")
 # Credit). This is composition and observed change, not a treatment effect.
 
 # %% [7] D0 — validation gates (run before any D chart)
-# !! VERIFY-FIRST: the metric names used below ("n_clients", "spend_avg",
-# "prof_avg", "prof_med", "prod_cnt_avg") are reconstructed from photos,
-# NOT read from the file. Before first run:
-#   display(_frames["b_delta"]["metric"].unique())
-# and correct the strings in get_val()/D1/D2 to the actual names.
+# Metric/group/period names below are SOURCE-VERIFIED against
+# unsub_unified.py Cell [15b] (b_delta_summary writer): metrics incl
+# n_clients (period 'n/a'), spend_monthly_avg/median, prof_annual_avg/
+# median, prod_cnt_avg; groups STAYERS, LEAVERS_ALL, per-mne (>=500
+# leavers), LEAVERS_OTHER, LEAVERS_UNMAPPED.
 b_delta = _frames["b_delta"]
 piv = b_delta.pivot_table(index=["group", "metric"], columns="period",
                           values="value", aggfunc="first")
 def get_val(group, metric, period):
     return piv.loc[(group, metric), period]
 def get_n(group):
-    return get_val(group, "n_clients", "then")
+    return get_val(group, "n_clients", "n/a")
 # --- SANITY GATE 1: cohort anchor ---
 cohort_check = get_n("STAYERS") + get_n("LEAVERS_ALL")
 assert abs(cohort_check - 4_783_193) < 1, f"FAIL: cohort anchor = {cohort_check:,.0f}"
-# --- SANITY GATE 2: campaign groups sum to LEAVERS_ALL ---
-camp_sum = sum(get_n(g) for g in ["PCL", "PCD", "PCQ", "LEAVERS_OTHER"]
-               if (g, "n_clients") in piv.index)
-assert abs(camp_sum - get_n("LEAVERS_ALL")) < 1, f"FAIL: campaign sum {camp_sum:,.0f}"
-# --- SANITY GATE 3: delta sign spot-check (PCQ spend) ---
-spot_delta = get_val("PCQ", "spend_avg", "delta")
-computed = get_val("PCQ", "spend_avg", "now") - get_val("PCQ", "spend_avg", "then")
+# --- SANITY GATE 2: leaver sub-groups sum to LEAVERS_ALL ---
+_subgroups = [g for g in piv.index.get_level_values(0).unique()
+              if g not in ("STAYERS", "LEAVERS_ALL")]
+camp_sum = sum(get_n(g) for g in _subgroups)
+assert abs(camp_sum - get_n("LEAVERS_ALL")) < 1,     f"FAIL: leaver sub-groups sum {camp_sum:,.0f} != LEAVERS_ALL {get_n('LEAVERS_ALL'):,.0f}"
+# --- SANITY GATE 3: delta sign spot-check (LEAVERS_ALL spend) ---
+spot_delta = get_val("LEAVERS_ALL", "spend_monthly_avg", "delta")
+computed = (get_val("LEAVERS_ALL", "spend_monthly_avg", "now")
+            - get_val("LEAVERS_ALL", "spend_monthly_avg", "then"))
 assert pd.isna(spot_delta) or abs(spot_delta - computed) < 0.01, "FAIL: delta != now - then"
 SANITY_OK = True
 print("SANITY GATES PASSED: cohort anchor, campaign sum, delta arithmetic.")
@@ -605,8 +610,8 @@ grps_d = ["STAYERS", "LEAVERS_ALL"]
 d1 = pd.DataFrame({
     "group": grps_d,
     "n": [get_n(g) for g in grps_d],
-    "spend_then": [get_val(g, "spend_avg", "then") for g in grps_d],
-    "spend_now": [get_val(g, "spend_avg", "now") for g in grps_d],
+    "spend_then": [get_val(g, "spend_monthly_avg", "then") for g in grps_d],
+    "spend_now": [get_val(g, "spend_monthly_avg", "now") for g in grps_d],
 })
 d1["spend_delta"] = d1["spend_now"] - d1["spend_then"]
 d1["delta_pct"] = d1["spend_delta"] / d1["spend_then"] * 100
@@ -637,10 +642,10 @@ plt.tight_layout(); plt.show()
 # %% [9] D2 — profitability + product count (avg-vs-median skew check)
 d2 = pd.DataFrame({
     "group": grps_d,
-    "prof_avg_then": [get_val(g, "prof_avg", "then") for g in grps_d],
-    "prof_avg_now": [get_val(g, "prof_avg", "now") for g in grps_d],
-    "prof_med_then": [get_val(g, "prof_med", "then") for g in grps_d],
-    "prof_med_now": [get_val(g, "prof_med", "now") for g in grps_d],
+    "prof_avg_then": [get_val(g, "prof_annual_avg", "then") for g in grps_d],
+    "prof_avg_now": [get_val(g, "prof_annual_avg", "now") for g in grps_d],
+    "prof_med_then": [get_val(g, "prof_annual_median", "then") for g in grps_d],
+    "prof_med_now": [get_val(g, "prof_annual_median", "now") for g in grps_d],
     "prod_then": [get_val(g, "prod_cnt_avg", "then") for g in grps_d],
     "prod_now": [get_val(g, "prod_cnt_avg", "now") for g in grps_d],
 })
