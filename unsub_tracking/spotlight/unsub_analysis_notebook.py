@@ -507,6 +507,118 @@ fig.suptitle("Q4: Contact Frequency (Cards Emails Only) — Jan to Apr 2026",
              fontsize=12, fontweight="bold")
 plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
 
+
+# %% [markdown]
+# ## Q4-LB: Contact Frequency with PRE-WINDOW LOOKBACK (the fix)
+# Answers the limitation above: splits every in-window bucket by whether
+# the client had ANY Cards email in Oct-Dec 2025 (pre-window). "New to
+# Cards mail" 1-2 clients really are first-contact; "mailed before" 1-2
+# clients are long-standing recipients who happened to get few in-window.
+# Own Teradata pull (bites, cached pm_q4_lookback.csv) — pipeline untouched.
+
+# %% [14c] Q4-LB pull + table
+Q4LB_CSV = os.path.join(BASE, "pm_q4_lookback.csv")
+if not os.path.exists(Q4LB_CSV):
+    import getpass
+    import teradatasql
+    _cards_all = con.execute(
+        "SELECT TRIM(MNEMONIC) AS mne FROM mapping WHERE UPPER(TRIM(LOB_Manual)) = 'CARDS'"
+    ).df()["mne"].tolist()
+    _inc = ", ".join(f"'{m}'" for m in _cards_all)
+    _sql_lb = """
+    WITH sends AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               MIN(CAST(disposition_dt_tm AS DATE)) AS send_dt
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd = 1
+          AND disposition_dt_tm >= DATE '2025-10-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+        GROUP BY 1, 2
+    ), u AS (
+        SELECT DISTINCT consumer_id_hashed
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd = 4
+          AND disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-07-01' AND CLNT_NO IS NOT NULL
+    ), cl AS (
+        SELECT i.CLNT_NO,
+               SUM(CASE WHEN s.send_dt >= DATE '2026-01-01' THEN 1 ELSE 0 END) AS in_cnt,
+               SUM(CASE WHEN s.send_dt <  DATE '2026-01-01' THEN 1 ELSE 0 END) AS pre_cnt,
+               MAX(CASE WHEN u.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS unsub_cards
+        FROM sends s
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = s.consumer_id_hashed
+          AND i.TREATMENT_ID = s.TREATMENT_ID
+        LEFT JOIN u ON u.consumer_id_hashed = s.consumer_id_hashed
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT CASE WHEN in_cnt = 0 THEN '0'
+                WHEN in_cnt <= 2 THEN '1-2'
+                WHEN in_cnt <= 5 THEN '3-5'
+                WHEN in_cnt <= 10 THEN '6-10'
+                ELSE '11+' END AS bucket,
+           CASE WHEN pre_cnt = 0 THEN 'new to Cards mail'
+                ELSE 'mailed before window' END AS prior_contact,
+           COUNT(*) AS clients,
+           SUM(unsub_cards) AS unsubs_cards
+    FROM cl
+    WHERE in_cnt > 0
+    GROUP BY 1, 2
+    """
+    if "EDW" not in globals():
+        _u = input("Enter your username: ")
+        _p = getpass.getpass("Enter your password: ")
+        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                                  user=_u, password=_p, logmech="LDAP")
+    _parts = []
+    for bite in range(10):
+        _parts.append(pd.read_sql(_sql_lb % {"cards": _inc, "bite": bite}, EDW))
+        print(f"lookback bite {bite}: {_parts[-1]['clients'].sum():,.0f} clients")
+    lb = pd.concat(_parts).groupby(["bucket", "prior_contact"], as_index=False).sum()
+    lb.to_csv(Q4LB_CSV, index=False)
+    print(f"WROTE {Q4LB_CSV}")
+else:
+    print(f"CACHED: {Q4LB_CSV} exists.")
+lb = pd.read_csv(Q4LB_CSV)
+lb["rate_pct"] = lb["unsubs_cards"] / lb["clients"] * 100
+display(lb.sort_values(["bucket", "prior_contact"]))
+
+# %% [14d] Q4-LB chart — unsub rate by bucket, new vs pre-mailed
+_border = ["1-2", "3-5", "6-10", "11+"]
+lbp = lb[lb["bucket"].isin(_border)].copy()
+fig, ax = plt.subplots(figsize=(11, 5.5))
+xb = np.arange(len(_border)); w = 0.38
+for off, pc_, colr in [(-w/2, "new to Cards mail", C_LINE),
+                       (w/2, "mailed before window", C_THEN)]:
+    d_ = (lbp[lbp["prior_contact"] == pc_].set_index("bucket")
+          .reindex(_border))
+    ax.bar(xb + off, d_["rate_pct"], w, color=colr, label=pc_)
+    for xi, (r_, n_) in zip(xb + off, zip(d_["rate_pct"], d_["clients"])):
+        if pd.notna(r_):
+            ax.text(xi, r_ + 0.02, f"{r_:.2f}%\n(n = {compact_n(n_)})",
+                    ha="center", va="bottom", fontsize=8, fontweight="bold")
+ax.set_xticks(xb); ax.set_xticklabels(_border)
+ax.set_xlabel("Cards emails received IN window (Jan-Apr)")
+ax.set_ylabel("Cards unsub rate in window (%)")
+ax.set_ylim(0, lbp["rate_pct"].max() * 1.35)
+ax.legend(frameon=False)
+ax.set_title("Q4-LB: First contact, properly defined — unsub rate by in-window bucket,\n"
+             "split by pre-window history (Oct-Dec 2025 Cards mail) | Cards LOB incl FIFA",
+             fontweight="bold")
+style_ax(ax)
+plt.tight_layout(); plt.show()
+
 # %% [markdown]
 # ## OVERLAP — Loyalty x Cards, FIFA isolated
 # Groups (mutually exclusive, by which exposures DELIVERED in Jan-Apr):
