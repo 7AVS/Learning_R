@@ -572,6 +572,11 @@ print(f"Excludes {no_ucp_n:,} clients with no UCP match ({no_ucp_pct:.1f}%).")
 # Credit). This is composition and observed change, not a treatment effect.
 
 # %% [7] D0 — validation gates (run before any D chart)
+# !! VERIFY-FIRST: the metric names used below ("n_clients", "spend_avg",
+# "prof_avg", "prof_med", "prod_cnt_avg") are reconstructed from photos,
+# NOT read from the file. Before first run:
+#   display(_frames["b_delta"]["metric"].unique())
+# and correct the strings in get_val()/D1/D2 to the actual names.
 b_delta = _frames["b_delta"]
 piv = b_delta.pivot_table(index=["group", "metric"], columns="period",
                           values="value", aggfunc="first")
