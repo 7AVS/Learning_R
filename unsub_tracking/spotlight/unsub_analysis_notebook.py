@@ -620,6 +620,129 @@ style_ax(ax)
 plt.tight_layout(); plt.show()
 
 # %% [markdown]
+# ## Q4 v2: Contact Frequency over the EXTENDED period (Oct 2025 - Apr 2026)
+# Andre's actual ask (2026-08-06): same stayers-vs-leavers DISTRIBUTION
+# comparison as Q4, but bands counted over the window PLUS a 3-month
+# lookback, so "1-2" genuinely means <= 2 Cards emails across 7 months —
+# no long-standing recipient can pollute the low bands.
+# Population unchanged: clients mailed IN window (Jan-Apr); unsub = in-window.
+# Own cache pm_q4_lookback_v2.csv at (in_cnt, pre_cnt) grain — bands are
+# rebuilt locally, so re-banding needs no re-pull. (This grain can also
+# reproduce Q4-LB v1 exactly; v1 cells kept untouched above.)
+# CAVEAT (printed on chart): unsubscribing STOPS the email count — a Feb
+# unsubscriber mechanically lands in a low band. Leavers tilt low partly
+# by construction; the lookback softens but does not remove this.
+
+# %% [14e] Q4 v2 pull + banding
+Q4LB2_CSV = os.path.join(BASE, "pm_q4_lookback_v2.csv")
+if not os.path.exists(Q4LB2_CSV):
+    import getpass
+    import teradatasql
+    _cards_all = con.execute(
+        "SELECT TRIM(MNEMONIC) AS mne FROM mapping WHERE UPPER(TRIM(LOB_Manual)) = 'CARDS'"
+    ).df()["mne"].tolist()
+    _inc = ", ".join(f"'{m}'" for m in _cards_all)
+    _sql_lb2 = """
+    WITH sends AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               MIN(CAST(disposition_dt_tm AS DATE)) AS send_dt
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd = 1
+          AND disposition_dt_tm >= DATE '2025-10-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+        GROUP BY 1, 2
+    ), u AS (
+        SELECT DISTINCT consumer_id_hashed
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd = 4
+          AND disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-07-01' AND CLNT_NO IS NOT NULL
+    ), cl AS (
+        SELECT i.CLNT_NO,
+               SUM(CASE WHEN s.send_dt >= DATE '2026-01-01' THEN 1 ELSE 0 END) AS in_cnt,
+               SUM(CASE WHEN s.send_dt <  DATE '2026-01-01' THEN 1 ELSE 0 END) AS pre_cnt,
+               MAX(CASE WHEN u.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS unsub_cards
+        FROM sends s
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = s.consumer_id_hashed
+          AND i.TREATMENT_ID = s.TREATMENT_ID
+        LEFT JOIN u ON u.consumer_id_hashed = s.consumer_id_hashed
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT in_cnt, pre_cnt,
+           COUNT(*) AS clients,
+           SUM(unsub_cards) AS unsubs_cards
+    FROM cl
+    WHERE in_cnt > 0
+    GROUP BY 1, 2
+    """
+    if "EDW" not in globals():
+        _u = input("Enter your username: ")
+        _p = getpass.getpass("Enter your password: ")
+        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                                  user=_u, password=_p, logmech="LDAP")
+    _parts = []
+    for bite in range(10):
+        _parts.append(pd.read_sql(_sql_lb2 % {"cards": _inc, "bite": bite}, EDW))
+        print(f"v2 lookback bite {bite}: {_parts[-1]['clients'].sum():,.0f} clients")
+    lb2 = pd.concat(_parts).groupby(["in_cnt", "pre_cnt"], as_index=False).sum()
+    lb2.to_csv(Q4LB2_CSV, index=False)
+    print(f"WROTE {Q4LB2_CSV}")
+else:
+    print(f"CACHED: {Q4LB2_CSV} exists.")
+lb2 = pd.read_csv(Q4LB2_CSV)
+lb2["total_cnt"] = lb2["in_cnt"] + lb2["pre_cnt"]
+_edges2 = [(1, 2, "1-2"), (3, 5, "3-5"), (6, 10, "6-10"), (11, 20, "11-20"), (21, None, "21+")]
+lb2["band"] = pd.cut(lb2["total_cnt"], bins=[0, 2, 5, 10, 20, np.inf],
+                     labels=[e[2] for e in _edges2])
+q4v2 = (lb2.groupby("band", as_index=False, observed=True)
+        [["clients", "unsubs_cards"]].sum())
+q4v2["stayers"] = q4v2["clients"] - q4v2["unsubs_cards"]
+q4v2["pct_of_stayers"] = q4v2["stayers"] / q4v2["stayers"].sum() * 100
+q4v2["pct_of_unsubs"] = q4v2["unsubs_cards"] / q4v2["unsubs_cards"].sum() * 100
+q4v2["rate_pct"] = q4v2["unsubs_cards"] / q4v2["clients"] * 100
+print("Bands on TOTAL Cards emails Oct 2025 - Apr 2026 (population: mailed Jan-Apr):")
+display(q4v2)
+
+# %% [14f] Q4 v2 chart — distribution + rate, extended-period bands
+fig, (axl, axr) = plt.subplots(1, 2, figsize=(14, 5.5))
+xb = np.arange(len(q4v2)); w = 0.38
+axl.bar(xb - w/2, q4v2["pct_of_stayers"], w, color=C_THEN, label="stayers")
+axl.bar(xb + w/2, q4v2["pct_of_unsubs"], w, color=C_NOW, label="Cards unsubs")
+for xi, (s_, u_) in zip(xb, zip(q4v2["pct_of_stayers"], q4v2["pct_of_unsubs"])):
+    axl.text(xi - w/2, s_, f"{s_:.0f}%", ha="center", va="bottom", fontsize=9)
+    axl.text(xi + w/2, u_, f"{u_:.0f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+axl.set_xticks(xb)
+axl.set_xticklabels([f"{b}\n(n = {compact_n(c_)})" for b, c_ in zip(q4v2["band"], q4v2["clients"])])
+axl.set_xlabel("TOTAL Cards emails, Oct 2025 - Apr 2026 (window + 3mo lookback)")
+axl.set_ylabel("% of group")
+axl.set_title("Distribution: stayers vs unsubs — honest bands\n"
+              "(\"1-2\" = truly <= 2 emails across 7 months)", fontweight="bold")
+axl.legend(frameon=False); style_ax(axl)
+axr.bar(q4v2["band"].astype(str), q4v2["rate_pct"], color=C_THEN)
+for xi, r_ in enumerate(q4v2["rate_pct"]):
+    axr.text(xi, r_, f"{r_:.2f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+axr.set_ylim(0, q4v2["rate_pct"].max() * 1.25)
+axr.set_ylabel("unsubscribed in window (%)")
+axr.set_title("Unsub rate by extended-period band", fontweight="bold")
+style_ax(axr)
+fig.suptitle("Q4 v2: Contact Frequency, bands over Oct 2025 - Apr 2026 — Jan-Apr unsubs\n"
+             "CAVEAT: unsubscribing stops the count — leavers tilt toward low bands "
+             "partly by construction", fontsize=11, fontweight="bold")
+plt.tight_layout(rect=[0, 0, 1, 0.90]); plt.show()
+
+# %% [markdown]
 # ## OVERLAP — Loyalty x Cards, FIFA isolated
 # Groups (mutually exclusive, by which exposures DELIVERED in Jan-Apr):
 # Cards only (ex-FIFA) · FIFA only · Loyalty only · All three (partial
@@ -1342,6 +1465,65 @@ q5_rate_chart(q5_ten, TEN_ORDER,
 q5_rate_chart(q5_tibc, None,
               "Q5c v2: Unsub RATE by Product Mix (TIBC) — Jan to Apr 2026\n"
               "(same top-12-by-volume combos as original; Cards series on all RBC-mailed)")
+
+# %% [markdown]
+# ## Q5a v3: is it propensity, or over-contacting? (age x email volume)
+# Andre's question (2026-08-06): "<25 unsubs more — but do we also MAIL each
+# <25 client more?" The per-CLIENT rate (v2) can't separate the two. This
+# view can:
+# - LEFT: Cards unsubs per 1,000 Cards emails SENT (per-email propensity)
+# - RIGHT: avg Cards emails per client (contact intensity)
+# Read: per-email flat + intensity higher for young => over-contacting story;
+# per-email still elevated for young => genuine propensity.
+# Universe: Cards-mailed clients ONLY (n_emails_cards >= 1) — this also fixes
+# v2's denominator caveat. Input built by spotlight/q5_age_volume_recompute.py
+# (Lumina Spark, reads landed ucp_enriched_a3_v1 — no new Teradata pull).
+
+# %% [25i] Q5a v3 — per-email rate + contact intensity by age
+Q5V3_CSV = os.path.join(BASE, "q5_age_volume.csv")
+if not os.path.exists(Q5V3_CSV):
+    print(f"MISSING: {Q5V3_CSV}\nRun spotlight/q5_age_volume_recompute.py in Lumina first "
+          "(reads ucp_enriched_a3_v1, writes this CSV). Skipping cell.")
+else:
+    v3 = pd.read_csv(Q5V3_CSV)
+    display(v3.sort_values("age_band"))
+    d3 = v3[~v3["age_band"].astype(str).str.contains("no_ucp", case=False, na=False)].copy()
+    _no3 = v3.loc[v3["age_band"].astype(str).str.contains("no_ucp", case=False, na=False), "clients"].sum()
+    print(f"Excluded from chart: {int(_no3):,} Cards-mailed clients with no UCP match.")
+    bands3 = [o for o in AGE_ORDER if o in set(d3["age_band"])]
+    extras3 = sorted(set(d3["age_band"]) - set(bands3))   # never drop silently
+    if extras3:
+        print(f"extra bands appended (not in standard order): {extras3}")
+    d3 = d3.set_index("age_band").reindex(bands3 + extras3).reset_index()
+    ov_pe = d3["cards_unsubs"].sum() / d3["emails_cards"].sum() * 1000
+    ov_epc = d3["emails_cards"].sum() / d3["clients"].sum()
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(14, 5.5))
+    x3 = np.arange(len(d3))
+    axl.bar(x3, d3["unsubs_per_1k_emails"], 0.6, color=C_NOW)
+    for xi, r_ in enumerate(d3["unsubs_per_1k_emails"]):
+        axl.text(xi, r_, f"{r_:.2f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    axl.axhline(ov_pe, color="black", linewidth=0.9, linestyle="--")
+    axl.text(len(d3) - 0.5, ov_pe, f" overall {ov_pe:.2f}", fontsize=8, va="bottom", ha="right")
+    axl.set_ylabel("Cards unsubs per 1,000 Cards emails sent")
+    axl.set_title("Per-EMAIL propensity\n(volume-adjusted — the honest comparison)",
+                  fontweight="bold")
+    axr.bar(x3, d3["emails_per_client"], 0.6, color=C_THEN)
+    for xi, e_ in enumerate(d3["emails_per_client"]):
+        axr.text(xi, e_, f"{e_:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    axr.axhline(ov_epc, color="black", linewidth=0.9, linestyle="--")
+    axr.text(len(d3) - 0.5, ov_epc, f" overall {ov_epc:.1f}", fontsize=8, va="bottom", ha="right")
+    axr.set_ylabel("avg Cards emails per client, Jan-Apr")
+    axr.set_title("Contact INTENSITY\n(are we simply mailing this band more?)",
+                  fontweight="bold")
+    for ax_ in (axl, axr):
+        ax_.set_xticks(x3)
+        ax_.set_xticklabels([f"{b}\n(n = {compact_n(c_)})"
+                             for b, c_ in zip(d3["age_band"], d3["clients"])], fontsize=8.5)
+        style_ax(ax_)
+    fig.suptitle("Q5a v3: Cards unsubs by Age — propensity vs contact volume — Jan to Apr 2026\n"
+                 "Universe: Cards-mailed clients only (fixes v2 denominator caveat)",
+                 fontsize=11, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.90]); plt.show()
 
 # %% [markdown]
 # ## D5: Behavior Migration — where did each then-segment end up?
