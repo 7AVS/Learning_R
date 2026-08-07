@@ -488,6 +488,453 @@ fig.suptitle("Q4: Contact Frequency (Cards Emails Only) — Jan to Apr 2026",
 plt.tight_layout(rect=[0, 0, 1, 0.93]); plt.show()
 
 # %% [markdown]
+# ## OVERLAP — Loyalty x Cards, FIFA isolated
+# Groups (mutually exclusive, by which exposures DELIVERED in Jan-Apr):
+# Cards only (ex-FIFA) · FIFA only · Loyalty only · All three (partial
+# combos counted but not charted). CLEAN ATTRIBUTION: a group's unsub rate
+# counts ONLY unsubs on that scope's own lists. Red-team caveats: volume
+# confound, targeting selection, window truncation. Mechanics per
+# 2026-08-05 verification: disposition 4 = completed per-list opt-out;
+# client-level flags, no event inflation.
+
+# %% [12] A3 pull — FIFA-isolated cube, three caches, auto-invalidates
+OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
+_ALL_CACHES = [OVERLAP_CSV,
+               os.path.join(BASE, "pm_overlap_detail.csv"),
+               os.path.join(BASE, "pm_overlap_mne.csv")]
+def _caches_current():
+    if not all(os.path.exists(p) for p in _ALL_CACHES):
+        return False
+    try:
+        return "mailed_fwc" in pd.read_csv(OVERLAP_CSV, nrows=0).columns
+    except Exception:
+        return False
+
+if _caches_current():
+    print("CACHED: all three overlap caches exist (v2 schema) - no Teradata pull.")
+else:
+    for _p in _ALL_CACHES:
+        if os.path.exists(_p):
+            os.remove(_p); print(f"removed stale cache {_p}")
+    import getpass
+    import teradatasql
+    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
+    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
+    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
+    assert CARDS_L and LOY_L, "mapping gave empty LOB lists - STOP"
+    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
+    _EV = """
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND disposition_cd IN (1, 4)
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
+        GROUP BY 1, 2, 3
+    """
+    _IDS = """
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
+    """
+    _sql = ("WITH ev AS (" + _EV + "), ids AS (" + _IDS + """), cl AS (
+        SELECT i.CLNT_NO,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_fwc,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy,
+               SUM(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_cards,
+               SUM(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_fwc,
+               SUM(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_loy,
+               COUNT(DISTINCT CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN e.mne END) AS mnes_cards,
+               COUNT(DISTINCT CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN e.mne END) AS mnes_loy
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT mailed_cards, mailed_fwc, mailed_loy, mnes_cards, mnes_loy,
+           COUNT(*) AS clients,
+           SUM(unsub_cards) AS unsub_cards, SUM(unsub_fwc) AS unsub_fwc,
+           SUM(unsub_loy) AS unsub_loy,
+           SUM(CASE WHEN unsub_cards = 1 OR unsub_fwc = 1 OR unsub_loy = 1
+                    THEN 1 ELSE 0 END) AS unsub_any,
+           SUM(emails_cards) AS emails_cards, SUM(emails_fwc) AS emails_fwc,
+           SUM(emails_loy) AS emails_loy
+    FROM cl GROUP BY 1, 2, 3, 4, 5
+    """)
+    _sql_mne = ("WITH ev AS (" + _EV + "), ids AS (" + _IDS + """), cl AS (
+        SELECT i.CLNT_NO,
+               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
+               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
+               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1
+    )
+    SELECT c2.mailed_cards, c2.mailed_fwc, c2.mailed_loy, e.mne,
+           COUNT(DISTINCT CASE WHEN e.sent = 1 THEN i.CLNT_NO END) AS clients_mailed,
+           COUNT(DISTINCT CASE WHEN e.unsub = 1 THEN i.CLNT_NO END) AS clients_unsub
+    FROM ev e
+    INNER JOIN ids i
+       ON i.consumer_id_hashed = e.consumer_id_hashed
+      AND i.TREATMENT_ID = e.TREATMENT_ID
+    INNER JOIN cl c2 ON c2.CLNT_NO = i.CLNT_NO
+    GROUP BY 1, 2, 3, 4
+    """)
+    if "EDW" not in globals():
+        _u = input("Enter your username: ")
+        _p = getpass.getpass("Enter your password: ")
+        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                                  user=_u, password=_p, logmech="LDAP")
+    parts, parts_mne = [], []
+    for bite in range(10):
+        kw = {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}
+        parts.append(pd.read_sql(_sql % kw, EDW))
+        parts_mne.append(pd.read_sql(_sql_mne % kw, EDW))
+        print(f"bite {bite} done: {parts[-1]['clients'].sum():,.0f} clients")
+    _FLAGS = ["mailed_cards", "mailed_fwc", "mailed_loy"]
+    detail = (pd.concat(parts)
+              .groupby(_FLAGS + ["mnes_cards", "mnes_loy"], as_index=False).sum())
+    detail.to_csv(os.path.join(BASE, "pm_overlap_detail.csv"), index=False)
+    mne_cube = (pd.concat(parts_mne).groupby(_FLAGS + ["mne"], as_index=False).sum())
+    mne_cube.to_csv(os.path.join(BASE, "pm_overlap_mne.csv"), index=False)
+    agg = detail.copy()
+    agg["sum_mnes_cards"] = agg["mnes_cards"] * agg["clients"]
+    agg["sum_mnes_loy"] = agg["mnes_loy"] * agg["clients"]
+    ov = (agg.groupby(_FLAGS, as_index=False)
+          [["clients", "unsub_cards", "unsub_fwc", "unsub_loy", "unsub_any",
+            "emails_cards", "emails_fwc", "emails_loy",
+            "sum_mnes_cards", "sum_mnes_loy"]].sum())
+    ov.to_csv(OVERLAP_CSV, index=False)
+    print(f"WROTE {OVERLAP_CSV} + detail + mne caches"); print(ov)
+
+# %% [13] A3 chart — headline (clean attribution) + exposure
+SEG_ORDER = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only",
+             "Cards+FIFA", "Cards+Loyalty", "FIFA+Loyalty", "All three"]
+def seg_name(c, f, l):
+    return {(1, 0, 0): "Cards only (ex-FIFA)", (0, 1, 0): "FIFA only",
+            (0, 0, 1): "Loyalty only", (1, 1, 0): "Cards+FIFA",
+            (1, 0, 1): "Cards+Loyalty", (0, 1, 1): "FIFA+Loyalty",
+            (1, 1, 1): "All three"}.get((int(c), int(f), int(l)))
+
+if not _caches_current():
+    print("SKIP: run cell [12] first (needs Teradata once).")
+else:
+    ov = pd.read_csv(OVERLAP_CSV)
+    ov = ov[(ov[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
+    ov["segment"] = ov.apply(lambda r: seg_name(r["mailed_cards"], r["mailed_fwc"],
+                                                r["mailed_loy"]), axis=1)
+    ov = ov.set_index("segment").reindex(SEG_ORDER).dropna(subset=["clients"])
+    n_tot = int(ov["clients"].sum())
+    KEEP = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only", "All three"]
+    hidden = ov[~ov.index.isin(KEEP)]
+    if len(hidden):
+        print("not shown (partial combos):",
+              {s_: int(v) for s_, v in hidden["clients"].items()})
+    ovk = ov[ov.index.isin(KEEP)]
+    segs = [s_ for s_ in KEEP if s_ in ovk.index]
+    scope_style = [("unsub_cards", "mailed_cards", "emails_cards",
+                    "Cards lists (ex-FIFA)", lob_colors["CARDS"]),
+                   ("unsub_fwc", "mailed_fwc", "emails_fwc", "FIFA list", C_NOW),
+                   ("unsub_loy", "mailed_loy", "emails_loy",
+                    "Loyalty lists", lob_colors["LOYALTY"])]
+    fig, (axh, axe) = plt.subplots(1, 2, figsize=(15, 6.5))
+    xs = np.arange(len(segs)); wS = 0.26
+    for k, (ucol, flag, ecol, nm, colr) in enumerate(scope_style):
+        rates, emails, pos = [], [], []
+        for si, s_ in enumerate(segs):
+            if ovk.loc[s_, flag] == 1:
+                pos.append(si + (k - 1) * wS)
+                rates.append(float(ovk.loc[s_, ucol] / ovk.loc[s_, "clients"] * 100))
+                emails.append(float(ovk.loc[s_, ecol] / ovk.loc[s_, "clients"]))
+        axh.bar(pos, rates, wS, color=colr, label=nm)
+        for p_, r_ in zip(pos, rates):
+            axh.text(p_, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
+                     fontsize=9, fontweight="bold")
+        axe.bar(pos, emails, wS, color=colr)
+        for p_, v_ in zip(pos, emails):
+            axe.text(p_, v_ + 0.05, f"{v_:.1f}", ha="center", va="bottom", fontsize=9)
+    for ax, ylab, ttl in [
+            (axh, "% of group's clients who unsubscribed\nfrom THAT scope's lists, Jan-Apr",
+             "HEADLINE — clean attribution:\nunsubs counted only on the group's own lists"),
+            (axe, "avg delivered emails per client, Jan-Apr",
+             "EXPOSURE — how much mail did each group get?")]:
+        ax.set_xticks(xs)
+        ax.set_xticklabels([f"{s_}\nn = {int(ovk.loc[s_, 'clients']):,}" for s_ in segs],
+                           fontsize=8)
+        ax.set_ylabel(ylab); ax.set_title(ttl, fontweight="bold", fontsize=11)
+        style_ax(ax)
+    axh.set_ylim(0, axh.get_ylim()[1] * 1.15)
+    axh.legend(frameon=False, fontsize=8.5, loc="upper left")
+    fig.suptitle(f"OVERLAP (FIFA isolated): unsub rate by mail-exposure group — Jan-Apr 2026\n"
+                 f"Groups are MUTUALLY EXCLUSIVE clients (sum = {n_tot:,} of ~10.4M mailed "
+                 "enterprise-wide); group = which exposures DELIVERED email in the window",
+                 fontsize=11.5, fontweight="bold")
+    fig.text(0.01, 0.01,
+             "CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that scope's own lists. "
+             "Navy = Cards ex-FIFA, orange = FIFA, tundra = Loyalty — same colors both panels.",
+             fontsize=8, style="italic")
+    plt.tight_layout(rect=[0, 0.04, 1, 0.90]); plt.show()
+
+# %% [14] A3b — WHICH programs, single-side groups (FIFA = orange bar inside Cards panel)
+if not _caches_current():
+    print("SKIP: run cell [12] first.")
+else:
+    mc = pd.read_csv(os.path.join(BASE, "pm_overlap_mne.csv"))
+    mc = mc[(mc[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
+    lm2 = (_frames["mapping"].assign(
+        mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].astype(str).str.strip(),
+        lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].astype(str).str.strip().str.upper())
+        [["mne", "lob"]])
+    mc["mne"] = mc["mne"].astype(str).str.strip()
+    mc = mc.merge(lm2, on="mne", how="left")
+    mc.loc[mc["mne"] == "FWC", "lob"] = "FIFA"
+    mc = mc[mc["clients_mailed"] > 0].copy()
+    mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
+    mc["label_mne"] = np.where(mc["clients_mailed"] < SMALL_BASE,
+                               mc["mne"] + " △", mc["mne"])
+    mc["panel"] = np.where(mc["mailed_loy"] == 0, "Cards side only (incl FIFA)",
+                  np.where((mc["mailed_cards"] == 0) & (mc["mailed_fwc"] == 0),
+                           "Loyalty only", "mixed"))
+    pm_ = (mc[mc["panel"] != "mixed"]
+           .groupby(["panel", "label_mne", "lob"], as_index=False)
+           [["clients_mailed", "clients_unsub"]].sum())
+    pm_["unsub_rate"] = pm_["clients_unsub"] / pm_["clients_mailed"] * 100
+    panels = ["Cards side only (incl FIFA)", "Loyalty only"]
+    fig, axs = plt.subplots(1, 2, figsize=(15, 6))
+    for ax, seg in zip(axs, panels):
+        top = (pm_[pm_["panel"] == seg]
+               .sort_values("clients_mailed", ascending=True).tail(10))
+        ax.barh(top["label_mne"], top["clients_mailed"],
+                color=[lob_colors.get(l, "#899299") for l in top["lob"]])
+        for y_, (v, r_) in enumerate(zip(top["clients_mailed"], top["unsub_rate"])):
+            ax.text(v, y_, f" {compact_n(v)} · {r_:.2f}%", va="center", fontsize=8)
+        ax.set_title(seg, fontweight="bold")
+        ax.set_xlim(0, top["clients_mailed"].max() * 1.45); style_ax(ax)
+    fig.suptitle("OVERLAP deep-dive — WHICH programs — single-side groups, Jan-Apr 2026\n"
+                 "label = clients mailed · that program's unsub rate within the group | "
+                 "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed",
+                 fontsize=11, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.88]); plt.show()
+
+# %% [15] A3c — TOP 10 PROGRAM COMBINATIONS (own pull, own cache)
+COMBO_CSV = os.path.join(BASE, "pm_overlap_combos.csv")
+if not os.path.exists(COMBO_CSV):
+    import getpass
+    import teradatasql
+    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
+    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
+    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
+    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
+    _sql_combo = """
+    WITH ev AS (
+        SELECT consumer_id_hashed, TREATMENT_ID,
+               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
+               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_dt_tm >= DATE '2026-01-01'
+          AND disposition_dt_tm <  DATE '2026-05-01'
+          AND disposition_cd IN (1, 4)
+          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
+          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
+        GROUP BY 1, 2, 3
+    ), ids AS (
+        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
+    ), per_mne AS (
+        SELECT i.CLNT_NO, e.mne,
+               MAX(e.sent) AS sent, MAX(e.unsub) AS unsub
+        FROM ev e
+        INNER JOIN ids i
+           ON i.consumer_id_hashed = e.consumer_id_hashed
+          AND i.TREATMENT_ID = e.TREATMENT_ID
+        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
+        GROUP BY 1, 2
+    ), cl AS (
+        SELECT CLNT_NO,
+               TRIM(TRAILING '+' FROM (XMLAGG(CASE WHEN sent = 1
+                    THEN TRIM(mne) || '+' END ORDER BY mne) (VARCHAR(600)))) AS combo,
+               MAX(unsub) AS unsub_any
+        FROM per_mne GROUP BY 1
+    )
+    SELECT combo, COUNT(*) AS clients, SUM(unsub_any) AS unsubs
+    FROM cl WHERE combo IS NOT NULL
+    GROUP BY 1 HAVING COUNT(*) >= 50
+    """
+    if "EDW" not in globals():
+        _u = input("Enter your username: ")
+        _p = getpass.getpass("Enter your password: ")
+        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                                  user=_u, password=_p, logmech="LDAP")
+    parts_c = []
+    for bite in range(10):
+        parts_c.append(pd.read_sql(
+            _sql_combo % {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}, EDW))
+        print(f"combo bite {bite}: {len(parts_c[-1]):,} combo rows")
+    combos_df = pd.concat(parts_c).groupby("combo", as_index=False).sum()
+    combos_df.to_csv(COMBO_CSV, index=False)
+    print(f"WROTE {COMBO_CSV} ({len(combos_df):,} combos)")
+else:
+    print(f"CACHED: {COMBO_CSV} exists.")
+
+cb = pd.read_csv(COMBO_CSV)
+cb["n_programs"] = cb["combo"].str.count(r"\+") + 1
+cb["unsub_rate"] = cb["unsubs"] / cb["clients"] * 100
+top = (cb[cb["n_programs"] >= 2]
+       .sort_values("clients", ascending=False).head(10)
+       .sort_values("clients", ascending=True))
+fig, ax = plt.subplots(figsize=(11, 5.5))
+ax.barh(top["combo"], top["clients"], color=C_THEN)
+for y_, (v, r_) in enumerate(zip(top["clients"], top["unsub_rate"])):
+    ax.text(v, y_, f" {compact_n(v)} clients · {r_:.2f}%", va="center",
+            fontsize=8.5, fontweight="bold")
+ax.set_xlim(0, top["clients"].max() * 1.45)
+ax.xaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
+style_ax(ax)
+ax.set_title("TOP 10 PROGRAM COMBINATIONS (2+ programs) — clients mailed, Jan-Apr 2026\n"
+             "combo = exact set of Cards/FIFA/Loyalty programs delivered · "
+             "label = clients · % unsubscribed from any of these lists | <50 clients/bite excluded",
+             fontweight="bold", fontsize=10.5)
+plt.tight_layout(); plt.show()
+# %% [markdown]
+# # A: Stakeholder follow-up — the three asks (2026-08-06 feedback email)
+# 1. Loyalty x Cards OVERLAP (A3) · 2. ATTRITION (A2) · 3. PROFIT
+# population check (A1). Definitions as the D section: cohort 4,783,193,
+# anchors Jun 30 2025 -> Jun 30 2026, "leaver" = Cards-marketing unsub by
+# anchor (NOT account closure). No-UCP-match shown, never dropped silently.
+
+# %% [markdown]
+# ## ATTRITION — do unsubscribers actually leave more? Yes, on every cut.
+# ELI5: of clients who HAD a card in June 2025 — a year later: still has
+# cards / no cards but still a client ("lost cards") / not in the data at
+# all ("vanished" = left-bank PROXY; no official closure field here).
+# Result: leavers lose cards 1.91% vs 1.63% (x1.17), vanish 1.74% vs
+# 1.30% (x1.34); whole-relationship vanish 5.9% vs 2.6% (2.2x).
+# Caveat attached: descriptive, not causal — groups not matched.
+
+# %% [11] A2 — attrition + population ledger (needs pm_asks_results.csv)
+if not HAS_PM:
+    print("SKIP: pm_asks_results.csv not in BASE - see A1 note.")
+else:
+    pmw = (con.execute("SELECT * FROM pm").df()
+           .pivot_table(index=["table", "grp"], columns="metric",
+                        values="value", aggfunc="first"))
+    led = pmw.loc["population_ledger"]
+    att = pmw.loc["card_attrition"]
+    grps = ["stayer", "leaver"]
+    lost = [float(att.loc[g, "lost_cards_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
+    van  = [float(att.loc[g, "vanished_from_ucp_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
+    ns_a = [int(att.loc[g, "held_cards_then"]) for g in grps]
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13, 5.5))
+    xg = np.arange(2); w = 0.36
+    axl.bar(xg - w/2, lost, w, color=C_THEN, label="no cards anymore (still a client)")
+    axl.bar(xg + w/2, van, w, color=C_LINE, label="gone from the data (left-bank PROXY)")
+    for xi, (l_, v_) in zip(xg, zip(lost, van)):
+        axl.text(xi - w/2, l_ + 0.03, f"{l_:.2f}%", ha="center", va="bottom",
+                 fontsize=9.5, fontweight="bold")
+        axl.text(xi + w/2, v_ + 0.03, f"{v_:.2f}%", ha="center", va="bottom",
+                 fontsize=9.5, fontweight="bold")
+    axl.set_xticks(xg)
+    axl.set_xticklabels([f"{g.upper()}\nheld cards Jun 2025: n = {n_:,}"
+                         for g, n_ in zip(grps, ns_a)])
+    axl.set_ylim(0, max(lost + van) * 1.4)
+    axl.set_ylabel("% of Jun-2025 cardholders")
+    axl.set_title("Of clients who HAD cards in Jun 2025,\nwho exited by Jun 2026?",
+                  fontweight="bold", fontsize=11)
+    axl.legend(frameon=False, fontsize=8.5, loc="upper left"); style_ax(axl)
+    m_now = [float(led.loc[g, "matched_now"]) for g in grps]
+    v_now = [float(led.loc[g, "vanished_now"]) for g in grps]
+    xgl = [g.upper() for g in grps]
+    axr.bar(xgl, m_now, color="#899299")
+    axr.bar(xgl, v_now, bottom=m_now, color=C_LINE)
+    for i, g in enumerate(grps):
+        mt = float(led.loc[g, "matched_then"])
+        axr.text(i, m_now[i] / 2, f"still found\n{compact_n(m_now[i])}", ha="center",
+                 va="center", fontsize=9, color="white", fontweight="bold")
+        axr.text(i, m_now[i] + v_now[i], f"vanished: {v_now[i]:,.0f}\n({v_now[i] / mt * 100:.1f}%)",
+                 ha="center", va="bottom", fontsize=9, fontweight="bold", color=C_LINE)
+    axr.set_ylim(0, (np.array(m_now) + np.array(v_now)).max() * 1.28)
+    axr.yaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
+    axr.set_title("Where each group's Jun-2025 clients ended up\n(the counts behind PROFIT CHECK's fix)",
+                  fontweight="bold", fontsize=11); style_ax(axr)
+    fig.suptitle("ATTRITION: Do unsubscribers leave more? (descriptive — groups not matched)",
+                 fontsize=12.5, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.92]); plt.show()
+
+# %% [markdown]
+# ## PROFIT CHECK — profit recomputed on a fixed population
+# ELI5: 100 leavers in June 2025; a year later 6 no longer appear in the
+# profitability data. ORIGINAL basis averages only the 94 present (grading
+# the class after dropouts left). FIXED basis keeps all 100 — vanished
+# count $0. Result (run 2026-08-06): finding SURVIVES — leavers $550->$688
+# (+25.1%), stayers $795->$982 (+23.6%); vanished were low-value ($134 /
+# $183). Basis (b) is the reported number. The check surfaced: leavers
+# vanish at 5.9% vs 2.6% (2.2x) — feeds ATTRITION.
+
+# %% [10] A1 — profit three bases (needs pm_asks_results.csv)
+if not HAS_PM:
+    print("SKIP: pm_asks_results.csv not in BASE - run spotlight/"
+          "pm_asks_recompute.py in the pod once, then rerun this cell.")
+else:
+    pmw = (con.execute("SELECT * FROM pm").df()
+           .pivot_table(index=["table", "grp"], columns="metric",
+                        values="value", aggfunc="first"))
+    prof = pmw.loc["profit_three_ways"]
+    grps = ["stayer", "leaver"]
+    ns = [int(prof.loc[g, "n_then_matched"]) for g in grps]
+    bases = [("(a) ORIGINAL basis — survivors only", "avg_then_survivors", "avg_now_survivors"),
+             ("(b) FIXED basis — everyone kept, vanished = $0", "avg_then_all", "avg_now_zerofill")]
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=True)
+    ymax = 0
+    for ax, (label, tc, nc) in zip(axes, bases):
+        thin = [float(prof.loc[g, tc]) for g in grps]
+        now = [float(prof.loc[g, nc]) for g in grps]
+        ymax = max([ymax] + thin + now)
+        xg = np.arange(2); w = 0.36
+        ax.bar(xg - w/2, thin, w, color=C_THEN, label="avg profit Jun 2025")
+        ax.bar(xg + w/2, now, w, color=C_NOW, label="avg profit Jun 2026")
+        for xi, (t, n_) in zip(xg, zip(thin, now)):
+            ax.text(xi - w/2, t + 12, f"${t:,.0f}", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold")
+            ax.text(xi + w/2, n_ + 12, f"${n_:,.0f}", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold")
+            d_, dp = n_ - t, (n_ - t) / t * 100
+            ax.text(xi, max(t, n_) * 1.18,
+                    f"{'+' if d_ >= 0 else ''}${d_:,.0f}  ({dp:+.1f}%)", ha="center",
+                    fontsize=10.5, color=C_POS if d_ >= 0 else C_LINE, fontweight="bold")
+        ax.set_xticks(xg)
+        ax.set_xticklabels([f"{g.upper()}\nn = {n_:,}" for g, n_ in zip(grps, ns)])
+        ax.set_title(label, fontweight="bold", fontsize=11, pad=10); style_ax(ax)
+    for ax in axes:
+        ax.set_ylim(0, ymax * 1.35)
+    axes[0].set_ylabel("avg annual profit estimate ($, UCP)")
+    _h, _l = axes[0].get_legend_handles_labels()
+    fig.legend(_h, _l, loc="upper right", frameon=False, fontsize=9, ncol=2,
+               bbox_to_anchor=(0.99, 0.90))
+    fig.suptitle("PROFIT CHECK: Did unsubscribers' profit really grow? "
+                 "Same data, two ways of counting", fontsize=12.5, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.85]); plt.show()
+    print("HOW TO READ: (a) silently drops clients who vanished by 2026;"
+          " (b) keeps every June-2025 client, vanished at $0. The story"
+          " holds in (b): both groups grow, leavers slightly faster in %.")
+
+# %% [markdown]
 # ## Q5: Who Unsubscribes — Age, Tenure, Products — Jan to Apr 2026
 # UCP match ~90.8%; no_ucp_match (held_* = -1) shown separately, never
 # folded into 0. Representation ratio = share of unsubs in a band / share
@@ -687,447 +1134,3 @@ fig.legend(handles=[Patch(color=C_THEN, label="Then (Jun 2025)"),
 plt.tight_layout(rect=[0, 0.06, 1, 1]); plt.show()
 print("Excludes LEAVERS_OTHER (not shown). UCP no-match excluded from averages.")
 
-# %% [markdown]
-# # A: Stakeholder follow-up — the three asks (2026-08-06 feedback email)
-# 1. Loyalty x Cards OVERLAP (A3) · 2. ATTRITION (A2) · 3. PROFIT
-# population check (A1). Definitions as the D section: cohort 4,783,193,
-# anchors Jun 30 2025 -> Jun 30 2026, "leaver" = Cards-marketing unsub by
-# anchor (NOT account closure). No-UCP-match shown, never dropped silently.
-
-# %% [markdown]
-# ## A1: PROFIT CHECK — profit recomputed on a fixed population
-# ELI5: 100 leavers in June 2025; a year later 6 no longer appear in the
-# profitability data. ORIGINAL basis averages only the 94 present (grading
-# the class after dropouts left). FIXED basis keeps all 100 — vanished
-# count $0. Result (run 2026-08-06): finding SURVIVES — leavers $550->$688
-# (+25.1%), stayers $795->$982 (+23.6%); vanished were low-value ($134 /
-# $183). Basis (b) is the reported number. The check surfaced: leavers
-# vanish at 5.9% vs 2.6% (2.2x) — feeds A2.
-
-# %% [10] A1 — profit three bases (needs pm_asks_results.csv)
-if not HAS_PM:
-    print("SKIP: pm_asks_results.csv not in BASE - run spotlight/"
-          "pm_asks_recompute.py in the pod once, then rerun this cell.")
-else:
-    pmw = (con.execute("SELECT * FROM pm").df()
-           .pivot_table(index=["table", "grp"], columns="metric",
-                        values="value", aggfunc="first"))
-    prof = pmw.loc["profit_three_ways"]
-    grps = ["stayer", "leaver"]
-    ns = [int(prof.loc[g, "n_then_matched"]) for g in grps]
-    bases = [("(a) ORIGINAL basis — survivors only", "avg_then_survivors", "avg_now_survivors"),
-             ("(b) FIXED basis — everyone kept, vanished = $0", "avg_then_all", "avg_now_zerofill")]
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=True)
-    ymax = 0
-    for ax, (label, tc, nc) in zip(axes, bases):
-        thin = [float(prof.loc[g, tc]) for g in grps]
-        now = [float(prof.loc[g, nc]) for g in grps]
-        ymax = max([ymax] + thin + now)
-        xg = np.arange(2); w = 0.36
-        ax.bar(xg - w/2, thin, w, color=C_THEN, label="avg profit Jun 2025")
-        ax.bar(xg + w/2, now, w, color=C_NOW, label="avg profit Jun 2026")
-        for xi, (t, n_) in zip(xg, zip(thin, now)):
-            ax.text(xi - w/2, t + 12, f"${t:,.0f}", ha="center", va="bottom",
-                    fontsize=9, fontweight="bold")
-            ax.text(xi + w/2, n_ + 12, f"${n_:,.0f}", ha="center", va="bottom",
-                    fontsize=9, fontweight="bold")
-            d_, dp = n_ - t, (n_ - t) / t * 100
-            ax.text(xi, max(t, n_) * 1.18,
-                    f"{'+' if d_ >= 0 else ''}${d_:,.0f}  ({dp:+.1f}%)", ha="center",
-                    fontsize=10.5, color=C_POS if d_ >= 0 else C_LINE, fontweight="bold")
-        ax.set_xticks(xg)
-        ax.set_xticklabels([f"{g.upper()}\nn = {n_:,}" for g, n_ in zip(grps, ns)])
-        ax.set_title(label, fontweight="bold", fontsize=11, pad=10); style_ax(ax)
-    for ax in axes:
-        ax.set_ylim(0, ymax * 1.35)
-    axes[0].set_ylabel("avg annual profit estimate ($, UCP)")
-    _h, _l = axes[0].get_legend_handles_labels()
-    fig.legend(_h, _l, loc="upper right", frameon=False, fontsize=9, ncol=2,
-               bbox_to_anchor=(0.99, 0.90))
-    fig.suptitle("A1 PROFIT CHECK: Did unsubscribers' profit really grow? "
-                 "Same data, two ways of counting", fontsize=12.5, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.85]); plt.show()
-    print("HOW TO READ: (a) silently drops clients who vanished by 2026;"
-          " (b) keeps every June-2025 client, vanished at $0. The story"
-          " holds in (b): both groups grow, leavers slightly faster in %.")
-
-# %% [markdown]
-# ## A2: ATTRITION — do unsubscribers actually leave more? Yes, on every cut.
-# ELI5: of clients who HAD a card in June 2025 — a year later: still has
-# cards / no cards but still a client ("lost cards") / not in the data at
-# all ("vanished" = left-bank PROXY; no official closure field here).
-# Result: leavers lose cards 1.91% vs 1.63% (x1.17), vanish 1.74% vs
-# 1.30% (x1.34); whole-relationship vanish 5.9% vs 2.6% (2.2x).
-# Caveat attached: descriptive, not causal — groups not matched.
-
-# %% [11] A2 — attrition + population ledger (needs pm_asks_results.csv)
-if not HAS_PM:
-    print("SKIP: pm_asks_results.csv not in BASE - see A1 note.")
-else:
-    led = pmw.loc["population_ledger"]
-    att = pmw.loc["card_attrition"]
-    grps = ["stayer", "leaver"]
-    lost = [float(att.loc[g, "lost_cards_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
-    van  = [float(att.loc[g, "vanished_from_ucp_now"] / att.loc[g, "held_cards_then"] * 100) for g in grps]
-    ns_a = [int(att.loc[g, "held_cards_then"]) for g in grps]
-    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13, 5.5))
-    xg = np.arange(2); w = 0.36
-    axl.bar(xg - w/2, lost, w, color=C_THEN, label="no cards anymore (still a client)")
-    axl.bar(xg + w/2, van, w, color=C_LINE, label="gone from the data (left-bank PROXY)")
-    for xi, (l_, v_) in zip(xg, zip(lost, van)):
-        axl.text(xi - w/2, l_ + 0.03, f"{l_:.2f}%", ha="center", va="bottom",
-                 fontsize=9.5, fontweight="bold")
-        axl.text(xi + w/2, v_ + 0.03, f"{v_:.2f}%", ha="center", va="bottom",
-                 fontsize=9.5, fontweight="bold")
-    axl.set_xticks(xg)
-    axl.set_xticklabels([f"{g.upper()}\nheld cards Jun 2025: n = {n_:,}"
-                         for g, n_ in zip(grps, ns_a)])
-    axl.set_ylim(0, max(lost + van) * 1.4)
-    axl.set_ylabel("% of Jun-2025 cardholders")
-    axl.set_title("Of clients who HAD cards in Jun 2025,\nwho exited by Jun 2026?",
-                  fontweight="bold", fontsize=11)
-    axl.legend(frameon=False, fontsize=8.5, loc="upper left"); style_ax(axl)
-    m_now = [float(led.loc[g, "matched_now"]) for g in grps]
-    v_now = [float(led.loc[g, "vanished_now"]) for g in grps]
-    xgl = [g.upper() for g in grps]
-    axr.bar(xgl, m_now, color="#899299")
-    axr.bar(xgl, v_now, bottom=m_now, color=C_LINE)
-    for i, g in enumerate(grps):
-        mt = float(led.loc[g, "matched_then"])
-        axr.text(i, m_now[i] / 2, f"still found\n{compact_n(m_now[i])}", ha="center",
-                 va="center", fontsize=9, color="white", fontweight="bold")
-        axr.text(i, m_now[i] + v_now[i], f"vanished: {v_now[i]:,.0f}\n({v_now[i] / mt * 100:.1f}%)",
-                 ha="center", va="bottom", fontsize=9, fontweight="bold", color=C_LINE)
-    axr.set_ylim(0, (np.array(m_now) + np.array(v_now)).max() * 1.28)
-    axr.yaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
-    axr.set_title("Where each group's Jun-2025 clients ended up\n(the counts behind A1's fix)",
-                  fontweight="bold", fontsize=11); style_ax(axr)
-    fig.suptitle("A2 ATTRITION: Do unsubscribers leave more? (descriptive — groups not matched)",
-                 fontsize=12.5, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.92]); plt.show()
-
-# %% [markdown]
-# ## A3: OVERLAP — Loyalty x Cards, FIFA isolated
-# Groups (mutually exclusive, by which exposures DELIVERED in Jan-Apr):
-# Cards only (ex-FIFA) · FIFA only · Loyalty only · All three (partial
-# combos counted but not charted). CLEAN ATTRIBUTION: a group's unsub rate
-# counts ONLY unsubs on that scope's own lists. Red-team caveats: volume
-# confound, targeting selection, window truncation. Mechanics per
-# 2026-08-05 verification: disposition 4 = completed per-list opt-out;
-# client-level flags, no event inflation.
-
-# %% [12] A3 pull — FIFA-isolated cube, three caches, auto-invalidates
-OVERLAP_CSV = os.path.join(BASE, "pm_overlap_results.csv")
-_ALL_CACHES = [OVERLAP_CSV,
-               os.path.join(BASE, "pm_overlap_detail.csv"),
-               os.path.join(BASE, "pm_overlap_mne.csv")]
-def _caches_current():
-    if not all(os.path.exists(p) for p in _ALL_CACHES):
-        return False
-    try:
-        return "mailed_fwc" in pd.read_csv(OVERLAP_CSV, nrows=0).columns
-    except Exception:
-        return False
-
-if _caches_current():
-    print("CACHED: all three overlap caches exist (v2 schema) - no Teradata pull.")
-else:
-    for _p in _ALL_CACHES:
-        if os.path.exists(_p):
-            os.remove(_p); print(f"removed stale cache {_p}")
-    import getpass
-    import teradatasql
-    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
-    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
-    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
-    assert CARDS_L and LOY_L, "mapping gave empty LOB lists - STOP"
-    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
-    _EV = """
-        SELECT consumer_id_hashed, TREATMENT_ID,
-               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
-               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
-               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT
-        WHERE disposition_dt_tm >= DATE '2026-01-01'
-          AND disposition_dt_tm <  DATE '2026-05-01'
-          AND disposition_cd IN (1, 4)
-          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
-          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
-        GROUP BY 1, 2, 3
-    """
-    _IDS = """
-        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-        FROM DTZV01.VENDOR_FEEDBACK_MASTER
-        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
-    """
-    _sql = ("WITH ev AS (" + _EV + "), ids AS (" + _IDS + """), cl AS (
-        SELECT i.CLNT_NO,
-               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
-               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
-               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy,
-               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_cards,
-               MAX(CASE WHEN e.mne = 'FWC'        AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_fwc,
-               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.unsub = 1 THEN 1 ELSE 0 END) AS unsub_loy,
-               SUM(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_cards,
-               SUM(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_fwc,
-               SUM(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS emails_loy,
-               COUNT(DISTINCT CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN e.mne END) AS mnes_cards,
-               COUNT(DISTINCT CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN e.mne END) AS mnes_loy
-        FROM ev e
-        INNER JOIN ids i
-           ON i.consumer_id_hashed = e.consumer_id_hashed
-          AND i.TREATMENT_ID = e.TREATMENT_ID
-        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
-        GROUP BY 1
-    )
-    SELECT mailed_cards, mailed_fwc, mailed_loy, mnes_cards, mnes_loy,
-           COUNT(*) AS clients,
-           SUM(unsub_cards) AS unsub_cards, SUM(unsub_fwc) AS unsub_fwc,
-           SUM(unsub_loy) AS unsub_loy,
-           SUM(CASE WHEN unsub_cards = 1 OR unsub_fwc = 1 OR unsub_loy = 1
-                    THEN 1 ELSE 0 END) AS unsub_any,
-           SUM(emails_cards) AS emails_cards, SUM(emails_fwc) AS emails_fwc,
-           SUM(emails_loy) AS emails_loy
-    FROM cl GROUP BY 1, 2, 3, 4, 5
-    """)
-    _sql_mne = ("WITH ev AS (" + _EV + "), ids AS (" + _IDS + """), cl AS (
-        SELECT i.CLNT_NO,
-               MAX(CASE WHEN e.mne IN (%(cards)s) AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_cards,
-               MAX(CASE WHEN e.mne = 'FWC'        AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_fwc,
-               MAX(CASE WHEN e.mne IN (%(loy)s)   AND e.sent = 1 THEN 1 ELSE 0 END) AS mailed_loy
-        FROM ev e
-        INNER JOIN ids i
-           ON i.consumer_id_hashed = e.consumer_id_hashed
-          AND i.TREATMENT_ID = e.TREATMENT_ID
-        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
-        GROUP BY 1
-    )
-    SELECT c2.mailed_cards, c2.mailed_fwc, c2.mailed_loy, e.mne,
-           COUNT(DISTINCT CASE WHEN e.sent = 1 THEN i.CLNT_NO END) AS clients_mailed,
-           COUNT(DISTINCT CASE WHEN e.unsub = 1 THEN i.CLNT_NO END) AS clients_unsub
-    FROM ev e
-    INNER JOIN ids i
-       ON i.consumer_id_hashed = e.consumer_id_hashed
-      AND i.TREATMENT_ID = e.TREATMENT_ID
-    INNER JOIN cl c2 ON c2.CLNT_NO = i.CLNT_NO
-    GROUP BY 1, 2, 3, 4
-    """)
-    if "EDW" not in globals():
-        _u = input("Enter your username: ")
-        _p = getpass.getpass("Enter your password: ")
-        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
-                                  user=_u, password=_p, logmech="LDAP")
-    parts, parts_mne = [], []
-    for bite in range(10):
-        kw = {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}
-        parts.append(pd.read_sql(_sql % kw, EDW))
-        parts_mne.append(pd.read_sql(_sql_mne % kw, EDW))
-        print(f"bite {bite} done: {parts[-1]['clients'].sum():,.0f} clients")
-    _FLAGS = ["mailed_cards", "mailed_fwc", "mailed_loy"]
-    detail = (pd.concat(parts)
-              .groupby(_FLAGS + ["mnes_cards", "mnes_loy"], as_index=False).sum())
-    detail.to_csv(os.path.join(BASE, "pm_overlap_detail.csv"), index=False)
-    mne_cube = (pd.concat(parts_mne).groupby(_FLAGS + ["mne"], as_index=False).sum())
-    mne_cube.to_csv(os.path.join(BASE, "pm_overlap_mne.csv"), index=False)
-    agg = detail.copy()
-    agg["sum_mnes_cards"] = agg["mnes_cards"] * agg["clients"]
-    agg["sum_mnes_loy"] = agg["mnes_loy"] * agg["clients"]
-    ov = (agg.groupby(_FLAGS, as_index=False)
-          [["clients", "unsub_cards", "unsub_fwc", "unsub_loy", "unsub_any",
-            "emails_cards", "emails_fwc", "emails_loy",
-            "sum_mnes_cards", "sum_mnes_loy"]].sum())
-    ov.to_csv(OVERLAP_CSV, index=False)
-    print(f"WROTE {OVERLAP_CSV} + detail + mne caches"); print(ov)
-
-# %% [13] A3 chart — headline (clean attribution) + exposure
-SEG_ORDER = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only",
-             "Cards+FIFA", "Cards+Loyalty", "FIFA+Loyalty", "All three"]
-def seg_name(c, f, l):
-    return {(1, 0, 0): "Cards only (ex-FIFA)", (0, 1, 0): "FIFA only",
-            (0, 0, 1): "Loyalty only", (1, 1, 0): "Cards+FIFA",
-            (1, 0, 1): "Cards+Loyalty", (0, 1, 1): "FIFA+Loyalty",
-            (1, 1, 1): "All three"}.get((int(c), int(f), int(l)))
-
-if not _caches_current():
-    print("SKIP: run cell [12] first (needs Teradata once).")
-else:
-    ov = pd.read_csv(OVERLAP_CSV)
-    ov = ov[(ov[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
-    ov["segment"] = ov.apply(lambda r: seg_name(r["mailed_cards"], r["mailed_fwc"],
-                                                r["mailed_loy"]), axis=1)
-    ov = ov.set_index("segment").reindex(SEG_ORDER).dropna(subset=["clients"])
-    n_tot = int(ov["clients"].sum())
-    KEEP = ["Cards only (ex-FIFA)", "FIFA only", "Loyalty only", "All three"]
-    hidden = ov[~ov.index.isin(KEEP)]
-    if len(hidden):
-        print("not shown (partial combos):",
-              {s_: int(v) for s_, v in hidden["clients"].items()})
-    ovk = ov[ov.index.isin(KEEP)]
-    segs = [s_ for s_ in KEEP if s_ in ovk.index]
-    scope_style = [("unsub_cards", "mailed_cards", "emails_cards",
-                    "Cards lists (ex-FIFA)", lob_colors["CARDS"]),
-                   ("unsub_fwc", "mailed_fwc", "emails_fwc", "FIFA list", C_NOW),
-                   ("unsub_loy", "mailed_loy", "emails_loy",
-                    "Loyalty lists", lob_colors["LOYALTY"])]
-    fig, (axh, axe) = plt.subplots(1, 2, figsize=(15, 6.5))
-    xs = np.arange(len(segs)); wS = 0.26
-    for k, (ucol, flag, ecol, nm, colr) in enumerate(scope_style):
-        rates, emails, pos = [], [], []
-        for si, s_ in enumerate(segs):
-            if ovk.loc[s_, flag] == 1:
-                pos.append(si + (k - 1) * wS)
-                rates.append(float(ovk.loc[s_, ucol] / ovk.loc[s_, "clients"] * 100))
-                emails.append(float(ovk.loc[s_, ecol] / ovk.loc[s_, "clients"]))
-        axh.bar(pos, rates, wS, color=colr, label=nm)
-        for p_, r_ in zip(pos, rates):
-            axh.text(p_, r_ + 0.02, f"{r_:.2f}%", ha="center", va="bottom",
-                     fontsize=9, fontweight="bold")
-        axe.bar(pos, emails, wS, color=colr)
-        for p_, v_ in zip(pos, emails):
-            axe.text(p_, v_ + 0.05, f"{v_:.1f}", ha="center", va="bottom", fontsize=9)
-    for ax, ylab, ttl in [
-            (axh, "% of group's clients who unsubscribed\nfrom THAT scope's lists, Jan-Apr",
-             "HEADLINE — clean attribution:\nunsubs counted only on the group's own lists"),
-            (axe, "avg delivered emails per client, Jan-Apr",
-             "EXPOSURE — how much mail did each group get?")]:
-        ax.set_xticks(xs)
-        ax.set_xticklabels([f"{s_}\nn = {int(ovk.loc[s_, 'clients']):,}" for s_ in segs],
-                           fontsize=8)
-        ax.set_ylabel(ylab); ax.set_title(ttl, fontweight="bold", fontsize=11)
-        style_ax(ax)
-    axh.set_ylim(0, axh.get_ylim()[1] * 1.15)
-    axh.legend(frameon=False, fontsize=8.5, loc="upper left")
-    fig.suptitle(f"A3 OVERLAP (FIFA isolated): unsub rate by mail-exposure group — Jan-Apr 2026\n"
-                 f"Groups are MUTUALLY EXCLUSIVE clients (sum = {n_tot:,} of ~10.4M mailed "
-                 "enterprise-wide); group = which exposures DELIVERED email in the window",
-                 fontsize=11.5, fontweight="bold")
-    fig.text(0.01, 0.01,
-             "CLEAN ATTRIBUTION: a group's rate counts ONLY unsubs on that scope's own lists. "
-             "Navy = Cards ex-FIFA, orange = FIFA, tundra = Loyalty — same colors both panels.",
-             fontsize=8, style="italic")
-    plt.tight_layout(rect=[0, 0.04, 1, 0.90]); plt.show()
-
-# %% [14] A3b — WHICH programs, single-side groups (FIFA = orange bar inside Cards panel)
-if not _caches_current():
-    print("SKIP: run cell [12] first.")
-else:
-    mc = pd.read_csv(os.path.join(BASE, "pm_overlap_mne.csv"))
-    mc = mc[(mc[["mailed_cards", "mailed_fwc", "mailed_loy"]].sum(axis=1)) > 0].copy()
-    lm2 = (_frames["mapping"].assign(
-        mne=lambda d: d[[c for c in d.columns if "MNEMONIC" in c.upper()][0]].astype(str).str.strip(),
-        lob=lambda d: d[[c for c in d.columns if "LOB" in c.upper()][0]].astype(str).str.strip().str.upper())
-        [["mne", "lob"]])
-    mc["mne"] = mc["mne"].astype(str).str.strip()
-    mc = mc.merge(lm2, on="mne", how="left")
-    mc.loc[mc["mne"] == "FWC", "lob"] = "FIFA"
-    mc = mc[mc["clients_mailed"] > 0].copy()
-    mc["unsub_rate"] = mc["clients_unsub"] / mc["clients_mailed"] * 100
-    mc["label_mne"] = np.where(mc["clients_mailed"] < SMALL_BASE,
-                               mc["mne"] + " △", mc["mne"])
-    mc["panel"] = np.where(mc["mailed_loy"] == 0, "Cards side only (incl FIFA)",
-                  np.where((mc["mailed_cards"] == 0) & (mc["mailed_fwc"] == 0),
-                           "Loyalty only", "mixed"))
-    pm_ = (mc[mc["panel"] != "mixed"]
-           .groupby(["panel", "label_mne", "lob"], as_index=False)
-           [["clients_mailed", "clients_unsub"]].sum())
-    pm_["unsub_rate"] = pm_["clients_unsub"] / pm_["clients_mailed"] * 100
-    panels = ["Cards side only (incl FIFA)", "Loyalty only"]
-    fig, axs = plt.subplots(1, 2, figsize=(15, 6))
-    for ax, seg in zip(axs, panels):
-        top = (pm_[pm_["panel"] == seg]
-               .sort_values("clients_mailed", ascending=True).tail(10))
-        ax.barh(top["label_mne"], top["clients_mailed"],
-                color=[lob_colors.get(l, "#899299") for l in top["lob"]])
-        for y_, (v, r_) in enumerate(zip(top["clients_mailed"], top["unsub_rate"])):
-            ax.text(v, y_, f" {compact_n(v)} · {r_:.2f}%", va="center", fontsize=8)
-        ax.set_title(seg, fontweight="bold")
-        ax.set_xlim(0, top["clients_mailed"].max() * 1.45); style_ax(ax)
-    fig.suptitle("A3b WHICH programs — single-side groups, Jan-Apr 2026\n"
-                 "label = clients mailed · that program's unsub rate within the group | "
-                 "navy = Cards, orange = FIFA, tundra = Loyalty | △ = <10K mailed",
-                 fontsize=11, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.88]); plt.show()
-
-# %% [15] A3c — TOP 10 PROGRAM COMBINATIONS (own pull, own cache)
-COMBO_CSV = os.path.join(BASE, "pm_overlap_combos.csv")
-if not os.path.exists(COMBO_CSV):
-    import getpass
-    import teradatasql
-    lobs = con.execute("SELECT TRIM(MNEMONIC) AS mne, UPPER(TRIM(LOB_Manual)) AS lob FROM mapping").df()
-    CARDS_L = sorted(set(lobs.loc[lobs["lob"] == "CARDS", "mne"]) - {"FWC"})
-    LOY_L = sorted(set(lobs.loc[lobs["lob"] == "LOYALTY", "mne"]))
-    _in = lambda ms: ", ".join(f"'{m}'" for m in ms)
-    _sql_combo = """
-    WITH ev AS (
-        SELECT consumer_id_hashed, TREATMENT_ID,
-               SUBSTR(TREATMENT_ID, 8, 3) AS mne,
-               MAX(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS sent,
-               MAX(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END) AS unsub
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT
-        WHERE disposition_dt_tm >= DATE '2026-01-01'
-          AND disposition_dt_tm <  DATE '2026-05-01'
-          AND disposition_cd IN (1, 4)
-          AND CHARACTER_LENGTH(TRIM(TREATMENT_ID)) = 10
-          AND SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s, 'FWC', %(loy)s)
-        GROUP BY 1, 2, 3
-    ), ids AS (
-        SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-        FROM DTZV01.VENDOR_FEEDBACK_MASTER
-        WHERE load_tm >= DATE '2025-10-01' AND CLNT_NO IS NOT NULL
-    ), per_mne AS (
-        SELECT i.CLNT_NO, e.mne,
-               MAX(e.sent) AS sent, MAX(e.unsub) AS unsub
-        FROM ev e
-        INNER JOIN ids i
-           ON i.consumer_id_hashed = e.consumer_id_hashed
-          AND i.TREATMENT_ID = e.TREATMENT_ID
-        WHERE MOD(ABS(i.CLNT_NO), 10) = %(bite)d
-        GROUP BY 1, 2
-    ), cl AS (
-        SELECT CLNT_NO,
-               TRIM(TRAILING '+' FROM (XMLAGG(CASE WHEN sent = 1
-                    THEN TRIM(mne) || '+' END ORDER BY mne) (VARCHAR(600)))) AS combo,
-               MAX(unsub) AS unsub_any
-        FROM per_mne GROUP BY 1
-    )
-    SELECT combo, COUNT(*) AS clients, SUM(unsub_any) AS unsubs
-    FROM cl WHERE combo IS NOT NULL
-    GROUP BY 1 HAVING COUNT(*) >= 50
-    """
-    if "EDW" not in globals():
-        _u = input("Enter your username: ")
-        _p = getpass.getpass("Enter your password: ")
-        EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
-                                  user=_u, password=_p, logmech="LDAP")
-    parts_c = []
-    for bite in range(10):
-        parts_c.append(pd.read_sql(
-            _sql_combo % {"cards": _in(CARDS_L), "loy": _in(LOY_L), "bite": bite}, EDW))
-        print(f"combo bite {bite}: {len(parts_c[-1]):,} combo rows")
-    combos_df = pd.concat(parts_c).groupby("combo", as_index=False).sum()
-    combos_df.to_csv(COMBO_CSV, index=False)
-    print(f"WROTE {COMBO_CSV} ({len(combos_df):,} combos)")
-else:
-    print(f"CACHED: {COMBO_CSV} exists.")
-
-cb = pd.read_csv(COMBO_CSV)
-cb["n_programs"] = cb["combo"].str.count(r"\+") + 1
-cb["unsub_rate"] = cb["unsubs"] / cb["clients"] * 100
-top = (cb[cb["n_programs"] >= 2]
-       .sort_values("clients", ascending=False).head(10)
-       .sort_values("clients", ascending=True))
-fig, ax = plt.subplots(figsize=(11, 5.5))
-ax.barh(top["combo"], top["clients"], color=C_THEN)
-for y_, (v, r_) in enumerate(zip(top["clients"], top["unsub_rate"])):
-    ax.text(v, y_, f" {compact_n(v)} clients · {r_:.2f}%", va="center",
-            fontsize=8.5, fontweight="bold")
-ax.set_xlim(0, top["clients"].max() * 1.45)
-ax.xaxis.set_major_formatter(FuncFormatter(lambda v_, _: compact_n(v_)))
-style_ax(ax)
-ax.set_title("A3c TOP 10 PROGRAM COMBINATIONS (2+ programs) — clients mailed, Jan-Apr 2026\n"
-             "combo = exact set of Cards/FIFA/Loyalty programs delivered · "
-             "label = clients · % unsubscribed from any of these lists | <50 clients/bite excluded",
-             fontweight="bold", fontsize=10.5)
-plt.tight_layout(); plt.show()
