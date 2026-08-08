@@ -38,10 +38,7 @@ def load_cube(fname, alts=(), **read_csv_kwargs):
     raise FileNotFoundError(f"none of {(fname,) + tuple(alts)} found")
 
 C_THEN = "#003168"; C_LINE = "#B00020"; C_MUTE = "#9AA7B4"
-lob_colors = {"CARDS": "#003168", "LOYALTY": "#87AFBF", "PSI": "#AABA0A",
-              "PBA": "#FFC72C", "COMMERCIAL": "#588886", "RBC_BANK": "#51B5E0",
-              "UNKNOWN": "#899299", "HEF": "#FCA311", "AUTO": "#B8A970",
-              "INS": "#C1B5A5", "PL": "#6F6E6F", "FIFA": "#FCA311"}
+lob_colors = {"FIFA": "#FCA311"}  # only key still read (Exhibit 2 PCQ reference line)
 
 def style_ax(ax):
     ax.spines["top"].set_visible(False)
@@ -66,7 +63,11 @@ _cdf = _cdf.rename(columns={
     _pick(_cols, "mne"): "mne", _pick(_cols, "ym", "month"): "ym",
     _pick(_cols, "send", "deliver"): "sends", _pick(_cols, "unsub"): "unsubs_attributed",
 })[["mne", "ym", "sends", "unsubs_attributed"]]
-_cdf["ym"] = _cdf["ym"].astype(str).str.strip()
+# bare .astype(str) on a float64 column (e.g. from a null row) stringifies as "202508.0",
+# which silently breaks the string BETWEEN upper bound and drops the last month.
+_cdf["ym"] = pd.to_numeric(_cdf["ym"], errors="coerce")
+_cdf = _cdf.dropna(subset=["ym"])
+_cdf["ym"] = _cdf["ym"].astype(int).astype(str)
 _cdf["sends"] = pd.to_numeric(_cdf["sends"], errors="coerce")
 _cdf["unsubs_attributed"] = pd.to_numeric(_cdf["unsubs_attributed"], errors="coerce")
 con.register("c", _cdf)
@@ -101,6 +102,8 @@ def expect(name, got, ref, tol=0.15):
 # %% [1] Exhibit 1 — data
 MATURE_YM_MAX = "202605"   # unchanged immaturity rule from the prior build: the last 2 pulled
                             # months (202606, 202607) are bridge-lag immature.
+PULL_YM_MAX = "202607"     # last month present in data / chart's upper pull bound.
+                            # Changing MATURE_YM_MAX and/or PULL_YM_MAX is sufficient — no other edit needed.
 cards_mnes = con.execute(
     "SELECT TRIM(MNEMONIC) AS mne FROM mapping WHERE UPPER(TRIM(LOB_Manual)) = 'CARDS'"
 ).df()["mne"].tolist()
@@ -113,9 +116,9 @@ SELECT c.ym,
        ROUND(SUM(CASE WHEN TRIM(c.mne) IN ({_in_cards}) THEN c.unsubs_attributed ELSE 0 END)
              * 100.0 / NULLIF(SUM(CASE WHEN TRIM(c.mne) IN ({_in_cards}) THEN c.sends ELSE 0 END), 0), 3)
              AS cards_rate_pct
-FROM c WHERE c.ym BETWEEN '202508' AND '202607'
+FROM c WHERE c.ym BETWEEN '202508' AND '{PULL_YM_MAX}'
 GROUP BY 1 ORDER BY 1""").df()
-curve["immature"] = curve["ym"].isin(["202606", "202607"])
+curve["immature"] = curve["ym"] > MATURE_YM_MAX
 mature = curve.loc[~curve["immature"]]
 
 WINDOW = f"202508–{MATURE_YM_MAX}"   # the ONE window on this slide
@@ -151,7 +154,7 @@ expect("LOYALTY per-send %", loyalty_rate, 0.37)
 expect("ENTERPRISE ex-LOYALTY per-send %", ent_ex_loy_rate, 0.18)
 # 0.18 is a hand estimate back-computed from 2-dp LOB rates; if this fires, trust the code and report the computed value.
 expect("ENTERPRISE all-LOB per-send %", ent_all_rate, 0.27)
-# 0.18 is a hand estimate back-computed from 2-dp LOB rates; if this fires, trust the code and report the computed value.
+# 0.27 is a hand estimate back-computed from 2-dp LOB rates; if this fires, trust the code and report the computed value.
 
 _peak_idx = mature["cards_rate_pct"].idxmax()
 _peak_val = float(mature.loc[_peak_idx, "cards_rate_pct"])
@@ -208,6 +211,10 @@ plt.tight_layout(); plt.show()
 lb1 = need_cache("pm_q4_lookback.csv")
 if lb1 is not None:
     g = lb1.set_index(["bucket", "prior_contact"])
+    assert ("1-2", "mailed before window") in g.index and ("1-2", "new to Cards mail") in g.index, (
+        "pm_q4_lookback.csv missing expected (bucket, prior_contact) rows - check for the two "
+        "expected prior_contact values 'mailed before window' / 'new to Cards mail' in that file."
+    )
     rb = g.loc[("1-2", "mailed before window"), "unsubs_cards"] / g.loc[("1-2", "mailed before window"), "clients"] * 100
     rn = g.loc[("1-2", "new to Cards mail"), "unsubs_cards"] / g.loc[("1-2", "new to Cards mail"), "clients"] * 100
     print(f"re-contact: after-gap {rb:.2f}% vs true first-contact {rn:.2f}%")
@@ -223,6 +230,9 @@ SELECT TRIM(m.ACTION_TYPE) AS action_type,
 FROM a2 JOIN mapping m ON TRIM(a2.mne) = TRIM(m.MNEMONIC)
 WHERE UPPER(TRIM(m.LOB_Manual)) = 'CARDS'
 GROUP BY 1""").df().set_index("action_type")
+assert "Attract" in act.index and "Deepen" in act.index, (
+    "act is missing 'Attract' and/or 'Deepen' - check ACTION_TYPE values in the mapping file."
+)
 ratt = act.loc["Attract", "unsubs"] / act.loc["Attract", "senders"] * 100
 rdee = act.loc["Deepen", "unsubs"] / act.loc["Deepen", "senders"] * 100
 print(f"audience: Attract {ratt:.2f}% vs Deepen {rdee:.2f}%")
@@ -230,6 +240,10 @@ expect("Attract (acquisition) %", ratt, 0.56)
 expect("Deepen %", rdee, 0.28)
 
 pcq = con.execute("SELECT a2.senders, a2.unsubs_attributed FROM a2 WHERE TRIM(a2.mne) = 'PCQ'").df()
+assert len(pcq) == 1, (
+    f"expected exactly one PCQ row in a2_mne_rates.csv, got {len(pcq)} - check for mnemonic "
+    "casing/whitespace/drift in a2_mne_rates.csv."
+)
 pcq_rate = float(pcq["unsubs_attributed"].iloc[0] * 100.0 / pcq["senders"].iloc[0])
 expect("PCQ %", pcq_rate, 0.58)
 
@@ -277,7 +291,7 @@ axB.text(0.5, -0.24, ACTION_BASIS, transform=axB.transAxes, ha="center", va="top
 
 fig.suptitle("EXHIBIT 2 — where unsub risk concentrates: two comparisons, each within its own basis",
              fontsize=12, fontweight="bold")
-plt.tight_layout(rect=[0, 0, 1, 0.90]); plt.show()
+plt.tight_layout(rect=[0, 0.08, 1, 0.90]); plt.show()
 
 # %% [markdown]
 # ## SLIDE 2 — Value (text only, no chart)
