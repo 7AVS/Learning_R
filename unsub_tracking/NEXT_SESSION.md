@@ -1,125 +1,161 @@
-# NEXT SESSION — start here
+# NEXT SESSION — unsub unified pipeline (updated 2026-08-03)
 
-Workstream: **"who unsubscribes"** = `unsub_tracking/museum/`.
-**`unsub_before_after_jul25/` is a DIFFERENT workstream with its own session. Do not touch it.**
-Commits prefixed `museum:` are ours. `jul25:` are not.
+Read in this order: this file → `UNIFIED_BRIEF.md` → `spotlight/AUDIT_2026-08-02.md`.
+All .py pushed to GitHub (`6410cb3`); .md files live in this local repo.
+(Previous version of this file = the 2026-07-30 museum-era plan; superseded —
+its resets, incl. "Cards is the primary lens", are absorbed into UNIFIED_BRIEF.md.
+See git history if needed.)
 
-Read in this order: this file → `POWER_PACK_BRIEF.md` → `museum/RUN_2026-07-30_L10_L13.md`.
+## The pivot that happened 2026-08-02 (the bridge)
 
----
+1. **Two stakeholder briefings were merged into ONE brief: `UNIFIED_BRIEF.md`.**
+   It SUPERSEDES the raw wording of both `POWER_PACK_BRIEF.md` (Maya email,
+   spotlights) and `WORKSTREAM_2_BRIEF.md` (LOB/MNE + Cards profit — transcribed
+   from the second briefing photo, was never in the repo before). Andre's verbal
+   refinements are locked inside it — do not re-ask settled questions.
+   Core structure: Cards is the subject, enterprise = comparator; THREE time
+   axes: **A** = cross-LOB profiling, in-window Jan 1–Apr 30 2026 (frequency
+   lives here, 3-month logic, no 12m lookback — left-truncation); **B** =
+   before/after, anchor 2025-08-31 HARDCODED, remeasure +12m (2026-08-31),
+   Cards-mailed cohort, leaver = any-list unsub by anchor, cards_unsub carried
+   as slicing column; **C** = trailing-12m monthly unsub curve by EVENT month
+   (q_trend's entry-cohort month does NOT answer this).
+2. **One pipeline file implements all of it: `spotlight/unsub_unified.py`**
+   (cell-structured, ONE Run All, brain-local PySpark kernel — NEVER YARN,
+   Andre hard requirement; teradatasql direct connector for EDW, never Trino).
+   Replaces `spotlight.py` + `spotlight2.py` for this deliverable (kept as
+   history; spotlight2's temporal core condemned by audit: floating anchor,
+   contaminated leaver flag). `spotlight/unsub_unified_onepass_16gb.py` =
+   one-pass variant, A/C playground ONLY — its Piece B has two known bugs,
+   never ship B from it.
+3. **The process (now standing practice; /analyze skill encodes it):**
+   brief frozen → build → BLIND red team vs brief (different model, zero
+   context) → patch → full blind re-review → coverage table → SMOKE run
+   (bite 0) → CSV diff vs prior smoke (drift check = arithmetic, not trust)
+   → full run. Two red-team rounds caught 4 blockers before any full-scale
+   number existed.
 
-## 1. The reset Andre gave at the end of 2026-07-30
+## Run state (session end 2026-08-03)
 
-These override the current page's structure. The page was built bank-wide-first and that was wrong.
+- **Banked on HDFS (`/user/427966379/unsub_unified/`):** A1 client grain
+  (10 bites, 10.44M rows), A2, C (all bites), UCP enrichment. Rerun = SKIP.
+- **Full-scale A-side numbers already produced** (mislabeled `out_smoke/`):
+  109,431 unique enterprise unsub clients Jan–Apr; rows a1=179, a2=178, a3=18,
+  a4=456, c=1858. PRELIMINARY until the SMOKE=False run relabels into `out/`.
+- **Piece B: bite-0 only, partly from the buggy one-pass version.** The
+  corrected file AUTO-RE-PULLS unverifiable B bites (regime-flag guard prints
+  "no regime flag found … forcing re-pull"). NO manual HDFS wipe needed.
+- **FULL RUN COMPLETED 2026-08-03 (build 2026-08-03c, SMOKE=False): all six
+  deliverables [OK], zero errors.** Enterprise unique unsubbers Jan-Apr =
+  109,431; Cohort B = 4,522,763. B_DFP landed all 10 bites clean — NO spool
+  error (the 2646 fear is dead; ~328k rows/bite, 13s each). CSVs:
+  `/home/jovyan/unsub_unified_out/` + HDFS `out/`. a2 has 177 rows vs 178 in
+  an earlier read — verify which MNE dropped when pivoting (likely zero-count
+  edge). xlsx still needs `pip install openpyxl` (CSV fallback fine).
+  Along the way: HDFS NAMESPACE quota (file count 13,107) was hit — dead dirs
+  deleted; keep an eye on file counts, `hdfs dfs -count -q` shows both quotas.
+- **t12 empty until September:** Aug-2026 not closed. Pre-close runs band t12
+  `untiered` (NULL, not fake zeros) and print loudly. RERUN AFTER 2026-09-01 —
+  the regime flag forces the t12 re-pull automatically.
 
-1. **CARDS IS THE PRIMARY LENS.** Bank-wide is a baseline bar next to each cards chart, not its own section.
-2. **The window has no past.** Everything measured so far is Mar–May 2026 only. The brief's frequency questions are about the **12 months prior**. This is the root cause of every missed brief item.
-3. **§3 "we lose the people who were still reading" is MISLEADING — must change.** Unsubscribing requires opening and clicking, so engagement is a *precondition* of the action, not just a correlate. Replace with: *did the client engage with campaigns BEFORE the window?*
-4. **The L13 pair table is DROPPED.** 3c is still live, but as **overlap/concurrency** — how many distinct campaigns touched a client in the same period, and does the unsub rate rise with that.
-5. **Exclude regulatory campaigns everywhere.**
-6. **Less prose, more plot.** Caveats live in dropdowns. If the plot cannot tell the story, fix the plot.
+## Process rules (binding — from the 2026-08-03 post-mortem, ~6 failed runs)
 
----
+1. A patch is cleared ONLY by a full-file smoke that re-executes past it —
+   review + compile never suffice. 2. Two crashes in unrun code → static sweep
+   of the whole region, one combined patch. 3. Build stamp governs every
+   diagnosis — never assume a screenshot matches the latest push. 4. Asserts
+   must hold across the mode matrix (SMOKE×full, pre/post-Sept). 5. Sidecar
+   files stay out of data-glob namespaces. Full doctrine in memory:
+   feedback_execution_gap_lessons.
 
-## 2. THE JOB: adapt and run pack 19. Do not build from scratch.
+## Standing gotchas (learned the hard way 2026-08-02/03)
 
-`archaeology/19_unsub_journey_lookback.sql` (230 lines) is the 12-month-prior query. It has **never
-run** — v4→v7 were all SQL fixes, no result exists. It already has the right grain, the right
-lookback, and leavers-vs-stayers built in.
+- 10 NULL-clnt_no rows per full A1 pull (landing conversion artifact) — dropped
+  with WARN. A NULL key joins to nothing and masquerades as "1 duplicate
+  client" in distinct counts (empty join lookups on a finished run = NULL key).
+- Full-scale Spark joins on a 4GB pod = OOM kernel death; file is bite-looped
+  (no single join exceeds ~1.1M clients). 16GB pod comfortable either way.
+- `pip install openpyxl` in pod for the single xlsx; else 6 CSVs + zip
+  fallback (fine, pivot-ready). Zip may report 0.0 MB — CSVs are tiny, fine.
+- Outputs: HDFS `out/` (full) vs `out_smoke/` (bite-0); pod-local
+  `~/unsub_unified_out[_smoke]/`; `unsub_unified_cubes.zip` = the one download.
+- A4 pivots: held_t/i/b/c ∈ {1, 0, −1}; −1 = no UCP match — its OWN bucket,
+  never folded into 0. UCP match rate 90.8% (floor 70%).
+- Andre's binding operational rules: ONE Run All (no cell-by-cell); no YARN;
+  CSVs must land on the pod; counts not rates; he slices cubes himself —
+  every proposed story ships with its pivot recipe (rows/cols/filter).
 
-**It also already fixes point 3 above.** Lines 156-158 classify engagement from `lookback_clicks` /
-`lookback_opens` — the 12 months *before* the index date, not the unsubscribe email. That is exactly
-the replacement Andre asked for, and it is already written.
+## September build (03e) — accumulate here, ONE build when B re-pulls for t12
 
-### What it produces now
+1. t12 endpoint (automatic via regime flag) → Q5 becomes the migration/delta
+   view (tier/segment at anchor vs +12m; "value that walked away").
+2. ADD CAMPAIGN DIMENSION to the B cube (per-MNE Piece B cuts — PCQ/PCL/PCD
+   highlights; Andre ask 2026-08-03, not derivable today).
+3. Remove provenance columns from CSVs → single _provenance.txt sidecar.
+4. Logic fingerprint (SQL hash) in landing markers → auto-invalidation on
+   any parameter change + auto-retirement of stale versions.
+NOTE 2026-08-03: HTML exploration page WITHDRAWN by Andre — the notebook
+plots are the deliverable. Q5 parked until t12.
 
-`cohort_group` (unsub/stayed) × `engagement` (clicked/opened/dark) × `cohort_month`, with
-`avg_contacts`, `avg_mnes`, bands `contacts_0 … contacts_15p` and `mnes_0 … mnes_5p`.
-Lookback join is `19_unsub_journey_lookback.sql:150-151` — 12 months back from each client's own
-`index_dt` (unsub date for leavers, last-send date for stayers).
+## Narrative state (2026-08-03 end of day)
 
-### The three edits it needs
+- Matched-tier check (CSV-only, b_before_after_cube) CONFIRMED mean
+  reversion: leavers hold starting tier same/better than stayers (High
+  77.6% vs 76.1%; Mid 54.9% vs 54.5%). **"Spend stalls after unsub" claim
+  is DEAD - never resurrect without new evidence.**
+- Final sound bite (survived marketing-director red team + kill test):
+  "Unsubscribing doesn't mark declining customers - their spend, tiers,
+  products and profitability hold. What we lose is the CHANNEL: we can no
+  longer talk to some of our best card spenders."
+- Decisions that stand: first-contact discipline on high-value lists;
+  suppression-gap fix (standalone compliance ticket); pre-launch unsub
+  guardrail for 1M+ blasts (FIFA = 11,476 unsubs @0.39%, 3x share spike).
+- OPEN: revolver-de-revolve (27.1% vs 22.1%) is an UNMATCHED comparison -
+  same critique class; match it or footnote it before any deck.
+- 2-slide deck: S1 landscape (curve+FIFA+timing, first-contact, rates);
+  S2 who leavers are + matched-tier honesty exhibit + access-loss framing.
 
-**(a) Exclude regulatory — line 134, in the `events` CTE `WHERE`:**
-```sql
-  AND SUBSTR(e.TREATMENT_ID, 8, 3) NOT IN (
-      'AFD','BPU','BUK','CFR','EOE','FNE','FSA','FSO','FXR','GAF','HFC',
-      'HPN','IOO','NST','OTC','PUK','ROP','TWI','VMF','VOA','ZDC','ZHX')
-```
-The 22 are canon in `museum/RUN_2026-07-30_REGULATORY.md`.
+## THE NEXT SESSION'S JOB: the Cards-pod PowerPoint (2 slides max)
 
-**(b) Add cards-only counterparts — after line 146, inside the `lookback` CTE:**
-```sql
-  COUNT(DISTINCT CASE WHEN s.disposition_cd = 1
-        AND s.mne IN ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV')
-        THEN s.TREATMENT_ID END) AS lookback_contacts_cards,
-  COUNT(DISTINCT CASE WHEN s.disposition_cd = 1
-        AND s.mne IN ('PCQ','PCL','PCD','AUH','CLI','MVP','CRV')
-        THEN s.mne END)          AS lookback_mnes_cards,
-```
-Then band them in the final SELECT the same way as lines 166-180. **Do not filter the whole query to
-cards** — the bank-wide columns are the baseline and must stay on the same row.
+Everything analytical is DONE and verified. Build the deck from what's saved:
 
-**(c) OVERLAP, for brief 3c** — add a concurrency measure. Distinct MNEs per client per *month* in
-the lookback, then the max or mean across months. `lookback_mnes` counts distinct campaigns over the
-whole 12 months, which is breadth; overlap is how many landed in the *same* month.
-
-### Then run it
-
-Teradata-direct. It is the only new run required. Watch for spool — v4 was already staged into
-volatile tables after two spool failures, and there are 4 DROPs at EOF so a rerun is clean.
-
----
-
-## 3. Queued behind that
-
-| Item | Cell | Needs |
-|---|---|---|
-| Cards angle: H1 ratios, **H2 contact control per campaign**, H3 engagement, H4 populations | `[20h]` line 1488 | nothing — analysis only |
-| Is the 427,079 a leak or regulatory mail | `[20i]` line 1584 | nothing — analysis only |
-| Send cadence per campaign (brief 3a) | `[5b]` line 435 | EDW connection |
-| §1/§2 cards view for PCL, PCQ, PCD | — | `hdfs dfs -getmerge .../csv_l9_per_campaign_ratios` |
-
-**Analysis-only run path:** cell `[1]` at **line 79**, then **line 637 → 1639**. Skips every EDW cell.
-At line 972 expect `stage banded - BUILT (stale - missing band_v3)`. If it says `REUSED`, stop.
-
----
-
-## 4. Open questions for Andre
-
-1. **Which table holds `ACTION_TYPE`, joinable on TACTIC_ID or MNE?** That retires the hardcoded
-   22-mnemonic list permanently instead of hand-maintaining it.
-2. `unsub_before_after_jul25.py:787` still carries the retired "listeners/deaf" phrasing — his other
-   session owns that file.
-
----
-
-## 5. Traps that already cost time. Do not re-learn these.
-
-- **`red-team-deck` skill has the CPC deck HARDCODED** and silently ignores the target passed in args.
-  All 7 agents reviewed the wrong artifact. **Spawn reviewers directly with the Agent tool.**
-- **Run `museum/colcheck.py` before every push.** It replays the analysis cells against a mock Spark
-  and catches ambiguous joins, missing columns and unionByName mismatches in two seconds. It is
-  verified by a negative control — if you change the mock, re-run that control.
-- **Two `COUNT(DISTINCT)` in one Teradata `GROUP BY` over this window does not finish.** Hung `[5b]`.
-- **`WHERE MOD(...) = 0 OR x IN (subquery)`** can drop to a product join. Use two branches `UNION`ed.
-- **`stage()` only checks column NAMES**, so redefining a band silently reuses stale data. That is
-  what `BAND_VERSION` / `BAND_STAMP` exists for — bump it when a cut point changes.
-- **Constants read by analysis cells must live in `[1]`**, not in a pull cell. `SAMPLE_MOD` in `[7b]`
-  killed the analysis-only path with a `NameError`.
-- **Grep proving a result is absent from the repo means "not transcribed", NOT "not run."** Ask.
-
----
-
-## 6. Findings that survived scrutiny — safe to build on
-
-- **Age survives a contact control** in all five bands (1.25–1.63). **Tenure largely does not** —
-  collapses to 1.04 at 4–6 sends. Do not state them with equal confidence.
-- **Frequency is non-monotonic.** Unsub rate peaks at 7–12 emails (0.887%) and falls to 0.526% at
-  13+. Likely survivorship. Derived from L10b; the five bands reconcile to L7's 62,658 / 9,072,977
-  exactly.
-- **Cards loses high-potential far harder than the bank:** CRV 1.62, AUH 1.54 vs 1.15.
-- **AUH and CRV point opposite directions on single-product:** 1.32 vs 0.78. Bank-wide 0.91 hides both.
-- **Co-occurrence is ~nothing:** max cards lift 1.43 on 152 leavers; PCL+QCF 1.03 on 919k clients.
-- **Value is flat.** Top profit quintile is *protective* (0.84). But it is not independent of age —
-  `PROF_TOT_ANNUAL` is current-year contribution and rises with tenure.
+1. **Deck rules:** `unsub_tracking/DECK_STANDARDS.md` is binding - copy the
+   house shell `museum/cpc_evidence_deck.html` (its :root/.slide/.eyebrow/
+   h1/.hrule/.body/.read/footer/.nav/.mark classes), values labeled on
+   marks, date range on every chart, prints to PDF, no internal machinery
+   in reader-facing text. Rule 5: every number must trace to a results_*.md
+   transcription - WRITE `results_2026-08-04_spotlight_final.md` FIRST,
+   transcribing the verified numbers below (+ the evidence-query output and
+   exact repeat-unsub distribution once Andre runs them).
+2. **Structure (agreed):** S1 "We're causing it" - three mechanisms:
+   first-contact (48% of cards unsubscribers had received only 1-2 cards
+   emails vs 27% of stayers), FIFA (11,476 unsubs @0.39% of 2.9M; share of
+   monthly unsub events peaked ~17.6-18% vs ~5-9% baseline; unsubs
+   followed send waves 0-1 month lag), suppression gap (146,706 campaign-
+   distinct unsub clients vs 109,431 unique people = 37,275 counted in 2+
+   campaigns; evidence trails: spotlight/evidence_repeat_unsub.sql -
+   PENDING Andre running it for the receipt rows + exact distribution).
+   S2 "What it costs" - who goes deaf: unsubscribers skew high-spend tier
+   (41% High among tiered leavers vs ~33% stayers), tenured (cards peak
+   4-7yr), Cards LOB = 20.5% of the bank's unique unsubscribers
+   (a1_lob_dedup); the matched-tier null as the honesty exhibit (leavers
+   hold tier same/better: High 77.6% vs 76.1%, Mid 54.9% vs 54.5% -
+   "the gap is WHO unsubscribes, not what happens after"); three
+   decisions: first-contact discipline, suppression fix (compliance
+   ticket), 1M+ blast unsub-cost guardrail.
+3. **Sound bite (survived marketing-director red team + kill test):**
+   "Unsubscribes aren't customers leaving - they're customers going deaf
+   to us. Spending doesn't change; we lose the CHANNEL to some of our
+   best card spenders - and we cause most of it ourselves (first touch,
+   mega-blasts, suppression that doesn't stick)."
+4. **Dead claims - never resurrect:** "spend stalls after unsub" (killed
+   by matched-tier check); de-revolve differential (dissolved when
+   tier-matched); PCQ +$245 is acquisition lifecycle, not recovery.
+5. Notebook state: env LLM applied the final story; D7 matched-tier
+   exhibit exists; final_story_prompt.py consolidation may still be
+   mid-application - verify before pulling numbers from the notebook.
+6. All prompts/inputs pushed and current: cube_analyst_prompt,
+   plot_revision_prompt, delta_update_prompt, final_story_prompt,
+   matched_check_prompt (CSV version), evidence_repeat_unsub.sql.
+   8 CSVs on the share; pipeline build 03e; September items in the 03e
+   backlog section above.

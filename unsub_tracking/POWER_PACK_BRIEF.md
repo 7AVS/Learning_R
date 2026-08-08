@@ -1,7 +1,18 @@
 # Power Pack Q3 — stakeholder brief for the unsub spotlights
 
 Source: email from Maya to Andre, cc Daniel. Follow-up flagged "start by / due by Mon 20 Jul 2026".
-Transcribed from photo 2026-07-29. Names first-name-only per repo convention.
+Transcribed from photo 2026-07-29; re-verified against archived photo 2026-08-02
+(`pics/PXL_20260802_unsub_powerpack_brief_1of2.jpg`). Names first-name-only per repo convention.
+Companion brief (separate document, NOT a continuation): `WORKSTREAM_2_BRIEF.md`
+(LOB/MNE drivers + Cards profit impact — the explicitly Cards-focused ask).
+
+**Corrections from the 2026-08-02 re-read:**
+- Item 3a is ALSO cut off at the right edge after "monthly" — the frequency ask
+  may continue. Confirm full 3a wording with Maya along with 3c.
+- The timeline table is COMPLETE in the photo (ends cleanly at Phase 4 /
+  2-Sep-26). The "may be cut off at the bottom" caveat below is retired.
+- The 3c continuation does NOT appear in the second photo (that photo is the
+  separate Workstream 2 brief). 3c's full wording remains unconfirmed.
 
 ---
 

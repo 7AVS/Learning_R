@@ -67,6 +67,17 @@
   .bar.plain { border-radius: 0 4px 4px 0; background: var(--series-1); left: 0; }
   .bar:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 1px; }
 
+  /* SERIES colour, and it must come AFTER .pos/.neg to win the cascade (same specificity,
+     later rule wins). Direction already encodes gain vs loss - the axis does that job - so
+     colour is free to encode WHICH GROUP, which is the thing a reader cannot otherwise see.
+     Before this, both bars in a pair were the same colour whenever they moved the same way. */
+  .bar.s1 { background: var(--series-1); }
+  .bar.s2 { background: var(--series-2); }
+
+  .duo .lane { display: grid; grid-template-columns: 52px 1fr; gap: 8px; align-items: center; }
+  .duo .tag { font-size: 11px; color: var(--text-muted); text-align: right;
+              white-space: nowrap; letter-spacing: 0.02em; }
+
   .duo { display: grid; grid-template-columns: minmax(92px, max-content) 1fr 78px;
          gap: 10px; align-items: center; padding: 6px 0;
          border-bottom: 1px solid var(--border); }
@@ -143,13 +154,14 @@ banded together so a decile means the same dollars on each side. 91.4% matched t
 <hr style="margin-top:34px">
 
 <h2>1. In the top four deciles the two groups move in opposite directions</h2>
-<p class="sub">Change in annual profitability over the eleven months. Two bars per decile on one zero
-axis — the clients who stayed subscribed, then the clients who unsubscribed. Right of the line is a gain.</p>
+<p class="sub">Change in annual profitability over the eleven months. Two bars per decile on one shared
+zero axis. <strong>Colour is the group, side is the direction</strong> — a bar right of the line gained
+value, left of it lost value, and every bar is tagged with its group so nothing depends on hovering.</p>
 
 <div class="legend">
-  <span><span class="swatch" style="background:var(--under)"></span>gained over 11 months</span>
-  <span><span class="swatch" style="background:var(--over)"></span>lost</span>
-  <span><span class="swatch" style="background:var(--neutral)"></span>zero</span>
+  <span><span class="swatch" style="background:var(--series-1)"></span>stayed subscribed</span>
+  <span><span class="swatch" style="background:var(--series-2)"></span>unsubscribed</span>
+  <span style="color:var(--text-muted)">← lost &nbsp;·&nbsp; gained →</span>
 </div>
 
 <div class="chart" id="c-duo"></div>
@@ -322,15 +334,22 @@ lifetime) is undocumented, so dollar deltas are directional.</p>
     node.setAttribute("role", "img");
     node.setAttribute("aria-label", text);
   }
-  function divergingTrack(value, max, tip) {
+  function divergingTrack(value, max, tip, series) {
     var tr = el("div", "track");
     tr.appendChild(el("div", "axis"));
     var dev = Math.max(-max, Math.min(max, value));
-    var b = el("div", "bar tip " + (dev >= 0 ? "pos" : "neg"));
+    var b = el("div", "bar tip " + (dev >= 0 ? "pos" : "neg") + (series ? " " + series : ""));
     b.style.width = (Math.abs(dev) / max * 50) + "%";
     tipify(b, tip);
     tr.appendChild(b);
     return tr;
+  }
+  // the persistent group tag beside each bar - this is what removes the need to hover
+  function lane(tag, track) {
+    var l = el("div", "lane");
+    l.appendChild(el("div", "tag", tag));
+    l.appendChild(track);
+    return l;
   }
   function plainTrack(value, max, tip, colour) {
     var tr = el("div", "track");
@@ -360,14 +379,14 @@ lifetime) is undocumented, so dollar deltas are directional.</p>
     var g = el("div", "duo");
     g.appendChild(el("div", "cat", r[0]));
     var stack = el("div", "stack");
-    stack.appendChild(divergingTrack(r[2], MAXD,
-      r[0] + " · stayed subscribed: " + money(r[2]) + " over 11 months · n = " + fmt(r[5])));
-    stack.appendChild(divergingTrack(r[3], MAXD,
-      r[0] + " · unsubscribed: " + money(r[3]) + " over 11 months · n = " + fmt(r[4])));
+    stack.appendChild(lane("stayed", divergingTrack(r[2], MAXD,
+      r[0] + " · stayed subscribed: " + money(r[2]) + " over 11 months · n = " + fmt(r[5]), "s1")));
+    stack.appendChild(lane("unsub", divergingTrack(r[3], MAXD,
+      r[0] + " · unsubscribed: " + money(r[3]) + " over 11 months · n = " + fmt(r[4]), "s2")));
     g.appendChild(stack);
     var v = el("div", "val");
-    var a = el("div", null, money(r[2])); a.style.color = "var(--text-secondary)";
-    var b = el("div", null, money(r[3])); b.style.color = r[3] < 0 ? "var(--over)" : "var(--under)";
+    var a = el("div", null, money(r[2])); a.style.color = "var(--series-1)";
+    var b = el("div", null, money(r[3])); b.style.color = "var(--series-2)";
     v.appendChild(a); v.appendChild(b);
     g.appendChild(v);
     hostD.appendChild(g);
@@ -388,7 +407,9 @@ lifetime) is undocumented, so dollar deltas are directional.</p>
     hostG.appendChild(row);
   });
 
-  // 3 - stayer-only churn by decile
+  // 3 - stayer-only churn by decile. Left in --series-1 throughout: now that colour means GROUP
+  // page-wide, the old orange highlight on decile 4 would read as "these are the unsubscribers",
+  // which is the opposite of what this chart is. The callout carries the emphasis instead.
   var hostH = document.getElementById("c-hump");
   var maxH = Math.max.apply(null, ATTR.map(function (r) { return r[1]; }));
   ATTR.forEach(function (r, i) {
@@ -396,8 +417,7 @@ lifetime) is undocumented, so dollar deltas are directional.</p>
     row.appendChild(el("div", "cat", r[0]));
     row.appendChild(plainTrack(r[1], maxH,
       r[0] + " · " + r[1].toFixed(2) + "% of subscribed clients gone · median worth $"
-      + DUO[i][1].toFixed(0) + " · n = " + fmt(r[4]),
-      r[0] === "Decile 4" ? "var(--over)" : null));
+      + DUO[i][1].toFixed(0) + " · n = " + fmt(r[4])));
     row.appendChild(el("div", "val", r[1].toFixed(2) + "%"));
     hostH.appendChild(row);
   });

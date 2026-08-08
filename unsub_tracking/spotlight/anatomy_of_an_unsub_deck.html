@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anatomy of an Unsub — Cards / NBA</title>
+<style>
+  :root{
+    --blue:#0051A4; --navy:#002887; --sky:#0091DA; --vibrant:#006AC3;
+    --slate:#9DB0CF; --steel:#6E8DB8; --gold:#FDDF00;
+    --ink:#111C1F; --muted:#4f5763; --faint:#8b93a0;
+    --grid:#e5e8ec; --axis:#c5cbd3; --rule:#d9dee5;
+    --paper:#ffffff; --card:#F1F0EF; --ice:#EDF4F6;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#dfe3e8;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{font-variant-numeric:tabular-nums}
+  .slide{
+    width:min(1220px,96vw);height:min(688px,91vh);margin:3vh auto;background:var(--paper);
+    border:1px solid #d3d7dd;box-shadow:0 12px 34px rgba(17,28,31,.10);
+    display:none;flex-direction:column;padding:30px 42px 14px;position:relative;
+  }
+  .slide.active{display:flex}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:7px}
+  h1{font-size:22px;line-height:1.22;font-weight:700;letter-spacing:-.01em;color:var(--blue);max-width:68ch}
+  .hrule{height:2px;background:var(--slate);opacity:.55;margin:13px 0 4px}
+  .body{display:grid;grid-template-columns:1.5fr 1fr;gap:32px;flex:1;align-items:center;min-height:0}
+  .body.wide{display:flex;flex-direction:column;justify-content:center;align-items:stretch}
+  .trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;flex:1;align-items:center;min-height:0}
+  figure{margin:0;width:100%}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin:0 0 2px 58px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+  .grid{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--axis);stroke-width:1.3}
+  .gl{font-size:11px;fill:var(--faint);text-anchor:end}
+  .val{font-size:13.5px;font-weight:700;fill:var(--ink);text-anchor:middle}
+  .valw{font-size:13px;font-weight:700;fill:#fff;text-anchor:middle}
+  .cat{font-size:11.5px;fill:var(--ink);text-anchor:middle;font-weight:600}
+  .sub{font-size:10px;fill:var(--faint);text-anchor:middle}
+  .pan{font-size:11.5px;fill:var(--muted);text-anchor:middle;font-weight:700}
+  .yt{font-size:11px;fill:var(--muted);text-anchor:middle}
+  .lend{font-size:12px;font-weight:700}
+  .anno{font-size:11px;fill:var(--steel);font-weight:600}
+  .ct{font-size:13px;font-weight:700;fill:var(--ink)}
+  .ctd{font-size:10.5px;fill:var(--faint)}
+  .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-weight:700}
+  .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:9px}
+  .read .k{font-weight:700;color:var(--navy)}
+  .read .concl{border-left:3px solid var(--blue);padding:8px 0 8px 13px;background:var(--ice);font-size:13.5px;line-height:1.4}
+  .read .note{font-size:11px;color:var(--muted);font-style:italic;margin-top:8px;line-height:1.38}
+  .read ul{list-style:none;margin-bottom:9px}
+  .read li{font-size:13px;line-height:1.4;color:#23282f;padding:4px 0 4px 16px;position:relative}
+  .read li::before{content:"▪";position:absolute;left:0;color:var(--blue)}
+  footer{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);margin-top:10px;padding-top:7px;
+    font-size:10.5px;color:var(--steel);font-style:italic}
+  .nav{position:fixed;right:22px;bottom:16px;display:flex;align-items:center;gap:11px;
+    background:#fff;border:1px solid #d3d7dd;border-radius:22px;padding:5px 9px;box-shadow:0 4px 14px rgba(17,28,31,.14);z-index:10}
+  .nav button{border:0;background:var(--blue);color:#fff;width:27px;height:27px;border-radius:50%;font-size:14px;cursor:pointer;line-height:1}
+  .nav button:disabled{background:var(--slate);cursor:default}
+  .nav .count{font-size:12px;color:var(--muted);font-weight:600;min-width:44px;text-align:center}
+  .mark{position:absolute;top:12px;right:20px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  @media print{
+    html,body{background:#fff}
+    .slide{display:flex;width:100%;height:100vh;margin:0;border:0;box-shadow:none;page-break-after:always}
+    .slide:last-of-type{page-break-after:auto}
+    .nav{display:none}
+    @page{size:landscape;margin:0}
+  }
+</style>
+</head>
+<body>
+
+  <!-- SLIDE 1 — WE'RE CAUSING IT -->
+  <section class="slide active">
+    <span class="mark">Anatomy of an Unsub · Cards / NBA</span>
+    <div class="eyebrow">Unsubscribe spotlight · Jan – Apr 2026 · what drives the unsubs we get</div>
+    <h1>Most unsubs are self-inflicted: half leave at first contact, one blast drove nearly half the quarter's&nbsp;total, and clients who already said no had to say it&nbsp;again</h1>
+    <div class="hrule"></div>
+    <div class="trio">
+      <figure><svg id="p1" viewBox="0 0 380 470" role="img" aria-label="Cards unsub rate by number of Cards emails received"></svg></figure>
+      <figure><svg id="p2" viewBox="0 0 380 470" role="img" aria-label="Cards unsubs by campaign group"></svg></figure>
+      <figure><svg id="p3" viewBox="0 0 380 470" role="img" aria-label="Unsub actions versus unique people"></svg></figure>
+    </div>
+    <footer><span>Unified unsubscribe measurement, full run 2026-08-03 · unsub = one-click list unsubscribe in the vendor email feed</span><span>Cards / NBA measurement</span></footer>
+  </section>
+
+  <!-- SLIDE 2 — WHAT IT COSTS -->
+  <section class="slide">
+    <span class="mark">Anatomy of an Unsub · Cards / NBA</span>
+    <div class="eyebrow">Unsubscribe spotlight · who we lose, and what changes after</div>
+    <h1>We lose the channel to our best card spenders — but spending itself does not change when they&nbsp;unsubscribe</h1>
+    <div class="hrule"></div>
+    <div class="body">
+      <figure>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--navy)"></i>Unsubscribers (leavers)</span>
+          <span><i class="sw" style="background:var(--slate)"></i>Stayers</span>
+        </div>
+        <svg id="p4" viewBox="0 0 900 420" role="img" aria-label="Leaver tier mix and matched-tier hold rates"></svg>
+      </figure>
+      <div class="read">
+        <h2>What we found</h2>
+        <p><span class="k">Who leaves:</span> tiered leavers skew high-value — <span class="k">41%</span> High tier, and they averaged <span class="k">~$2,450</span>/mo card spend vs <span class="k">~$2,050</span> for stayers. Leavers also peak at 4–7 years tenure and skew younger (&lt;35).</p>
+        <p><span class="k">What happens after — nothing:</span> matched on starting tier, leavers hold their tier at the same rate as stayers (77.6% vs 76.1% High; 54.9% vs 54.5% Mid). The aggregate gap is <span class="k">who</span> unsubscribes, not what happens after.</p>
+        <p class="concl">The cost is the <span class="k">channel</span>, not the spend: high-spend clients go deaf to us. Three decisions follow — <span class="k">first-contact discipline</span> on high-value lists · <span class="k">suppression fix</span> as a standalone compliance ticket · a pre-launch <span class="k">unsub-cost guardrail</span> for 1M+ blasts.</p>
+        <p class="note">Profile numbers cover the 90.8% of unsubscribers matched to client attributes; the 9.2% unmatched are excluded. Tier mix covers tiered clients only — ~53% of leavers (vs ~29% of stayers) had no starting tier, concentrated in newly-acquired clients.</p>
+      </div>
+    </div>
+    <footer><span>Cohort: 4,783,193 Cards-mailed clients · 14,140 Cards-campaign unsubscribers · measured Jun 30 2025 → Jun 30 2026</span><span>Cards / NBA measurement</span></footer>
+  </section>
+
+<div class="nav">
+  <button id="prev" aria-label="Previous">‹</button>
+  <span class="count" id="count">1 / 2</span>
+  <button id="next" aria-label="Next">›</button>
+</div>
+
+<script>
+(function(){
+  function svg(id,s){var e=document.getElementById(id); if(e) e.innerHTML=s;}
+  var INK="#111C1F", BLUE="#0051A4", NAVY="#002887", SKY="#0091DA", SLATE="#9DB0CF", STEEL="#6E8DB8";
+
+  /* P1 — first contact: unsub rate by # Cards emails received */
+  (function(){
+    var s="";
+    s+='<text class="ct" x="10" y="20">The first email is the riskiest</text>';
+    s+='<text class="ctd" x="10" y="36">Cards unsub rate by # of Cards emails received · Jan–Apr 2026</text>';
+    var bars=[{l:"1–2",r:0.73,n:"1.4M"},{l:"3–5",r:0.35,n:"2.4M"},{l:"6–10",r:0.21,n:"1.1M"},{l:"11+",r:0.14,n:"68.6K"}];
+    var x0=52,x1=366,top=70,base=330,MX=0.8;
+    var Y=function(v){return base-(v/MX)*(base-top);};
+    [0,0.2,0.4,0.6,0.8].forEach(function(g){var y=Y(g);
+      s+='<line class="grid" x1="'+x0+'" x2="'+x1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(x0-6)+'" y="'+(y+4)+'">'+g.toFixed(1)+'%</text>';});
+    s+='<line class="axis" x1="'+x0+'" y1="'+top+'" x2="'+x0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+x0+'" y1="'+base+'" x2="'+x1+'" y2="'+base+'"/>';
+    bars.forEach(function(b,i){var bw=54,bx=x0+16+i*76,by=Y(b.r),cx=bx+bw/2;
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+(base-by)+'" rx="3" fill="'+(i===0?NAVY:BLUE)+'"/>';
+      s+='<text class="val" x="'+cx+'" y="'+(by-9)+'">'+b.r.toFixed(2)+'%</text>';
+      s+='<text class="cat" x="'+cx+'" y="'+(base+16)+'">'+b.l+'</text>';
+      s+='<text class="sub" x="'+cx+'" y="'+(base+30)+'">n='+b.n+'</text>';});
+    s+='<text class="yt" transform="translate(14,'+((top+base)/2)+') rotate(-90)">unsubscribed in window (%)</text>';
+    s+='<text x="10" y="392" font-size="12.5" font-weight="700" fill="'+NAVY+'">48% of unsubscribers had received only 1–2</text>';
+    s+='<text x="10" y="409" font-size="12.5" font-weight="700" fill="'+NAVY+'">Cards emails — among stayers it is 27%.</text>';
+    s+='<text x="10" y="430" font-size="11" fill="#4f5763">Flow measure: unsub events written Jan–Apr 2026,</text>';
+    s+='<text x="10" y="444" font-size="11" fill="#4f5763">over clients mailed by Cards in the window.</text>';
+    svg("p1",s);
+  })();
+
+  /* P2 — the mega-blast: Cards unsubs by campaign group */
+  (function(){
+    var s="";
+    s+='<text class="ct" x="10" y="20">One blast produced nearly half of them</text>';
+    s+='<text class="ctd" x="10" y="36">Cards unsub events by campaign group · Jan–Apr 2026</text>';
+    var rows=[{l:"FIFA / FWC blast",v:11476},{l:"Deepen",v:6750},{l:"Attract",v:5235},{l:"Onboard",v:1128},{l:"Retain",v:340},{l:"Operational",v:0}];
+    var x0=118,maxW=155,MX=11476,y0=70,rh=30,gp=14;
+    rows.forEach(function(r,i){var y=y0+i*(rh+gp);var w=Math.max((r.v/MX)*maxW,r.v>0?3:0);
+      s+='<text x="'+(x0-8)+'" y="'+(y+rh/2+4)+'" class="gl" fill="'+INK+'" font-weight="600">'+r.l+'</text>';
+      s+='<rect x="'+x0+'" y="'+y+'" width="'+Math.max(w,1)+'" height="'+rh+'" rx="3" fill="'+(i===0?NAVY:BLUE)+'"/>';
+      s+='<text x="'+(x0+w+8)+'" y="'+(y+rh/2+4)+'" text-anchor="start" fill="'+(i===0?NAVY:INK)+'" font-weight="700" font-size="'+(i===0?14:12)+'">'+r.v.toLocaleString()+(i===0?"  · 46%":"")+'</text>';});
+    var yb=y0+6*(rh+gp)+8;
+    s+='<text x="10" y="'+(yb+10)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">2.9M audience · 0.39% unsub rate — and Cards’</text>';
+    s+='<text x="10" y="'+(yb+27)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">share of monthly unsubs peaked ~18% in</text>';
+    s+='<text x="10" y="'+(yb+44)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">Mar–Apr vs a 5–9% baseline — tripled for a quarter.</text>';
+    s+='<text x="10" y="'+(yb+65)+'" font-size="11" fill="#4f5763">Flow measure: unsub events in window. Unsubs followed</text>';
+    s+='<text x="10" y="'+(yb+79)+'" font-size="11" fill="#4f5763">the blast’s send waves with a 0–1 month lag.</text>';
+    svg("p2",s);
+  })();
+
+  /* P3 — suppression: unsub actions vs unique people */
+  (function(){
+    var s="";
+    s+='<text class="ct" x="10" y="20">Saying no once was not enough</text>';
+    s+='<text class="ctd" x="10" y="36">Campaign unsub actions vs unique people · enterprise · Jan–Apr 2026</text>';
+    var x0=10,maxW=340,MX=146706;
+    var rows=[
+      {v:146706,lab:"unsub actions (per-campaign distinct clients)",col:NAVY},
+      {v:109431,lab:"unique people who unsubscribed",col:BLUE}
+    ];
+    var y0=88,rowH=104;
+    rows.forEach(function(r,i){var y=y0+i*rowH;var w=(r.v/MX)*maxW;
+      s+='<text x="'+x0+'" y="'+y+'" font-size="23" font-weight="800" fill="'+NAVY+'">'+r.v.toLocaleString()+'</text>';
+      s+='<text x="'+x0+'" y="'+(y+16)+'" font-size="12" fill="#4f5763">'+r.lab+'</text>';
+      s+='<rect x="'+x0+'" y="'+(y+24)+'" width="'+maxW+'" height="30" fill="#eef1f4" rx="4"/>';
+      s+='<rect x="'+x0+'" y="'+(y+24)+'" width="'+w+'" height="30" rx="4" fill="'+r.col+'"/>';
+    });
+    var yg=y0+rowH-16;
+    s+='<text x="'+(x0+maxW)+'" y="'+(yg+8)+'" class="anno" text-anchor="end" fill="'+STEEL+'">▼ 37,275 unsub actions beyond the first</text>';
+    var yb=y0+2*rowH+4;
+    s+='<text x="10" y="'+(yb+14)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">Every month, 7,100–8,400 clients unsubscribed</text>';
+    s+='<text x="10" y="'+(yb+31)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">from 2+ different campaigns within the same</text>';
+    s+='<text x="10" y="'+(yb+48)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">month — suppression did not carry across lists.</text>';
+    s+='<text x="10" y="'+(yb+69)+'" font-size="11" fill="#4f5763">Jan 7,783 · Feb 7,354 · Mar 8,393 · Apr 7,142. Unsubscribe</text>';
+    s+='<text x="10" y="'+(yb+83)+'" font-size="11" fill="#4f5763">applies per list — trails show clients unsubscribing list by</text>';
+    s+='<text x="10" y="'+(yb+97)+'" font-size="11" fill="#4f5763">list, minutes apart, while other lists keep sending to them.</text>';
+    svg("p3",s);
+  })();
+
+  /* P4 — two panels: who leaves (tier mix) + matched-tier hold */
+  (function(){
+    var s="";
+    /* left panel — tier mix */
+    var Lx0=64,Lx1=400,top=64,base=326,H=base-top,MXL=50;
+    var YL=function(p){return base-(p/MXL)*H;};
+    s+='<text class="ct" x="'+Lx0+'" y="22">Leavers skew high-value</text>';
+    s+='<text class="ctd" x="'+Lx0+'" y="38">Tier mix of tiered clients · starting tier at Jun 30 2025</text>';
+    [0,10,20,30,40,50].forEach(function(p){var y=YL(p);
+      s+='<line class="grid" x1="'+Lx0+'" x2="'+Lx1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(Lx0-6)+'" y="'+(y+4)+'">'+p+'%</text>';});
+    s+='<line class="axis" x1="'+Lx0+'" y1="'+top+'" x2="'+Lx0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+Lx0+'" y1="'+base+'" x2="'+Lx1+'" y2="'+base+'"/>';
+    var groups=[{l:"High",lv:41,sv:33},{l:"Mid",lv:34,sv:33},{l:"Low",lv:25,sv:33}];
+    groups.forEach(function(g,i){var gx=Lx0+26+i*110,bw=40;
+      var y1=YL(g.lv);
+      s+='<rect x="'+gx+'" y="'+y1+'" width="'+bw+'" height="'+(base-y1)+'" rx="3" fill="'+NAVY+'"/>';
+      s+='<text class="val" x="'+(gx+bw/2)+'" y="'+(y1-8)+'">'+g.lv+'%</text>';
+      var y2=YL(g.sv);
+      s+='<rect x="'+(gx+bw+6)+'" y="'+y2+'" width="'+bw+'" height="'+(base-y2)+'" rx="3" fill="'+SLATE+'"/>';
+      s+='<text class="val" x="'+(gx+bw+6+bw/2)+'" y="'+(y2-8)+'" fill="#4f5763">~'+g.sv+'%</text>';
+      s+='<text class="cat" x="'+(gx+bw+3)+'" y="'+(base+17)+'">'+g.l+'</text>';});
+    s+='<text class="sub" x="'+((Lx0+Lx1)/2)+'" y="'+(base+33)+'">stayer thirds by tercile construction · leavers n=14,140 (tiered subset)</text>';
+    s+='<text x="'+Lx0+'" y="'+(base+58)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">Leaver avg card spend ~$2,450/mo vs stayers ~$2,050 (then)</text>';
+    /* right panel — matched-tier hold */
+    var Rx0=520,Rx1=880,MXR=100;
+    var YR=function(p){return base-(p/MXR)*H;};
+    s+='<text class="ct" x="'+Rx0+'" y="22">Matched on tier, no decline after unsub</text>';
+    s+='<text class="ctd" x="'+Rx0+'" y="38">% still in starting tier · Jun 30 2025 → Jun 30 2026</text>';
+    [0,25,50,75,100].forEach(function(p){var y=YR(p);
+      s+='<line class="grid" x1="'+Rx0+'" x2="'+Rx1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(Rx0-6)+'" y="'+(y+4)+'">'+p+'%</text>';});
+    s+='<line class="axis" x1="'+Rx0+'" y1="'+top+'" x2="'+Rx0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+Rx0+'" y1="'+base+'" x2="'+Rx1+'" y2="'+base+'"/>';
+    var mg=[{l:"High tier",lv:77.6,ln:"2,731",sv:76.1,sn:"1.19M"},{l:"Mid tier",lv:54.9,ln:"2,255",sv:54.5,sn:"1.15M"}];
+    mg.forEach(function(g,i){var gx=Rx0+42+i*160,bw=52;
+      var y1=YR(g.lv);
+      s+='<rect x="'+gx+'" y="'+y1+'" width="'+bw+'" height="'+(base-y1)+'" rx="3" fill="'+NAVY+'"/>';
+      s+='<text class="val" x="'+(gx+bw/2)+'" y="'+(y1-8)+'">'+g.lv+'%</text>';
+      s+='<text class="sub" x="'+(gx+bw/2)+'" y="'+(base+30)+'">n='+g.ln+'</text>';
+      var y2=YR(g.sv);
+      s+='<rect x="'+(gx+bw+6)+'" y="'+y2+'" width="'+bw+'" height="'+(base-y2)+'" rx="3" fill="'+SLATE+'"/>';
+      s+='<text class="val" x="'+(gx+bw+6+bw/2)+'" y="'+(y2-8)+'" fill="#4f5763">'+g.sv+'%</text>';
+      s+='<text class="sub" x="'+(gx+bw+6+bw/2)+'" y="'+(base+30)+'">n='+g.sn+'</text>';
+      s+='<text class="cat" x="'+(gx+bw+3)+'" y="'+(base+16)+'">'+g.l+'</text>';});
+    s+='<text x="'+Rx0+'" y="'+(base+58)+'" font-size="12.5" font-weight="700" fill="'+NAVY+'">Leavers hold their tier at the same rate as stayers.</text>';
+    svg("p4",s);
+  })();
+
+  /* navigation */
+  var slides=[].slice.call(document.querySelectorAll(".slide"));
+  var i=0, prev=document.getElementById("prev"), next=document.getElementById("next"), count=document.getElementById("count");
+  function show(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach(function(s,k){s.classList.toggle("active",k===i);});
+    count.textContent=(i+1)+" / "+slides.length;
+    prev.disabled=i===0; next.disabled=i===slides.length-1;}
+  prev.onclick=function(){show(i-1);}; next.onclick=function(){show(i+1);};
+  document.addEventListener("keydown",function(e){if(e.key==="ArrowRight"||e.key==="PageDown")show(i+1);if(e.key==="ArrowLeft"||e.key==="PageUp")show(i-1);});
+  show(0);
+})();
+</script>
+</body>
+</html>

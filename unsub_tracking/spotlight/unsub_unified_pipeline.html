@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>unsub_unified.py — pipeline map</title>
+<style>
+:root{
+  --bg:#f7f8fa; --panel:#fff; --ink:#12161c; --muted:#5b6672; --line:#dfe3e8;
+  --src:#8a6d3b; --srcbg:#fdf6e3;
+  --td:#0b5fa5;  --tdbg:#eaf3fb;
+  --land:#6b4fa8; --landbg:#f2edfb;
+  --spark:#0f7a5a; --sparkbg:#e9f7f1;
+  --cube:#b0334a; --cubebg:#fdeef1;
+  --ship:#334155; --shipbg:#eef1f5;
+  --warn:#b3261e; --warnbg:#fdecea;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+header{padding:22px 28px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:21px;letter-spacing:-.01em}
+h1 small{font-weight:400;color:var(--muted);font-size:14px;margin-left:10px}
+.banner{margin:12px 0 0;padding:10px 14px;background:#e9f7f1;border-left:4px solid var(--spark);
+  border-radius:4px;font-size:13.5px}
+.wrap{padding:20px 28px 60px;max-width:2200px}
+h2{font-size:16px;margin:34px 0 10px;letter-spacing:-.01em}
+h2 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:8px}
+.scroller{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+#canvas{position:relative;display:flex;gap:34px;padding:20px 22px 26px;min-width:1700px;align-items:flex-start}
+#wires{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.col{display:flex;flex-direction:column;gap:12px;width:232px;flex:0 0 232px;position:relative;z-index:1}
+.colhead{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  font-weight:700;padding-bottom:6px;border-bottom:2px solid var(--line);margin-bottom:4px}
+.colhead em{display:block;text-transform:none;letter-spacing:0;font-style:normal;font-weight:400;
+  font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.35}
+.node{background:var(--panel);border:1.5px solid var(--line);border-radius:7px;padding:9px 11px;
+  cursor:pointer;transition:.14s;position:relative}
+.node:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,0,0,.09)}
+.node .t{font-weight:650;font-size:13px;line-height:1.3;font-family:ui-monospace,Consolas,monospace}
+.node .s{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.35}
+.badge{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  padding:1.5px 5px;border-radius:3px;margin:6px 4px 0 0}
+.k-src{border-color:var(--src);background:var(--srcbg)} .k-src .t{color:var(--src)}
+.k-td{border-color:var(--td);background:var(--tdbg)} .k-td .t{color:var(--td)}
+.k-land{border-color:var(--land);background:var(--landbg)} .k-land .t{color:var(--land)}
+.k-spark{border-color:var(--spark);background:var(--sparkbg)} .k-spark .t{color:var(--spark)}
+.k-cube{border-color:var(--cube);background:var(--cubebg)} .k-cube .t{color:var(--cube)}
+.k-ship{border-color:var(--ship);background:var(--shipbg)} .k-ship .t{color:var(--ship)}
+.k-cfg{border-style:dashed;border-color:var(--muted);background:#fafbfc}
+.b-warn{background:var(--warnbg);color:var(--warn)}
+.b-good{background:#e9f7f1;color:var(--spark)}
+.node.sel{box-shadow:0 0 0 3px rgba(11,95,165,.30);transform:translateY(-1px)}
+.node.dim{opacity:.22}
+path.wire{fill:none;stroke:#b9c2cc;stroke-width:1.6}
+path.wire.dash{stroke-dasharray:5 4;stroke:#c9ced6}
+path.wire.hot{stroke:#0b5fa5;stroke-width:2.6}
+path.wire.dim{opacity:.12}
+.detail{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;min-height:96px}
+.detail h3{margin:0 0 4px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
+.detail .meta{font-size:12px;color:var(--muted);margin-bottom:10px}
+.detail p{margin:0 0 9px;font-size:13.5px}
+.detail ul{margin:6px 0;padding-left:18px;font-size:13px}
+.detail li{margin-bottom:4px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:#eef1f4;padding:1px 5px;border-radius:3px}
+.hint{color:var(--muted);font-size:13px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th{text-align:left;background:#eef1f4;padding:8px 10px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid #edf0f3;vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.mono,th.mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.tblscroll{overflow-x:auto;border-radius:8px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:10px}
+summary{cursor:pointer;font-weight:600;font-size:13.5px}
+pre{background:#12161c;color:#e6edf3;padding:14px;border-radius:6px;overflow-x:auto;font-size:11.5px;line-height:1.55}
+.gotcha{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--warn);
+  border-radius:6px;padding:11px 14px;margin-bottom:8px;font-size:13.5px}
+.gotcha b{display:block;margin-bottom:3px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 0;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1.5px solid}
+</style>
+</head>
+<body>
+<header>
+  <h1>unsub_unified.py — pipeline map <small>build 2026-08-03c · one Run All · brain-local kernel · full run completed 2026-08-03</small></h1>
+  <div class="banner"><b>Status: DELIVERED.</b> Full run (SMOKE=False) completed clean — six cubes at full scale in <code>out/</code>. 109,431 enterprise unsubbers · 11,252 Cards-exact · cohort 4,522,763. t12 fills after the automatic September re-pull. Companions: <code>PIPELINE_ASSUMPTIONS.md</code> (every parameter, business English) · <code>cube_analyst_prompt.py</code> (schemas + query recipes).</div>
+</header>
+
+<div class="wrap">
+
+<h2>Pipeline DAG <span>click any box to trace its inputs, outputs and logic</span></h2>
+<div class="scroller">
+  <div id="canvas"><svg id="wires"></svg></div>
+</div>
+<div class="legend">
+  <span><i style="border-color:var(--src);background:var(--srcbg)"></i>source table</span>
+  <span><i style="border-color:var(--td);background:var(--tdbg)"></i>Teradata pull (bitten ×10)</span>
+  <span><i style="border-color:var(--land);background:var(--landbg)"></i>HDFS landing</span>
+  <span><i style="border-color:var(--spark);background:var(--sparkbg)"></i>Spark stage</span>
+  <span><i style="border-color:var(--cube);background:var(--cubebg)"></i>cube / deliverable</span>
+  <span><i style="border-color:var(--ship);background:var(--shipbg)"></i>delivery</span>
+  <span>— solid = data flow · dashed = config / control</span>
+</div>
+
+<div class="detail" id="detail"><span class="hint">Click a node above. Its grain, business logic, key parameters and every connection appear here.</span></div>
+
+<h2>Every edge <span>operation + key/filter, from the code</span></h2>
+<div class="tblscroll"><table id="edgetbl">
+  <thead><tr><th>From</th><th>To</th><th>Op</th><th class="mono">Key / filter / logic</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<h2>Node inventory <span>grain = one row per WHAT</span></h2>
+<div class="tblscroll"><table id="nodetbl">
+  <thead><tr><th>ID</th><th>Node</th><th>Kind</th><th>Grain</th><th>Scale (full run)</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<h2>Gotchas the diagram can't show</h2>
+<div id="gotchas"></div>
+
+<h2>Same DAG as Mermaid <span>also in PIPELINE_MAP.md — paste anywhere that renders mermaid</span></h2>
+<details><summary>Show Mermaid source</summary><pre id="mermaid"></pre></details>
+
+</div>
+
+<script>
+const NODES = [
+{st:0,id:"cfg",t:"Cell 0 · config",s:"every parameter, one place",k:"cfg",grain:"scalars & lists",scale:"—",
+ why:["Single source of truth: Window A Jan 1–Apr 30 2026 · Piece B anchors 2025-08-31 / 2026-08-31 (hardcoded) · Curve trailing 12m · 12 CARDS_MNES · band edges · N_BITES=10 · SMOKE flag · UCP_MONTH_A=2026-04-30.",
+      "Prints the PIPELINE_BUILD stamp first — every run output is version-attributable."],
+ consts:["Business rationale for every value: <code>PIPELINE_ASSUMPTIONS.md</code>"]},
+{st:0,id:"s1",t:"VENDOR_FEEDBACK_EVENT",s:"sends (cd=1) · unsubs (cd=4)",k:"src",grain:"one row per email disposition event",scale:"400M+ raw",
+ why:["The event fact. Every pull filters at source: window + the TREATMENT_ID shape filter (10 chars, first 7 numeric) that excludes non-campaign mail.",
+      "Events dedup to (client, treatment, disposition, DAY) — removes vendor retries, keeps genuine re-sends."]},
+{st:0,id:"s2",t:"VENDOR_FEEDBACK_MASTER",s:"hashed id → clnt_no",k:"src",grain:"(hash, treatment) → clnt_no — NOT 1:1",scale:"~385M keys",
+ why:["Identity bridge. Always joined through a DISTINCT subquery (raw join inflates ~11%).",
+      "load_tm is a LOAD stamp — every pull uses a 3-month floor margin (zero margin measured to drop 8.7% of unsubs)."]},
+{st:0,id:"s3",t:"UCP ucp4",s:"snapshot 2026-04-30, hardcoded",k:"src",grain:"one row per client per month-end",scale:"15.3M Personal rows",
+ why:["Client attributes: AGE, TENURE_RBC_YEARS, T/I/B/C product counts (kept as four separate flags per the brief).",
+      "ONE fixed snapshot — profiles describe the client now, not at unsub time. Month never derived from run date (that bug crashed a run)."]},
+{st:0,id:"s4",t:"DLY_FULL_PORTFOLIO",s:"daily card spend",k:"src",grain:"one row per account per day",scale:"huge — scanned cohort-scoped only",
+ why:["Monthly spend = the LAST daily record's month-to-date purchase amount per account per month (robust to mid-month closure). Annual = trailing 12 months ending at each anchor.",
+      "Feared for spool — landed all 10 bites clean, ~13s each. Fear retired 2026-08-03."]},
+{st:0,id:"s5",t:"CR_CRD_RPTS_ACCT",s:"revolver / transactor",k:"src",grain:"account × cycle month-end",scale:"cohort-scoped",
+ why:["usg_bhvr_seg at the exact anchor month-ends. Account→client precedence: Revolver &gt; Transactor &gt; Dormant (house rule).",
+      "Value domain probed at run time: Revolver 2.9M / Transactor 4.1M / Dormant 2.2M / None 2.7M accounts — clean."]},
+
+{st:1,id:"A1",t:"Pull A1 · client grain",s:"Window A, enterprise-wide",k:"td",grain:"one row per client (per bite)",scale:"10.44M clients",
+ why:["The backbone: per-client email counts (all + cards), campaign breadth, unsub flags (any-list + cards), dates — all within Jan–Apr 2026.",
+      "Aggregated inside Teradata (GROUP BY clnt_no); only ~1M rows per bite cross the wire at ~60k rows/s."]},
+{st:1,id:"A2",t:"Pull A2 · campaign grain",s:"senders · attributed · exposed",k:"td",grain:"one row per MNE (per bite)",scale:"~170/bite → 177 total",
+ why:["Three counts per campaign: senders (unique mailed), unsubs_attributed (events clicked from it), leavers_exposed (its audience ∩ enterprise unsubbers). The two unsub counts differ up to ~4.6× — both carried, named apart."]},
+{st:1,id:"C",t:"Pull C · event-month grain",s:"the curve's source",k:"td",grain:"one row per (MNE, event month)",scale:"~1.9k rows",
+ why:["Sends and unsubs counted in the calendar month the EVENT happened (not first-send cohort). Trailing 12 months. Fully aggregated server-side — no client grain, tiny wire cost."]},
+{st:1,id:"BC",t:"Pull B_COHORT",s:"cards-mailed by anchor",k:"td",grain:"one row per client (per bite)",scale:"4.52M clients",
+ why:["Everyone mailed by any of the 12 Cards campaigns from 2024-01-01 up to the anchor (half-open &lt; Sep 1 2025).",
+      "Flags AT the anchor: any_unsub_by_anchor (leaver) + cards_unsub_by_anchor — computed from a window ENDING at the anchor, never the full year (pre-period contamination was spotlight2's fatal bug)."]},
+{st:1,id:"BD",t:"Pull B_DFP · spend",s:"annual t0 + t12, in-SQL cohort scope",k:"td",grain:"one row per cohort client (per bite)",scale:"~3.3M rows",badges:["good"],
+ why:["Cohort CTE re-derived INSIDE the statement and inner-joined to DFP before aggregation — never a bank-wide scan.",
+      "annual_spend_p12 is NULL (not zero) when the t12 months have no rows — pre-Sept t12 reads honestly as untiered.",
+      "Carries a pre/post-close REGIME flag: bites landed before Sep 1 2026 auto-re-pull on the first post-September run."]},
+{st:1,id:"BB",t:"Pull B_BHV · R/T seg",s:"anchor month-ends, cohort-scoped",k:"td",grain:"one row per cohort client (per bite)",scale:"~3.2M rows",
+ why:["Revolver/transactor at t0 and t12 month-ends. Same regime flag as B_DFP. rank 0 → no_data (safe by construction)."]},
+
+{st:2,id:"l1",t:"a1_client_v1/",s:"10 bite dirs + markers",k:"land",grain:"client",scale:"10.44M",
+ why:["Every landed bite has a _ROWCOUNT sidecar; reads use the bite_? glob so sidecars are never read as data (the bite_* wildcard bug cost a day of phantom duplicates)."]},
+{st:2,id:"l2",t:"a2_mne_v1/",s:"bitten, tiny",k:"land",grain:"MNE per bite",scale:"~1.7k rows"},
+{st:2,id:"l3",t:"c_month_mne_v1/",s:"bitten, tiny",k:"land",grain:"MNE × month per bite",scale:"~1.9k rows"},
+{st:2,id:"l4",t:"b_cohort_v1/",s:"10 bite dirs",k:"land",grain:"client",scale:"4.52M"},
+{st:2,id:"l5",t:"b_dfp_v1/ + _REGIME",s:"regime-flagged",k:"land",grain:"client",scale:"~3.3M"},
+{st:2,id:"l6",t:"b_bhv_v1/ + _REGIME",s:"regime-flagged",k:"land",grain:"client",scale:"~3.2M"},
+{st:2,id:"l7",t:"ucp_enriched_a2_v1/",s:"the bitten UCP join (Cell 5)",k:"land",grain:"client",scale:"10.44M · match 90.8%",
+ why:["a1's client universe LEFT JOINed to pruned UCP, one ~1M bite at a time (the single-shot join OOM-killed a 4GB kernel).",
+      "Misses land as no_ucp_match / held_*=-1 — kept visible, never dropped. Match-rate floor 70% asserted; actual 90.8%."]},
+
+{st:3,id:"q1",t:"a1_mne_share.csv",s:"THE DENOMINATOR FILE",k:"cube",grain:"MNE + 2 total rows",scale:"179 rows",badges:["good"],
+ why:["Per-MNE attributed counts PLUS the only two deduped totals in existence: ENTERPRISE_TOTAL_UNIQUE_CLIENTS=109,431 and CARDS_TOTAL_UNIQUE_CLIENTS=11,252.",
+      "Never sum per-MNE rows for a total (that sum is 171,989 — multi-list clients count once per campaign)."]},
+{st:3,id:"q2",t:"a2_mne_rates.csv",s:"campaign counts",k:"cube",grain:"MNE",scale:"177 rows",
+ why:["senders / unsubs_attributed / leavers_exposed. Rates computed at pivot time: attributed÷senders or exposed÷senders — always name which."]},
+{st:3,id:"q3",t:"a3_contact_cube.csv",s:"frequency gradient",k:"cube",grain:"all-emails band × cards-emails band",scale:"18 rows",
+ why:["stayers / leavers / leavers_cards_unsub_subset / clients_total per contact-load bucket. The is-it-us question lives here."]},
+{st:3,id:"q4",t:"a4_profile_cube.csv",s:"who unsubscribes",k:"cube",grain:"age × tenure × T/I/B/C × depth",scale:"456 rows",
+ why:["Four separate product flags (1/0/-1) + depth. -1 = no UCP match — its own bucket (9.2%), never folded into 0."]},
+{st:3,id:"q5",t:"b_before_after_cube.csv",s:"value at risk (t0) · trajectory (Sept)",k:"cube",grain:"offset × tier × tier-at-offset × seg × seg-t0",scale:"69 rows",badges:["warn"],
+ why:["The Workstream-2 3×4 template = the t_offset=0 slice: spend tier × revolver/transactor × stayers/leavers.",
+      "spend_tier frozen at t0 (composition) vs spend_tier_at_offset (movement, same cutpoints). usg_bhvr_seg_t0 makes R/T flows pivotable.",
+      "t12 rows are untiered/no_data until September — embargoed, never a trend. Framing rule: value that walked away, NEVER causal cost."]},
+{st:3,id:"q6",t:"c_monthly_curve.csv",s:"the 12-month curve",k:"cube",grain:"MNE × event month",scale:"1,857 rows",
+ why:["GROUP BY ym → the enterprise curve; filter to the 12 cards MNEs → the cards curve. Sanity: ~9-15k enterprise unsubs/month."]},
+
+{st:4,id:"d1",t:"HDFS out/ + out_parquet/",s:"copy of record",k:"ship",grain:"6 cubes × 2 formats",scale:"—",
+ why:["Full-run outputs only — smoke outputs land in out_smoke/, so sample numbers can never masquerade as real."]},
+{st:4,id:"d2",t:"~/unsub_unified_out/",s:"pod-local + one zip",k:"ship",grain:"6 CSVs + zip",scale:"—",
+ why:["The download bundle. xlsx if openpyxl is installed; CSV fallback otherwise (loud, zip includes whatever was written)."]},
+{st:4,id:"d3",t:"RUN SUMMARY",s:"post-run self-check",k:"ship",grain:"printout",scale:"—",
+ why:["Per-output row counts + [OK] flags + the headline totals — the last thing every run prints, mirroring the pre-run coverage gate."]}
+];
+
+const EDGES = [
+["cfg","A1","config","windows, MNE list, shape filter, bites",1],["cfg","BC","config","anchor dates, cohort floor",1],
+["s1","A1","filter+dedup","cd IN (1,4) · Jan–Apr · shape filter · dedup to (client,treatment,cd,day)",0],
+["s2","A1","dedup+join","DISTINCT(hash,treatment,clnt) · load_tm ≥ Oct 2025 · bite predicate INSIDE the subquery",0],
+["s1","A2","filter+dedup","same pattern as A1",0],["s2","A2","dedup+join","same pattern",0],
+["s1","C","filter+aggregate","cd IN (1,4) · trailing 12m · GROUP BY mne, EVENT month",0],
+["s2","C","dedup+join","same pattern",0],
+["s1","BC","filter","cards sends 2024-01-01 → &lt; Sep 1 2025 · unsub flags from window ENDING at anchor",0],
+["s2","BC","dedup+join","same pattern · load_tm ≥ Oct 2023",0],
+["BC","BD","in-SQL cohort CTE","cohort re-derived inside the DFP statement, INNER JOIN before aggregation",0],
+["BC","BB","in-SQL cohort CTE","same",0],
+["s4","BD","scan+pivot","dt in spend window · ym IN needed months · ROW_NUMBER last-day-per-month · annual sums t0/p12 (p12 NULL if no rows)",0],
+["s5","BB","scan","exact anchor month-ends · seg precedence R&gt;T&gt;D",0],
+["A1","l1","land ×10","chunked write + _ROWCOUNT marker per bite",0],
+["A2","l2","land ×10","same",0],["C","l3","land ×10","same",0],["BC","l4","land ×10","same",0],
+["BD","l5","land ×10","+ _REGIME (pre/post-close) sidecar",0],["BB","l6","land ×10","+ _REGIME sidecar",0],
+["l1","l7","bitten LEFT JOIN","per bite: a1 clients ⟕ pruned UCP on clnt_no (decimal→long cast both sides) · misses → no_ucp_match",0],
+["s3","l7","read once","Personal filter · 8 columns pruned from 641 · deduped",0],
+["l1","q1","dedup counts","distinct clients: enterprise total + cards total (client-grain, exact)",0],
+["l2","q1","per-MNE rows","unsubs_attributed",0],
+["l2","q2","sum across bites","senders / attributed / exposed per MNE",0],
+["l1","q3","band+aggregate","email-count buckets × unsub flags → stayers/leavers",0],
+["l7","q4","bitten join+partials","per-bite partial cubes → union → groupBy-sum (additive, bites disjoint)",0],
+["l1","q4","unsub flags","stayer/leaver split",0],
+["l3","q6","sum across bites","sends + unsubs per MNE × month",0],
+["l4","q5","bitten panel","cohort × spend × seg at t0 and t12 — same clients both offsets (true panel)",0],
+["l5","q5","spend + tiers","terciles cut ONCE at t0 (33/67% of cohort), held fixed; spend_tier_at_offset = offset spend vs same cutpoints",0],
+["l6","q5","seg + seg_t0","R/T at each offset + t0 seg carried onto every row (flows)",0],
+["q1","d1","write",0,0],["q2","d1","write","",0],["q3","d1","write","",0],
+["q4","d1","write","",0],["q5","d1","write","",0],["q6","d1","write","",0],
+["d1","d2","collect","toPandas → CSVs → zip on pod",0],
+["d2","d3","verify","row counts + [OK] per output + headline totals",0]
+];
+
+const STAGES = [
+ ["1 · Sources","5 tables, read filtered"],
+ ["2 · Teradata pulls","bitten ×10 · resumable · aggregated in-database"],
+ ["3 · HDFS landings","bite dirs + _ROWCOUNT/_REGIME markers"],
+ ["4 · Cubes","the six deliverables (full run 2026-08-03)"],
+ ["5 · Delivery","HDFS + pod + self-check"]
+];
+// map node stage index: sources 0, pulls 1, landings 2, cubes 3, delivery 4
+
+const BADGE = {good:['b-good','verified'],warn:['b-warn','t12 embargo']};
+const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
+const canvas = document.getElementById('canvas');
+STAGES.forEach((st,i)=>{
+  const col = document.createElement('div'); col.className='col';
+  col.innerHTML = `<div class="colhead">${st[0]}<em>${st[1]}</em></div>`;
+  NODES.filter(n=>n.st===i).forEach(n=>{
+    const d = document.createElement('div');
+    d.className = 'node k-'+n.k; d.dataset.id = n.id;
+    let h = `<div class="t">${n.t}</div><div class="s">${n.s||""}</div>`;
+    if(n.badges) h += n.badges.map(b=>`<span class="badge ${BADGE[b][0]}">${BADGE[b][1]}</span>`).join('');
+    d.innerHTML = h;
+    d.addEventListener('click', e=>{e.stopPropagation(); select(n.id);});
+    col.appendChild(d);
+  });
+  canvas.appendChild(col);
+});
+const svg = document.getElementById('wires');
+function draw(){
+  const cb = canvas.getBoundingClientRect();
+  svg.setAttribute('width', canvas.scrollWidth); svg.setAttribute('height', canvas.scrollHeight);
+  svg.innerHTML = '';
+  EDGES.forEach(e=>{
+    const a = canvas.querySelector(`[data-id="${e[0]}"]`), b = canvas.querySelector(`[data-id="${e[1]}"]`);
+    if(!a||!b) return;
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const x1 = ra.right-cb.left, y1 = ra.top-cb.top+ra.height/2;
+    const x2 = rb.left-cb.left,  y2 = rb.top-cb.top+rb.height/2;
+    const dx = Math.max(28,(x2-x1)*0.5);
+    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
+    p.setAttribute('class','wire'+(e[4]?' dash':''));
+    p.dataset.from = e[0]; p.dataset.to = e[1];
+    svg.appendChild(p);
+  });
+}
+window.addEventListener('resize', draw); draw(); setTimeout(draw,120);
+const detail = document.getElementById('detail');
+function select(id){
+  const n = byId[id];
+  const ins = EDGES.filter(e=>e[1]===id), outs = EDGES.filter(e=>e[0]===id);
+  const touched = new Set([id, ...ins.map(e=>e[0]), ...outs.map(e=>e[1])]);
+  canvas.querySelectorAll('.node').forEach(el=>{
+    el.classList.toggle('sel', el.dataset.id===id);
+    el.classList.toggle('dim', !touched.has(el.dataset.id));
+  });
+  svg.querySelectorAll('path').forEach(p=>{
+    const hot = p.dataset.from===id || p.dataset.to===id;
+    p.classList.toggle('hot', hot); p.classList.toggle('dim', !hot);
+  });
+  const row = e => `<li><code>${e[0]} → ${e[1]}</code> · <b>${e[2]}</b>${e[3]?" — "+e[3]:""}</li>`;
+  detail.innerHTML = `
+    <h3>${n.t} <span style="color:var(--muted);font-size:12px">[${n.id}]</span></h3>
+    <div class="meta">grain: <b>${n.grain||"—"}</b> · scale: ${n.scale||"—"}</div>
+    ${(n.why||[]).map(w=>`<p>${w}</p>`).join('')}
+    ${n.consts?`<ul>${n.consts.map(c=>`<li>${c}</li>`).join('')}</ul>`:''}
+    ${ins.length?`<p style="margin-top:10px"><b>Inputs (${ins.length})</b></p><ul>${ins.map(row).join('')}</ul>`:''}
+    ${outs.length?`<p style="margin-top:10px"><b>Outputs (${outs.length})</b></p><ul>${outs.map(row).join('')}</ul>`:''}`;
+}
+document.body.addEventListener('click',()=>{
+  canvas.querySelectorAll('.node').forEach(el=>el.classList.remove('sel','dim'));
+  svg.querySelectorAll('path').forEach(p=>p.classList.remove('hot','dim'));
+});
+document.querySelector('#edgetbl tbody').innerHTML = EDGES.map(e=>`<tr>
+  <td class="mono">${byId[e[0]].t}</td><td class="mono">${byId[e[1]].t}</td><td>${e[2]}</td>
+  <td class="mono">${(e[3]||"").toString().replace(/</g,'&lt;')}</td></tr>`).join('');
+document.querySelector('#nodetbl tbody').innerHTML = NODES.map(n=>`<tr>
+  <td class="mono">${n.id}</td><td class="mono">${n.t}</td><td>${n.k}</td>
+  <td>${n.grain||"—"}</td><td>${n.scale||"—"}</td></tr>`).join('');
+const GOTCHAS = [
+ ["t12 is embargoed until September","Aug-2026 hasn't closed: t12 rows read untiered/no_data BY DESIGN. The _REGIME flag auto-re-pulls B on the first post-Sept run. Never present pre-Sept t12 as a trend."],
+ ["Never sum per-MNE unsubs into a total","171,989 (per-MNE sum) vs 109,431 (deduped) — multi-list clients count once per campaign. Totals come ONLY from a1's two special rows."],
+ ["Two unsub counts per campaign","unsubs_attributed (clicked from it) vs leavers_exposed (its audience ∩ any-list unsubbers) differ up to ~4.6×. Every number names which it is."],
+ ["-1 / no_ucp_match is its own bucket","9.2% of clients. Folding it into 0 turns 'unknown' into 'doesn't hold the product'."],
+ ["Spend tiers are cohort terciles","Equal thirds of THIS population at t0, not official RBC bands. Dollar cutpoints print in the run log. Cutpoints held fixed at t12 so tier movement = real spend movement."],
+ ["Reads use bite_? never bite_*","The _ROWCOUNT/_REGIME sidecars live inside the landing dirs; the wider wildcard reads them as data rows (one phantom NULL client per bite — a full day of debugging, 2026-08-03)."],
+ ["SMOKE outputs are quarantined","out_smoke/ vs out/ — a sample number can never masquerade as a real one. SMOKE=True also only pulls bite 0 of any missing pull."],
+ ["Piece B framing is composition, not cause","'Value that walked away' — leavers differ from stayers before leaving. No causal cost claim survives review."],
+ ["HDFS namespace quota","The pipeline's many small files count against the FILE-COUNT quota (13,107), not just bytes. Dead dirs deleted 2026-08-03; check with hdfs dfs -count -q."]
+];
+document.getElementById('gotchas').innerHTML = GOTCHAS.map(g=>`<div class="gotcha"><b>${g[0]}</b>${g[1]}</div>`).join('');
+const MSHAPE = {src:['[(',')]'],td:['[[',']]'],land:['[',']'],spark:['(',')'],cube:['[',']'],ship:['([','])'],cfg:['{{','}}']};
+let m = 'flowchart LR\n';
+STAGES.forEach((st,i)=>{
+  m += `  subgraph S${i}["${st[0]}"]\n  direction TB\n`;
+  NODES.filter(n=>n.st===i).forEach(n=>{
+    const sh = MSHAPE[n.k]||['[',']'];
+    m += `    ${n.id}${sh[0]}"${n.t.replace(/"/g,"'")}"${sh[1]}\n`;
+  });
+  m += '  end\n';
+});
+EDGES.forEach(e=>{ m += `  ${e[0]} ${e[4]?'-.->':'-->'} ${e[1]}\n`; });
+document.getElementById('mermaid').textContent = m;
+</script>
+</body>
+</html>
