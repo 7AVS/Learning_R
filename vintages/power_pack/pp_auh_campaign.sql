@@ -76,15 +76,33 @@
 --   for rewards." segment is a PRE-TREATMENT split, derived from tst_grp_cd,
 --   that sits ABOVE grp (Test/Control) — base is now computed at
 --   cohort_month x segment x grp grain (deployment dropped 2026-08-10).
---   Mapping, transcribed from the work-env AUH_P2_Vintage.sql (per deployment,
---   the code alphabets differ between the two waves):
---     2026042AUH (Phase 1) — all non-rewards:
---       TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C') -> 'NonReward'
---     2026119AUH (Phase 2) — three arms:
---       SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') -> 'NonReward'
---       SUBSTR(tst_grp_cd,1,3) IN ('RNM','RNW')       -> 'Rewards_NoOffer'
---       SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') -> 'Rewards_Offer'
---     Anything unmatched -> 'Unknown' (NOT silently folded into a real segment).
+--   MAPPING REWRITTEN 2026-08-10 after a run produced an Unknown bucket of
+--   ~63k accounts in cohort 2026-04. Root cause: the previous version used
+--   three-character prefix IN-lists copied from the work-env file, and one
+--   member was missing — 'RNR' was absent from the Rewards_NoOffer list, so
+--   every RNR* code fell through to Unknown.
+--
+--   The code structure makes the 3-char lists unnecessary and fragile:
+--     chars 1-2 = STRATEGY   ('NR' non-reward, 'RN' rewards-no-offer,
+--                             'RO' rewards-offer)
+--     char  3   = MODEL ARM  (R = Random, M = Model, W = Web)
+--   The model arm is collapsed here anyway (see GRP COLLAPSE below), so
+--   matching on chars 1-2 covers every model variant, both waves, and any
+--   future code, with no IN-list to fall out of date:
+--     SUBSTR(TRIM(tst_grp_cd),1,2) = 'NR' -> 'NonReward'
+--     SUBSTR(TRIM(tst_grp_cd),1,2) = 'RN' -> 'Rewards_NoOffer'
+--     SUBSTR(TRIM(tst_grp_cd),1,2) = 'RO' -> 'Rewards_Offer'
+--     anything else -> 'Unknown' (NOT silently folded into a real segment).
+--
+--   This also removes the tactic_id dependency the old CASE carried. Phase 1
+--   codes (NRGA, NRR, NRS and their _C variants) all begin 'NR', which lands
+--   them in NonReward — consistent with Phase 1 being 100% non-rewards, so the
+--   per-wave branching bought nothing.
+--
+--   Unknown should now be zero or near-zero. If it is not, the residual codes
+--   are genuinely outside the NR/RN/RO scheme and need to be looked at before
+--   the cube is trusted — check with the tst_grp_cd roll-up at the bottom of
+--   this file.
 --   THREE segment values are emitted on purpose, not two — see prior header
 --   revision for the full DOE-contrast rationale (unchanged by the deployment
 --   drop). [WARNING] block above explains why the NonReward line now mixes
@@ -159,18 +177,12 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
             AS VARCHAR(7))                          AS cohort_month,
             -- segment: rewards vs non-rewards, derived per-wave from tst_grp_cd — see header
             CASE
-                WHEN tactic_id = '2026042AUH'
-                     AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
-                    THEN CAST('NonReward' AS VARCHAR(20))
-                WHEN tactic_id = '2026119AUH'
-                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('NRR','NRM','NRW')
-                    THEN CAST('NonReward' AS VARCHAR(20))
-                WHEN tactic_id = '2026119AUH'
-                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('RNM','RNW')
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'NR'
+                    THEN CAST('NonReward'       AS VARCHAR(20))
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RN'
                     THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
-                WHEN tactic_id = '2026119AUH'
-                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('ROR','ROM','ROW')
-                    THEN CAST('Rewards_Offer' AS VARCHAR(20))
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RO'
+                    THEN CAST('Rewards_Offer'   AS VARCHAR(20))
                 ELSE CAST('Unknown' AS VARCHAR(20))
             END                                      AS segment,
             CASE
@@ -341,7 +353,30 @@ DROP TABLE vt_auh_experiment_cells;
 DROP TABLE vt_auh_experiment_spine;
 
 -- ============================================================================
--- DIAGNOSTIC (commented out): how many accounts hit both arms in one month?
+-- DIAGNOSTIC A (commented out): every tst_grp_cd and where it lands.
+-- Run this FIRST if any Unknown rows appear. ~20 rows. It shows the actual
+-- code strings, which segment each maps to, and the Test/Control split, so a
+-- residual Unknown bucket can be read off directly instead of guessed at.
+-- ============================================================================
+-- SELECT
+--       tactic_id
+--     , TRIM(tst_grp_cd)                                  AS tst_grp_cd
+--     , SUBSTR(TRIM(tst_grp_cd), 1, 2)                    AS strategy_2char
+--     , CASE
+--           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='NR' THEN 'NonReward'
+--           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RN' THEN 'Rewards_NoOffer'
+--           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RO' THEN 'Rewards_Offer'
+--           ELSE 'Unknown' END                            AS segment
+--     , CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS grp
+--     , COUNT(DISTINCT CAST(tactic_evnt_id AS BIGINT))    AS accts
+-- FROM DG6V01.tactic_evnt_ip_ar_hist
+-- WHERE tactic_id IN ('2026042AUH', '2026119AUH')
+--   AND treatmt_strt_dt >= DATE '2026-01-01'
+-- GROUP BY 1,2,3,4,5
+-- ORDER BY 1,2;
+
+-- ============================================================================
+-- DIAGNOSTIC B (commented out): how many accounts hit both arms in one month?
 -- ============================================================================
 -- SELECT cohort_month, COUNT(*) AS conflicted_accounts FROM (
 --     SELECT acct_no, cohort_month FROM (
