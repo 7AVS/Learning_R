@@ -1,9 +1,16 @@
 -- pcd_experiment_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
---   Exactly 7 columns, this order: cohort_month | segment | grp | vintage_day
---   | base | responders | responders_cum. Counts only. segment = CAST('All' AS VARCHAR(20))
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
+--   `mne` ADDED 2026-08-10 as first column).
+--   Exactly 8 columns, this order: mne | cohort_month | segment | grp | vintage_day
+--   | base | responders | responders_cum. Counts only. mne = CAST('PCD' AS VARCHAR(3)) —
+--   constant, campaign mnemonic. segment = CAST('All' AS VARCHAR(20))
 --   — constant; this async carve-out has no pre-treatment split above tst_grp_cd Test/Control.
+--
+-- NOTE: mne is the campaign mnemonic only. This file shares its mne with
+--   pp_pcd_campaign.sql. If both are stacked into one cube they are not
+--   distinguishable by mne alone - keep them on separate sheets, or add a
+--   scope column.
 -- SCOPE: **EXPERIMENT** — the async mobile banner carve-out inside PCD, NOT
 --   the whole campaign. Companion file pcd_campaign_vintage.sql is the
 --   campaign-scope curve.
@@ -239,6 +246,7 @@ dense_grid AS (
 )
 
 SELECT
+    CAST('PCD' AS VARCHAR(3))          AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))         AS segment,
     g.grp,

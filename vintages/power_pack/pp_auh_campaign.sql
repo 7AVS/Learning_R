@@ -1,8 +1,10 @@
 -- auh_experiment_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
---   Exactly 7 columns, this order: cohort_month | segment | grp | vintage_day
---   | base | responders | responders_cum. Counts only.
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
+--   `mne` ADDED 2026-08-10 as first column).
+--   Exactly 8 columns, this order: mne | cohort_month | segment | grp | vintage_day
+--   | base | responders | responders_cum. Counts only. mne = CAST('AUH' AS VARCHAR(3)) —
+--   constant, campaign mnemonic.
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
 --   section 1/5). No separate auh_campaign_vintage.sql exists or is needed.
@@ -330,6 +332,7 @@ dense_grid AS (
 )
 
 SELECT
+    CAST('AUH' AS VARCHAR(3)) AS mne,
     g.cohort_month,
     g.segment,
     g.grp,

@@ -1,10 +1,17 @@
 -- pcd_campaign_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
---   Exactly 7 columns, this order: cohort_month | segment | grp | vintage_day
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
+--   `mne` ADDED 2026-08-10 as first column).
+--   Exactly 8 columns, this order: mne | cohort_month | segment | grp | vintage_day
 --   | base | responders | responders_cum. Counts only, no rates, no strategy/model/product
---   breakouts. segment = CAST('All' AS VARCHAR(20)) — constant; PCD has no pre-treatment
---   population split above tst_grp_cd Test/Control. Real segment values exist only for AUH.
+--   breakouts. mne = CAST('PCD' AS VARCHAR(3)) — constant, campaign mnemonic. segment =
+--   CAST('All' AS VARCHAR(20)) — constant; PCD has no pre-treatment population split above
+--   tst_grp_cd Test/Control. Real segment values exist only for AUH.
+--
+-- NOTE: mne is the campaign mnemonic only. This file shares its mne with
+--   pp_pcd_async.sql. If both are stacked into one cube they are not
+--   distinguishable by mne alone - keep them on separate sheets, or add a
+--   scope column.
 -- SCOPE: **CAMPAIGN** — the whole PCD (Product Card Upgrade) campaign, every
 --   deployment/wave, past and future. NO async carve-out. This is the
 --   "how did the whole campaign perform" curve, distinct from
@@ -229,6 +236,7 @@ dense_grid AS (
 )
 
 SELECT
+    CAST('PCD' AS VARCHAR(3))          AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))         AS segment,
     g.grp,

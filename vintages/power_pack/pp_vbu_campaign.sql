@@ -1,7 +1,9 @@
 -- vbu_campaign_vintage.sql
--- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
---             7 columns only: cohort_month, segment, grp, vintage_day, base,
+-- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
+--             `mne` ADDED 2026-08-10 as first column).
+--             8 columns only: mne, cohort_month, segment, grp, vintage_day, base,
 --             responders, responders_cum.
+-- mne       : CAST('VBU' AS VARCHAR(3)) — constant per file, campaign mnemonic.
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. VBU has no pre-treatment population split
 --             above Test/Control; segment carries real values only for AUH.
 -- Campaign  : VBU (Visa Benefit Upgrade) — CAMPAIGN scope
@@ -232,6 +234,7 @@ dense_grid AS (
 )
 
 SELECT
+    CAST('VBU' AS VARCHAR(3)) AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,

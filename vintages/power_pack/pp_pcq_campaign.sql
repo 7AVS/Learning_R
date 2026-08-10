@@ -1,9 +1,16 @@
 -- pcq_campaign_vintage.sql
 -- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
---   2026-08-10). Emits EXACTLY 7 columns: cohort_month VARCHAR(7) 'YYYY-MM', segment VARCHAR(20)
---   [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above test_group_latest for
---   PCQ], grp VARCHAR(20) [binary], vintage_day INTEGER (0..90 continuous), base INTEGER (fixed
---   per cohort x segment x grp), responders INTEGER, responders_cum INTEGER. Counts only.
+--   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(3)
+--   [CAST('PCQ' AS VARCHAR(3)) — constant, campaign mnemonic], cohort_month VARCHAR(7) 'YYYY-MM',
+--   segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above
+--   test_group_latest for PCQ], grp VARCHAR(20) [binary], vintage_day INTEGER (0..90 continuous),
+--   base INTEGER (fixed per cohort x segment x grp), responders INTEGER, responders_cum INTEGER.
+--   Counts only.
+--
+-- NOTE: mne is the campaign mnemonic only. This file shares its mne with
+--   pp_pcq_sales_modal.sql. If both are stacked into one cube they are not
+--   distinguishable by mne alone - keep them on separate sheets, or add a
+--   scope column.
 --
 -- SCOPE: *** CAMPAIGN *** — whole PCQ campaign. The test_group_latest IN (...) filter used by the
 --   Modal Sales experiment file is DROPPED entirely, per task instruction.
@@ -184,6 +191,7 @@ dense_grid AS (
 )
 
 SELECT
+    CAST('PCQ' AS VARCHAR(3))                               AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,
