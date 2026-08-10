@@ -35,7 +35,7 @@
 --   tell apart.
 --   Phase 1 (2026042AUH) is 100% NonReward. Phase 2 (2026119AUH) has all three
 --   segments (NonReward, Rewards_NoOffer, Rewards_Offer). Because both phases
---   land in cohort_month '2026-04', the '2026-04' x NonReward x {Test,Control}
+--   land in cohort_month '2026-04', the '2026-04' x NonReward x {Action,Control}
 --   line now MIXES Phase 1 clients and Phase 2-NonReward-arm clients into one
 --   base/responders count. There is no way to separate them back out of this
 --   file's output — the Rewards_* segment lines are pure Phase 2 (since Phase 1
@@ -76,7 +76,7 @@
 --   Andre: "don't separate by model arm, but do separate rewards and
 --   non-rewards, then test and control for non-rewards and test and control
 --   for rewards." segment is a PRE-TREATMENT split, derived from tst_grp_cd,
---   that sits ABOVE grp (Test/Control) — base is now computed at
+--   that sits ABOVE grp (Action/Control) — base is now computed at
 --   cohort_month x segment x grp grain (deployment dropped 2026-08-10).
 --   MAPPING REWRITTEN 2026-08-10 after a run produced an Unknown bucket of
 --   ~63k accounts in cohort 2026-04. Root cause: the previous version used
@@ -112,9 +112,9 @@
 -- ----------------------------------------------------------------------------
 -- *** GRP COLLAPSE — DELIBERATE, READ BEFORE USING ***
 --   model_arm (Web / Random / Model) is COLLAPSED ENTIRELY — Andre explicitly
---   does NOT want that slicer broken out here. grp itself stays binary Test vs
+--   does NOT want that slicer broken out here. grp itself stays binary Action vs
 --   Control, per segment. grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' ->
---   'Control', ELSE -> 'Test'.
+--   'Control', ELSE -> 'Action'.
 --
 --   [VERIFY] *** the '_C' = Control convention is an UNCONFIRMED WORKING
 --   ASSUMPTION for BOTH waves (2026042AUH and 2026119AUH) and is LOAD-BEARING
@@ -122,7 +122,7 @@
 --   uses '_C' this way; Phase 2 codes seen in the wild (NRW_C, RORMC2_C)
 --   appear consistent; Robin Ji's Phase 2 email (2026-05-14) confirmed the
 --   TST_GRP_CD prefix-to-arm mapping WITHOUT explicitly confirming '_C' =
---   Control. Treat every Control/Test split from this file as provisional
+--   Control. Treat every Control/Action split from this file as provisional
 --   until that is confirmed.
 -- ----------------------------------------------------------------------------
 -- *** POOLING GUARD — READ BEFORE TRUSTING A POOLED NUMBER ***
@@ -208,7 +208,7 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
             END                                      AS segment,
             CASE
                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
-                ELSE                                        CAST('Test'    AS VARCHAR(20))
+                ELSE                                        CAST('Action'  AS VARCHAR(20))
             END                                      AS grp
         FROM DG6V01.tactic_evnt_ip_ar_hist
         WHERE tactic_id IN ('2026042AUH', '2026119AUH')
@@ -273,7 +273,7 @@ population_raw AS (
         END                                      AS segment,
         CASE
             WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
-            ELSE                                        CAST('Test'    AS VARCHAR(20))
+            ELSE                                        CAST('Action'  AS VARCHAR(20))
         END                                      AS grp
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
@@ -387,7 +387,7 @@ DROP TABLE vt_auh_experiment_spine;
 -- ============================================================================
 -- DIAGNOSTIC A (commented out): every tst_grp_cd and where it lands.
 -- Run this FIRST if any Unknown rows appear. ~20 rows. It shows the actual
--- code strings, which segment each maps to, and the Test/Control split, so a
+-- code strings, which segment each maps to, and the Action/Control split, so a
 -- residual Unknown bucket can be read off directly instead of guessed at.
 -- ============================================================================
 -- SELECT
@@ -399,7 +399,7 @@ DROP TABLE vt_auh_experiment_spine;
 --           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RN' THEN 'Rewards_NoOffer'
 --           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RO' THEN 'Rewards_Offer'
 --           ELSE 'Unknown' END                            AS segment
---     , CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Test' END AS grp
+--     , CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Action' END AS grp
 --     , COUNT(DISTINCT CAST(tactic_evnt_id AS BIGINT))    AS accts
 -- FROM DG6V01.tactic_evnt_ip_ar_hist
 -- WHERE tactic_id IN ('2026042AUH', '2026119AUH')
@@ -421,7 +421,7 @@ DROP TABLE vt_auh_experiment_spine;
 --             AS VARCHAR(7)) AS cohort_month,
 --             CASE
 --                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
---                 ELSE                                        CAST('Test'    AS VARCHAR(20))
+--                 ELSE                                        CAST('Action'  AS VARCHAR(20))
 --             END AS grp
 --         FROM DG6V01.tactic_evnt_ip_ar_hist
 --         WHERE tactic_id IN ('2026042AUH', '2026119AUH')

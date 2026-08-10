@@ -7,7 +7,7 @@
 --   breakouts. mne = CAST('PCD' AS VARCHAR(20)) — campaign mnemonic, or the experiment name
 --   where the file measures an experiment. segment =
 --   CAST('All' AS VARCHAR(20)) — constant; PCD has no pre-treatment population split above
---   tst_grp_cd Test/Control. Real segment values exist only for AUH.
+--   test_groups_period Action/Control. Real segment values exist only for AUH.
 --
 -- mne distinguishes this file from its experiment sibling (pp_pcd_async.sql), so both
 --   can be stacked into one cube safely.
@@ -20,8 +20,8 @@
 --   (TDWM unconstrained-product-join guard). CTEs for everything else.
 -- ----------------------------------------------------------------------------
 -- SOURCES
---   dl_mr_prod.cards_pcd_ongoing_decis_resp   -- curated: population + success
---   DG6V01.TACTIC_EVNT_IP_AR_HIST              -- tst_grp_cd ONLY (see below)
+--   dl_mr_prod.cards_pcd_ongoing_decis_resp   -- curated: population + success + grp (test_groups_period)
+--   (DG6V01.TACTIC_EVNT_IP_AR_HIST join REMOVED 2026-08-10 — grp no longer needs it, see GRP below)
 -- ----------------------------------------------------------------------------
 -- POPULATION FILTER (pattern, not hardcoded IDs — new waves appear automatically):
 --   SUBSTR(tactic_id_parent, 8, 3) = 'PCD'
@@ -29,10 +29,13 @@
 --   "TACTIC_ID structure". PCD ran 8+ deployments in Q3 2026 alone — this file
 --   pools ALL of them into monthly cohorts, which is exactly why dedup matters here.)
 -- ----------------------------------------------------------------------------
--- GRP — tst_grp_cd lives on the TACTIC EVENT table, NOT the curated table
---   (verified 2026-08-10 against schemas/pcd_curated_schemas.md). This file therefore
---   JOINS curated -> tactic on (tactic_id = tactic_id_parent, clnt_no = clnt_no) to pull
---   tst_grp_cd. grp derivation: TRIM(tst_grp_cd) LIKE '%C' -> 'Control', LIKE '%T' -> 'Test'.
+-- GRP — REDERIVED 2026-08-10 off test_groups_period, a column that lives on the curated
+--   row itself (dl_mr_prod.cards_pcd_ongoing_decis_resp), per Andre's validated working file
+--   (PCD_async_vintage.sql, transcribed from screenshots 2026-08-10). This REMOVES the join
+--   to DG6V01.TACTIC_EVNT_IP_AR_HIST that the prior version carried solely to pull tst_grp_cd
+--   — one fewer join, one fewer table dependency, same first-touch semantics.
+--   grp derivation: TRIM(test_groups_period) LIKE '%C' -> 'Control', LIKE '%T' -> 'Action'.
+--   Rows matching neither pattern resolve to NULL and are excluded (see wave_arm below).
 -- ----------------------------------------------------------------------------
 -- DEDUP IDENTIFIER: clnt_no — this file's success/arm joins key on clnt_no throughout.
 --
@@ -62,8 +65,8 @@
 -- GRAIN: client (clnt_no). COUNT(DISTINCT clnt_no) throughout — never COUNT(*).
 -- SPINE: vintage_day 0-60 (PCD canon window, unchanged from prior file).
 -- FLOOR: every scan >= DATE '2026-01-01' (contract rule 6).
--- [VERIFY]: none open for this file. The tst_grp_cd table-location question
---   above was the one real unknown and is resolved by direct schema check.
+-- [VERIFY]: none open for this file. grp now reads test_groups_period directly off the
+--   curated row — see GRP note above.
 -- ----------------------------------------------------------------------------
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_pcd_campaign_cells;
@@ -89,29 +92,23 @@
 -- STEP 1: denominator cells (cohort_month x grp -> base)
 -- ============================================================================
 CREATE VOLATILE TABLE vt_pcd_campaign_cells AS (
-    WITH wave_pop AS (
+    WITH wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp read off that same row
         SELECT
             clnt_no,
             tactic_id_parent                       AS deployment,
-            MIN(response_start)                    AS response_start
+            response_start,
+            CASE
+                WHEN TRIM(test_groups_period) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
+                WHEN TRIM(test_groups_period) LIKE '%T' THEN CAST('Action'  AS VARCHAR(20))
+            END                                     AS grp
         FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
         WHERE SUBSTR(tactic_id_parent, 8, 3) = 'PCD'
           AND response_start >= DATE '2026-01-01'                           -- floor guard
           AND response_end   >= DATE '2026-05-01'                           -- <<WINDOW>>
           AND response_end   <  DATE '2026-08-01'                           -- <<WINDOW>>
-        GROUP BY clnt_no, tactic_id_parent
-    ),
-    arm_lookup AS (
-        SELECT DISTINCT
-            tactic_id,
-            clnt_no,
-            CASE
-                WHEN TRIM(tst_grp_cd) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
-                WHEN TRIM(tst_grp_cd) LIKE '%T' THEN CAST('Test'    AS VARCHAR(20))
-            END AS grp
-        FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-        WHERE SUBSTR(tactic_id, 8, 3) = 'PCD'
-          AND treatmt_strt_dt >= DATE '2026-01-01'
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY clnt_no, tactic_id_parent ORDER BY response_start ASC
+        ) = 1
     ),
     wave_arm AS (
         SELECT
@@ -122,11 +119,9 @@ CREATE VOLATILE TABLE vt_pcd_campaign_cells AS (
                 CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
                 CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
             AS VARCHAR(7))                          AS cohort_month,
-            al.grp
+            wp.grp
         FROM wave_pop wp
-        INNER JOIN arm_lookup al
-            ON al.tactic_id = wp.deployment AND al.clnt_no = wp.clnt_no
-        WHERE al.grp IS NOT NULL
+        WHERE wp.grp IS NOT NULL
     ),
     cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
         SELECT clnt_no, cohort_month, grp
@@ -157,30 +152,23 @@ COLLECT STATISTICS ON vt_pcd_campaign_spine COLUMN (vintage_day);
 -- STEP 3: final curve
 -- ============================================================================
 WITH
-wave_pop AS (
+wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp read off that same row
     SELECT
         clnt_no,
         tactic_id_parent                       AS deployment,
-        MIN(response_start)                    AS response_start
+        response_start,
+        CASE
+            WHEN TRIM(test_groups_period) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
+            WHEN TRIM(test_groups_period) LIKE '%T' THEN CAST('Action'  AS VARCHAR(20))
+        END                                     AS grp
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE SUBSTR(tactic_id_parent, 8, 3) = 'PCD'
       AND response_start >= DATE '2026-01-01'                               -- floor guard
       AND response_end   >= DATE '2026-05-01'                               -- <<WINDOW>>
       AND response_end   <  DATE '2026-08-01'                               -- <<WINDOW>>
-    GROUP BY clnt_no, tactic_id_parent
-),
-
-arm_lookup AS (
-    SELECT DISTINCT
-        tactic_id,
-        clnt_no,
-        CASE
-            WHEN TRIM(tst_grp_cd) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
-            WHEN TRIM(tst_grp_cd) LIKE '%T' THEN CAST('Test'    AS VARCHAR(20))
-        END AS grp
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE SUBSTR(tactic_id, 8, 3) = 'PCD'
-      AND treatmt_strt_dt >= DATE '2026-01-01'
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clnt_no, tactic_id_parent ORDER BY response_start ASC
+    ) = 1
 ),
 
 wave_arm AS (
@@ -193,11 +181,9 @@ wave_arm AS (
             CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
             CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
         AS VARCHAR(7))                          AS cohort_month,
-        al.grp
+        wp.grp
     FROM wave_pop wp
-    INNER JOIN arm_lookup al
-        ON al.tactic_id = wp.deployment AND al.clnt_no = wp.clnt_no
-    WHERE al.grp IS NOT NULL
+    WHERE wp.grp IS NOT NULL
 ),
 
 cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
@@ -293,23 +279,18 @@ DROP TABLE vt_pcd_campaign_spine;
 --                 CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
 --                 CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
 --             AS VARCHAR(7)) AS cohort_month,
---             al.grp
+--             wp.grp
 --         FROM (
---             SELECT clnt_no, tactic_id_parent AS deployment, MIN(response_start) AS response_start
+--             SELECT clnt_no, tactic_id_parent AS deployment, response_start,
+--                 CASE WHEN TRIM(test_groups_period) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
+--                      WHEN TRIM(test_groups_period) LIKE '%T' THEN CAST('Action'  AS VARCHAR(20))
+--                 END AS grp
 --             FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
 --             WHERE SUBSTR(tactic_id_parent, 8, 3) = 'PCD'
 --               AND response_start >= DATE '2026-01-01'
---             GROUP BY clnt_no, tactic_id_parent
+--             QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, tactic_id_parent ORDER BY response_start ASC) = 1
 --         ) wp
---         INNER JOIN (
---             SELECT DISTINCT tactic_id, clnt_no,
---                 CASE WHEN TRIM(tst_grp_cd) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
---                      WHEN TRIM(tst_grp_cd) LIKE '%T' THEN CAST('Test'    AS VARCHAR(20))
---                 END AS grp
---             FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
---             WHERE SUBSTR(tactic_id, 8, 3) = 'PCD' AND treatmt_strt_dt >= DATE '2026-01-01'
---         ) al ON al.tactic_id = wp.deployment AND al.clnt_no = wp.clnt_no
---         WHERE al.grp IS NOT NULL
+--         WHERE wp.grp IS NOT NULL
 --     ) raw
 --     GROUP BY clnt_no, cohort_month
 --     HAVING COUNT(DISTINCT grp) > 1

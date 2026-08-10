@@ -6,7 +6,7 @@
 -- mne       : CAST('VBA' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
 --             file measures an experiment.
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. VBA has no pre-treatment population split
---             above Test/Control; segment carries real values only for AUH.
+--             above Action/Control; segment carries real values only for AUH.
 -- Campaign  : VBA (Visa Benefit Add) — CAMPAIGN scope
 -- Engine    : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS
 --             before the cross join (TDWM product-join guard). CTEs for everything else.
@@ -38,12 +38,12 @@
 --   3. cohort_window: MAX(treatmt_end_dt) across ALL of that client's waves in the cohort_month,
 --      so a later wave's window is never truncated by only looking at the first-touch wave's own
 --      end date. Search window for success = [anchor_dt, window_end].
--- grp       : LEFT(TRIM(tst_grp_cd),1): 'C'->Control, 'T'->Test, from the client's first-touch
+-- grp       : LEFT(TRIM(tst_grp_cd),1): 'C'->Control, 'T'->Action, from the client's first-touch
 --             wave. Anything else is EXCLUDED from the population (not a third bucket — contract
 --             requires grp strictly binary). [VERIFY] the C/T-prefix split itself is not
 --             documented in the original campaigns/VBA_VBU/vba_vintage_curves.sql; confirmed
 --             instead in the sibling harness campaigns/VBA_VBU/vba_summary_vintage_cell.py
---             (`tc()`, ~line 68) as VBA/VBU's real Test/Control rollup rule.
+--             (`tc()`, ~line 68) as VBA/VBU's real Action/Control rollup rule.
 -- Success   : UNCHANGED definition — Casper + SCOT unioned and deduped to one earliest-approval
 --             event. Casper: Status='A', PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND='N',
 --             visa_prod_cd NOT IN ('CCL','BXX'), Cell_Code NOT IN ('PATACT','GV0320'), event date
@@ -86,7 +86,7 @@ CREATE VOLATILE TABLE vt_vba_cells AS (
             clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
             CASE
                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
-                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
+                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
             END AS grp
         FROM DG6V01.tactic_evnt_ip_ar_hist
         WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
@@ -142,7 +142,7 @@ pop_wave AS (
         clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
         CASE
             WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
-            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
+            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
         END AS grp
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
@@ -292,7 +292,7 @@ DROP TABLE vt_vba_spine;
 --             AS VARCHAR(7)) AS cohort_month,
 --             CASE
 --                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
---                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
+--                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
 --             END AS grp
 --         FROM DG6V01.tactic_evnt_ip_ar_hist
 --         WHERE treatmt_strt_dt >= DATE '2026-01-01'

@@ -49,15 +49,15 @@
 --      once per wave.
 --
 -- grp (arm) — *** [VERIFY] BLOCKING, UNRESOLVED — READ BEFORE TRUSTING grp ON THIS FILE ***
---   PCL tst_grp_cd Test/Control code mapping is UNCONFIRMED anywhere in this repo (unchanged by
+--   PCL tst_grp_cd Action/Control code mapping is UNCONFIRMED anywhere in this repo (unchanged by
 --   the deployment drop — this was already true in the 8-column version). `grp` below is
 --   TRIM(tst_grp_cd) passed through RAW from the account's first-touch wave, CAST to VARCHAR(20)
 --   — i.e. it will show whatever raw codes exist (may be more than 2 values), NOT a true binary
 --   collapse. This is a deliberate deviation from contract rule 5, flagged here rather than
---   guessed. BEFORE using this file's grp for any Test-vs-Control read: run
+--   guessed. BEFORE using this file's grp for any Action-vs-Control read: run
 --   campaigns/CRV/crv_pcl_overlap_summary.sql §C4 (or equivalent) to get the actual code list,
 --   then edit the grp expressions below into a real
---   CASE WHEN TRIM(tst_grp_cd) IN (...) THEN 'Test' WHEN ... THEN 'Control' END.
+--   CASE WHEN TRIM(tst_grp_cd) IN (...) THEN 'Action' WHEN ... THEN 'Control' END.
 --
 -- Success  : responder_cli = 1 (CLI response flag); event date = dt_cl_change (already absolute).
 --            Same primary success metric as pcl_vintage_monthly.sql / pcl_sales_modal.sql —
