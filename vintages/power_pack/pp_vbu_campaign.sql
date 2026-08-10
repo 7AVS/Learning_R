@@ -8,13 +8,26 @@
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. VBU has no pre-treatment population split
 --             above Action/Control; segment carries real values only for AUH.
 -- Campaign  : VBU (Visa Benefit Upgrade) — CAMPAIGN scope
--- Engine    : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS
---             before the cross join (TDWM product-join guard). CTEs for everything else.
--- [VERIFY ENGINE] SCOT source (edl0_im.prod_yg80_pcbsharedzone.tsz_00222_...) is an EDL/Trino
---             catalog table. Whether it is reachable from a plain Teradata-direct session
---             (QueryGrid/foreign server) is UNCONFIRMED. If not reachable, this file must be
---             rewritten to run via Starburst federation (Trino syntax rules then apply).
--- Source    : DG6V01.tactic_evnt_ip_ar_hist (population) + p3c.appl_fact_dly (Casper) +
+--
+-- ENGINE: Trino / Starburst. ALL Power Pack files use ONE engine - EDW tables are reached
+--         through Starburst federation. No volatile tables, no QUALIFY, no SYS_CALENDAR.
+--
+-- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed):
+--   DG6V01.tactic_evnt_ip_ar_hist — bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
+--     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
+--     campaigns/PCD/async_banner_summary.sql — all three headed "Engine: Trino/Starburst".
+--   d3cv12a.appl_fact_dly (Casper) — bare, no dw00 prefix. This exact table isn't independently
+--     proven, but the D3CV12A schema's no-prefix pattern is proven for sibling tables
+--     (dly_full_portfolio, cr_crd_rpts_acct, visa_txn_dly, lkup_txn_cd_catg) in
+--     campaigns/CRV/suppression_experiment/c3_banner_reach_2026.sql, c4_demand_shaping.sql,
+--     and campaigns/PCD/async_banner_summary.sql / pcd_success_validation.sql /
+--     async_banner_vintage_tracker.sql — all Engine: Trino/Starburst. Same schema, same rule.
+--     (Note: query_engine_guidelines.md §Catalog Naming lists "dw00_im.d3cv12a.*" as the
+--     federated form — that line does not match what actually runs in this repo's Trino files.
+--     Going with the proven code, not the stale doc line. Flag if this errors.)
+--   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_... (SCOT) — 3-part EDL form, unambiguous.
+--
+-- Source    : DG6V01.tactic_evnt_ip_ar_hist (population) + d3cv12a.appl_fact_dly (Casper) +
 --             edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot (SCOT)
 -- [FLAG] Success definition for VBU is Casper+SCOT application approval — the SAME definition
 --             as VBA — per the 2026-07-22 methodology swap documented in
@@ -39,31 +52,30 @@
 -- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
 --   1. pop_wave: one row per (clnt_no, tactic_id) — the original per-wave dedup (multiple event
 --      rows for the same client+wave collapse to the earliest treatmt_strt_dt), unchanged.
---   2. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
---      ORDER BY treatmt_strt_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
+--   2. cohort_first: ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
+--      ORDER BY treatmt_strt_dt ASC), keep rn=1 — first-touch wave wins grp and becomes Day 0.
 --   3. cohort_window: MAX(treatmt_end_dt) across ALL of that client's waves in the cohort_month,
 --      so a later wave's window is never truncated by only looking at the first-touch wave's own
 --      end date. Search window for success = [anchor_dt, window_end].
--- grp       : LEFT(TRIM(tst_grp_cd),1): 'C'->Control, 'T'->Action, from the client's first-touch
---             wave. Anything else is EXCLUDED from the population (not a third bucket — contract
---             requires grp strictly binary). [VERIFY] the C/T-prefix split itself is not
---             documented in the original campaigns/VBA_VBU/vbu_vintage_original.sql (which uses
---             tst_grp_cd positions 6-8 as a FROM-product code, not an Action/Control split);
---             confirmed instead in campaigns/VBA_VBU/vbu_summary_vintage_cell.py (`tc()`, ~line
---             64) as VBA/VBU's real Action/Control rollup rule.
+-- grp       : SUBSTR(TRIM(tst_grp_cd),1,1): 'C'->Control, 'T'->Action, from the client's
+--             first-touch wave (Trino has no LEFT() — SUBSTR(x,1,1) is the equivalent; TRIM
+--             guards against CHAR padding on the code column). Anything else is EXCLUDED from
+--             the population (not a third bucket — contract requires grp strictly binary).
+--             [VERIFY] the C/T-prefix split itself is not documented in the original
+--             campaigns/VBA_VBU/vbu_vintage_original.sql (which uses tst_grp_cd positions 6-8
+--             as a FROM-product code, not an Action/Control split); confirmed instead in
+--             campaigns/VBA_VBU/vbu_summary_vintage_cell.py (`tc()`, ~line 64) as VBA/VBU's real
+--             Action/Control rollup rule.
 -- Success   : UNCHANGED definition — Casper + SCOT unioned and deduped to one earliest-approval
 --             event. Same tables/filters as vba_campaign.sql. Union is a plain UNION (not UNION
 --             ALL) on (clnt_no, event_date) to dedupe the same physical event reported by both
 --             systems, done BEFORE cohort attribution. Only the cross-wave pooling layer
 --             changed — see DEDUP above; each client's cohort-month window now spans ALL their
 --             VBU waves that month instead of measuring against a single wave's window.
--- Spine     : fixed 0-90 — preserved as a deliberate cap.
+-- Spine     : fixed 0-90 — preserved as a deliberate cap. UNNEST(SEQUENCE(0,90)), Trino has no
+--             SYS_CALENDAR.
 -- Floor     : DATE '2026-01-01' on every scan (contract rule 6), including Casper/SCOT event
 --             tables.
---
--- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_vbu_cells;
---   DROP TABLE vt_vbu_spine;
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt). cohort_month and day-0 still anchor
@@ -81,99 +93,52 @@
 -- WINDOW START : DATE '2026-05-01'
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
--- ============================================================================
--- STEP 1: cells — base (denominator) per (cohort_month, grp)
--- ============================================================================
-CREATE VOLATILE TABLE vt_vbu_cells AS (
-    WITH pop_wave AS (
+WITH
+-- stage 1 dedup: one row per (clnt_no, tactic_id) — earliest treatmt_strt_dt wins
+pop_wave AS (
+    SELECT clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt, grp
+    FROM (
         SELECT
             clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
             CASE
-                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
-                WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
-            END AS grp
-        FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
+            END AS grp,
+            ROW_NUMBER() OVER (
+                PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
+            ) AS rn
+        FROM DG6V01.tactic_evnt_ip_ar_hist
         WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
           AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
           AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
           AND SUBSTR(tactic_id, 8, 3) = 'VBU'
-          AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
-        ) = 1
-    ),
-    pop_raw AS (
-        SELECT
-            clnt_no, treatmt_strt_dt, grp,
-            CAST(
-                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-            AS VARCHAR(7))                        AS cohort_month
-        FROM pop_wave
-    ),
-    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
-        SELECT clnt_no, cohort_month, grp
-        FROM pop_raw
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
-        ) = 1
-    )
-    SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
-    FROM cohort_first
-    GROUP BY 1, 2
-) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_vbu_cells COLUMN (cohort_month, grp);
-
--- ============================================================================
--- STEP 2: day spine 0-90 (deliberate fixed cap, preserved from source)
--- ============================================================================
-CREATE VOLATILE TABLE vt_vbu_spine AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
-) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_vbu_spine COLUMN (vintage_day);
-
--- ============================================================================
--- STEP 3: final curve
--- ============================================================================
-WITH
-pop_wave AS (
-    SELECT
-        clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
-        CASE
-            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
-            WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
-        END AS grp
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
-      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
-      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
-      AND SUBSTR(tactic_id, 8, 3) = 'VBU'
-      AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
-    ) = 1
+          AND SUBSTR(TRIM(tst_grp_cd), 1, 1) IN ('C', 'T')
+    ) ranked
+    WHERE rn = 1
 ),
 pop_raw AS (
     SELECT
         clnt_no, treatmt_strt_dt, treatmt_end_dt, grp,
-        CAST(
-            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7))                        AS cohort_month
+        DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month
     FROM pop_wave
 ),
-cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+-- stage 2 dedup: one row per (clnt_no, cohort_month) — first-touch wave wins grp + anchor date
+-- (never expected to fire — see header)
+cohort_first AS (
     SELECT clnt_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
-    FROM pop_raw
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
-    ) = 1
+    FROM (
+        SELECT clnt_no, cohort_month, grp, treatmt_strt_dt,
+               ROW_NUMBER() OVER (
+                   PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
+               ) AS rn
+        FROM pop_raw
+    ) ranked
+    WHERE rn = 1
+),
+vbu_cells AS (
+    SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, grp
 ),
 cohort_window AS (
     -- widen search window to the latest end date across ALL the client's waves this month
@@ -191,7 +156,7 @@ population AS (
 -- raw candidate success events, Casper (PRIMARY) — no deployment key on the event table itself
 casper_events AS (
     SELECT DISTINCT app.bus_clnt_no AS clnt_no, app.app_rcv_dt AS event_date
-    FROM p3c.appl_fact_dly app
+    FROM d3cv12a.appl_fact_dly app
     WHERE app.app_rcv_dt >= DATE '2026-02-01'                               -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
       AND app.app_rcv_dt <  DATE '2026-08-01'                               -- <<WINDOW>> upper: no selected deployment runs past this
       AND app.Status IN ('A')
@@ -235,7 +200,7 @@ success AS (
         p.cohort_month,
         p.grp,
         p.clnt_no,
-        MIN(CAST(e.event_date - p.anchor_dt AS INTEGER)) AS vintage_day
+        MIN(DATE_DIFF('day', p.anchor_dt, e.event_date)) AS vintage_day
     FROM population p
     INNER JOIN events e
         ON  e.clnt_no    = p.clnt_no
@@ -250,10 +215,16 @@ daily_counts AS (
     GROUP BY cohort_month, grp, vintage_day
 ),
 
+-- day spine 0-90 (deliberate fixed cap, preserved from source)
+spine AS (
+    SELECT s.vintage_day
+    FROM UNNEST(SEQUENCE(0, 90)) AS s(vintage_day)
+),
+
 dense_grid AS (
     SELECT c.cohort_month, c.grp, c.base, s.vintage_day
-    FROM vt_vbu_cells c
-    CROSS JOIN vt_vbu_spine s
+    FROM vbu_cells c
+    CROSS JOIN spine s
 )
 
 SELECT
@@ -261,7 +232,7 @@ SELECT
     -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
     -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
     CAST('VBU' AS VARCHAR(20)) AS mne,
-    g.cohort_month,
+    CAST(SUBSTR(CAST(g.cohort_month AS VARCHAR), 1, 7) AS VARCHAR(7)) AS cohort_month,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,
     g.vintage_day,
@@ -279,9 +250,6 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day    = g.vintage_day
 ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
-DROP TABLE vt_vbu_cells;
-DROP TABLE vt_vbu_spine;
-
 -- ============================================================================
 -- DIAGNOSTIC (commented out): how many clients hit both arms in one month?
 -- ============================================================================
@@ -289,19 +257,15 @@ DROP TABLE vt_vbu_spine;
 --     SELECT clnt_no, cohort_month FROM (
 --         SELECT
 --             clnt_no,
---             CAST(
---                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
---                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
---                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
---             AS VARCHAR(7)) AS cohort_month,
+--             DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month,
 --             CASE
---                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
---                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
+--                 WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
+--                 WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
 --             END AS grp
---         FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+--         FROM DG6V01.tactic_evnt_ip_ar_hist
 --         WHERE treatmt_strt_dt >= DATE '2026-01-01'
 --           AND SUBSTR(tactic_id, 8, 3) = 'VBU'
---           AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
+--           AND SUBSTR(TRIM(tst_grp_cd), 1, 1) IN ('C', 'T')
 --     ) raw
 --     GROUP BY clnt_no, cohort_month
 --     HAVING COUNT(DISTINCT grp) > 1

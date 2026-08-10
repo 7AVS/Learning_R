@@ -18,10 +18,11 @@
 --   order, find the first row where carries_experiment = 'EXPERIMENT'. Run
 --   BLOCK 2 only if you need to see the literal code strings behind that flag.
 --
--- ENGINE: Teradata-direct for all four blocks below — every pp_ source file
---   read for this probe (pp_pcq_sales_modal.sql, pp_pcd_async.sql,
---   pp_pcl_sales_modal.sql, pp_auh_campaign.sql) is Teradata-direct (SYS_CALENDAR
---   volatile-table spine pattern). No Trino/Starburst block needed here.
+-- ENGINE: Trino / Starburst for all four blocks below, matching every pp_ source file
+--   this probe reads from (pp_pcq_sales_modal.sql, pp_pcd_async.sql,
+--   pp_pcl_sales_modal.sql, pp_auh_campaign.sql — all converted 2026-08-10, see
+--   query_engine_guidelines.md). Plain aggregation, no volatile tables/QUALIFY/
+--   SYS_CALENDAR to begin with — only the catalog prefixes below changed.
 --
 -- MARKER COLUMN PER EXPERIMENT (this file doubles as documentation of how
 --   each experiment is identified):
@@ -37,7 +38,7 @@
 -- ============================================================================
 -- === PCQ MODAL SALES =========================================================
 -- Source pp_ file : pp_pcq_sales_modal.sql
--- Table           : DL_MR_PROD.cards_tpa_pcq_decision_resp
+-- Table           : dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 -- Deployment key  : tactic_id  -- [CONFIRMED via file comment: "*** deployment
 --                    DROPPED, 2026-08-10 *** — was tactic_id." The curve file's
 --                    SELECT no longer emits it (cohort_month replaced it as the
@@ -66,7 +67,7 @@ SELECT
                                           IN ('NG3_CHMP','NG3_CHLN','NG3_CHLG')
                                      THEN clnt_no END) > 0
            THEN 'EXPERIMENT' ELSE 'no' END                                   AS carries_experiment
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 WHERE tpa_ita          = 'TPA'
   AND treatmt_start_dt >= DATE '2026-01-01'          -- floor only, NO Q3 <<WINDOW>>
 GROUP BY 1
@@ -81,7 +82,7 @@ SELECT
       tactic_id             AS deployment
     , TRIM(test_group_latest) AS code
     , COUNT(DISTINCT clnt_no) AS clients
-FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
+FROM dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
 WHERE tpa_ita          = 'TPA'
   AND treatmt_start_dt >= DATE '2026-01-01'
 GROUP BY 1, 2
@@ -91,7 +92,8 @@ ORDER BY 1, 2;
 -- ============================================================================
 -- === PCD ASYNC ================================================================
 -- Source pp_ file : pp_pcd_async.sql
--- Table           : dl_mr_prod.cards_pcd_ongoing_decis_resp
+-- Table           : dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp -- [VERIFY CATALOG],
+--                    same caveat as pp_pcd_campaign.sql / pp_pcd_async.sql
 -- Deployment key  : tactic_id_parent  -- [CONFIRMED, actively used in the file:
 --                    "tactic_id_parent AS deployment"]
 -- Start col       : response_start
@@ -128,7 +130,7 @@ SELECT
                                               'MFB8UJPY','MFB9BX97','MFB9HYQ7')
                                      THEN clnt_no END) > 0
            THEN 'EXPERIMENT' ELSE 'no' END                                   AS carries_experiment
-FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
+FROM dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp
 WHERE response_start >= DATE '2026-01-01'            -- floor only, NO Q3 <<WINDOW>>
 GROUP BY 1
 ORDER BY strt_dt;
@@ -143,7 +145,7 @@ SELECT
       tactic_id_parent      AS deployment
     , TRIM(strategy_seg_cd) AS code
     , COUNT(DISTINCT clnt_no) AS clients
-FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
+FROM dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp
 WHERE response_start >= DATE '2026-01-01'
 GROUP BY 1, 2
 ORDER BY 1, 2;
@@ -152,7 +154,7 @@ ORDER BY 1, 2;
 -- ============================================================================
 -- === PCL SALES MODAL ==========================================================
 -- Source pp_ file : pp_pcl_sales_modal.sql
--- Table           : DL_MR_PROD.cards_pli_decision_resp
+-- Table           : dw00_im.dl_mr_prod.cards_pli_decision_resp
 -- Deployment key  : parent_tactic_id  -- [CONFIRMED via file comment: "***
 --                    deployment DROPPED, 2026-08-10 *** — was parent_tactic_id."
 --                    Same situation as PCQ: dropped from the curve SELECT,
@@ -183,7 +185,7 @@ SELECT
                                        OR report_groups_period LIKE '%R____NMS%'
                                      THEN clnt_no END) > 0
            THEN 'EXPERIMENT' ELSE 'no' END                                   AS carries_experiment
-FROM DL_MR_PROD.cards_pli_decision_resp
+FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
 WHERE treatmt_strt_dt >= DATE '2026-01-01'           -- floor only, NO Q3 <<WINDOW>>
 GROUP BY 1
 ORDER BY strt_dt;
@@ -199,7 +201,7 @@ SELECT
       parent_tactic_id            AS deployment
     , TRIM(report_groups_period)  AS code
     , COUNT(DISTINCT clnt_no)     AS clients
-FROM DL_MR_PROD.cards_pli_decision_resp
+FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
 WHERE treatmt_strt_dt >= DATE '2026-01-01'
 GROUP BY 1, 2
 ORDER BY 1, 2;
