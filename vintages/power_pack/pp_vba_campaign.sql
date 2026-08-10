@@ -3,93 +3,93 @@
 --             `mne` ADDED 2026-08-10 as first column).
 --             8 columns only: mne, cohort_month, segment, grp, vintage_day, base,
 --             responders, responders_cum.
--- mne       : CAST('VBA' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
+-- mne       : CAST('VBA' AS VARCHAR(20))  campaign mnemonic, or the experiment name where the
 --             file measures an experiment.
--- segment   : CAST('All' AS VARCHAR(20)) — constant. VBA has no pre-treatment population split
+-- segment   : CAST('All' AS VARCHAR(20))  constant. VBA has no pre-treatment population split
 --             above Action/Control; segment carries real values only for AUH.
--- Campaign  : VBA (Visa Benefit Add) — CAMPAIGN scope
+-- Campaign  : VBA (Visa Benefit Add)  CAMPAIGN scope
 --
--- ENGINE: Trino / Starburst — one of only two non-Teradata-direct files in this pack (the other
+-- ENGINE: Trino / Starburst  one of only two non-Teradata-direct files in this pack (the other
 --         is pp_crv_campaign.sql). Every other pp_*.sql file is Teradata-direct. This one flips
 --         because the success signal reaches edl0_im (SCOT, the EDL Success Library form used
---         here is prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot) — touching
+--         here is prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot)  touching
 --         any edl0_im table forces the whole statement onto Starburst/Trino syntax (see
 --         query_engine_guidelines.md, "SYNTAX FOLLOWS THE ENGINE, NOT THE TABLE"). No volatile
---         tables, no QUALIFY, no SYS_CALENDAR — all Teradata-only and unavailable here.
+--         tables, no QUALIFY, no SYS_CALENDAR  all Teradata-only and unavailable here.
 --
 -- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed).
---   None of these carry a dw00_im/dw00_jm prefix — that prefix is a Teradata-direct anti-pattern
+--   None of these carry a dw00_im/dw00_jm prefix  that prefix is a Teradata-direct anti-pattern
 --   Andre flagged 2026-08-10 ("why are we including the dw00_im over there, it never works when
 --   I'm querying Teradata") and none of this file's tables ever had it:
---   DG6V01.tactic_evnt_ip_ar_hist — bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
+--   DG6V01.tactic_evnt_ip_ar_hist  bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
 --     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
---     campaigns/PCD/async_banner_summary.sql — all three headed "Engine: Trino/Starburst".
---   d3cv12a.appl_fact_dly (Casper) — bare, no dw00 prefix. This exact table isn't independently
+--     campaigns/PCD/async_banner_summary.sql  all three headed "Engine: Trino/Starburst".
+--   d3cv12a.appl_fact_dly (Casper)  bare, no dw00 prefix. This exact table isn't independently
 --     proven, but the D3CV12A schema's no-prefix pattern is proven for sibling tables
 --     (dly_full_portfolio, cr_crd_rpts_acct, visa_txn_dly, lkup_txn_cd_catg) in
 --     campaigns/CRV/suppression_experiment/c3_banner_reach_2026.sql, c4_demand_shaping.sql,
 --     and campaigns/PCD/async_banner_summary.sql / pcd_success_validation.sql /
---     async_banner_vintage_tracker.sql — all Engine: Trino/Starburst. Same schema, same rule.
---     (Note: query_engine_guidelines.md §Catalog Naming lists "dw00_im.d3cv12a.*" as the
---     federated form — that line does not match what actually runs in this repo's Trino files.
+--     async_banner_vintage_tracker.sql  all Engine: Trino/Starburst. Same schema, same rule.
+--     (Note: query_engine_guidelines.md Catalog Naming lists "dw00_im.d3cv12a.*" as the
+--     federated form  that line does not match what actually runs in this repo's Trino files.
 --     Going with the proven code, not the stale doc line. Flag if this errors.)
---   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_... (SCOT) — 3-part EDL form, unambiguous.
+--   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_... (SCOT)  3-part EDL form, unambiguous.
 --
 -- Source    : DG6V01.tactic_evnt_ip_ar_hist (population) + d3cv12a.appl_fact_dly (Casper) +
 --             edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot (SCOT)
 -- Population: SUBSTR(tactic_id,8,3)='VBA', treatmt_strt_dt >= DATE '2026-01-01'. DELETED the
---             dead filter SUBSTR(tactic_id,8,1)<>'J' — position 8 is always 'V' for VBA/VBU.
+--             dead filter SUBSTR(tactic_id,8,1)<>'J'  position 8 is always 'V' for VBA/VBU.
 --
--- *** deployment DROPPED, 2026-08-10 *** — was tactic_id. Curve grain is now COHORT MONTH.
+-- *** deployment DROPPED, 2026-08-10 ***  was tactic_id. Curve grain is now COHORT MONTH.
 --
--- DEDUP IDENTIFIER: clnt_no — this file's success join keys on clnt_no throughout.
+-- DEDUP IDENTIFIER: clnt_no  this file's success join keys on clnt_no throughout.
 --
 -- *** [NOTE] grp tie-break = FIRST-TOUCH ***
 --   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
 --   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
 --   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros.
+--   confirms it  expect zeros.
 --
--- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
---   1. pop_wave: one row per (clnt_no, tactic_id) — the original per-wave dedup (multiple event
+-- *** DEDUP  one row per (clnt_no, cohort_month), anchored on first wave ***
+--   1. pop_wave: one row per (clnt_no, tactic_id)  the original per-wave dedup (multiple event
 --      rows for the same client+wave collapse to the earliest treatmt_strt_dt), unchanged.
 --   2. cohort_first: ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
---      ORDER BY treatmt_strt_dt ASC), keep rn=1 — first-touch wave wins grp and becomes Day 0.
+--      ORDER BY treatmt_strt_dt ASC), keep rn=1  first-touch wave wins grp and becomes Day 0.
 --   3. cohort_window: MAX(treatmt_end_dt) across ALL of that client's waves in the cohort_month,
 --      so a later wave's window is never truncated by only looking at the first-touch wave's own
 --      end date. Search window for success = [anchor_dt, window_end].
 -- grp       : SUBSTR(TRIM(tst_grp_cd),1,1): 'C'->Control, 'T'->Action, from the client's
---             first-touch wave (Trino has no LEFT() — SUBSTR(x,1,1) is the equivalent; TRIM
+--             first-touch wave (Trino has no LEFT()  SUBSTR(x,1,1) is the equivalent; TRIM
 --             guards against CHAR padding on the code column). Anything else is EXCLUDED from
---             the population (not a third bucket — contract requires grp strictly binary).
+--             the population (not a third bucket  contract requires grp strictly binary).
 --             [VERIFY] the C/T-prefix split itself is not documented in the original
 --             campaigns/VBA_VBU/vba_vintage_curves.sql; confirmed instead in the sibling harness
 --             campaigns/VBA_VBU/vba_summary_vintage_cell.py (`tc()`, ~line 68) as VBA/VBU's real
 --             Action/Control rollup rule.
--- Success   : UNCHANGED definition — Casper + SCOT unioned and deduped to one earliest-approval
+-- Success   : UNCHANGED definition  Casper + SCOT unioned and deduped to one earliest-approval
 --             event. Casper: Status='A', PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND='N',
 --             visa_prod_cd NOT IN ('CCL','BXX'), Cell_Code NOT IN ('PATACT','GV0320'), event date
 --             = app_rcv_dt. SCOT: productcategory='CREDIT_CARD', statuscode='FULFILLED', event
 --             date = creditapplication_createddatetime. Union is a plain UNION (not UNION ALL) on
 --             (clnt_no, event_date) to dedupe the same physical event reported by both systems,
---             done BEFORE cohort attribution. Only the cross-wave pooling layer changed — see
+--             done BEFORE cohort attribution. Only the cross-wave pooling layer changed  see
 --             DEDUP above; each client's cohort-month window now spans ALL their VBA waves that
 --             month instead of measuring against a single wave's window.
--- Spine     : fixed 0-90 — preserved as a deliberate cap. UNNEST(SEQUENCE(0,90)), Trino has no
+-- Spine     : fixed 0-90  preserved as a deliberate cap. UNNEST(SEQUENCE(0,90)), Trino has no
 --             SYS_CALENDAR.
 -- Floor     : DATE '2026-01-01' on every scan (contract rule 6), including Casper/SCOT event
 --             tables.
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt). cohort_month and day-0 still anchor
---   on treatmt_strt_dt (the START column) — unchanged. Success-side scan (Casper
---   + SCOT event tables) tightened separately — see <<WINDOW>> tags below.
+--   on treatmt_strt_dt (the START column)  unchanged. Success-side scan (Casper
+--   + SCOT event tables) tightened separately  see <<WINDOW>> tags below.
 --   Retargeting a quarter = editing the two <<WINDOW>> literals below only.
 -- ============================================================================
 
 -- ============================================================================
--- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+-- QUARTER WINDOW  EDIT THESE TWO DATES TO RETARGET THE PACK
 --   Selects deployments whose END date (treatmt_end_dt) falls in the window.
 --   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
 --     Q3 FY2026 = 2026-05-01 .. 2026-07-31
@@ -98,7 +98,7 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 WITH
--- stage 1 dedup: one row per (clnt_no, tactic_id) — earliest treatmt_strt_dt wins
+-- stage 1 dedup: one row per (clnt_no, tactic_id)  earliest treatmt_strt_dt wins
 pop_wave AS (
     SELECT clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt, grp
     FROM (
@@ -126,8 +126,8 @@ pop_raw AS (
         DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month
     FROM pop_wave
 ),
--- stage 2 dedup: one row per (clnt_no, cohort_month) — first-touch wave wins grp + anchor date
--- (never expected to fire — see header)
+-- stage 2 dedup: one row per (clnt_no, cohort_month)  first-touch wave wins grp + anchor date
+-- (never expected to fire  see header)
 cohort_first AS (
     SELECT clnt_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
     FROM (
@@ -157,7 +157,7 @@ population AS (
         ON cw.clnt_no = cf.clnt_no AND cw.cohort_month = cf.cohort_month
 ),
 
--- raw candidate success events, Casper (PRIMARY) — no deployment key on the event table itself
+-- raw candidate success events, Casper (PRIMARY)  no deployment key on the event table itself
 casper_events AS (
     SELECT DISTINCT app.bus_clnt_no AS clnt_no, app.app_rcv_dt AS event_date
     FROM d3cv12a.appl_fact_dly app
@@ -170,7 +170,7 @@ casper_events AS (
       AND (app.Cell_Code IS NULL OR app.Cell_Code NOT IN ('PATACT', 'GV0320'))
 ),
 
--- raw candidate success events, SCOT (SECONDARY) — one row per client (SCOT's snapshot
+-- raw candidate success events, SCOT (SECONDARY)  one row per client (SCOT's snapshot
 -- structure has no per-deployment key; MIN date + fulfilled flag is the most it supports)
 scot_events_raw AS (
     SELECT
@@ -190,7 +190,7 @@ scot_events AS (
     SELECT clnt_no, event_date FROM scot_events_raw WHERE approved = 1
 ),
 
--- union FIRST, dedupe the physical event (clnt_no, event_date) — plain UNION, not UNION ALL —
+-- union FIRST, dedupe the physical event (clnt_no, event_date)  plain UNION, not UNION ALL 
 -- BEFORE joining to a cohort window
 events AS (
     SELECT clnt_no, event_date FROM casper_events

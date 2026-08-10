@@ -1,9 +1,9 @@
 -- pcq_campaign_vintage.sql
 -- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
 --   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(20)
---   [CAST('PCQ' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the file
+--   [CAST('PCQ' AS VARCHAR(20))  campaign mnemonic, or the experiment name where the file
 --   measures an experiment], cohort_month VARCHAR(7) 'YYYY-MM',
---   segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above
+--   segment VARCHAR(20) [CAST('All' AS VARCHAR(20))  constant, no pre-treatment split above
 --   test_group_latest for PCQ], grp VARCHAR(20) [binary], vintage_day INTEGER (0..90 continuous),
 --   base INTEGER (fixed per cohort x segment x grp), responders INTEGER, responders_cum INTEGER.
 --   Counts only.
@@ -11,19 +11,19 @@
 -- mne distinguishes this file from its experiment sibling (pp_pcq_sales_modal.sql), so both
 --   can be stacked into one cube safely.
 --
--- SCOPE: *** CAMPAIGN *** — whole PCQ campaign. The test_group_latest IN (...) filter used by the
+-- SCOPE: *** CAMPAIGN ***  whole PCQ campaign. The test_group_latest IN (...) filter used by the
 --   Modal Sales experiment file is DROPPED entirely, per task instruction.
---   (The EXPERIMENT-scope sibling is pcq_sales_modal.sql — Modal Sales NG3_* codes only.)
+--   (The EXPERIMENT-scope sibling is pcq_sales_modal.sql  Modal Sales NG3_* codes only.)
 --
 -- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_tpa_pcq_decision_resp)
---   — no dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/DATE_ADD/UNNEST/SEQUENCE).
---   Uses QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine — both
+--    no dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/DATE_ADD/UNNEST/SEQUENCE).
+--   Uses QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine  both
 --   native Teradata, both unavailable on Trino/Starburst. (CRV and VBA are the exceptions in this
---   folder — they reach EDL and stay on Trino/Starburst.)
+--   folder  they reach EDL and stay on Trino/Starburst.)
 --
--- TABLE NAME: dl_mr_prod.cards_tpa_pcq_decision_resp — bare, no dw00_im catalog prefix.
+-- TABLE NAME: dl_mr_prod.cards_tpa_pcq_decision_resp  bare, no dw00_im catalog prefix.
 --   Teradata-direct does not need a Starburst catalog prefix at all; the prior Trino build of
---   this file carried dw00_im.dl_mr_prod.* — that prefix is REMOVED here per Andre (2026-08-10):
+--   this file carried dw00_im.dl_mr_prod.*  that prefix is REMOVED here per Andre (2026-08-10):
 --   "why are we including the dw00_im over there, it never works when I'm querying Teradata, I
 --   always have to fix this. Just dl_mr_prod."
 --
@@ -31,37 +31,37 @@
 -- Grain    : client (clnt_no)
 -- Anchor   : treatmt_start_dt (treatment start), per wave.
 --
--- Population filter: tpa_ita = 'TPA' (mandatory for every PCQ measurement query — PCQ has no ITA
+-- Population filter: tpa_ita = 'TPA' (mandatory for every PCQ measurement query  PCQ has no ITA
 --   arm; canon: reference_pcq_measurement_filters.md) AND treatmt_start_dt >= DATE '2026-01-01'
---   (contract floor). The test_group_latest filter is DROPPED — campaign-wide, all test groups,
---   not just the Modal Sales NG3_CHMP/CHLN/CHLG set. decsn_year = 2026 DROPPED — see [LANDMINE]
+--   (contract floor). The test_group_latest filter is DROPPED  campaign-wide, all test groups,
+--   not just the Modal Sales NG3_CHMP/CHLN/CHLG set. decsn_year = 2026 DROPPED  see [LANDMINE]
 --   below, unchanged reasoning from the 8-column version.
 --
--- *** deployment DROPPED, 2026-08-10 *** — was tactic_id. Curve grain is now COHORT MONTH.
+-- *** deployment DROPPED, 2026-08-10 ***  was tactic_id. Curve grain is now COHORT MONTH.
 --
--- DEDUP IDENTIFIER: clnt_no — this file's grain and success are both clnt_no throughout.
+-- DEDUP IDENTIFIER: clnt_no  this file's grain and success are both clnt_no throughout.
 --
 -- *** [NOTE] grp tie-break = FIRST-TOUCH ***
 --   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
 --   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
 --   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
+--   confirms it  expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
 --   ranked subquery with an outer WHERE rn = 1.
 --
--- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
+-- *** DEDUP  one row per (clnt_no, cohort_month), anchored on first wave ***
 --   1. mapped_rows: population filter + grp mapping, exactly as the 8-column version (unmapped
---      test_group_latest codes stay excluded from the population entirely — see [VERIFY] below).
+--      test_group_latest codes stay excluded from the population entirely  see [VERIFY] below).
 --   2. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
---      ORDER BY treatmt_start_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
+--      ORDER BY treatmt_start_dt ASC) = 1  first-touch wave wins grp and becomes Day 0.
 --   3. Success is reconstructed to an absolute date (treatmt_start_dt + days_to_respond, only
 --      when app_approved=1 AND Period-ASC) and pooled across EVERY mapped wave the client
---      touched that month — success_pooled takes MIN(success_dt_abs), then rebases to the
+--      touched that month  success_pooled takes MIN(success_dt_abs), then rebases to the
 --      first-touch anchor date. A client who didn't respond on wave 1 but did on wave 2 (same
 --      month) is no longer silently dropped, and base is not inflated by counting them once per
 --      wave.
 --
--- grp (arm) — *** [VERIFY] BLOCKING, PARTIAL COVERAGE ONLY — READ BEFORE TRUSTING grp OR base ***
+-- grp (arm)  *** [VERIFY] BLOCKING, PARTIAL COVERAGE ONLY  READ BEFORE TRUSTING grp OR base ***
 --   Campaign-wide, test_group_latest is NOT limited to the 3 Modal Sales codes. The repo confirms
 --   other/unrecognized values exist (n_unmapped bucket in value_capture_report_v2*.sql). grp below
 --   maps ONLY the confirmed Modal Sales codes: NG3_CHMP -> 'Champion'; NG3_CHLN / NG3_CHLG ->
@@ -72,33 +72,33 @@
 --   campaign-wide (no repo query does this today).
 --
 -- Success: app_approved = 1 AND TRIM(asc_on_app_source) = 'Period-ASC'. Period-ASC gates the
---   NUMERATOR only (canon: reference_pcq_measurement_filters.md) — it is NOT in the population
+--   NUMERATOR only (canon: reference_pcq_measurement_filters.md)  it is NOT in the population
 --   WHERE clause, so `base` stays all mapped TPA-targeted clients in the cell, not just
 --   responders. Absolute success date = treatmt_start_dt + days_to_respond (both fields live on
---   the same curated row) — plain Teradata date + integer-days arithmetic (treatmt_start_dt +
+--   the same curated row)  plain Teradata date + integer-days arithmetic (treatmt_start_dt +
 --   days_to_respond); Trino needed DATE_ADD('day', ...) for this, Teradata does not. This is the
 --   'approved' metric only (matches the primary metric already established in
 --   vintages/pcq_vintage_monthly.sql); the source pcq_ms_vintage.sql also tracks 'completed' as a
---   second metric — dropped here per contract rule 4 (one success metric per file).
+--   second metric  dropped here per contract rule 4 (one success metric per file).
 -- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days. Built as a Teradata
---            VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...)) — that is a
+--            VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...))  that is a
 --            Trino-only function. TDWM blocks an unconstrained product join against SYS_CALENDAR,
 --            so both the spine AND the denominator cells (vt_pcq_cells) are materialized as
 --            VOLATILE TABLEs with COLLECT STATISTICS before the CROSS JOIN that builds the grid.
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt, confirmed column on
---   dl_mr_prod.cards_tpa_pcq_decision_resp — see value_capture/value_capture_report_v3.sql:95-98
+--   dl_mr_prod.cards_tpa_pcq_decision_resp  see value_capture/value_capture_report_v3.sql:95-98
 --   which uses the identical pattern). cohort_month and day-0 still anchor on treatmt_start_dt
---   (the START column) — unchanged. Success (app_approved/asc_on_app_source, success date =
+--   (the START column)  unchanged. Success (app_approved/asc_on_app_source, success date =
 --   treatmt_start_dt + days_to_respond) is read from the SAME curated row as population, so the
---   end-date filter below tightens both the population AND the success-side scan in one change —
+--   end-date filter below tightens both the population AND the success-side scan in one change 
 --   no separate event table to bound here. Retargeting a quarter = editing the two <<WINDOW>>
 --   literals below only.
 -- ============================================================================
 
 -- ============================================================================
--- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+-- QUARTER WINDOW  EDIT THESE TWO DATES TO RETARGET THE PACK
 --   Selects deployments whose END date (treatmt_end_dt) falls in the window.
 --   Cohort month and day 0 still anchor on treatmt_start_dt (START), not these.
 --     Q3 FY2026 = 2026-05-01 .. 2026-07-31
@@ -107,7 +107,7 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
--- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- RERUN GUARD  if re-running this file in the SAME Teradata session, the volatile tables
 -- below will already exist. Uncomment and run these two drops first:
 --   DROP TABLE vt_pcq_spine;
 --   DROP TABLE vt_pcq_cells;
@@ -125,7 +125,7 @@ CREATE VOLATILE TABLE vt_pcq_spine AS (
 COLLECT STATISTICS ON vt_pcq_spine COLUMN (vintage_day);
 
 -- ----------------------------------------------------------------------------
--- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason — it is the
+-- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason  it is the
 -- other side of the spine CROSS JOIN. Rebuilds mapped_rows -> cohort_first internally; the same
 -- CTE chain is repeated in the main query below (Teradata volatile-table creation is a
 -- standalone statement, it cannot see CTEs defined outside it).
@@ -154,7 +154,7 @@ CREATE VOLATILE TABLE vt_pcq_cells AS (
     population_mapped AS (
         SELECT * FROM mapped_rows WHERE grp IS NOT NULL   -- see [VERIFY] header note: unmapped codes dropped
     ),
-    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire  see header)
         SELECT clnt_no, cohort_month, grp, treatmt_start_dt AS anchor_dt
         FROM population_mapped
         QUALIFY ROW_NUMBER() OVER (
@@ -168,7 +168,7 @@ CREATE VOLATILE TABLE vt_pcq_cells AS (
 COLLECT STATISTICS ON vt_pcq_cells COLUMN (cohort_month, grp);
 
 -- ----------------------------------------------------------------------------
--- Main query — numerator side rebuilds the same mapped_rows/cohort_first chain (regular CTEs
+-- Main query  numerator side rebuilds the same mapped_rows/cohort_first chain (regular CTEs
 -- are fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools success,
 -- then joins the dense grid off the two volatile tables built above.
 -- ----------------------------------------------------------------------------
@@ -200,7 +200,7 @@ population_mapped AS (
     SELECT * FROM mapped_rows WHERE grp IS NOT NULL   -- see [VERIFY] header note: unmapped codes dropped
 ),
 
-cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire  see header)
     SELECT clnt_no, cohort_month, grp, treatmt_start_dt AS anchor_dt
     FROM population_mapped
     QUALIFY ROW_NUMBER() OVER (

@@ -11,9 +11,9 @@
 --   in_q3 is informational only (flags end_dt landing in 2026-05-01..2026-07-31)
 --   -- it is NOT filtered on, because onset can predate the quarter.
 --
--- ENGINE: Teradata-direct. Touches only DG6V01.tactic_evnt_ip_ar_hist (bare, no dw00 prefix) —
+-- ENGINE: Teradata-direct. Touches only DG6V01.tactic_evnt_ip_ar_hist (bare, no dw00 prefix) 
 --   Teradata-direct does not use a Starburst catalog prefix at all. No QUALIFY, no volatile
---   table, no SYS_CALENDAR spine needed — this is a single GROUP BY aggregate, no
+--   table, no SYS_CALENDAR spine needed  this is a single GROUP BY aggregate, no
 --   deduplication ranking and no day-spine cross join required.
 --
 -- MARKER PER MNEMONIC (this file doubles as documentation of how each experiment
@@ -27,22 +27,22 @@
 --         IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6','MFB8UJPY','MFB9BX97','MFB9HYQ7')
 --       Teradata has no split()/element_at() and no repo-proven STRTOK/STRTOK_SPLIT_TO_TABLE
 --       rewrite of this exact token-3 extraction was found anywhere in this repo (grepped for
---       STRTOK across the whole tree, 2026-08-10 — zero hits in a Teradata-direct .sql file).
+--       STRTOK across the whole tree, 2026-08-10  zero hits in a Teradata-direct .sql file).
 --       Per instruction: do NOT invent a STRTOK expression without repo proof. This file KEEPS
 --       the Trino-only expression below, commented out in the CASE branch, with a plain
---       SUBSTR(TACTIC_DECISN_VRB_INFO,121,30) LIKE '%<code>%' fallback is ALSO not usable — that
+--       SUBSTR(TACTIC_DECISN_VRB_INFO,121,30) LIKE '%<code>%' fallback is ALSO not usable  that
 --       offset/pattern is PCQ's, not PCD's, and substituting it would be guessing a new marker,
 --       which the task also forbids. Net effect: the PCD Async row of this probe is disabled
 --       (clients_in_experiment = NULL, experiment says NOT CONFIRMED) until someone hand-verifies
 --       the token-3-of-TACTIC_DECISN_VRB_INFO position holds under Teradata's own SUBSTR/INDEX
 --       semantics and writes the equivalent expression. Confirmed tactic-side (Trino form),
 --       campaigns/PCD/async_banner_summary.sql:36-38 (cohort_raw CTE reads FROM
---       DG6V01.TACTIC_EVNT_IP_AR_HIST, line 41) — that source file stays on Trino, unaffected.
+--       DG6V01.TACTIC_EVNT_IP_AR_HIST, line 41)  that source file stays on Trino, unaffected.
 --   - AUH Rewards/NonReward : SUBSTR(TRIM(TST_GRP_CD),1,2) IN ('NR','RN','RO')
 --       Tactic-side by construction -- vintages/power_pack's own prior AUH block
 --       (this file's previous version, BLOCK AUH) read this off
 --       DG6V01.tactic_evnt_ip_ar_hist directly; matches the expression this task
---       specified verbatim. Positive-index SUBSTR — works unchanged on Teradata.
+--       specified verbatim. Positive-index SUBSTR  works unchanged on Teradata.
 --   - PCL Sales Modal : *** NOT CONFIRMED ***. The only known marker,
 --       report_groups_period LIKE '%R____WMS%' / '%R____NMS%', lives on the CURATED
 --       table dl_mr_prod.cards_pli_decision_resp (pp_pcl_sales_modal.sql, "raw_rows" CTE
@@ -76,7 +76,7 @@ WITH agg AS (
                       WHEN SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'
                            AND SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%MS%'
                       THEN CLNT_NO
-                      -- PCD marker DISABLED on Teradata — no proven split()/element_at()
+                      -- PCD marker DISABLED on Teradata  no proven split()/element_at()
                       -- equivalent, see [VERIFY] note above. Left out of the CASE entirely
                       -- rather than guessed; PCD rows fall through to the outer NULL via the
                       -- SUBSTR(TACTIC_ID,8,3) IN ('PCL','PCD') branch above.
@@ -98,7 +98,7 @@ SELECT
     , clients
     , CASE SUBSTR(deployment, 8, 3)
            WHEN 'PCQ' THEN CAST('Sales Modal' AS VARCHAR(60))
-           WHEN 'PCD' THEN CAST('[VERIFY] Async marker not portable to Teradata — see header' AS VARCHAR(60))
+           WHEN 'PCD' THEN CAST('[VERIFY] Async marker not portable to Teradata  see header' AS VARCHAR(60))
            WHEN 'AUH' THEN CAST('Rewards/NonReward arms' AS VARCHAR(60))
            WHEN 'PCL' THEN CAST('[VERIFY] PCL tactic-side marker not confirmed' AS VARCHAR(60))
            ELSE CAST('n/a' AS VARCHAR(60))

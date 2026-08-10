@@ -3,7 +3,7 @@
 -- ENGINE: Teradata-direct
 -- Table:  DTZV01.TACTIC_EVNT_IP_AR_H60M
 --         (if this returns nothing, retry against DG6V01.TACTIC_EVNT_IP_AR_HIST
---          — both variants exist; H60M is the one that returned PCQ rows on
+--           both variants exist; H60M is the one that returned PCQ rows on
 --          2026-08-10)
 --
 -- WHY: the curated run (probe_pcq_arm_split.sql) showed PCQ is a clean 50/50
@@ -17,7 +17,7 @@
 --   test_group_latest            TST_GRP_CD
 --   treatmt_start_dt             TREATMT_STRT_DT
 --   treatmt_end_dt               TREATMT_END_DT
---   tpa_ita = 'TPA'              no equivalent — TPA/ITA is a curated field.
+--   tpa_ita = 'TPA'              no equivalent  TPA/ITA is a curated field.
 --                                Population is scoped by SUBSTR(TACTIC_ID,8,3)='PCQ'.
 --   (no equivalent)              SUBSTR(TACTIC_DECISN_VRB_INFO,121,30) LIKE '%MS%'
 --                                = the Modal Sales delivery marker
@@ -25,7 +25,7 @@
 --
 --   [VERIFY] whether TST_GRP_CD on the tactic table carries the same
 --   NG3_CHMP / NG3_CHLN / NG3_CHLG strings as curated test_group_latest.
---   Block A does NOT assume it does — it lists whatever codes are actually
+--   Block A does NOT assume it does  it lists whatever codes are actually
 --   there. Read Block A before trusting any mapping.
 -- ============================================================================
 
@@ -97,7 +97,7 @@ SELECT
       CAST(EXTRACT(MONTH FROM TREATMT_STRT_DT) AS VARCHAR(2))    AS cohort_month
     , CASE WHEN TRIM(TST_GRP_CD) = 'NG3_CHMP'               THEN 'Champion'
            WHEN TRIM(TST_GRP_CD) IN ('NG3_CHLN','NG3_CHLG') THEN 'Challenger'
-           ELSE 'OTHER — see Block A'                       END AS grp
+           ELSE 'OTHER  see Block A'                       END AS grp
     , COUNT(DISTINCT CLNT_NO)                                    AS clients
 FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
 WHERE SUBSTR(TACTIC_ID, 8, 3) = 'PCQ'

@@ -1,57 +1,57 @@
 -- pcl_campaign_vintage.sql
 -- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
 --   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(20)
---   [CAST('PCL' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the file
+--   [CAST('PCL' AS VARCHAR(20))  campaign mnemonic, or the experiment name where the file
 --   measures an experiment], cohort_month VARCHAR(7) 'YYYY-MM',
---   segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above
---   tst_grp_cd for PCL], grp VARCHAR(20) [see grp note below — NOT true binary in this file],
+--   segment VARCHAR(20) [CAST('All' AS VARCHAR(20))  constant, no pre-treatment split above
+--   tst_grp_cd for PCL], grp VARCHAR(20) [see grp note below  NOT true binary in this file],
 --   vintage_day INTEGER (0..90 continuous), base INTEGER (fixed per cohort x segment x grp),
 --   responders INTEGER, responders_cum INTEGER. Counts only, no rates.
 --
 -- mne distinguishes this file from its experiment sibling (pp_pcl_sales_modal.sql), so both
 --   can be stacked into one cube safely.
 --
--- SCOPE: *** CAMPAIGN *** — whole PCL campaign. NO modal / sales-modal population filter.
---   (The EXPERIMENT-scope sibling is pcl_sales_modal.sql — sales-modal WMS/NMS only.)
+-- SCOPE: *** CAMPAIGN ***  whole PCL campaign. NO modal / sales-modal population filter.
+--   (The EXPERIMENT-scope sibling is pcl_sales_modal.sql  sales-modal WMS/NMS only.)
 --
--- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_pli_decision_resp) —
+-- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_pli_decision_resp) 
 --   no dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE). Uses
---   QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine — both native
+--   QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine  both native
 --   Teradata, both unavailable on Trino/Starburst. (CRV and VBA are the exceptions in this
---   folder — they reach EDL and stay on Trino/Starburst.)
+--   folder  they reach EDL and stay on Trino/Starburst.)
 --
--- TABLE NAME: dl_mr_prod.cards_pli_decision_resp — bare, no dw00_im catalog prefix. Teradata-
+-- TABLE NAME: dl_mr_prod.cards_pli_decision_resp  bare, no dw00_im catalog prefix. Teradata-
 --   direct does not need a Starburst catalog prefix at all; the prior Trino build of this file
---   carried dw00_im.dl_mr_prod.* — that prefix is REMOVED here per Andre (2026-08-10): "why are
+--   carried dw00_im.dl_mr_prod.*  that prefix is REMOVED here per Andre (2026-08-10): "why are
 --   we including the dw00_im over there, it never works when I'm querying Teradata, I always
 --   have to fix this. Just dl_mr_prod."
 --
 -- Source   : dl_mr_prod.cards_pli_decision_resp
 -- Grain    : account (acct_no)
 -- Anchor   : treatmt_strt_dt (treatment start). [VERIFY] reliability of this field on THIS curated
---            table was never confirmed (see prior probe in vintages/pcl_vintage_monthly.sql header —
+--            table was never confirmed (see prior probe in vintages/pcl_vintage_monthly.sql header 
 --            it flagged treatmt_strt_dt as unreliable on DG6V01.tactic_evnt_ip_ar_hist; unconfirmed
 --            whether the same issue exists here). Not re-run here per task scope ("do not run
---            anything") — carried forward, not resolved.
+--            anything")  carried forward, not resolved.
 -- Population filter: treatmt_strt_dt >= DATE '2026-01-01' only. No report_groups_period filter,
---            no tst_grp_cd exclusion — this is the WHOLE campaign, every arm, every deployment.
+--            no tst_grp_cd exclusion  this is the WHOLE campaign, every arm, every deployment.
 --
--- *** deployment DROPPED, 2026-08-10 *** — was parent_tactic_id. PCL runs ~25 deployments/quarter
+-- *** deployment DROPPED, 2026-08-10 ***  was parent_tactic_id. PCL runs ~25 deployments/quarter
 --   and Andre will not build a curve per deployment. Curve grain is now COHORT MONTH.
 --
--- DEDUP IDENTIFIER: acct_no — this file's grain and success are both acct_no throughout.
+-- DEDUP IDENTIFIER: acct_no  this file's grain and success are both acct_no throughout.
 --
 -- *** [NOTE] grp tie-break = FIRST-TOUCH ***
 --   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
 --   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
 --   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
+--   confirms it  expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
 --   ranked subquery with an outer WHERE rn = 1.
 --
--- *** DEDUP — one row per (acct_no, cohort_month), anchored on first wave ***
+-- *** DEDUP  one row per (acct_no, cohort_month), anchored on first wave ***
 --   1. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
---      ORDER BY treatmt_strt_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
+--      ORDER BY treatmt_strt_dt ASC) = 1  first-touch wave wins grp and becomes Day 0.
 --   2. Success (dt_cl_change, already an absolute date on the curated row when responder_cli=1)
 --      is pooled across EVERY wave the account touched that month: success_pooled takes
 --      MIN(dt_cl_change) across all the account's rows in the cohort_month, then rebases to the
@@ -59,38 +59,38 @@
 --      month) is no longer silently dropped, and base is not inflated by counting the account
 --      once per wave.
 --
--- grp (arm) — *** [VERIFY] BLOCKING, UNRESOLVED — READ BEFORE TRUSTING grp ON THIS FILE ***
+-- grp (arm)  *** [VERIFY] BLOCKING, UNRESOLVED  READ BEFORE TRUSTING grp ON THIS FILE ***
 --   PCL tst_grp_cd Action/Control code mapping is UNCONFIRMED anywhere in this repo (unchanged by
---   the deployment drop — this was already true in the 8-column version). `grp` below is
+--   the deployment drop  this was already true in the 8-column version). `grp` below is
 --   TRIM(tst_grp_cd) passed through RAW from the account's first-touch wave, CAST to VARCHAR(20)
---   — i.e. it will show whatever raw codes exist (may be more than 2 values), NOT a true binary
+--    i.e. it will show whatever raw codes exist (may be more than 2 values), NOT a true binary
 --   collapse. This is a deliberate deviation from contract rule 5, flagged here rather than
 --   guessed. BEFORE using this file's grp for any Action-vs-Control read: run
---   campaigns/CRV/crv_pcl_overlap_summary.sql §C4 (or equivalent) to get the actual code list,
+--   campaigns/CRV/crv_pcl_overlap_summary.sql C4 (or equivalent) to get the actual code list,
 --   then edit the grp expressions below into a real
 --   CASE WHEN TRIM(tst_grp_cd) IN (...) THEN 'Action' WHEN ... THEN 'Control' END.
 --
 -- Success  : responder_cli = 1 (CLI response flag); event date = dt_cl_change (already absolute).
---            Same primary success metric as pcl_vintage_monthly.sql / pcl_sales_modal.sql —
+--            Same primary success metric as pcl_vintage_monthly.sql / pcl_sales_modal.sql 
 --            preserved unchanged, not invented. One metric per file per contract rule 4.
 -- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days. Built as a Teradata
---            VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...)) — that is a
+--            VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...))  that is a
 --            Trino-only function. TDWM blocks an unconstrained product join against SYS_CALENDAR,
 --            so both the spine AND the denominator cells (vt_pcl_cells) are materialized as
 --            VOLATILE TABLEs with COLLECT STATISTICS before the CROSS JOIN that builds the grid.
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt, confirmed column on
---   schemas/crv_pcl_curated_schemas.md §3a). cohort_month and day-0 still anchor
---   on treatmt_strt_dt (the START column) — unchanged. Success (dt_cl_change) is
+--   schemas/crv_pcl_curated_schemas.md 3a). cohort_month and day-0 still anchor
+--   on treatmt_strt_dt (the START column)  unchanged. Success (dt_cl_change) is
 --   read from the SAME curated row as population, so the end-date filter below
---   tightens both the population AND the success-side scan in one change — no
+--   tightens both the population AND the success-side scan in one change  no
 --   separate event table to bound here. Retargeting a quarter = editing the two
 --   <<WINDOW>> literals below only.
 -- ============================================================================
 
 -- ============================================================================
--- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+-- QUARTER WINDOW  EDIT THESE TWO DATES TO RETARGET THE PACK
 --   Selects deployments whose END date (treatmt_end_dt) falls in the window.
 --   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
 --     Q3 FY2026 = 2026-05-01 .. 2026-07-31
@@ -99,7 +99,7 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
--- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- RERUN GUARD  if re-running this file in the SAME Teradata session, the volatile tables
 -- below will already exist. Uncomment and run these two drops first:
 --   DROP TABLE vt_pcl_spine;
 --   DROP TABLE vt_pcl_cells;
@@ -117,7 +117,7 @@ CREATE VOLATILE TABLE vt_pcl_spine AS (
 COLLECT STATISTICS ON vt_pcl_spine COLUMN (vintage_day);
 
 -- ----------------------------------------------------------------------------
--- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason — it is the
+-- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason  it is the
 -- other side of the spine CROSS JOIN. Rebuilds raw_rows -> cohort_first internally; the same CTE
 -- chain is repeated in the main query below (Teradata volatile-table creation is a standalone
 -- statement, it cannot see CTEs defined outside it).
@@ -141,7 +141,7 @@ CREATE VOLATILE TABLE vt_pcl_cells AS (
           AND TRIM(tst_grp_cd) IS NOT NULL
           AND TRIM(tst_grp_cd) <> ''
     ),
-    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire  see header)
         SELECT acct_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
         FROM raw_rows
         QUALIFY ROW_NUMBER() OVER (
@@ -155,7 +155,7 @@ CREATE VOLATILE TABLE vt_pcl_cells AS (
 COLLECT STATISTICS ON vt_pcl_cells COLUMN (cohort_month, grp);
 
 -- ----------------------------------------------------------------------------
--- Main query — numerator side rebuilds the same raw_rows/cohort_first chain (regular CTEs are
+-- Main query  numerator side rebuilds the same raw_rows/cohort_first chain (regular CTEs are
 -- fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools success,
 -- then joins the dense grid off the two volatile tables built above.
 -- ----------------------------------------------------------------------------
@@ -179,7 +179,7 @@ raw_rows AS (
       AND TRIM(tst_grp_cd) <> ''
 ),
 
-cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire  see header)
     SELECT acct_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
     FROM raw_rows
     QUALIFY ROW_NUMBER() OVER (
