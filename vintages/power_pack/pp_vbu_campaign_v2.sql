@@ -222,10 +222,31 @@ elig AS (
     JOIN d3cv12a.cr_crd_rpts_acct a
         ON a.clnt_no = b.clnt_no
        AND a.ME_dt   = LAST_DAY(ADD_MONTHS(b.addnl_data_dt, -1))
-       AND (
-            (a.prod_cd_current = SUBSTR(b.tst_grp_cd, 6, 3) AND b.tst_grp_cd <> 'XX')
-         OR (a.prod_cd_current IN ('C00','C01','C02')       AND b.tst_grp_cd  = 'XX')
-           )
+       -- ==== PRODUCT-MATCH GATE REMOVED 2026-08-10 =====================
+       -- Measured on the 2026-04-13 wave (probe_vbu_elig_loss.sql):
+       --     base (denominator)          39,954
+       --     elig, all conditions        19,706   <- 49% of base
+       --     elig, no product match      39,953   <- full population
+       --     elig, no status filter      19,707
+       --     elig, no ME_dt condition    19,712
+       -- The product match dropped HALF the clients. Status and ME_dt cost
+       -- 1 and 6 clients respectively - immaterial.
+       --
+       -- Why this matters: `base` is the denominator (all 39,954 targeted
+       -- clients, matching the dashboard) but the numerator only counts
+       -- clients who survive elig. Gating elig on the from-product code put
+       -- half the population in the denominator with no possible route to
+       -- the numerator. That is a one-way loss, never a gain.
+       --
+       -- from_product_code is still SELECTed above and still used downstream
+       -- by acct_changes (d.visa_prod_cd <> e.from_product_code), so the
+       -- from-product logic is preserved where it belongs - in change
+       -- detection, not in eligibility.
+       --
+       -- Restore by uncommenting the two lines below.
+       --   AND ( (a.prod_cd_current = SUBSTR(b.tst_grp_cd, 6, 3) AND b.tst_grp_cd <> 'XX')
+       --      OR (a.prod_cd_current IN ('C00','C01','C02')       AND b.tst_grp_cd  = 'XX') )
+       -- ===============================================================
        AND a.status = 'OPEN'
 ),
 
