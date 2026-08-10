@@ -8,23 +8,9 @@
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
 --   section 1/5). No separate auh_campaign_vintage.sql exists or is needed.
---
--- ENGINE: Trino / Starburst. ALL Power Pack files use ONE engine - EDW tables are reached
---         through Starburst federation. No volatile tables, no QUALIFY, no SYS_CALENDAR.
---
--- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed):
---   DG6V01.tactic_evnt_ip_ar_hist — bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
---     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
---     campaigns/PCD/async_banner_summary.sql — all three headed "Engine: Trino/Starburst".
---   D3CV12A.CR_CRD_ACCT_EVNT_DLY / D3CV12A.DLY_FULL_PORTFOLIO — bare, no dw00 prefix. The
---     D3CV12A schema's no-prefix pattern is proven for sibling tables (dly_full_portfolio,
---     cr_crd_rpts_acct, visa_txn_dly, lkup_txn_cd_catg) in
---     campaigns/CRV/suppression_experiment/c3_banner_reach_2026.sql, c4_demand_shaping.sql,
---     and campaigns/PCD/async_banner_summary.sql / pcd_success_validation.sql /
---     async_banner_vintage_tracker.sql — all Engine: Trino/Starburst. Same schema, same rule.
---     (Note: query_engine_guidelines.md §Catalog Naming lists "dw00_im.d3cv12a.*" as the
---     federated form — that line does not match what actually runs in this repo's Trino files.
---     Going with the proven code, not the stale doc line. Flag if this errors.)
+-- Engine: Teradata-direct. SYS_CALENDAR spine + the population/base cells both
+--   live in VOLATILE TABLEs with COLLECT STATISTICS before the cross join
+--   (TDWM unconstrained-product-join guard). CTEs for everything else.
 -- ----------------------------------------------------------------------------
 -- SOURCES
 --   DG6V01.tactic_evnt_ip_ar_hist          -- population + cohort/grp/segment
@@ -79,8 +65,8 @@
 --   safety net if that disjointness assumption is ever wrong.
 --   One row per (acct_no, cohort_month), anchored on that account's earliest
 --   treatmt_strt_dt within the month:
---     ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
---                        ORDER BY treatmt_strt_dt ASC), keep rn = 1
+--     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
+--                                ORDER BY treatmt_strt_dt ASC) = 1
 --   The success-window join below uses [MIN(treatmt_strt_dt), MAX(treatmt_end_dt)]
 --   across all of that account's rows in the cohort_month (not just the
 --   first-touch row's own window) so a later wave's window is never silently
@@ -127,9 +113,8 @@
 -- *** GRP COLLAPSE — DELIBERATE, READ BEFORE USING ***
 --   model_arm (Web / Random / Model) is COLLAPSED ENTIRELY — Andre explicitly
 --   does NOT want that slicer broken out here. grp itself stays binary Action vs
---   Control, per segment. grp derivation: SUBSTR(TRIM(tst_grp_cd), -2) = '_C' ->
---   'Control', ELSE -> 'Action' (Trino has no RIGHT() — SUBSTR with a negative
---   start index is the equivalent, per query_engine_guidelines.md).
+--   Control, per segment. grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' ->
+--   'Control', ELSE -> 'Action'.
 --
 --   [VERIFY] *** the '_C' = Control convention is an UNCONFIRMED WORKING
 --   ASSUMPTION for BOTH waves (2026042AUH and 2026119AUH) and is LOAD-BEARING
@@ -171,13 +156,16 @@
 --   The work-env file's target-product variant is DROPPED here on purpose —
 --   one metric per file, and Andre's instruction was explicit: use ANY-PRODUCT.
 -- ----------------------------------------------------------------------------
--- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file). UNNEST(SEQUENCE(0,30)),
---   Trino has no SYS_CALENDAR.
+-- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file).
 -- FLOOR: population floor guard >= DATE '2026-01-01' (contract rule 6) stays in place;
 --   population is now ALSO filtered to treatmt_end_dt in the Q3 window (see QUARTER WINDOW
 --   block below) — end-date is the SELECTOR, treatmt_strt_dt remains the cohort/day-0 anchor.
 --   Success-side scan (CR_CRD_ACCT_EVNT_DLY + DLY_FULL_PORTFOLIO) tightened to
 --   [2026-02-01, 2026-08-01) — see <<WINDOW>> tags below.
+-- ----------------------------------------------------------------------------
+-- Drop residual volatile tables if rerunning in the same session:
+--   DROP TABLE vt_auh_experiment_cells;
+--   DROP TABLE vt_auh_experiment_spine;
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt). cohort_month and day-0 still
@@ -194,53 +182,113 @@
 -- WINDOW START : DATE '2026-05-01'
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
+-- ============================================================================
+-- STEP 1: denominator cells (cohort_month x segment x grp -> base)
+-- ============================================================================
+CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
+    WITH population_raw AS (
+        SELECT
+            CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
+            treatmt_strt_dt,
+            treatmt_end_dt,
+            CAST(
+                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(7))                          AS cohort_month,
+            -- segment: rewards vs non-rewards, derived per-wave from tst_grp_cd — see header
+            CASE
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'NR'
+                    THEN CAST('NonReward'       AS VARCHAR(20))
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RN'
+                    THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
+                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RO'
+                    THEN CAST('Rewards_Offer'   AS VARCHAR(20))
+                ELSE CAST('Unknown' AS VARCHAR(20))
+            END                                      AS segment,
+            CASE
+                WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
+                ELSE                                        CAST('Action'  AS VARCHAR(20))
+            END                                      AS grp
+        FROM DG6V01.tactic_evnt_ip_ar_hist
+        WHERE tactic_id IN ('2026042AUH', '2026119AUH')
+          AND treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
+    ),
+    -- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins (never expected to fire — see header)
+    cohort_first AS (
+        SELECT acct_no, cohort_month, segment, grp
+        FROM population_raw
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+        ) = 1
+    )
+    SELECT cohort_month, segment, grp, COUNT(DISTINCT acct_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, segment, grp
+) WITH DATA PRIMARY INDEX (cohort_month, segment, grp) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, segment, grp);
+
+-- ============================================================================
+-- STEP 2: day spine 0-30
+-- ============================================================================
+CREATE VOLATILE TABLE vt_auh_experiment_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 30
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_auh_experiment_spine COLUMN (vintage_day);
+
+-- ============================================================================
+-- STEP 3: final curve
+-- ============================================================================
 WITH
 population_raw AS (
     SELECT
         CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
         treatmt_strt_dt,
         treatmt_end_dt,
-        DATE_TRUNC('month', treatmt_strt_dt)    AS cohort_month,
-        -- segment: rewards vs non-rewards, derived from tst_grp_cd — see header
+        CAST(
+            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(7))                          AS cohort_month,
         CASE
-            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'NR'
-                THEN CAST('NonReward'       AS VARCHAR(20))
-            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RN'
+            WHEN tactic_id = '2026042AUH'
+                 AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
+                THEN CAST('NonReward' AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('NRR','NRM','NRW')
+                THEN CAST('NonReward' AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('RNM','RNW')
                 THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
-            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RO'
-                THEN CAST('Rewards_Offer'   AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('ROR','ROM','ROW')
+                THEN CAST('Rewards_Offer' AS VARCHAR(20))
             ELSE CAST('Unknown' AS VARCHAR(20))
         END                                      AS segment,
-        -- grp: model_arm collapsed, binary Action/Control — see GRP COLLAPSE above
         CASE
-            WHEN SUBSTR(TRIM(tst_grp_cd), -2) = '_C' THEN CAST('Control' AS VARCHAR(20))
-            ELSE                                          CAST('Action'  AS VARCHAR(20))
+            WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
+            ELSE                                        CAST('Action'  AS VARCHAR(20))
         END                                      AS grp
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
-      AND treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
-      AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
-      AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
+      AND treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
+      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
+      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
 ),
 
--- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins
--- (never expected to fire — see header)
+-- [NOTE] first-touch: grp/segment come from the account's earliest row this month (never expected to fire — see header)
 cohort_first AS (
     SELECT acct_no, cohort_month, segment, grp, treatmt_strt_dt AS anchor_dt
-    FROM (
-        SELECT acct_no, cohort_month, segment, grp, treatmt_strt_dt,
-               ROW_NUMBER() OVER (
-                   PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
-               ) AS rn
-        FROM population_raw
-    ) ranked
-    WHERE rn = 1
-),
-
-auh_cells AS (
-    SELECT cohort_month, segment, grp, COUNT(DISTINCT acct_no) AS base
-    FROM cohort_first
-    GROUP BY cohort_month, segment, grp
+    FROM population_raw
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+    ) = 1
 ),
 
 -- pooled search window: earliest start to latest end across ALL of the account's
@@ -289,7 +337,7 @@ first_owned AS (
 success_raw AS (
     SELECT
         p.cohort_month, p.segment, p.grp, p.acct_no,
-        DATE_DIFF('day', p.anchor_dt, fo.first_owned_dt) AS vintage_day
+        CAST(fo.first_owned_dt - p.anchor_dt AS INTEGER) AS vintage_day
     FROM population p
     INNER JOIN first_owned fo
         ON  fo.acct_no        = p.acct_no
@@ -303,16 +351,10 @@ daily_counts AS (
     GROUP BY cohort_month, segment, grp, vintage_day
 ),
 
--- day spine 0-30
-spine AS (
-    SELECT s.vintage_day
-    FROM UNNEST(SEQUENCE(0, 30)) AS s(vintage_day)
-),
-
 dense_grid AS (
     SELECT c.cohort_month, c.segment, c.grp, c.base, s.vintage_day
-    FROM auh_cells c
-    CROSS JOIN spine s
+    FROM vt_auh_experiment_cells c
+    CROSS JOIN vt_auh_experiment_spine s
 )
 
 SELECT
@@ -320,7 +362,7 @@ SELECT
     -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
     -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
     CAST('AUH' AS VARCHAR(20)) AS mne,
-    CAST(SUBSTR(CAST(g.cohort_month AS VARCHAR), 1, 7) AS VARCHAR(7)) AS cohort_month,
+    g.cohort_month,
     g.segment,
     g.grp,
     g.vintage_day,
@@ -339,6 +381,9 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day   = g.vintage_day
 ORDER BY g.cohort_month, g.segment, g.grp, g.vintage_day;
 
+DROP TABLE vt_auh_experiment_cells;
+DROP TABLE vt_auh_experiment_spine;
+
 -- ============================================================================
 -- DIAGNOSTIC A (commented out): every tst_grp_cd and where it lands.
 -- Run this FIRST if any Unknown rows appear. ~20 rows. It shows the actual
@@ -354,7 +399,7 @@ ORDER BY g.cohort_month, g.segment, g.grp, g.vintage_day;
 --           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RN' THEN 'Rewards_NoOffer'
 --           WHEN SUBSTR(TRIM(tst_grp_cd),1,2)='RO' THEN 'Rewards_Offer'
 --           ELSE 'Unknown' END                            AS segment
---     , CASE WHEN SUBSTR(TRIM(tst_grp_cd),-2)='_C' THEN 'Control' ELSE 'Action' END AS grp
+--     , CASE WHEN RIGHT(TRIM(tst_grp_cd),2)='_C' THEN 'Control' ELSE 'Action' END AS grp
 --     , COUNT(DISTINCT CAST(tactic_evnt_id AS BIGINT))    AS accts
 -- FROM DG6V01.tactic_evnt_ip_ar_hist
 -- WHERE tactic_id IN ('2026042AUH', '2026119AUH')
@@ -369,10 +414,14 @@ ORDER BY g.cohort_month, g.segment, g.grp, g.vintage_day;
 --     SELECT acct_no, cohort_month FROM (
 --         SELECT
 --             CAST(tactic_evnt_id AS BIGINT) AS acct_no,
---             DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month,
+--             CAST(
+--                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
 --             CASE
---                 WHEN SUBSTR(TRIM(tst_grp_cd), -2) = '_C' THEN CAST('Control' AS VARCHAR(20))
---                 ELSE                                          CAST('Action'  AS VARCHAR(20))
+--                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
+--                 ELSE                                        CAST('Action'  AS VARCHAR(20))
 --             END AS grp
 --         FROM DG6V01.tactic_evnt_ip_ar_hist
 --         WHERE tactic_id IN ('2026042AUH', '2026119AUH')

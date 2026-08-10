@@ -32,9 +32,13 @@
 --   acquisition — Casper+SCOT application approval IS the correct signal there. This fix does
 --   not touch pp_vba_campaign.sql.
 --
--- ENGINE: Trino / Starburst. No volatile tables, no QUALIFY, no SYS_CALENDAR.
+-- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_bizups_vbu_descresp_clnt),
+--   so no catalog prefix and no Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE). Uses
+--   QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine — both native
+--   Teradata, both unavailable on Trino/Starburst. (CRV and VBA are the exceptions in this
+--   folder — they reach EDL and stay on Trino/Starburst.)
 --
--- SOURCE: dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt — curated VBU outcomes table.
+-- SOURCE: dl_mr_prod.cards_bizups_vbu_descresp_clnt — curated VBU outcomes table.
 --   VBU-specific by construction (table name + schema doc framing), so no
 --   SUBSTR(tactic_id,8,3)='VBU' filter is applied here — unlike the shared
 --   DG6V01.tactic_evnt_ip_ar_hist table the OLD VBU population query ran against.
@@ -80,7 +84,8 @@
 --   leaves it an open question ("Grain confirmation — is this 1 row per (clnt_no, tactic_id)?
 --   Per (clnt_no, treatment_period)?"). If the table is already 1 row per (clnt_no, tactic_id),
 --   this dedup is a no-op; if not, it protects against double-counting exactly like it does in
---   every sibling file.
+--   every sibling file. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a ranked
+--   subquery with an outer WHERE rn = 1.
 --
 -- *** [NOTE] grp tie-break = FIRST-TOUCH *** — same convention as every pp_*.sql file: if a
 --   client appears twice in one cohort_month with opposing arms, grp comes from their FIRST
@@ -94,7 +99,11 @@
 --   first-touch anchor date — no separate raw-event-table search-window join needed (unlike
 --   VBA's Casper/SCOT union, which has no deployment key and must join on a date range instead).
 --
--- Spine : fixed 0-90 — same cap as VBA and the prior VBU builds. UNNEST(SEQUENCE(0,90)).
+-- Spine : fixed 0-90 — same cap as VBA and the prior VBU builds. Built as a Teradata VOLATILE
+--   TABLE off SYS_CALENDAR.CALENDAR (see below), not UNNEST(SEQUENCE(...)) — that is a Trino-only
+--   function. TDWM blocks an unconstrained product join against SYS_CALENDAR, so both the spine
+--   AND the denominator cells (vt_vbu_cells) are materialized as VOLATILE TABLEs with COLLECT
+--   STATISTICS before the CROSS JOIN that builds the dense grid.
 -- Floor : DATE '2026-01-01' on every scan (contract rule 6).
 --
 -- [VERIFY — RAW ALTERNATIVE, NOT BUILT HERE]: this file trusts the CURATED table's pre-built
@@ -119,12 +128,33 @@
 -- WINDOW START : DATE '2026-05-01'
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
-WITH
--- stage 1 dedup: one row per (clnt_no, tactic_id) — earliest response_start wins; grp read off
--- that same row
-wave_pop AS (
-    SELECT clnt_no, tactic_id, response_start, grp
-    FROM (
+-- ============================================================================
+-- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- below will already exist. Uncomment and run these two drops first:
+--   DROP TABLE vt_vbu_spine;
+--   DROP TABLE vt_vbu_cells;
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Day spine 0-90, off SYS_CALENDAR. VOLATILE so it can CROSS JOIN vt_vbu_cells below without
+-- tripping the TDWM unconstrained-product-join block.
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_vbu_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_vbu_spine COLUMN (vintage_day);
+
+-- ----------------------------------------------------------------------------
+-- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason — it is the
+-- other side of the spine CROSS JOIN. Rebuilds wave_pop -> wave_arm -> cohort_first internally;
+-- the same CTE chain is repeated in the main query below (Teradata volatile-table creation is a
+-- standalone statement, it cannot see CTEs defined outside it).
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_vbu_cells AS (
+    WITH
+    wave_pop AS (
         SELECT
             clnt_no,
             tactic_id,
@@ -132,16 +162,64 @@ wave_pop AS (
             CASE
                 WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
                 WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
-            END AS grp,
-            ROW_NUMBER() OVER (
-                PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
-            ) AS rn
-        FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+            END AS grp
+        FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
         WHERE response_start >= DATE '2026-01-01'                          -- floor guard
           AND response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
           AND response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
-    ) ranked
-    WHERE rn = 1
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
+        ) = 1
+    ),
+    wave_arm AS (
+        SELECT
+            wp.clnt_no,
+            wp.tactic_id,
+            wp.response_start,
+            CAST(
+              CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+              CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+              CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+            AS VARCHAR(7)) AS cohort_month,
+            wp.grp
+        FROM wave_pop wp
+        WHERE wp.grp IS NOT NULL
+    ),
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+        SELECT clnt_no, cohort_month, grp, response_start AS anchor_dt
+        FROM wave_arm
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY clnt_no, cohort_month ORDER BY response_start ASC
+        ) = 1
+    )
+    SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, grp
+) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_vbu_cells COLUMN (cohort_month, grp);
+
+-- ----------------------------------------------------------------------------
+-- Main query — numerator side rebuilds the same wave_pop/wave_arm/cohort_first chain (regular
+-- CTEs are fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools
+-- success, then joins the dense grid off the two volatile tables built above.
+-- ----------------------------------------------------------------------------
+WITH
+wave_pop AS (
+    SELECT
+        clnt_no,
+        tactic_id,
+        response_start,
+        CASE
+            WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
+            WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
+        END AS grp
+    FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
+    WHERE response_start >= DATE '2026-01-01'                          -- floor guard
+      AND response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
+      AND response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
+    ) = 1
 ),
 
 wave_arm AS (
@@ -149,7 +227,11 @@ wave_arm AS (
         wp.clnt_no,
         wp.tactic_id,
         wp.response_start,
-        DATE_TRUNC('month', wp.response_start) AS cohort_month,
+        CAST(
+          CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+          CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+          CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+        AS VARCHAR(7)) AS cohort_month,
         wp.grp
     FROM wave_pop wp
     WHERE wp.grp IS NOT NULL
@@ -157,20 +239,10 @@ wave_arm AS (
 
 cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
     SELECT clnt_no, cohort_month, grp, response_start AS anchor_dt
-    FROM (
-        SELECT clnt_no, cohort_month, grp, response_start,
-               ROW_NUMBER() OVER (
-                   PARTITION BY clnt_no, cohort_month ORDER BY response_start ASC
-               ) AS rn
-        FROM wave_arm
-    ) ranked
-    WHERE rn = 1
-),
-
-vbu_cells AS (
-    SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
-    FROM cohort_first
-    GROUP BY cohort_month, grp
+    FROM wave_arm
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clnt_no, cohort_month ORDER BY response_start ASC
+    ) = 1
 ),
 
 -- success: primary target-product responders only, same population window as wave_pop
@@ -179,7 +251,7 @@ success_events AS (
         clnt_no,
         tactic_id,
         dt_prod_change_client AS success_dt_abs
-    FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+    FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
     WHERE response_start >= DATE '2026-01-01'                              -- floor guard
       AND response_end   >= DATE '2026-05-01'                              -- <<WINDOW>> keeps success scan aligned to selected deployments
       AND response_end   <  DATE '2026-08-01'                              -- <<WINDOW>>
@@ -200,7 +272,7 @@ success_pooled AS (
 numerator AS (
     SELECT
         cf.cohort_month, cf.grp, cf.clnt_no,
-        DATE_DIFF('day', cf.anchor_dt, sp.success_dt_abs) AS vintage_day
+        CAST(sp.success_dt_abs - cf.anchor_dt AS INTEGER) AS vintage_day
     FROM cohort_first cf
     INNER JOIN success_pooled sp
         ON sp.clnt_no = cf.clnt_no AND sp.cohort_month = cf.cohort_month
@@ -213,16 +285,10 @@ daily_counts AS (
     GROUP BY cohort_month, grp, vintage_day
 ),
 
--- day spine 0-90 (deliberate fixed cap, preserved from source)
-spine AS (
-    SELECT s.vintage_day
-    FROM UNNEST(SEQUENCE(0, 90)) AS s(vintage_day)
-),
-
 dense_grid AS (
     SELECT c.cohort_month, c.grp, c.base, s.vintage_day
-    FROM vbu_cells c
-    CROSS JOIN spine s
+    FROM vt_vbu_cells c
+    CROSS JOIN vt_vbu_spine s
 )
 
 SELECT
@@ -230,7 +296,7 @@ SELECT
     -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
     -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
     CAST('VBU' AS VARCHAR(20)) AS mne,
-    CAST(SUBSTR(CAST(g.cohort_month AS VARCHAR), 1, 7) AS VARCHAR(7)) AS cohort_month,
+    g.cohort_month,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,
     g.vintage_day,
@@ -255,18 +321,22 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 --     SELECT clnt_no, cohort_month FROM (
 --         SELECT
 --             wp.clnt_no,
---             DATE_TRUNC('month', wp.response_start) AS cohort_month,
+--             CAST(
+--               CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+--               CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+--               CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
 --             wp.grp
 --         FROM (
 --             SELECT clnt_no, tactic_id, response_start,
 --                 CASE WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
 --                      WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
---                 END AS grp,
---                 ROW_NUMBER() OVER (PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC) AS rn
---             FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+--                 END AS grp
+--             FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
 --             WHERE response_start >= DATE '2026-01-01'
+--             QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC) = 1
 --         ) wp
---         WHERE wp.rn = 1 AND wp.grp IS NOT NULL
+--         WHERE wp.grp IS NOT NULL
 --     ) raw
 --     GROUP BY clnt_no, cohort_month
 --     HAVING COUNT(DISTINCT grp) > 1

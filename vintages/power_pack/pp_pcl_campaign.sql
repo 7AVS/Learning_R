@@ -14,15 +14,9 @@
 -- SCOPE: *** CAMPAIGN *** — whole PCL campaign. NO modal / sales-modal population filter.
 --   (The EXPERIMENT-scope sibling is pcl_sales_modal.sql — sales-modal WMS/NMS only.)
 --
--- ENGINE: Trino / Starburst. ALL Power Pack files use ONE engine - EDW tables are reached
---         through Starburst federation. No volatile tables, no QUALIFY, no SYS_CALENDAR.
---
--- CATALOG PREFIX: dw00_im.dl_mr_prod.cards_pli_decision_resp — proven in
---   campaigns/sales_modal/pcl/p9_vcl_full_measurement.sql, p10_vintage_curves.sql and every
---   other file in that directory, all headed "Engine: ... Trino/Starburst" and matches
---   CLAUDE.md's own EDW table citation for this table.
---
--- Source   : dw00_im.dl_mr_prod.cards_pli_decision_resp
+-- Engine   : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS before
+--            the cross join (TDWM product-join guard). CTEs for everything else (rerun-safety).
+-- Source   : DL_MR_PROD.cards_pli_decision_resp
 -- Grain    : account (acct_no)
 -- Anchor   : treatmt_strt_dt (treatment start). [VERIFY] reliability of this field on THIS curated
 --            table was never confirmed (see prior probe in vintages/pcl_vintage_monthly.sql header —
@@ -45,8 +39,8 @@
 --   confirms it — expect zeros.
 --
 -- *** DEDUP — one row per (acct_no, cohort_month), anchored on first wave ***
---   1. cohort_first: ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
---      ORDER BY treatmt_strt_dt ASC), keep rn = 1 — first-touch wave wins grp and becomes Day 0.
+--   1. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
+--      ORDER BY treatmt_strt_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
 --   2. Success (dt_cl_change, already an absolute date on the curated row when responder_cli=1)
 --      is pooled across EVERY wave the account touched that month: success_pooled takes
 --      MIN(dt_cl_change) across all the account's rows in the cohort_month, then rebases to the
@@ -68,8 +62,11 @@
 -- Success  : responder_cli = 1 (CLI response flag); event date = dt_cl_change (already absolute).
 --            Same primary success metric as pcl_vintage_monthly.sql / pcl_sales_modal.sql —
 --            preserved unchanged, not invented. One metric per file per contract rule 4.
--- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days. UNNEST(SEQUENCE(0,90)),
---            Trino has no SYS_CALENDAR.
+-- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days.
+--
+-- Drop residual volatile tables if rerunning in the same session:
+--   DROP TABLE vt_pcl_camp_cells;
+--   DROP TABLE vt_pcl_camp_spine;
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt, confirmed column on
@@ -90,15 +87,68 @@
 -- WINDOW START : DATE '2026-05-01'
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
+-- ============================================================================
+-- STEP 1: denominator cells — cohort_month x grp
+-- ============================================================================
+CREATE VOLATILE TABLE vt_pcl_camp_cells AS (
+    WITH raw_rows AS (
+        SELECT
+            acct_no,
+            treatmt_strt_dt,
+            CAST(
+                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(7))                                AS cohort_month,
+            CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp          -- [VERIFY] raw pass-through, see header
+        FROM DL_MR_PROD.cards_pli_decision_resp
+        WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
+          AND TRIM(tst_grp_cd) IS NOT NULL
+          AND TRIM(tst_grp_cd) <> ''
+    ),
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+        SELECT acct_no, cohort_month, grp
+        FROM raw_rows
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+        ) = 1
+    )
+    SELECT cohort_month, grp, COUNT(DISTINCT acct_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, grp
+) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_pcl_camp_cells COLUMN (cohort_month, grp);
+
+-- ============================================================================
+-- STEP 2: day spine 0-90
+-- ============================================================================
+CREATE VOLATILE TABLE vt_pcl_camp_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_pcl_camp_spine COLUMN (vintage_day);
+
+-- ============================================================================
+-- STEP 3: final curve
+-- ============================================================================
 WITH
 raw_rows AS (
     SELECT
         acct_no,
         treatmt_strt_dt,
-        DATE_TRUNC('month', treatmt_strt_dt)           AS cohort_month,
+        CAST(
+            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(7))                                AS cohort_month,
         CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp,          -- [VERIFY] raw pass-through, see header
         CASE WHEN responder_cli = 1 THEN dt_cl_change END AS success_dt_abs
-    FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+    FROM DL_MR_PROD.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
       AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
       AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
@@ -108,20 +158,10 @@ raw_rows AS (
 
 cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
     SELECT acct_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
-    FROM (
-        SELECT acct_no, cohort_month, grp, treatmt_strt_dt,
-               ROW_NUMBER() OVER (
-                   PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
-               ) AS rn
-        FROM raw_rows
-    ) ranked
-    WHERE rn = 1
-),
-
-pcl_cells AS (
-    SELECT cohort_month, grp, COUNT(DISTINCT acct_no) AS base
-    FROM cohort_first
-    GROUP BY cohort_month, grp
+    FROM raw_rows
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+    ) = 1
 ),
 
 -- pool success across every wave the account touched this cohort_month
@@ -135,7 +175,7 @@ success_pooled AS (
 population AS (
     SELECT
         cf.cohort_month, cf.grp, cf.acct_no,
-        DATE_DIFF('day', cf.anchor_dt, sp.success_dt_abs) AS vintage_day_raw
+        CAST(sp.success_dt_abs - cf.anchor_dt AS INTEGER) AS vintage_day_raw
     FROM cohort_first cf
     LEFT JOIN success_pooled sp
         ON sp.acct_no = cf.acct_no AND sp.cohort_month = cf.cohort_month
@@ -149,16 +189,10 @@ daily_counts AS (
     GROUP BY cohort_month, grp, vintage_day_raw
 ),
 
--- day spine 0-90
-spine AS (
-    SELECT s.vintage_day
-    FROM UNNEST(SEQUENCE(0, 90)) AS s(vintage_day)
-),
-
 dense_grid AS (
     SELECT c.cohort_month, c.grp, c.base, s.vintage_day
-    FROM pcl_cells c
-    CROSS JOIN spine s
+    FROM vt_pcl_camp_cells c
+    CROSS JOIN vt_pcl_camp_spine s
 )
 
 SELECT
@@ -166,7 +200,7 @@ SELECT
     -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
     -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
     CAST('PCL' AS VARCHAR(20))                              AS mne,
-    CAST(SUBSTR(CAST(g.cohort_month AS VARCHAR), 1, 7) AS VARCHAR(7)) AS cohort_month,
+    g.cohort_month,
     CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,
     CAST(g.vintage_day AS INTEGER)                          AS vintage_day,
@@ -186,6 +220,9 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day    = g.vintage_day
 ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
+DROP TABLE vt_pcl_camp_cells;
+DROP TABLE vt_pcl_camp_spine;
+
 -- ============================================================================
 -- DIAGNOSTIC (commented out): how many accounts hit both arms in one month?
 -- ============================================================================
@@ -193,9 +230,13 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 --     SELECT acct_no, cohort_month FROM (
 --         SELECT
 --             acct_no,
---             DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month,
+--             CAST(
+--                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
 --             CAST(TRIM(tst_grp_cd) AS VARCHAR(20)) AS grp
---         FROM dw00_im.dl_mr_prod.cards_pli_decision_resp
+--         FROM DL_MR_PROD.cards_pli_decision_resp
 --         WHERE treatmt_strt_dt >= DATE '2026-01-01'
 --           AND TRIM(tst_grp_cd) IS NOT NULL
 --           AND TRIM(tst_grp_cd) <> ''
