@@ -34,6 +34,15 @@
 -- Grain    : client (clnt_no)
 -- Anchor   : treatmt_start_dt (treatment start), per wave.
 --
+-- *** cohort_month = DECISION month, NOT treatment-start month (2026-08-10) ***
+--   cohort_month is built from decsn_year / decsn_month (integer columns on
+--   dl_mr_prod.cards_tpa_pcq_decision_resp, confirmed cards_eda_v2.py:617-624), deliberately NOT
+--   from treatmt_start_dt. The dashboard labels cohorts by DECISION month  a wave that starts
+--   2026-06-01 shows there as "May". Day 0 / the vintage anchor is UNCHANGED and still
+--   treatmt_start_dt (treatment date), see Anchor above.
+--   Reconciliation: dashboard "May" = this file's cohort_month '2026-05' after this change.
+--   Challenger base 67,881 / responders 706 / 1.04%. Champion base 67,625 / responders 651 / 0.96%.
+--
 -- Population filter:
 --   tpa_ita = 'TPA' (mandatory, canon: reference_pcq_measurement_filters.md  PCQ has no ITA arm)
 --   AND TRIM(test_group_latest) IN ('NG3_CHMP','NG3_CHLN','NG3_CHLG')
@@ -153,9 +162,9 @@ CREATE VOLATILE TABLE vt_pcq_exp_cells AS (
             clnt_no,
             treatmt_start_dt,
             CAST(
-              CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) || '-' ||
-              CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
-              CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+              TRIM(CAST(decsn_year AS VARCHAR(4))) || '-' ||
+              CASE WHEN decsn_month < 10 THEN '0' ELSE '' END ||
+              TRIM(CAST(decsn_month AS VARCHAR(2)))
             AS VARCHAR(7))                          AS cohort_month,
             CASE WHEN TRIM(test_group_latest) = 'NG3_CHMP'                THEN CAST('Champion'   AS VARCHAR(20))
                  WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN CAST('Challenger' AS VARCHAR(20))
@@ -192,9 +201,9 @@ raw_rows AS (
         clnt_no,
         treatmt_start_dt,
         CAST(
-          CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) || '-' ||
-          CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
-          CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+          TRIM(CAST(decsn_year AS VARCHAR(4))) || '-' ||
+          CASE WHEN decsn_month < 10 THEN '0' ELSE '' END ||
+          TRIM(CAST(decsn_month AS VARCHAR(2)))
         AS VARCHAR(7))                          AS cohort_month,
         CASE WHEN TRIM(test_group_latest) = 'NG3_CHMP'                THEN CAST('Champion'   AS VARCHAR(20))
              WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN CAST('Challenger' AS VARCHAR(20))
@@ -284,9 +293,9 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 --         SELECT
 --             clnt_no,
 --             CAST(
---               CAST(EXTRACT(YEAR FROM treatmt_start_dt) AS VARCHAR(4)) || '-' ||
---               CASE WHEN EXTRACT(MONTH FROM treatmt_start_dt) < 10 THEN '0' ELSE '' END ||
---               CAST(EXTRACT(MONTH FROM treatmt_start_dt) AS VARCHAR(2))
+--               TRIM(CAST(decsn_year AS VARCHAR(4))) || '-' ||
+--               CASE WHEN decsn_month < 10 THEN '0' ELSE '' END ||
+--               TRIM(CAST(decsn_month AS VARCHAR(2)))
 --             AS VARCHAR(7)) AS cohort_month,
 --             CASE WHEN TRIM(test_group_latest) = 'NG3_CHMP'                THEN CAST('Champion'   AS VARCHAR(20))
 --                  WHEN TRIM(test_group_latest) IN ('NG3_CHLN', 'NG3_CHLG') THEN CAST('Challenger' AS VARCHAR(20))
