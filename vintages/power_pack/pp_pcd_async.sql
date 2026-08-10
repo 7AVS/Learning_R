@@ -1,8 +1,9 @@
 -- pcd_experiment_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). Exactly 7 columns,
---   this order: cohort_month | deployment | grp | vintage_day | base | responders
---   | responders_cum. Counts only.
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
+--   Exactly 8 columns, this order: cohort_month | deployment | segment | grp | vintage_day
+--   | base | responders | responders_cum. Counts only. segment = CAST('All' AS VARCHAR(20))
+--   — constant; this async carve-out has no pre-treatment split above tst_grp_cd Test/Control.
 -- SCOPE: **EXPERIMENT** — the async mobile banner carve-out inside PCD, NOT
 --   the whole campaign. Companion file pcd_campaign_vintage.sql is the
 --   campaign-scope curve.
@@ -224,6 +225,7 @@ dense_grid AS (
 SELECT
     g.cohort_month,
     CAST(g.deployment AS VARCHAR(30))  AS deployment,
+    CAST('All' AS VARCHAR(20))         AS segment,
     g.grp,
     g.vintage_day,
     g.base,

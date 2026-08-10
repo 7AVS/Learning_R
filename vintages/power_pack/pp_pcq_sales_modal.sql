@@ -1,7 +1,9 @@
 -- pcq_experiment_vintage.sql
--- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). Emits EXACTLY 7 columns:
---   cohort_month VARCHAR(7) 'YYYY-MM', deployment VARCHAR(30), grp VARCHAR(20) [binary],
---   vintage_day INTEGER (0..90 continuous), base INTEGER (fixed per cohort x deployment x grp),
+-- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added
+--   2026-08-10). Emits EXACTLY 8 columns: cohort_month VARCHAR(7) 'YYYY-MM', deployment
+--   VARCHAR(30), segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment
+--   split above Champion/Challenger Modal Sales arm], grp VARCHAR(20) [binary], vintage_day
+--   INTEGER (0..90 continuous), base INTEGER (fixed per cohort x deployment x segment x grp),
 --   responders INTEGER, responders_cum INTEGER. Counts only, no rates.
 --
 -- SCOPE: *** EXPERIMENT *** — PCQ Modal Sales (MS) champion/challenger split ONLY.
@@ -140,6 +142,7 @@ dense_grid AS (
 SELECT
     g.cohort_month,
     g.deployment,
+    CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,
     CAST(g.vintage_day AS INTEGER)                          AS vintage_day,
     CAST(g.base AS INTEGER)                                 AS base,

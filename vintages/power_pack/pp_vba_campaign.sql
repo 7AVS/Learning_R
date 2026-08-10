@@ -1,6 +1,9 @@
 -- vba_campaign_vintage.sql
--- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). 7 columns only:
---             cohort_month, deployment, grp, vintage_day, base, responders, responders_cum.
+-- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
+--             8 columns only: cohort_month, deployment, segment, grp, vintage_day, base,
+--             responders, responders_cum.
+-- segment   : CAST('All' AS VARCHAR(20)) — constant. VBA has no pre-treatment population split
+--             above Test/Control; segment carries real values only for AUH.
 -- Campaign  : VBA (Visa Benefit Add) — CAMPAIGN scope
 -- Engine    : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS
 --             before the cross join (TDWM product-join guard). CTEs for everything else.
@@ -197,6 +200,7 @@ dense_grid AS (
 SELECT
     g.cohort_month,
     g.deployment,
+    CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,
     g.vintage_day,
     g.base,

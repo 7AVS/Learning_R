@@ -1,8 +1,10 @@
 -- pcd_campaign_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). Exactly 7 columns,
---   this order: cohort_month | deployment | grp | vintage_day | base | responders
---   | responders_cum. Counts only. No rates, no strategy/model/product breakouts.
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
+--   Exactly 8 columns, this order: cohort_month | deployment | segment | grp | vintage_day
+--   | base | responders | responders_cum. Counts only. No rates, no strategy/model/product
+--   breakouts. segment = CAST('All' AS VARCHAR(20)) — constant; PCD has no pre-treatment
+--   population split above tst_grp_cd Test/Control. Real segment values exist only for AUH.
 -- SCOPE: **CAMPAIGN** — the whole PCD (Product Card Upgrade) campaign, every
 --   deployment/wave, past and future. NO async carve-out. This is the
 --   "how did the whole campaign perform" curve, distinct from
@@ -206,6 +208,7 @@ dense_grid AS (
 SELECT
     g.cohort_month,
     CAST(g.deployment AS VARCHAR(30))  AS deployment,
+    CAST('All' AS VARCHAR(20))         AS segment,
     g.grp,
     g.vintage_day,
     g.base,

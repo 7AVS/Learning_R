@@ -1,8 +1,8 @@
 -- auh_experiment_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). Exactly 7 columns,
---   this order: cohort_month | deployment | grp | vintage_day | base | responders
---   | responders_cum. Counts only.
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
+--   Exactly 8 columns, this order: cohort_month | deployment | segment | grp | vintage_day
+--   | base | responders | responders_cum. Counts only.
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
 --   section 1/5). No separate auh_campaign_vintage.sql exists or is needed.
@@ -11,7 +11,7 @@
 --   (TDWM unconstrained-product-join guard). CTEs for everything else.
 -- ----------------------------------------------------------------------------
 -- SOURCES
---   DG6V01.tactic_evnt_ip_ar_hist          -- population + cohort/grp
+--   DG6V01.tactic_evnt_ip_ar_hist          -- population + cohort/grp/segment
 --   D3CV12A.CR_CRD_ACCT_EVNT_DLY           -- raw success event (add event)
 --   D3CV12A.DLY_FULL_PORTFOLIO             -- portfolio join required by the
 --                                              WORK-ENV success definition below
@@ -21,15 +21,44 @@
 --   own surrogate id, same convention as auh_vintage_reconstructed.sql and the
 --   repo's prior auh_vintage_monthly.sql (not a portfolio account number).
 -- ----------------------------------------------------------------------------
+-- *** SEGMENT — REWARDS vs NON-REWARDS, ADDED 2026-08-10 ***
+--   Andre: "don't separate by model arm, but do separate rewards and
+--   non-rewards, then test and control for non-rewards and test and control
+--   for rewards." segment is a PRE-TREATMENT split, derived from tst_grp_cd,
+--   that sits ABOVE grp (Test/Control) — base is now computed at
+--   cohort_month x deployment x segment x grp grain.
+--   Mapping, transcribed from the work-env AUH_P2_Vintage.sql (per deployment,
+--   the code alphabets differ between the two waves):
+--     2026042AUH (Phase 1) — all non-rewards:
+--       TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C') -> 'NonReward'
+--     2026119AUH (Phase 2) — three arms:
+--       SUBSTR(tst_grp_cd,1,3) IN ('NRR','NRM','NRW') -> 'NonReward'
+--       SUBSTR(tst_grp_cd,1,3) IN ('RNM','RNW')       -> 'Rewards_NoOffer'
+--       SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') -> 'Rewards_Offer'
+--     Anything unmatched -> 'Unknown' (NOT silently folded into a real segment).
+--   THREE segment values are emitted on purpose, not two. Rewards_Offer vs
+--   Rewards_NoOffer is Phase 2's primary DOE contrast (Comm+Offer vs Comm
+--   Only) — Andre asked for a two-way rewards/non-rewards view, but emitting
+--   only two segment values would pool that contrast into 'Rewards' and
+--   destroy it IRREVERSIBLY (can't be recovered downstream). Emitting three
+--   lets Andre pool Rewards_Offer + Rewards_NoOffer himself in the pivot to
+--   get the two-way view, while the DOE contrast stays available underneath.
+--   [VERIFY NOTE — deployment scope] Phase 1 (2026042AUH) is entirely
+--   NonReward — the Rewards_NoOffer / Rewards_Offer segments exist ONLY for
+--   Phase 2 (2026119AUH). A rewards-vs-non-rewards comparison is therefore
+--   valid WITHIN Phase 2 only. Comparing Phase 1 NonReward against Phase 2
+--   Rewards would confound segment with deployment and time — do not do this.
+-- ----------------------------------------------------------------------------
 -- *** GRP COLLAPSE — DELIBERATE, READ BEFORE USING ***
---   strategy_arm (NonReward / Rewards_Offer / Rewards_No_Offer) and model_arm
---   (Web / Random / Model) are COLLAPSED ENTIRELY. Andre explicitly does NOT
---   want those slicers broken out here — binary Test vs Control only, per
---   deployment. This is a simplification, not a data limitation: both arms
---   are fully derivable from tst_grp_cd (see the work-env AUH_P2_Vintage.sql
---   structure, transcribed in EXPERIMENT_VS_CAMPAIGN_MAP.md section 5) — they
---   are just not wanted in this cube. If per-arm cuts are ever needed again,
---   build them as a SEPARATE file; do not add columns here (contract rule 5).
+--   model_arm (Web / Random / Model) is COLLAPSED ENTIRELY — Andre explicitly
+--   does NOT want that slicer broken out here. strategy_arm is now exposed as
+--   the segment column above (the one change from the prior version of this
+--   file, which collapsed strategy_arm too). grp itself stays binary Test vs
+--   Control, per deployment AND per segment. Both are fully derivable from
+--   tst_grp_cd (see the work-env AUH_P2_Vintage.sql structure, transcribed in
+--   EXPERIMENT_VS_CAMPAIGN_MAP.md section 5) — model_arm is just not wanted
+--   in this cube. If per-model_arm cuts are ever needed, build them as a
+--   SEPARATE file; do not add columns here (contract rule 5).
 --   grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' -> 'Control', ELSE -> 'Test'.
 --
 --   [VERIFY] *** the '_C' = Control convention is an UNCONFIRMED WORKING
@@ -42,16 +71,18 @@
 --   until that is confirmed.
 -- ----------------------------------------------------------------------------
 -- *** POOLING GUARD — READ BEFORE TRUSTING A POOLED NUMBER ***
---   Collapsing strategy arms into binary Test/Control is only valid if the
---   test:control ratio is the same across the arms being pooled (otherwise
---   Simpson's paradox — a shifted mix reads as a lift/drop that isn't real).
+--   Collapsing model_arm into a single segment/grp cell is only valid if the
+--   test:control ratio is the same across the model arms being pooled
+--   (otherwise Simpson's paradox — a shifted mix reads as a lift/drop that
+--   isn't real).
 --     - 2026119AUH (Phase 2): 50/50 between strategy arms, 70/30 test/control
 --       WITHIN each arm. Same ratio both sides -> pooling is SAFE.
 --     - 2026042AUH (Phase 1): NRGA/NRR/NRS ratios are UNVERIFIED.
---   base is output at (deployment x grp) grain specifically so this is
---   self-checking — if the Test:Control ratio drifts between the two
---   deployments (or looks structurally off within 2026042AUH), IT IS VISIBLE
---   ON THE FACE OF THE CUBE. Check base before trusting the Phase 1 line.
+--   base is output at (deployment x segment x grp) grain specifically so this
+--   is self-checking — if the Test:Control ratio drifts between the two
+--   deployments, or between segments (or looks structurally off within
+--   2026042AUH), IT IS VISIBLE ON THE FACE OF THE CUBE. Check base before
+--   trusting the Phase 1 line.
 -- ----------------------------------------------------------------------------
 -- SUCCESS (ONE metric, per contract rule 4) — WORK-ENV version (transcribed
 --   from screenshots 2026-08-10; more correct than the repo's prior
@@ -104,6 +135,22 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
             AS VARCHAR(7))                          AS cohort_month,
+            -- segment: rewards vs non-rewards, derived per-deployment from tst_grp_cd — see header
+            CASE
+                WHEN tactic_id = '2026042AUH'
+                     AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
+                    THEN CAST('NonReward' AS VARCHAR(20))
+                WHEN tactic_id = '2026119AUH'
+                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('NRR','NRM','NRW')
+                    THEN CAST('NonReward' AS VARCHAR(20))
+                WHEN tactic_id = '2026119AUH'
+                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('RNM','RNW')
+                    THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
+                WHEN tactic_id = '2026119AUH'
+                     AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('ROR','ROM','ROW')
+                    THEN CAST('Rewards_Offer' AS VARCHAR(20))
+                ELSE CAST('Unknown' AS VARCHAR(20))
+            END                                      AS segment,
             CASE
                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
                 ELSE                                        CAST('Test'    AS VARCHAR(20))
@@ -116,12 +163,12 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
             ORDER BY treatmt_strt_dt ASC
         ) = 1
     )
-    SELECT cohort_month, deployment, grp, COUNT(DISTINCT acct_no) AS base
+    SELECT cohort_month, deployment, segment, grp, COUNT(DISTINCT acct_no) AS base
     FROM population
-    GROUP BY cohort_month, deployment, grp
-) WITH DATA PRIMARY INDEX (cohort_month, deployment, grp) ON COMMIT PRESERVE ROWS;
+    GROUP BY cohort_month, deployment, segment, grp
+) WITH DATA PRIMARY INDEX (cohort_month, deployment, segment, grp) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, deployment, grp);
+COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, deployment, segment, grp);
 
 -- ============================================================================
 -- STEP 2: day spine 0-30
@@ -149,6 +196,22 @@ population AS (
             CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
             CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
         AS VARCHAR(7))                          AS cohort_month,
+        -- segment: rewards vs non-rewards, derived per-deployment from tst_grp_cd — see header
+        CASE
+            WHEN tactic_id = '2026042AUH'
+                 AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
+                THEN CAST('NonReward' AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('NRR','NRM','NRW')
+                THEN CAST('NonReward' AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('RNM','RNW')
+                THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
+            WHEN tactic_id = '2026119AUH'
+                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('ROR','ROM','ROW')
+                THEN CAST('Rewards_Offer' AS VARCHAR(20))
+            ELSE CAST('Unknown' AS VARCHAR(20))
+        END                                      AS segment,
         CASE
             WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
             ELSE                                        CAST('Test'    AS VARCHAR(20))
@@ -189,7 +252,7 @@ first_owned AS (
 -- (can legitimately match both waves if windows overlap for that account — see header)
 success_raw AS (
     SELECT
-        p.cohort_month, p.deployment, p.grp, p.acct_no,
+        p.cohort_month, p.deployment, p.segment, p.grp, p.acct_no,
         CAST(fo.first_owned_dt - p.treatmt_strt_dt AS INTEGER) AS vintage_day
     FROM population p
     INNER JOIN first_owned fo
@@ -198,14 +261,14 @@ success_raw AS (
 ),
 
 daily_counts AS (
-    SELECT cohort_month, deployment, grp, vintage_day, COUNT(DISTINCT acct_no) AS responders
+    SELECT cohort_month, deployment, segment, grp, vintage_day, COUNT(DISTINCT acct_no) AS responders
     FROM success_raw
     WHERE vintage_day BETWEEN 0 AND 30
-    GROUP BY cohort_month, deployment, grp, vintage_day
+    GROUP BY cohort_month, deployment, segment, grp, vintage_day
 ),
 
 dense_grid AS (
-    SELECT c.cohort_month, c.deployment, c.grp, c.base, s.vintage_day
+    SELECT c.cohort_month, c.deployment, c.segment, c.grp, c.base, s.vintage_day
     FROM vt_auh_experiment_cells c
     CROSS JOIN vt_auh_experiment_spine s
 )
@@ -213,12 +276,13 @@ dense_grid AS (
 SELECT
     g.cohort_month,
     CAST(g.deployment AS VARCHAR(30))  AS deployment,
+    g.segment,
     g.grp,
     g.vintage_day,
     g.base,
     CAST(COALESCE(dc.responders, 0) AS INTEGER) AS responders,
     CAST(SUM(COALESCE(dc.responders, 0)) OVER (
-        PARTITION BY g.cohort_month, g.deployment, g.grp
+        PARTITION BY g.cohort_month, g.deployment, g.segment, g.grp
         ORDER BY g.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS INTEGER) AS responders_cum
@@ -226,9 +290,10 @@ FROM dense_grid g
 LEFT JOIN daily_counts dc
     ON  dc.cohort_month = g.cohort_month
     AND dc.deployment    = g.deployment
+    AND dc.segment       = g.segment
     AND dc.grp           = g.grp
     AND dc.vintage_day   = g.vintage_day
-ORDER BY g.cohort_month, g.deployment, g.grp, g.vintage_day;
+ORDER BY g.cohort_month, g.deployment, g.segment, g.grp, g.vintage_day;
 
 DROP TABLE vt_auh_experiment_cells;
 DROP TABLE vt_auh_experiment_spine;
