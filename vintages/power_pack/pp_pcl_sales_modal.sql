@@ -14,16 +14,25 @@
 -- SCOPE: *** EXPERIMENT *** — PLI sales-modal challenger/champion split ONLY.
 --   (The CAMPAIGN-scope sibling is pcl_campaign.sql — whole PCL campaign, no modal filter.)
 --
--- Engine   : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS before
---            the cross join (TDWM product-join guard). CTEs for everything else (rerun-safety).
--- Source   : DL_MR_PROD.cards_pli_decision_resp
+-- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_pli_decision_resp) —
+--   no dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE). Uses
+--   QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine — both native
+--   Teradata, both unavailable on Trino/Starburst. (CRV and VBA are the exceptions in this
+--   folder — they reach EDL and stay on Trino/Starburst.)
+--
+-- TABLE NAME: dl_mr_prod.cards_pli_decision_resp — bare, no dw00_im catalog prefix. Teradata-
+--   direct does not need a Starburst catalog prefix at all; the prior Trino build of this file
+--   carried dw00_im.dl_mr_prod.* — that prefix is REMOVED here per Andre (2026-08-10): "why are
+--   we including the dw00_im over there, it never works when I'm querying Teradata, I always
+--   have to fix this. Just dl_mr_prod."
+--
+-- Source   : dl_mr_prod.cards_pli_decision_resp
 --            (Modal-experiment logic ported from campaigns/sales_modal/pcl/p9_vcl_full_measurement.sql
---            and p10_vintage_curves.sql, which run on Starburst/Trino against dw00_im.dl_mr_prod.
---            Same underlying table, same columns — re-pointed here at Teradata-direct per contract
---            rule 8. The CONVERSION metric (responder_cli/dt_cl_change) lives entirely on the
---            curated row and needs no GA4 join, so it is engine-portable; p10's second metric,
---            ENGAGEMENT (first GA4 modal view), requires a GA4/Trino federation join and is
---            deliberately NOT carried into this file — see Success note below.)
+--            and p10_vintage_curves.sql, adapted here for Teradata-direct execution. The
+--            CONVERSION metric (responder_cli/dt_cl_change) lives entirely on the curated row and
+--            needs no GA4 join; p10's second metric, ENGAGEMENT (first GA4 modal view), requires a
+--            separate GA4/EDL join and is deliberately NOT carried into this file — see Success
+--            note below, and it would force this file onto Trino/Starburst if it were added.)
 -- Grain    : client (clnt_no) — matches p9/p10, NOT acct_no (differs from the campaign-scope file,
 --            which is account-grain; the modal experiment's population CTEs in p9/p10 are built
 --            on clnt_no).
@@ -45,7 +54,8 @@
 --   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
 --   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros.
+--   confirms it — expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
+--   ranked subquery with an outer WHERE rn = 1.
 --
 -- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
 --   1. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
@@ -67,12 +77,12 @@
 --   This is the CONVERSION metric only (matches p10's 'conversion' metric and the campaign-scope
 --   file's metric — one shared primary success definition across both PCL files). p10's second
 --   metric, ENGAGEMENT, is NOT included: contract rule 4 caps this file at one success metric,
---   engagement needs a GA4/Trino join that is out of scope for a Teradata-direct file.
--- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days.
---
--- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_pcl_exp_cells;
---   DROP TABLE vt_pcl_exp_spine;
+--   engagement needs a separate GA4 join that is out of scope for this file.
+-- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days. Built as a Teradata
+--            VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...)) — that is a
+--            Trino-only function. TDWM blocks an unconstrained product join against SYS_CALENDAR,
+--            so both the spine AND the denominator cells (vt_pcl_exp_cells) are materialized as
+--            VOLATILE TABLEs with COLLECT STATISTICS before the CROSS JOIN that builds the grid.
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt, confirmed column on
@@ -94,29 +104,51 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
--- STEP 1: denominator cells — cohort_month x grp
+-- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- below will already exist. Uncomment and run these two drops first:
+--   DROP TABLE vt_pcl_exp_spine;
+--   DROP TABLE vt_pcl_exp_cells;
 -- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Day spine 0-90, off SYS_CALENDAR. VOLATILE so it can CROSS JOIN vt_pcl_exp_cells below without
+-- tripping the TDWM unconstrained-product-join block.
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_pcl_exp_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_pcl_exp_spine COLUMN (vintage_day);
+
+-- ----------------------------------------------------------------------------
+-- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason — it is the
+-- other side of the spine CROSS JOIN. Rebuilds raw_rows -> cohort_first internally; the same CTE
+-- chain is repeated in the main query below (Teradata volatile-table creation is a standalone
+-- statement, it cannot see CTEs defined outside it).
+-- ----------------------------------------------------------------------------
 CREATE VOLATILE TABLE vt_pcl_exp_cells AS (
-    WITH raw_rows AS (
+    WITH
+    raw_rows AS (
         SELECT
             clnt_no,
             treatmt_strt_dt,
             CAST(
-                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-            AS VARCHAR(7))                                AS cohort_month,
+              CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+              CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+              CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(7))                          AS cohort_month,
             CASE WHEN report_groups_period LIKE '%R____WMS%' THEN CAST('Challenger' AS VARCHAR(20))
                  WHEN report_groups_period LIKE '%R____NMS%' THEN CAST('Champion'   AS VARCHAR(20))
-            END                                            AS grp
-        FROM DL_MR_PROD.cards_pli_decision_resp
+            END                                      AS grp
+        FROM dl_mr_prod.cards_pli_decision_resp
         WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
-          AND treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
-          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
-          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
+          AND treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
     ),
     cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
-        SELECT clnt_no, cohort_month, grp
+        SELECT clnt_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
         FROM raw_rows
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
@@ -126,38 +158,28 @@ CREATE VOLATILE TABLE vt_pcl_exp_cells AS (
     FROM cohort_first
     GROUP BY cohort_month, grp
 ) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
-
 COLLECT STATISTICS ON vt_pcl_exp_cells COLUMN (cohort_month, grp);
 
--- ============================================================================
--- STEP 2: day spine 0-90
--- ============================================================================
-CREATE VOLATILE TABLE vt_pcl_exp_spine AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 90
-) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_pcl_exp_spine COLUMN (vintage_day);
-
--- ============================================================================
--- STEP 3: final curve
--- ============================================================================
+-- ----------------------------------------------------------------------------
+-- Main query — numerator side rebuilds the same raw_rows/cohort_first chain (regular CTEs are
+-- fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools success,
+-- then joins the dense grid off the two volatile tables built above.
+-- ----------------------------------------------------------------------------
 WITH
 raw_rows AS (
     SELECT
         clnt_no,
         treatmt_strt_dt,
         CAST(
-            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7))                                AS cohort_month,
+          CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+          CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+          CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(7))                          AS cohort_month,
         CASE WHEN report_groups_period LIKE '%R____WMS%' THEN CAST('Challenger' AS VARCHAR(20))
              WHEN report_groups_period LIKE '%R____NMS%' THEN CAST('Champion'   AS VARCHAR(20))
-        END                                            AS grp,
+        END                                      AS grp,
         CASE WHEN responder_cli = 1 THEN dt_cl_change END AS success_dt_abs
-    FROM DL_MR_PROD.cards_pli_decision_resp
+    FROM dl_mr_prod.cards_pli_decision_resp
     WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
       AND treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
       AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
@@ -228,9 +250,6 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day    = g.vintage_day
 ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
-DROP TABLE vt_pcl_exp_cells;
-DROP TABLE vt_pcl_exp_spine;
-
 -- ============================================================================
 -- DIAGNOSTIC (commented out): how many clients hit both arms in one month?
 -- ============================================================================
@@ -239,14 +258,14 @@ DROP TABLE vt_pcl_exp_spine;
 --         SELECT
 --             clnt_no,
 --             CAST(
---                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
---                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
---                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--               CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--               CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--               CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
 --             AS VARCHAR(7)) AS cohort_month,
 --             CASE WHEN report_groups_period LIKE '%R____WMS%' THEN CAST('Challenger' AS VARCHAR(20))
 --                  WHEN report_groups_period LIKE '%R____NMS%' THEN CAST('Champion'   AS VARCHAR(20))
 --             END AS grp
---         FROM DL_MR_PROD.cards_pli_decision_resp
+--         FROM dl_mr_prod.cards_pli_decision_resp
 --         WHERE (report_groups_period LIKE '%R____WMS%' OR report_groups_period LIKE '%R____NMS%')
 --           AND treatmt_strt_dt >= DATE '2026-01-01'
 --     ) raw

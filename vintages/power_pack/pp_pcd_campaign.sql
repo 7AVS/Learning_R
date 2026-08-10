@@ -15,9 +15,19 @@
 --   deployment/wave, past and future. NO async carve-out. This is the
 --   "how did the whole campaign perform" curve, distinct from
 --   pcd_experiment_vintage.sql (the async-banner-only experiment curve).
--- Engine: Teradata-direct. SYS_CALENDAR spine + the population/base cells both
---   live in VOLATILE TABLEs with COLLECT STATISTICS before the cross join
---   (TDWM unconstrained-product-join guard). CTEs for everything else.
+--
+-- ENGINE: Teradata-direct. Touches only Teradata tables (dl_mr_prod.cards_pcd_ongoing_decis_resp)
+--   — no dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE). Uses
+--   QUALIFY for dedup and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine — both native
+--   Teradata, both unavailable on Trino/Starburst. (CRV and VBA are the exceptions in this
+--   folder — they reach EDL and stay on Trino/Starburst.)
+--
+-- TABLE NAME: dl_mr_prod.cards_pcd_ongoing_decis_resp — bare, no dw00_jm/dw00_im catalog
+--   prefix. Teradata-direct does not need a Starburst catalog prefix at all; the prior Trino
+--   build of this file carried dw00_jm.dl_mr_prod.* — that prefix is REMOVED here per Andre
+--   (2026-08-10): "why are we including the dw00_im over there, it never works when I'm
+--   querying Teradata, I always have to fix this. Just dl_mr_prod." The prior [VERIFY CATALOG]
+--   concern about the dw00_jm alias is moot now that this file is Teradata-direct.
 -- ----------------------------------------------------------------------------
 -- SOURCES
 --   dl_mr_prod.cards_pcd_ongoing_decis_resp   -- curated: population + success + grp (test_groups_period)
@@ -30,8 +40,8 @@
 --   pools ALL of them into monthly cohorts, which is exactly why dedup matters here.)
 -- ----------------------------------------------------------------------------
 -- GRP — REDERIVED 2026-08-10 off test_groups_period, a column that lives on the curated
---   row itself (dl_mr_prod.cards_pcd_ongoing_decis_resp), per Andre's validated working file
---   (PCD_async_vintage.sql, transcribed from screenshots 2026-08-10). This REMOVES the join
+--   row itself (dl_mr_prod.cards_pcd_ongoing_decis_resp), per Andre's validated working
+--   file (PCD_async_vintage.sql, transcribed from screenshots 2026-08-10). This REMOVES the join
 --   to DG6V01.TACTIC_EVNT_IP_AR_HIST that the prior version carried solely to pull tst_grp_cd
 --   — one fewer join, one fewer table dependency, same first-touch semantics.
 --   grp derivation: TRIM(test_groups_period) LIKE '%C' -> 'Control', LIKE '%T' -> 'Action'.
@@ -44,7 +54,8 @@
 --   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
 --   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros.
+--   confirms it — expect zeros. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a
+--   ranked subquery with an outer WHERE rn = 1.
 --
 -- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
 --   PCD ran 8+ deployments across Q3 2026 alone (see repo CLAUDE.md campaign table); a client
@@ -63,14 +74,14 @@
 --   contract rule 4, not folded into extra columns.)
 -- ----------------------------------------------------------------------------
 -- GRAIN: client (clnt_no). COUNT(DISTINCT clnt_no) throughout — never COUNT(*).
--- SPINE: vintage_day 0-60 (PCD canon window, unchanged from prior file).
+-- SPINE: vintage_day 0-60 (PCD canon window, unchanged from prior file). Built as a Teradata
+--   VOLATILE TABLE off SYS_CALENDAR.CALENDAR, not UNNEST(SEQUENCE(...)) — that is a Trino-only
+--   function. TDWM blocks an unconstrained product join against SYS_CALENDAR, so both the spine
+--   AND the denominator cells (vt_pcd_cells) are materialized as VOLATILE TABLEs with COLLECT
+--   STATISTICS before the CROSS JOIN that builds the dense grid.
 -- FLOOR: every scan >= DATE '2026-01-01' (contract rule 6).
--- [VERIFY]: none open for this file. grp now reads test_groups_period directly off the
---   curated row — see GRP note above.
--- ----------------------------------------------------------------------------
--- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_pcd_campaign_cells;
---   DROP TABLE vt_pcd_campaign_spine;
+-- [VERIFY]: grp reads test_groups_period directly off the curated row — see GRP note above,
+--   that part is unchanged/confirmed.
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on response_end, confirmed column on the curated table,
@@ -89,13 +100,35 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
--- STEP 1: denominator cells (cohort_month x grp -> base)
+-- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- below will already exist. Uncomment and run these two drops first:
+--   DROP TABLE vt_pcd_spine;
+--   DROP TABLE vt_pcd_cells;
 -- ============================================================================
-CREATE VOLATILE TABLE vt_pcd_campaign_cells AS (
-    WITH wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp read off that same row
+
+-- ----------------------------------------------------------------------------
+-- Day spine 0-60, off SYS_CALENDAR. VOLATILE so it can CROSS JOIN vt_pcd_cells below without
+-- tripping the TDWM unconstrained-product-join block.
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_pcd_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 60
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_pcd_spine COLUMN (vintage_day);
+
+-- ----------------------------------------------------------------------------
+-- Denominator cells (cohort_month x grp x base). VOLATILE for the same TDWM reason — it is the
+-- other side of the spine CROSS JOIN. Rebuilds wave_pop -> wave_arm -> cohort_first internally;
+-- the same CTE chain is repeated in the main query below (Teradata volatile-table creation is a
+-- standalone statement, it cannot see CTEs defined outside it).
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_pcd_cells AS (
+    WITH
+    wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp read off that same row
         SELECT
             clnt_no,
-            tactic_id_parent                       AS deployment,
+            tactic_id_parent AS deployment,
             response_start,
             CASE
                 WHEN TRIM(test_groups_period) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
@@ -113,18 +146,19 @@ CREATE VOLATILE TABLE vt_pcd_campaign_cells AS (
     wave_arm AS (
         SELECT
             wp.clnt_no,
+            wp.deployment,
             wp.response_start,
             CAST(
-                CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
-                CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
-            AS VARCHAR(7))                          AS cohort_month,
+              CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+              CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+              CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+            AS VARCHAR(7)) AS cohort_month,
             wp.grp
         FROM wave_pop wp
         WHERE wp.grp IS NOT NULL
     ),
     cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
-        SELECT clnt_no, cohort_month, grp
+        SELECT clnt_no, cohort_month, grp, response_start AS anchor_dt
         FROM wave_arm
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY clnt_no, cohort_month ORDER BY response_start ASC
@@ -134,28 +168,18 @@ CREATE VOLATILE TABLE vt_pcd_campaign_cells AS (
     FROM cohort_first
     GROUP BY cohort_month, grp
 ) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_pcd_cells COLUMN (cohort_month, grp);
 
-COLLECT STATISTICS ON vt_pcd_campaign_cells COLUMN (cohort_month, grp);
-
--- ============================================================================
--- STEP 2: day spine 0-60
--- ============================================================================
-CREATE VOLATILE TABLE vt_pcd_campaign_spine AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 60
-) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_pcd_campaign_spine COLUMN (vintage_day);
-
--- ============================================================================
--- STEP 3: final curve
--- ============================================================================
+-- ----------------------------------------------------------------------------
+-- Main query — numerator side rebuilds the same wave_pop/wave_arm/cohort_first chain (regular
+-- CTEs are fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools
+-- success, then joins the dense grid off the two volatile tables built above.
+-- ----------------------------------------------------------------------------
 WITH
 wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp read off that same row
     SELECT
         clnt_no,
-        tactic_id_parent                       AS deployment,
+        tactic_id_parent AS deployment,
         response_start,
         CASE
             WHEN TRIM(test_groups_period) LIKE '%C' THEN CAST('Control' AS VARCHAR(20))
@@ -163,9 +187,9 @@ wave_pop AS (   -- one row per (clnt_no, wave), earliest response_start; grp rea
         END                                     AS grp
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE SUBSTR(tactic_id_parent, 8, 3) = 'PCD'
-      AND response_start >= DATE '2026-01-01'                               -- floor guard
-      AND response_end   >= DATE '2026-05-01'                               -- <<WINDOW>>
-      AND response_end   <  DATE '2026-08-01'                               -- <<WINDOW>>
+      AND response_start >= DATE '2026-01-01'                           -- floor guard
+      AND response_end   >= DATE '2026-05-01'                           -- <<WINDOW>>
+      AND response_end   <  DATE '2026-08-01'                           -- <<WINDOW>>
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY clnt_no, tactic_id_parent ORDER BY response_start ASC
     ) = 1
@@ -177,10 +201,10 @@ wave_arm AS (
         wp.deployment,
         wp.response_start,
         CAST(
-            CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
-        AS VARCHAR(7))                          AS cohort_month,
+          CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+          CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+          CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+        AS VARCHAR(7)) AS cohort_month,
         wp.grp
     FROM wave_pop wp
     WHERE wp.grp IS NOT NULL
@@ -237,8 +261,8 @@ daily_counts AS (
 
 dense_grid AS (
     SELECT c.cohort_month, c.grp, c.base, s.vintage_day
-    FROM vt_pcd_campaign_cells c
-    CROSS JOIN vt_pcd_campaign_spine s
+    FROM vt_pcd_cells c
+    CROSS JOIN vt_pcd_spine s
 )
 
 SELECT
@@ -264,9 +288,6 @@ LEFT JOIN daily_counts dc
     AND dc.vintage_day   = g.vintage_day
 ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
-DROP TABLE vt_pcd_campaign_cells;
-DROP TABLE vt_pcd_campaign_spine;
-
 -- ============================================================================
 -- DIAGNOSTIC (commented out): how many clients hit both arms in one month?
 -- ============================================================================
@@ -275,9 +296,9 @@ DROP TABLE vt_pcd_campaign_spine;
 --         SELECT
 --             wp.clnt_no,
 --             CAST(
---                 CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
---                 CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
---                 CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
+--               CAST(EXTRACT(YEAR FROM wp.response_start) AS VARCHAR(4)) || '-' ||
+--               CASE WHEN EXTRACT(MONTH FROM wp.response_start) < 10 THEN '0' ELSE '' END ||
+--               CAST(EXTRACT(MONTH FROM wp.response_start) AS VARCHAR(2))
 --             AS VARCHAR(7)) AS cohort_month,
 --             wp.grp
 --         FROM (

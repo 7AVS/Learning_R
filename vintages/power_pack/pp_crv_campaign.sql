@@ -19,14 +19,15 @@
 --               2026-04  Action  base   969,058  responders 11,169
 --               2026-04  Control base    50,815  responders    458
 --
--- ENGINE: Trino/Starburst — THE ONLY NON-TERADATA FILE IN THE PACK.
--- Every other pp_*.sql file is Teradata-direct (SYS_CALENDAR volatile spine). This one
--- flips because the success signal lives in the EDL Success Library
+-- ENGINE: Trino/Starburst — one of only two non-Teradata-direct files in this pack (the other
+-- is pp_vba_campaign.sql). Every other pp_*.sql file is Teradata-direct (SYS_CALENDAR volatile
+-- spine). This one flips because the success signal lives in the EDL Success Library
 -- (edl0_im.prod_zp10_prod_staging.measurement_events_v2), and touching any edl0_im table
 -- forces the whole statement into Starburst/Trino syntax (see query_engine_guidelines.md,
 -- "SYNTAX FOLLOWS THE ENGINE, NOT THE TABLE"). Consequences applied throughout this file:
 -- NO QUALIFY, NO VOLATILE TABLE (CTEs only), NO SYS_CALENDAR spine (UNNEST(SEQUENCE(0,90))
--- instead), NO Teradata date subtraction (DATE_DIFF('day', a, b) instead).
+-- instead), NO Teradata date subtraction (DATE_DIFF('day', a, b) instead). No dw00 catalog
+-- prefix appears anywhere in this file (dg6v01/edl0_im tables never carried one).
 --
 -- CATALOG — edl0_im (L-zero), NOT ed10_im. One screenshot rendered it as ed10_im; that is
 --             the known wrong-catalog trap. Confirmed edl0_im below.

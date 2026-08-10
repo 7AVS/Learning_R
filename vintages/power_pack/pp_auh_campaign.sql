@@ -8,9 +8,18 @@
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
 --   section 1/5). No separate auh_campaign_vintage.sql exists or is needed.
--- Engine: Teradata-direct. SYS_CALENDAR spine + the population/base cells both
---   live in VOLATILE TABLEs with COLLECT STATISTICS before the cross join
---   (TDWM unconstrained-product-join guard). CTEs for everything else.
+--
+-- ENGINE: Teradata-direct. Touches only Teradata tables (DG6V01.tactic_evnt_ip_ar_hist,
+--   D3CV12A.CR_CRD_ACCT_EVNT_DLY, D3CV12A.DLY_FULL_PORTFOLIO) — no dw00 catalog prefix, no
+--   Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE). Uses QUALIFY for dedup, RIGHT()
+--   for the '_C' suffix check, and a SYS_CALENDAR-backed VOLATILE TABLE for the day spine —
+--   all native Teradata, all unavailable on Trino/Starburst. (CRV and VBA are the exceptions
+--   in this folder — they reach EDL and stay on Trino/Starburst.)
+--
+-- TABLE NAMES: all three source tables are bare schema.table, no catalog prefix — this is
+--   Teradata-direct, catalog prefixes are a Starburst/federation concept and do not apply here.
+--   DG6V01.tactic_evnt_ip_ar_hist / D3CV12A.CR_CRD_ACCT_EVNT_DLY / D3CV12A.DLY_FULL_PORTFOLIO —
+--   same bare names used throughout this repo's Teradata-direct files.
 -- ----------------------------------------------------------------------------
 -- SOURCES
 --   DG6V01.tactic_evnt_ip_ar_hist          -- population + cohort/grp/segment
@@ -56,6 +65,8 @@
 --   uniformly for consistency with every other Power Pack file. segment is
 --   resolved by the SAME first-touch row as grp (both live on one tactic-event
 --   row), so a first-touch segment/grp pair always travels together.
+--   Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a ranked subquery with an
+--   outer WHERE rn = 1.
 -- ----------------------------------------------------------------------------
 -- *** DEDUP — REQUIRED, EVEN THOUGH IT SHOULD BE A NO-OP HERE ***
 --   Per Andre: the two AUH waves are DISJOINT populations (no client is
@@ -66,7 +77,7 @@
 --   One row per (acct_no, cohort_month), anchored on that account's earliest
 --   treatmt_strt_dt within the month:
 --     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
---                                ORDER BY treatmt_strt_dt ASC) = 1
+--                        ORDER BY treatmt_strt_dt ASC) = 1
 --   The success-window join below uses [MIN(treatmt_strt_dt), MAX(treatmt_end_dt)]
 --   across all of that account's rows in the cohort_month (not just the
 --   first-touch row's own window) so a later wave's window is never silently
@@ -114,7 +125,8 @@
 --   model_arm (Web / Random / Model) is COLLAPSED ENTIRELY — Andre explicitly
 --   does NOT want that slicer broken out here. grp itself stays binary Action vs
 --   Control, per segment. grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' ->
---   'Control', ELSE -> 'Action'.
+--   'Control', ELSE -> 'Action' (Teradata's native RIGHT() — the Trino version of
+--   this file used SUBSTR with a negative start index because Trino has no RIGHT()).
 --
 --   [VERIFY] *** the '_C' = Control convention is an UNCONFIRMED WORKING
 --   ASSUMPTION for BOTH waves (2026042AUH and 2026119AUH) and is LOAD-BEARING
@@ -156,16 +168,16 @@
 --   The work-env file's target-product variant is DROPPED here on purpose —
 --   one metric per file, and Andre's instruction was explicit: use ANY-PRODUCT.
 -- ----------------------------------------------------------------------------
--- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file).
+-- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file). Built as a
+--   Teradata VOLATILE TABLE off SYS_CALENDAR.CALENDAR (see below), not UNNEST(SEQUENCE(...)) —
+--   that is a Trino-only function. TDWM blocks an unconstrained product join against
+--   SYS_CALENDAR, so both the spine AND the denominator cells (vt_auh_cells) are materialized
+--   as VOLATILE TABLEs with COLLECT STATISTICS before the CROSS JOIN that builds the dense grid.
 -- FLOOR: population floor guard >= DATE '2026-01-01' (contract rule 6) stays in place;
 --   population is now ALSO filtered to treatmt_end_dt in the Q3 window (see QUARTER WINDOW
 --   block below) — end-date is the SELECTOR, treatmt_strt_dt remains the cohort/day-0 anchor.
 --   Success-side scan (CR_CRD_ACCT_EVNT_DLY + DLY_FULL_PORTFOLIO) tightened to
 --   [2026-02-01, 2026-08-01) — see <<WINDOW>> tags below.
--- ----------------------------------------------------------------------------
--- Drop residual volatile tables if rerunning in the same session:
---   DROP TABLE vt_auh_experiment_cells;
---   DROP TABLE vt_auh_experiment_spine;
 -- ----------------------------------------------------------------------------
 -- SCOPE: this file is scoped to deployments ENDING in the quarter window below
 --   (population filtered on treatmt_end_dt). cohort_month and day-0 still
@@ -183,20 +195,42 @@
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
--- STEP 1: denominator cells (cohort_month x segment x grp -> base)
+-- RERUN GUARD — if re-running this file in the SAME Teradata session, the volatile tables
+-- below will already exist. Uncomment and run these two drops first:
+--   DROP TABLE vt_auh_spine;
+--   DROP TABLE vt_auh_cells;
 -- ============================================================================
-CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
-    WITH population_raw AS (
+
+-- ----------------------------------------------------------------------------
+-- Day spine 0-30, off SYS_CALENDAR. VOLATILE so it can CROSS JOIN vt_auh_cells below without
+-- tripping the TDWM unconstrained-product-join block.
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_auh_spine AS (
+    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
+    FROM SYS_CALENDAR.CALENDAR
+    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 30
+) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_auh_spine COLUMN (vintage_day);
+
+-- ----------------------------------------------------------------------------
+-- Denominator cells (cohort_month x segment x grp x base). VOLATILE for the same TDWM reason —
+-- it is the other side of the spine CROSS JOIN. Rebuilds population_raw -> cohort_first
+-- internally; the same CTE chain is repeated in the main query below (Teradata volatile-table
+-- creation is a standalone statement, it cannot see CTEs defined outside it).
+-- ----------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_auh_cells AS (
+    WITH
+    population_raw AS (
         SELECT
             CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
             treatmt_strt_dt,
             treatmt_end_dt,
             CAST(
-                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+              CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+              CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+              CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
             AS VARCHAR(7))                          AS cohort_month,
-            -- segment: rewards vs non-rewards, derived per-wave from tst_grp_cd — see header
+            -- segment: rewards vs non-rewards, derived from tst_grp_cd — see header
             CASE
                 WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'NR'
                     THEN CAST('NonReward'       AS VARCHAR(20))
@@ -206,6 +240,7 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
                     THEN CAST('Rewards_Offer'   AS VARCHAR(20))
                 ELSE CAST('Unknown' AS VARCHAR(20))
             END                                      AS segment,
+            -- grp: model_arm collapsed, binary Action/Control — see GRP COLLAPSE above
             CASE
                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
                 ELSE                                        CAST('Action'  AS VARCHAR(20))
@@ -216,9 +251,10 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
           AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
           AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
     ),
-    -- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins (never expected to fire — see header)
+    -- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins
+    -- (never expected to fire — see header)
     cohort_first AS (
-        SELECT acct_no, cohort_month, segment, grp
+        SELECT acct_no, cohort_month, segment, grp, treatmt_strt_dt AS anchor_dt
         FROM population_raw
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
@@ -228,23 +264,13 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
     FROM cohort_first
     GROUP BY cohort_month, segment, grp
 ) WITH DATA PRIMARY INDEX (cohort_month, segment, grp) ON COMMIT PRESERVE ROWS;
+COLLECT STATISTICS ON vt_auh_cells COLUMN (cohort_month, segment, grp);
 
-COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, segment, grp);
-
--- ============================================================================
--- STEP 2: day spine 0-30
--- ============================================================================
-CREATE VOLATILE TABLE vt_auh_experiment_spine AS (
-    SELECT (calendar_date - DATE '2000-01-01') AS vintage_day
-    FROM SYS_CALENDAR.CALENDAR
-    WHERE (calendar_date - DATE '2000-01-01') BETWEEN 0 AND 30
-) WITH DATA PRIMARY INDEX (vintage_day) ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_auh_experiment_spine COLUMN (vintage_day);
-
--- ============================================================================
--- STEP 3: final curve
--- ============================================================================
+-- ----------------------------------------------------------------------------
+-- Main query — numerator side rebuilds the same population_raw/cohort_first chain (regular
+-- CTEs are fine here; only the spine CROSS JOIN needed the volatile-table workaround), pools
+-- success, then joins the dense grid off the two volatile tables built above.
+-- ----------------------------------------------------------------------------
 WITH
 population_raw AS (
     SELECT
@@ -252,37 +278,34 @@ population_raw AS (
         treatmt_strt_dt,
         treatmt_end_dt,
         CAST(
-            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+          CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+          CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+          CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
         AS VARCHAR(7))                          AS cohort_month,
+        -- segment: rewards vs non-rewards, derived from tst_grp_cd — see header
         CASE
-            WHEN tactic_id = '2026042AUH'
-                 AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
-                THEN CAST('NonReward' AS VARCHAR(20))
-            WHEN tactic_id = '2026119AUH'
-                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('NRR','NRM','NRW')
-                THEN CAST('NonReward' AS VARCHAR(20))
-            WHEN tactic_id = '2026119AUH'
-                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('RNM','RNW')
+            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'NR'
+                THEN CAST('NonReward'       AS VARCHAR(20))
+            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RN'
                 THEN CAST('Rewards_NoOffer' AS VARCHAR(20))
-            WHEN tactic_id = '2026119AUH'
-                 AND SUBSTR(TRIM(tst_grp_cd), 1, 3) IN ('ROR','ROM','ROW')
-                THEN CAST('Rewards_Offer' AS VARCHAR(20))
+            WHEN SUBSTR(TRIM(tst_grp_cd), 1, 2) = 'RO'
+                THEN CAST('Rewards_Offer'   AS VARCHAR(20))
             ELSE CAST('Unknown' AS VARCHAR(20))
         END                                      AS segment,
+        -- grp: model_arm collapsed, binary Action/Control — see GRP COLLAPSE above
         CASE
             WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
             ELSE                                        CAST('Action'  AS VARCHAR(20))
         END                                      AS grp
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
-      AND treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
-      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
-      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
+      AND treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+      AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+      AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
 ),
 
--- [NOTE] first-touch: grp/segment come from the account's earliest row this month (never expected to fire — see header)
+-- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins
+-- (never expected to fire — see header)
 cohort_first AS (
     SELECT acct_no, cohort_month, segment, grp, treatmt_strt_dt AS anchor_dt
     FROM population_raw
@@ -353,8 +376,8 @@ daily_counts AS (
 
 dense_grid AS (
     SELECT c.cohort_month, c.segment, c.grp, c.base, s.vintage_day
-    FROM vt_auh_experiment_cells c
-    CROSS JOIN vt_auh_experiment_spine s
+    FROM vt_auh_cells c
+    CROSS JOIN vt_auh_spine s
 )
 
 SELECT
@@ -380,9 +403,6 @@ LEFT JOIN daily_counts dc
     AND dc.grp           = g.grp
     AND dc.vintage_day   = g.vintage_day
 ORDER BY g.cohort_month, g.segment, g.grp, g.vintage_day;
-
-DROP TABLE vt_auh_experiment_cells;
-DROP TABLE vt_auh_experiment_spine;
 
 -- ============================================================================
 -- DIAGNOSTIC A (commented out): every tst_grp_cd and where it lands.
@@ -415,9 +435,9 @@ DROP TABLE vt_auh_experiment_spine;
 --         SELECT
 --             CAST(tactic_evnt_id AS BIGINT) AS acct_no,
 --             CAST(
---                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
---                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
---                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--               CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--               CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--               CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
 --             AS VARCHAR(7)) AS cohort_month,
 --             CASE
 --                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))

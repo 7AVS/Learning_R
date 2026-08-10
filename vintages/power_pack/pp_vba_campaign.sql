@@ -9,10 +9,18 @@
 --             above Action/Control; segment carries real values only for AUH.
 -- Campaign  : VBA (Visa Benefit Add) — CAMPAIGN scope
 --
--- ENGINE: Trino / Starburst. ALL Power Pack files use ONE engine - EDW tables are reached
---         through Starburst federation. No volatile tables, no QUALIFY, no SYS_CALENDAR.
+-- ENGINE: Trino / Starburst — one of only two non-Teradata-direct files in this pack (the other
+--         is pp_crv_campaign.sql). Every other pp_*.sql file is Teradata-direct. This one flips
+--         because the success signal reaches edl0_im (SCOT, the EDL Success Library form used
+--         here is prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot) — touching
+--         any edl0_im table forces the whole statement onto Starburst/Trino syntax (see
+--         query_engine_guidelines.md, "SYNTAX FOLLOWS THE ENGINE, NOT THE TABLE"). No volatile
+--         tables, no QUALIFY, no SYS_CALENDAR — all Teradata-only and unavailable here.
 --
--- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed):
+-- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed).
+--   None of these carry a dw00_im/dw00_jm prefix — that prefix is a Teradata-direct anti-pattern
+--   Andre flagged 2026-08-10 ("why are we including the dw00_im over there, it never works when
+--   I'm querying Teradata") and none of this file's tables ever had it:
 --   DG6V01.tactic_evnt_ip_ar_hist — bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
 --     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
 --     campaigns/PCD/async_banner_summary.sql — all three headed "Engine: Trino/Starburst".
