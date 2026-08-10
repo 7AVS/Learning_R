@@ -1,216 +1,214 @@
--- vbu_campaign_vintage.sql
--- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
---             `mne` ADDED 2026-08-10 as first column).
---             8 columns only: mne, cohort_month, segment, grp, vintage_day, base,
---             responders, responders_cum.
--- mne       : CAST('VBU' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
---             file measures an experiment.
--- segment   : CAST('All' AS VARCHAR(20)) — constant. VBU has no pre-treatment population split
---             above Action/Control; segment carries real values only for AUH.
--- Campaign  : VBU (Visa Benefit Upgrade) — CAMPAIGN scope
+-- pp_vbu_campaign.sql
+-- ============================================================================
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10). 8 columns, exact order:
+--   mne | cohort_month | segment | grp | vintage_day | base | responders | responders_cum.
+--   mne = CAST('VBU' AS VARCHAR(20)). segment = CAST('All' AS VARCHAR(20)) — constant. VBU has
+--   no pre-treatment population split above Action/Control; segment carries real values only
+--   for AUH.
+-- Campaign: VBU (Visa Benefit Upgrade) — CAMPAIGN scope.
 --
--- ENGINE: Trino / Starburst. ALL Power Pack files use ONE engine - EDW tables are reached
---         through Starburst federation. No volatile tables, no QUALIFY, no SYS_CALENDAR.
+-- *** METHODOLOGY FIX 2026-08-10 (Andre confirmed) — SUCCESS REDEFINED, REVERSES THE
+--     2026-07-22 "REINSTATE SCOT FOR ALL 4 VBA/VBU FILES" CHANGE ***
+--   VBU = Visa Benefit UPGRADE: an existing cardholder swaps to a richer product ON THE SAME
+--   ACCOUNT. That is a PRODUCT CHANGE, not a new credit application. The prior build of this
+--   file (and vintages/vbu_vintage_monthly.sql) used Casper+SCOT credit-application approval as
+--   the success signal — copied wholesale from VBA's methodology. That is WRONG for VBU: a
+--   client who upgrades in place without submitting a new credit application is invisible to
+--   Casper/SCOT and was silently excluded from every VBU number this repo has produced since
+--   2026-07-22.
+--   schemas/cards_bizups_vbu_descresp_clnt.md:3 — "NBA curated outcomes table for VBU (Visa
+--   Benefit Upgrade) — encodes **product change** as the success signal, not a new credit card
+--   application. Different methodology from the VBA table."
+--   This REVERSES the 2026-07-22 swap that vintages/vbu_vintage_monthly.sql:13-24 itself flagged
+--   as "a bigger swap than 'add a second source' and should be confirmed, not assumed permanent
+--   — FLAG THIS TO ANDRE" and that WORKSTREAMS.md:21-24 has carried as OPEN item #3 ("VBU
+--   success: Casper/SCOT application signal (current build) vs product-change (Daniel's
+--   original)") ever since, unanswered. Andre confirmed 2026-08-10: VBU must NOT use SCOT.
+--   Success reverts to the product-change definition — Daniel Chin's original framework
+--   (campaigns/VBA_VBU/vbu_vintage_original.sql), now sourced off the curated table's pre-built
+--   flag instead of a hand-rolled dly_full_portfolio join.
 --
--- CATALOG PREFIXES (verified against proven-running Trino files in this repo, not guessed):
---   DG6V01.tactic_evnt_ip_ar_hist — bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
---     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
---     campaigns/PCD/async_banner_summary.sql — all three headed "Engine: Trino/Starburst".
---   d3cv12a.appl_fact_dly (Casper) — bare, no dw00 prefix. This exact table isn't independently
---     proven, but the D3CV12A schema's no-prefix pattern is proven for sibling tables
---     (dly_full_portfolio, cr_crd_rpts_acct, visa_txn_dly, lkup_txn_cd_catg) in
---     campaigns/CRV/suppression_experiment/c3_banner_reach_2026.sql, c4_demand_shaping.sql,
---     and campaigns/PCD/async_banner_summary.sql / pcd_success_validation.sql /
---     async_banner_vintage_tracker.sql — all Engine: Trino/Starburst. Same schema, same rule.
---     (Note: query_engine_guidelines.md §Catalog Naming lists "dw00_im.d3cv12a.*" as the
---     federated form — that line does not match what actually runs in this repo's Trino files.
---     Going with the proven code, not the stale doc line. Flag if this errors.)
---   edl0_im.prod_yg80_pcbsharedzone.tsz_00222_... (SCOT) — 3-part EDL form, unambiguous.
+--   VBA IS UNCHANGED AND STAYS ON CASPER+SCOT. VBA = Visa Benefit ADD, a real credit-card
+--   acquisition — Casper+SCOT application approval IS the correct signal there. This fix does
+--   not touch pp_vba_campaign.sql.
 --
--- Source    : DG6V01.tactic_evnt_ip_ar_hist (population) + d3cv12a.appl_fact_dly (Casper) +
---             edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot (SCOT)
--- [FLAG] Success definition for VBU is Casper+SCOT application approval — the SAME definition
---             as VBA — per the 2026-07-22 methodology swap documented in
---             campaigns/VBA_VBU/vbu_summary_vintage_cell.py, REPLACING the earlier AIB/
---             dly_full_portfolio product-change definition ("Daniel Chin's original
---             framework", campaigns/VBA_VBU/vbu_vintage_original.sql — left in the repo,
---             untouched). Carried forward unchanged by the deployment drop.
--- Population: SUBSTR(tactic_id,8,3)='VBU', treatmt_strt_dt >= DATE '2026-01-01'. DELETED the
---             dead filter SUBSTR(tactic_id,8,1)<>'J' — position 8 is always 'V' for VBA/VBU.
+-- ENGINE: Trino / Starburst. No volatile tables, no QUALIFY, no SYS_CALENDAR.
 --
--- *** deployment DROPPED, 2026-08-10 *** — was tactic_id. Curve grain is now COHORT MONTH.
+-- SOURCE: dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt — curated VBU outcomes table.
+--   VBU-specific by construction (table name + schema doc framing), so no
+--   SUBSTR(tactic_id,8,3)='VBU' filter is applied here — unlike the shared
+--   DG6V01.tactic_evnt_ip_ar_hist table the OLD VBU population query ran against.
+--   [VERIFY] this table is exhaustive for VBU population (no non-VBU rows leak in) — not
+--   independently confirmed, going on the table name + schema doc.
 --
--- DEDUP IDENTIFIER: clnt_no — this file's success join keys on clnt_no throughout.
+-- COLUMNS USED (all confirmed against schemas/cards_bizups_vbu_descresp_clnt.md, cited by line):
+--   clnt_no                  — client id                                          (doc line 15)
+--   tactic_id                — deployment/wave key                                (doc line 16)
+--   response_start            — treatment START date / Day-0 anchor                (doc line 24)
+--   response_end              — treatment END date / <<WINDOW>> selector           (doc line 25)
+--   test_group / control      — arm columns, see GRP note below                    (doc lines 27-28)
+--   responder_targetproduct   — success flag, ONE metric per contract rule 4       (doc line 69)
+--   dt_prod_change_client     — product-change date = success event date          (doc line 72)
 --
--- *** [NOTE] grp tie-break = FIRST-TOUCH ***
---   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
---   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
---   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
---   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
---   confirms it — expect zeros.
+-- SUCCESS METRIC: responder_targetproduct = 1, event date = dt_prod_change_client. Per the
+--   schema doc's own framing (lines 63-69), the table pre-builds BOTH "any product change"
+--   (responder_anyproduct) and "primary/target upgrade" (responder_targetproduct) — mirroring
+--   Daniel Chin's original two-definition framework in vbu_vintage_original.sql ("any" vs
+--   "primary"/AIB-only). responder_targetproduct is the narrower, campaign-intent-aligned metric
+--   (change TO the offered target product, not any incidental product move) — the same choice
+--   pp_pcd_async.sql made for its analogous any/target pair. Going with it as the ONE
+--   contract-mandated metric; responder_anyproduct is available on the source table for a future
+--   secondary cut but is not a column in this 8-column output.
 --
--- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
---   1. pop_wave: one row per (clnt_no, tactic_id) — the original per-wave dedup (multiple event
---      rows for the same client+wave collapse to the earliest treatmt_strt_dt), unchanged.
---   2. cohort_first: ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
---      ORDER BY treatmt_strt_dt ASC), keep rn=1 — first-touch wave wins grp and becomes Day 0.
---   3. cohort_window: MAX(treatmt_end_dt) across ALL of that client's waves in the cohort_month,
---      so a later wave's window is never truncated by only looking at the first-touch wave's own
---      end date. Search window for success = [anchor_dt, window_end].
--- grp       : SUBSTR(TRIM(tst_grp_cd),1,1): 'C'->Control, 'T'->Action, from the client's
---             first-touch wave (Trino has no LEFT() — SUBSTR(x,1,1) is the equivalent; TRIM
---             guards against CHAR padding on the code column). Anything else is EXCLUDED from
---             the population (not a third bucket — contract requires grp strictly binary).
---             [VERIFY] the C/T-prefix split itself is not documented in the original
---             campaigns/VBA_VBU/vbu_vintage_original.sql (which uses tst_grp_cd positions 6-8
---             as a FROM-product code, not an Action/Control split); confirmed instead in
---             campaigns/VBA_VBU/vbu_summary_vintage_cell.py (`tc()`, ~line 64) as VBA/VBU's real
---             Action/Control rollup rule.
--- Success   : UNCHANGED definition — Casper + SCOT unioned and deduped to one earliest-approval
---             event. Same tables/filters as vba_campaign.sql. Union is a plain UNION (not UNION
---             ALL) on (clnt_no, event_date) to dedupe the same physical event reported by both
---             systems, done BEFORE cohort attribution. Only the cross-wave pooling layer
---             changed — see DEDUP above; each client's cohort-month window now spans ALL their
---             VBU waves that month instead of measuring against a single wave's window.
--- Spine     : fixed 0-90 — preserved as a deliberate cap. UNNEST(SEQUENCE(0,90)), Trino has no
---             SYS_CALENDAR.
--- Floor     : DATE '2026-01-01' on every scan (contract rule 6), including Casper/SCOT event
---             tables.
+-- GRP: *** [VERIFY] UNCONFIRMED DERIVATION *** — the schema doc lists `test_group` ("Test group
+--   label") and `control` ("Control group label") as two SEPARATE columns (doc lines 27-28), not
+--   a single tst_grp_cd / test_groups_period code column with a C/T suffix like every other
+--   Power Pack source. The doc does not state how the two columns combine into a binary arm
+--   (mutually exclusive per row? mutually exclusive population?), and no confirmed convention
+--   for this specific table exists anywhere else in the repo. Implemented below as the most
+--   defensible reading: test_group populated AND control null -> Action; control populated AND
+--   test_group null -> Control; anything else (both populated, both null) -> EXCLUDED, same as
+--   every other pp_*.sql file's binary-grp guard (contract rule 5). This is a GUESS, flagged the
+--   same way AUH's `_C`=Control convention is flagged [UNCONFIRMED] elsewhere in this repo
+--   (OUTPUT_CONTRACT.md file inventory) — CONFIRM WITH ANDRE before trusting grp splits on this
+--   file's output.
+--
+-- DEDUP IDENTIFIER: clnt_no. Same two-stage pattern as every other pp_*.sql file: wave_pop (one
+--   row per clnt_no, tactic_id, earliest response_start wins) -> cohort_first (one row per
+--   clnt_no, cohort_month, first-touch wins grp + anchor date). Applied defensively — the
+--   curated table's grain has never been reconciled: schemas/cards_bizups_vbu_descresp_clnt.md:139
+--   leaves it an open question ("Grain confirmation — is this 1 row per (clnt_no, tactic_id)?
+--   Per (clnt_no, treatment_period)?"). If the table is already 1 row per (clnt_no, tactic_id),
+--   this dedup is a no-op; if not, it protects against double-counting exactly like it does in
+--   every sibling file.
+--
+-- *** [NOTE] grp tie-break = FIRST-TOUCH *** — same convention as every pp_*.sql file: if a
+--   client appears twice in one cohort_month with opposing arms, grp comes from their FIRST
+--   treatment. Per Andre (2026-08-10) this should never fire (trigger-style decisioning). Bottom
+--   diagnostic (commented out) confirms it — expect zeros.
+--
+-- SUCCESS POOLING: dt_prod_change_client is already an absolute date embedded on the curated
+--   row (same shape as PCD's dt_prod_change on cards_pcd_ongoing_decis_resp) so, exactly like
+--   pp_pcd_async.sql, success is pooled across every wave the client touched that cohort_month
+--   via a plain MIN(dt_prod_change_client) joined back through wave_arm, then rebased to the
+--   first-touch anchor date — no separate raw-event-table search-window join needed (unlike
+--   VBA's Casper/SCOT union, which has no deployment key and must join on a date range instead).
+--
+-- Spine : fixed 0-90 — same cap as VBA and the prior VBU builds. UNNEST(SEQUENCE(0,90)).
+-- Floor : DATE '2026-01-01' on every scan (contract rule 6).
+--
+-- [VERIFY — RAW ALTERNATIVE, NOT BUILT HERE]: this file trusts the CURATED table's pre-built
+--   responder_targetproduct / dt_prod_change_client flags. The alternative is rebuilding product
+--   changes from scratch off D3CV12A.dly_full_portfolio + d3cv12a.cr_crd_rpts_acct, exactly as
+--   campaigns/VBA_VBU/vbu_vintage_original.sql does (its acct_changes CTE, excluding no-ops,
+--   flip-backs, and prior-AIB-holders). The curated table's grain vs that raw rebuild has NEVER
+--   been reconciled (schemas/cards_bizups_vbu_descresp_clnt.md:139). If Andre wants the raw
+--   build instead of trusting the curated flag, vbu_vintage_original.sql is the reference logic.
 -- ----------------------------------------------------------------------------
--- SCOPE: this file is scoped to deployments ENDING in the quarter window below
---   (population filtered on treatmt_end_dt). cohort_month and day-0 still anchor
---   on treatmt_strt_dt (the START column) — unchanged. Success-side scan (Casper
---   + SCOT event tables) tightened separately — see <<WINDOW>> tags below.
---   Retargeting a quarter = editing the two <<WINDOW>> literals below only.
+-- SCOPE: deployments ENDING in the quarter window below (population filtered on response_end,
+--   the schema-doc-confirmed treatment-end column). cohort_month and day-0 anchor on
+--   response_start (START). Retargeting a quarter = editing the two <<WINDOW>> literals below.
 -- ============================================================================
 
 -- ============================================================================
 -- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
---   Selects deployments whose END date (treatmt_end_dt) falls in the window.
---   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
+--   Selects deployments whose END date (response_end) falls in the window.
+--   Cohort month and day 0 still anchor on response_start (START), not these.
 --     Q3 FY2026 = 2026-05-01 .. 2026-07-31
 -- ============================================================================
 -- WINDOW START : DATE '2026-05-01'
 -- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 WITH
--- stage 1 dedup: one row per (clnt_no, tactic_id) — earliest treatmt_strt_dt wins
-pop_wave AS (
-    SELECT clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt, grp
+-- stage 1 dedup: one row per (clnt_no, tactic_id) — earliest response_start wins; grp read off
+-- that same row
+wave_pop AS (
+    SELECT clnt_no, tactic_id, response_start, grp
     FROM (
         SELECT
-            clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
+            clnt_no,
+            tactic_id,
+            response_start,
             CASE
-                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
-                WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
+                WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
+                WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
             END AS grp,
             ROW_NUMBER() OVER (
-                PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
+                PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
             ) AS rn
-        FROM DG6V01.tactic_evnt_ip_ar_hist
-        WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
-          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
-          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
-          AND SUBSTR(tactic_id, 8, 3) = 'VBU'
-          AND SUBSTR(TRIM(tst_grp_cd), 1, 1) IN ('C', 'T')
+        FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+        WHERE response_start >= DATE '2026-01-01'                          -- floor guard
+          AND response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
     ) ranked
     WHERE rn = 1
 ),
-pop_raw AS (
+
+wave_arm AS (
     SELECT
-        clnt_no, treatmt_strt_dt, treatmt_end_dt, grp,
-        DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month
-    FROM pop_wave
+        wp.clnt_no,
+        wp.tactic_id,
+        wp.response_start,
+        DATE_TRUNC('month', wp.response_start) AS cohort_month,
+        wp.grp
+    FROM wave_pop wp
+    WHERE wp.grp IS NOT NULL
 ),
--- stage 2 dedup: one row per (clnt_no, cohort_month) — first-touch wave wins grp + anchor date
--- (never expected to fire — see header)
-cohort_first AS (
-    SELECT clnt_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
+
+cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+    SELECT clnt_no, cohort_month, grp, response_start AS anchor_dt
     FROM (
-        SELECT clnt_no, cohort_month, grp, treatmt_strt_dt,
+        SELECT clnt_no, cohort_month, grp, response_start,
                ROW_NUMBER() OVER (
-                   PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
+                   PARTITION BY clnt_no, cohort_month ORDER BY response_start ASC
                ) AS rn
-        FROM pop_raw
+        FROM wave_arm
     ) ranked
     WHERE rn = 1
 ),
+
 vbu_cells AS (
     SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
     FROM cohort_first
     GROUP BY cohort_month, grp
 ),
-cohort_window AS (
-    -- widen search window to the latest end date across ALL the client's waves this month
-    SELECT clnt_no, cohort_month, MAX(treatmt_end_dt) AS window_end
-    FROM pop_raw
-    GROUP BY clnt_no, cohort_month
+
+-- success: primary target-product responders only, same population window as wave_pop
+success_events AS (
+    SELECT
+        clnt_no,
+        tactic_id,
+        dt_prod_change_client AS success_dt_abs
+    FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+    WHERE response_start >= DATE '2026-01-01'                              -- floor guard
+      AND response_end   >= DATE '2026-05-01'                              -- <<WINDOW>> keeps success scan aligned to selected deployments
+      AND response_end   <  DATE '2026-08-01'                              -- <<WINDOW>>
+      AND responder_targetproduct = 1
+      AND dt_prod_change_client IS NOT NULL
 ),
-population AS (
-    SELECT cf.clnt_no, cf.cohort_month, cf.grp, cf.anchor_dt, cw.window_end
+
+-- pool success across every wave the client touched this cohort_month — join via wave_arm
+-- to attach cohort_month, then take the earliest absolute success date for the client-month
+success_pooled AS (
+    SELECT wa.clnt_no, wa.cohort_month, MIN(se.success_dt_abs) AS success_dt_abs
+    FROM success_events se
+    INNER JOIN wave_arm wa
+        ON wa.clnt_no = se.clnt_no AND wa.tactic_id = se.tactic_id
+    GROUP BY wa.clnt_no, wa.cohort_month
+),
+
+numerator AS (
+    SELECT
+        cf.cohort_month, cf.grp, cf.clnt_no,
+        DATE_DIFF('day', cf.anchor_dt, sp.success_dt_abs) AS vintage_day
     FROM cohort_first cf
-    INNER JOIN cohort_window cw
-        ON cw.clnt_no = cf.clnt_no AND cw.cohort_month = cf.cohort_month
-),
-
--- raw candidate success events, Casper (PRIMARY) — no deployment key on the event table itself
-casper_events AS (
-    SELECT DISTINCT app.bus_clnt_no AS clnt_no, app.app_rcv_dt AS event_date
-    FROM d3cv12a.appl_fact_dly app
-    WHERE app.app_rcv_dt >= DATE '2026-02-01'                               -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
-      AND app.app_rcv_dt <  DATE '2026-08-01'                               -- <<WINDOW>> upper: no selected deployment runs past this
-      AND app.Status IN ('A')
-      AND app.PROD_APPRVD IN ('B', 'E')
-      AND app.CR_LMT_CHG_IND = 'N'
-      AND app.visa_prod_cd NOT IN ('CCL', 'BXX')
-      AND (app.Cell_Code IS NULL OR app.Cell_Code NOT IN ('PATACT', 'GV0320'))
-),
-
--- raw candidate success events, SCOT (SECONDARY) — one row per client (SCOT's snapshot
--- structure has no per-deployment key; MIN date + fulfilled flag is the most it supports)
-scot_events_raw AS (
-    SELECT
-        CAST(creditapplication_borrowers_borrowersrfnumber AS INTEGER) AS clnt_no,
-        MIN(CAST(creditapplication_createddatetime AS DATE))           AS event_date,
-        MAX(CASE
-            WHEN creditapplication_creditapplicationstatuscode IN ('FULFILLED') THEN 1 ELSE 0
-        END)                                                           AS approved
-    FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
-    WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory
-          IN ('CREDIT_CARD')
-      AND creditapplication_createddatetime >= DATE '2026-02-01'            -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
-      AND creditapplication_createddatetime <  DATE '2026-08-01'            -- <<WINDOW>> upper: no selected deployment runs past this
-    GROUP BY 1
-),
-scot_events AS (
-    SELECT clnt_no, event_date FROM scot_events_raw WHERE approved = 1
-),
-
--- union FIRST, dedupe the physical event (clnt_no, event_date) — plain UNION, not UNION ALL —
--- BEFORE joining to a cohort window
-events AS (
-    SELECT clnt_no, event_date FROM casper_events
-    UNION
-    SELECT clnt_no, event_date FROM scot_events
-),
-
--- each client-month is measured against its OWN pooled window only (anchor_dt to window_end)
-success AS (
-    SELECT
-        p.cohort_month,
-        p.grp,
-        p.clnt_no,
-        MIN(DATE_DIFF('day', p.anchor_dt, e.event_date)) AS vintage_day
-    FROM population p
-    INNER JOIN events e
-        ON  e.clnt_no    = p.clnt_no
-        AND e.event_date BETWEEN p.anchor_dt AND p.window_end
-    GROUP BY p.clnt_no, p.cohort_month, p.grp
+    INNER JOIN success_pooled sp
+        ON sp.clnt_no = cf.clnt_no AND sp.cohort_month = cf.cohort_month
 ),
 
 daily_counts AS (
-    SELECT cohort_month, grp, vintage_day, COUNT(*) AS responders
-    FROM success
+    SELECT cohort_month, grp, vintage_day, COUNT(DISTINCT clnt_no) AS responders
+    FROM numerator
     WHERE vintage_day BETWEEN 0 AND 90
     GROUP BY cohort_month, grp, vintage_day
 ),
@@ -237,17 +235,17 @@ SELECT
     g.grp,
     g.vintage_day,
     g.base,
-    COALESCE(dc.responders, 0) AS responders,
-    SUM(COALESCE(dc.responders, 0)) OVER (
+    CAST(COALESCE(dc.responders, 0) AS INTEGER) AS responders,
+    CAST(SUM(COALESCE(dc.responders, 0)) OVER (
         PARTITION BY g.cohort_month, g.grp
         ORDER BY g.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) AS responders_cum
+    ) AS INTEGER) AS responders_cum
 FROM dense_grid g
 LEFT JOIN daily_counts dc
     ON  dc.cohort_month = g.cohort_month
     AND dc.grp           = g.grp
-    AND dc.vintage_day    = g.vintage_day
+    AND dc.vintage_day   = g.vintage_day
 ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
 -- ============================================================================
@@ -256,16 +254,19 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 -- SELECT cohort_month, COUNT(*) AS conflicted_clients FROM (
 --     SELECT clnt_no, cohort_month FROM (
 --         SELECT
---             clnt_no,
---             DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month,
---             CASE
---                 WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
---                 WHEN SUBSTR(TRIM(tst_grp_cd), 1, 1) = 'T' THEN CAST('Action'  AS VARCHAR(20))
---             END AS grp
---         FROM DG6V01.tactic_evnt_ip_ar_hist
---         WHERE treatmt_strt_dt >= DATE '2026-01-01'
---           AND SUBSTR(tactic_id, 8, 3) = 'VBU'
---           AND SUBSTR(TRIM(tst_grp_cd), 1, 1) IN ('C', 'T')
+--             wp.clnt_no,
+--             DATE_TRUNC('month', wp.response_start) AS cohort_month,
+--             wp.grp
+--         FROM (
+--             SELECT clnt_no, tactic_id, response_start,
+--                 CASE WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
+--                      WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
+--                 END AS grp,
+--                 ROW_NUMBER() OVER (PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC) AS rn
+--             FROM dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt
+--             WHERE response_start >= DATE '2026-01-01'
+--         ) wp
+--         WHERE wp.rn = 1 AND wp.grp IS NOT NULL
 --     ) raw
 --     GROUP BY clnt_no, cohort_month
 --     HAVING COUNT(DISTINCT grp) > 1
