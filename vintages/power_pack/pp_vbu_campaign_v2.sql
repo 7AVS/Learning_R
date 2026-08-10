@@ -84,6 +84,20 @@
 --   "Action produced N upgrades against a near-zero Control base rate," not as a
 --   percentage lift.
 --
+-- RECONCILIATION -- gap measured 2026-08-10, deployment 2026-04-13 -> 2026-06-30:
+--     dashboard   Action 28,821 leads / 471 target-product clients / 1.63%
+--                 Control 11,133 leads / 5 / 0.04%
+--     v2 (pre-fix) Action 28,821 / 429            Control 11,133 / 0
+--   Leads matched exactly -- population is correct, only success detection differed.
+--   Short by 42 (Action) and 5 (Control).
+--   FIX 1 APPLIED 2026-08-10: acct_changes' change-detection window was capped at
+--     Treat_End_DT + 5 days, which closes BEFORE the vintage spine's day 90 for
+--     every wave -- see the FIX comment at acct_changes below for the before/after.
+--   FIX 2 AVAILABLE, NOT APPLIED: prior-AIB-holder exclusion in success_primary,
+--     toggleable with a one-line comment -- see the LEVER 2 block at success_primary.
+--   TARGET (2026-04-13 -> 2026-06-30 wave, vintage_day 90): Action 471 / 1.63%,
+--     Control 5 / 0.04%.
+--
 -- ENGINE: Teradata-direct. All three source tables and every function used
 --   (INTERVAL, ADD_MONTHS, LAST_DAY, EXTRACT, SYS_CALENDAR) are native Teradata.
 --   No dw00 catalog prefix, no Trino functions (DATE_TRUNC/DATE_DIFF/UNNEST/SEQUENCE).
@@ -216,6 +230,15 @@ elig AS (
 ),
 
 acct_changes AS (
+    -- FIX 2026-08-10: change-detection window must be AT LEAST as long as the vintage
+    -- spine (0-90, see vt_vbu2_spine above), or the last days of every curve are
+    -- structurally empty. Anchoring both on Treat_Start_DT makes them the same window
+    -- by construction. This REPLACES the original cap below (kept here for reference):
+    --   AND d.DT_record_ext BETWEEN (e.Treat_Start_DT - INTERVAL '1' DAY)
+    --                           AND (e.Treat_End_DT   + INTERVAL '5' DAY)
+    -- For the 2026-04-13 wave (Treat_End_DT 2026-06-30) that old cap closed at
+    -- 2026-07-05 -- day 83 from Treat_Start_DT -- while the spine runs to day 90
+    -- (2026-07-12). Days 84-90 could never contain a conversion under the old cap.
     SELECT
         e.clnt_no, e.tactic_id, e.Treat_Start_DT, e.Treat_End_DT, e.grp, e.acct_no,
         d.visa_prod_cd  AS new_product,
@@ -224,7 +247,7 @@ acct_changes AS (
     JOIN D3CV12A.dly_full_portfolio d
         ON d.acct_no = e.acct_no
        AND d.DT_record_ext BETWEEN (e.Treat_Start_DT - INTERVAL '1' DAY)
-                               AND (e.Treat_End_DT   + INTERVAL '5' DAY)
+                               AND (e.Treat_Start_DT + INTERVAL '90' DAY)
        AND d.visa_prod_cd <> e.prod_before
        AND d.visa_prod_cd <> e.from_product_code
 ),
@@ -251,6 +274,12 @@ success_primary AS (
     LEFT JOIN prior_aib prior
         ON prior.tactic_id = ac.tactic_id AND prior.acct_no = ac.acct_no
     WHERE ac.new_product = 'AIB'
+      -- ==== LEVER 2 (currently ON) ====================================
+      -- Comment out the next line to STOP excluding clients who already held AIB
+      -- before treatment. Dashboard target-product counts may not apply this
+      -- exclusion. If FIX 1 alone does not close the gap to 471 / 5, disable this
+      -- line and rerun.
+      -- ===============================================================
       AND prior.acct_no IS NULL
     GROUP BY ac.clnt_no, ac.tactic_id, ac.Treat_Start_DT, ac.Treat_End_DT, ac.grp
 ),
