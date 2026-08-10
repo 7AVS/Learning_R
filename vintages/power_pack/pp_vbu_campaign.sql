@@ -50,9 +50,10 @@
 --   tactic_id                 deployment/wave key                                (doc line 16)
 --   response_start             treatment START date / Day-0 anchor                (doc line 24)
 --   response_end               treatment END date / <<WINDOW>> selector           (doc line 25)
---   test_group / control       arm columns, see GRP note below                    (doc lines 27-28)
 --   responder_targetproduct    success flag, ONE metric per contract rule 4       (doc line 69)
 --   dt_prod_change_client      product-change date = success event date          (doc line 72)
+--   [grp is NOT sourced from this table's test_group/control  see GRP note below. It comes from
+--    DTZV01.TACTIC_EVNT_IP_AR_H60M.TST_GRP_CD, joined in on (tactic_id, clnt_no).]
 --
 -- SUCCESS METRIC: responder_targetproduct = 1, event date = dt_prod_change_client. Per the
 --   schema doc's own framing (lines 63-69), the table pre-builds BOTH "any product change"
@@ -64,18 +65,15 @@
 --   contract-mandated metric; responder_anyproduct is available on the source table for a future
 --   secondary cut but is not a column in this 8-column output.
 --
--- GRP: *** [VERIFY] UNCONFIRMED DERIVATION ***  the schema doc lists `test_group` ("Test group
---   label") and `control` ("Control group label") as two SEPARATE columns (doc lines 27-28), not
---   a single tst_grp_cd / test_groups_period code column with a C/T suffix like every other
---   Power Pack source. The doc does not state how the two columns combine into a binary arm
---   (mutually exclusive per row? mutually exclusive population?), and no confirmed convention
---   for this specific table exists anywhere else in the repo. Implemented below as the most
---   defensible reading: test_group populated AND control null -> Action; control populated AND
---   test_group null -> Control; anything else (both populated, both null) -> EXCLUDED, same as
---   every other pp_*.sql file's binary-grp guard (contract rule 5). This is a GUESS, flagged the
---   same way AUH's `_C`=Control convention is flagged [UNCONFIRMED] elsewhere in this repo
---   (OUTPUT_CONTRACT.md file inventory)  CONFIRM WITH ANDRE before trusting grp splits on this
---   file's output.
+-- GRP: *** FIXED 2026-08-10 *** grp no longer comes from the curated table. The curated table's
+--   own `test_group` / `control` columns do NOT yield a usable binary arm (every row evaluated to
+--   grp = NULL, emptying the whole output). grp is now derived from DTZV01.TACTIC_EVNT_IP_AR_H60M
+--   TST_GRP_CD  first char 'C' -> Control, else -> Action (see vbu_arm CTE below), the SAME
+--   convention every other pp_*.sql file uses off tst_grp_cd. VERIFIED against measured counts
+--   2026-08-10: tactic_id 2026070VBU  Action 34,435 / Control 11,326 (also 2026103VBU
+--   28,821/11,133 and 2026133VBU 23,947/10,600). Joined onto the curated population on
+--   (tactic_id, clnt_no)  both column names confirmed against schemas/cards_bizups_vbu_descresp_clnt.md
+--   lines 15-16.
 --
 -- DEDUP IDENTIFIER: clnt_no. Same two-stage pattern as every other pp_*.sql file: wave_pop (one
 --   row per clnt_no, tactic_id, earliest response_start wins) -> cohort_first (one row per
@@ -165,21 +163,34 @@ COLLECT STATISTICS ON vt_vbu_spine COLUMN (vintage_day);
 -- ----------------------------------------------------------------------------
 CREATE VOLATILE TABLE vt_vbu_cells AS (
     WITH
+    -- grp source: TACTIC table, NOT the curated table's test_group/control (see GRP header note)
+    vbu_arm AS (
+        SELECT
+              TACTIC_ID                                          AS tactic_id
+            , CLNT_NO                                            AS clnt_no
+            , CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
+                        ELSE 'Action' END AS VARCHAR(20))        AS grp
+        FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+        WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU'
+          AND TREATMT_STRT_DT >= DATE '2026-01-01'
+        GROUP BY TACTIC_ID, CLNT_NO,
+                 CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
+                           ELSE 'Action' END AS VARCHAR(20))
+    ),
     wave_pop AS (
         SELECT
-            clnt_no,
-            tactic_id,
-            response_start,
-            CASE
-                WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
-                WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
-            END AS grp
-        FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
-        WHERE response_start >= DATE '2026-01-01'                          -- floor guard
-          AND response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
-          AND response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
+            vc.clnt_no,
+            vc.tactic_id,
+            vc.response_start,
+            va.grp
+        FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
+        INNER JOIN vbu_arm va
+            ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+        WHERE vc.response_start >= DATE '2026-01-01'                          -- floor guard
+          AND vc.response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND vc.response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
+            PARTITION BY vc.clnt_no, vc.tactic_id ORDER BY vc.response_start ASC
         ) = 1
     ),
     -- seed exclusion: keep only tactic_ids with a non-empty Control arm (see header note above)
@@ -223,21 +234,35 @@ COLLECT STATISTICS ON vt_vbu_cells COLUMN (cohort_month, grp);
 -- success, then joins the dense grid off the two volatile tables built above.
 -- ----------------------------------------------------------------------------
 WITH
+-- grp source: TACTIC table, NOT the curated table's test_group/control (see GRP header note)
+vbu_arm AS (
+    SELECT
+          TACTIC_ID                                          AS tactic_id
+        , CLNT_NO                                            AS clnt_no
+        , CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
+                    ELSE 'Action' END AS VARCHAR(20))        AS grp
+    FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+    WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU'
+      AND TREATMT_STRT_DT >= DATE '2026-01-01'
+    GROUP BY TACTIC_ID, CLNT_NO,
+             CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
+                       ELSE 'Action' END AS VARCHAR(20))
+),
+
 wave_pop AS (
     SELECT
-        clnt_no,
-        tactic_id,
-        response_start,
-        CASE
-            WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
-            WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
-        END AS grp
-    FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
-    WHERE response_start >= DATE '2026-01-01'                          -- floor guard
-      AND response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
-      AND response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
+        vc.clnt_no,
+        vc.tactic_id,
+        vc.response_start,
+        va.grp
+    FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
+    INNER JOIN vbu_arm va
+        ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+    WHERE vc.response_start >= DATE '2026-01-01'                          -- floor guard
+      AND vc.response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
+      AND vc.response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
+        PARTITION BY vc.clnt_no, vc.tactic_id ORDER BY vc.response_start ASC
     ) = 1
 ),
 
@@ -356,13 +381,17 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 --             AS VARCHAR(7)) AS cohort_month,
 --             wp.grp
 --         FROM (
---             SELECT clnt_no, tactic_id, response_start,
---                 CASE WHEN test_group IS NOT NULL AND control IS NULL THEN CAST('Action'  AS VARCHAR(20))
---                      WHEN control IS NOT NULL AND test_group IS NULL THEN CAST('Control' AS VARCHAR(20))
---                 END AS grp
---             FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt
---             WHERE response_start >= DATE '2026-01-01'
---             QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC) = 1
+--             SELECT vc.clnt_no, vc.tactic_id, vc.response_start, va.grp
+--             FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
+--             INNER JOIN (
+--                 SELECT TACTIC_ID AS tactic_id, CLNT_NO AS clnt_no,
+--                     CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control' ELSE 'Action' END AS VARCHAR(20)) AS grp
+--                 FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
+--                 WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU' AND TREATMT_STRT_DT >= DATE '2026-01-01'
+--                 GROUP BY 1, 2, 3
+--             ) va ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+--             WHERE vc.response_start >= DATE '2026-01-01'
+--             QUALIFY ROW_NUMBER() OVER (PARTITION BY vc.clnt_no, vc.tactic_id ORDER BY vc.response_start ASC) = 1
 --         ) wp
 --         WHERE wp.grp IS NOT NULL
 --     ) raw
