@@ -3,7 +3,8 @@
 --             `mne` ADDED 2026-08-10 as first column).
 --             8 columns only: mne, cohort_month, segment, grp, vintage_day, base,
 --             responders, responders_cum.
--- mne       : CAST('VBU' AS VARCHAR(3)) — constant per file, campaign mnemonic.
+-- mne       : CAST('VBU' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
+--             file measures an experiment.
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. VBU has no pre-treatment population split
 --             above Test/Control; segment carries real values only for AUH.
 -- Campaign  : VBU (Visa Benefit Upgrade) — CAMPAIGN scope
@@ -256,7 +257,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('VBU' AS VARCHAR(3)) AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('VBU' AS VARCHAR(20)) AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,

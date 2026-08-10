@@ -3,8 +3,8 @@
 -- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
 --   `mne` ADDED 2026-08-10 as first column).
 --   Exactly 8 columns, this order: mne | cohort_month | segment | grp | vintage_day
---   | base | responders | responders_cum. Counts only. mne = CAST('AUH' AS VARCHAR(3)) —
---   constant, campaign mnemonic.
+--   | base | responders | responders_cum. Counts only. mne = CAST('AUH' AS VARCHAR(20)) —
+--   campaign mnemonic, or the experiment name where the file measures an experiment.
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
 --   section 1/5). No separate auh_campaign_vintage.sql exists or is needed.
@@ -358,7 +358,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('AUH' AS VARCHAR(3)) AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('AUH' AS VARCHAR(20)) AS mne,
     g.cohort_month,
     g.segment,
     g.grp,

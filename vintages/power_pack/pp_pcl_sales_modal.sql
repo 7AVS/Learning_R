@@ -1,16 +1,15 @@
 -- pcl_experiment_vintage.sql
 -- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
---   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(3)
---   [CAST('PCL' AS VARCHAR(3)) — constant, campaign mnemonic], cohort_month VARCHAR(7) 'YYYY-MM',
+--   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(20)
+--   [CAST('PCL Sales Modal' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
+--   file measures an experiment], cohort_month VARCHAR(7) 'YYYY-MM',
 --   segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above the
 --   Champion/Challenger modal arm], grp VARCHAR(20) [binary], vintage_day INTEGER (0..90
 --   continuous), base INTEGER (fixed per cohort x segment x grp), responders INTEGER,
 --   responders_cum INTEGER. Counts only.
 --
--- NOTE: mne is the campaign mnemonic only. This file shares its mne with
---   pp_pcl_campaign.sql. If both are stacked into one cube they are not
---   distinguishable by mne alone - keep them on separate sheets, or add a
---   scope column.
+-- mne distinguishes this file from its campaign sibling (pp_pcl_campaign.sql), so both
+--   can be stacked into one cube safely.
 --
 -- SCOPE: *** EXPERIMENT *** — PLI sales-modal challenger/champion split ONLY.
 --   (The CAMPAIGN-scope sibling is pcl_campaign.sql — whole PCL campaign, no modal filter.)
@@ -205,7 +204,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('PCL' AS VARCHAR(3))                               AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('PCL Sales Modal' AS VARCHAR(20))                  AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,

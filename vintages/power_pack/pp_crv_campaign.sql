@@ -37,7 +37,8 @@
 --   1. dg6v01.tactic_evnt_ip_ar_hist       — population / arm / treatment window (raw tactic history)
 --   2. edl0_im.prod_zp10_prod_staging.measurement_events_v2 — success (raw Success Library events)
 --
--- mne       : CAST('CRV' AS VARCHAR(3)) — constant per file, campaign mnemonic.
+-- mne       : CAST('CRV' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the
+--             file measures an experiment.
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. CRV has no pre-treatment population
 --             split above Action/Control; segment carries real values only for AUH.
 -- DEDUP IDENTIFIER: visa_acct_no — the raw tactic table's account column (it has no column
@@ -190,7 +191,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('CRV' AS VARCHAR(3)) AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('CRV' AS VARCHAR(20)) AS mne,
     CAST(SUBSTR(CAST(g.cohort_month AS VARCHAR), 1, 7) AS VARCHAR(7)) AS cohort_month,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.arm AS grp,

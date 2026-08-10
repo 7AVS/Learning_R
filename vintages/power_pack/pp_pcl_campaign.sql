@@ -1,16 +1,15 @@
 -- pcl_campaign_vintage.sql
 -- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
---   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(3)
---   [CAST('PCL' AS VARCHAR(3)) — constant, campaign mnemonic], cohort_month VARCHAR(7) 'YYYY-MM',
+--   2026-08-10; `mne` ADDED 2026-08-10 as first column). Emits EXACTLY 8 columns: mne VARCHAR(20)
+--   [CAST('PCL' AS VARCHAR(20)) — campaign mnemonic, or the experiment name where the file
+--   measures an experiment], cohort_month VARCHAR(7) 'YYYY-MM',
 --   segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above
 --   tst_grp_cd for PCL], grp VARCHAR(20) [see grp note below — NOT true binary in this file],
 --   vintage_day INTEGER (0..90 continuous), base INTEGER (fixed per cohort x segment x grp),
 --   responders INTEGER, responders_cum INTEGER. Counts only, no rates.
 --
--- NOTE: mne is the campaign mnemonic only. This file shares its mne with
---   pp_pcl_sales_modal.sql. If both are stacked into one cube they are not
---   distinguishable by mne alone - keep them on separate sheets, or add a
---   scope column.
+-- mne distinguishes this file from its experiment sibling (pp_pcl_sales_modal.sql), so both
+--   can be stacked into one cube safely.
 --
 -- SCOPE: *** CAMPAIGN *** — whole PCL campaign. NO modal / sales-modal population filter.
 --   (The EXPERIMENT-scope sibling is pcl_sales_modal.sql — sales-modal WMS/NMS only.)
@@ -197,7 +196,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('PCL' AS VARCHAR(3))                               AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('PCL' AS VARCHAR(20))                              AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,

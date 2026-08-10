@@ -3,14 +3,13 @@
 -- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10;
 --   `mne` ADDED 2026-08-10 as first column).
 --   Exactly 8 columns, this order: mne | cohort_month | segment | grp | vintage_day
---   | base | responders | responders_cum. Counts only. mne = CAST('PCD' AS VARCHAR(3)) —
---   constant, campaign mnemonic. segment = CAST('All' AS VARCHAR(20))
+--   | base | responders | responders_cum. Counts only. mne = CAST('PCD Async' AS VARCHAR(20)) —
+--   campaign mnemonic, or the experiment name where the file measures an experiment. segment =
+--   CAST('All' AS VARCHAR(20))
 --   — constant; this async carve-out has no pre-treatment split above tst_grp_cd Test/Control.
 --
--- NOTE: mne is the campaign mnemonic only. This file shares its mne with
---   pp_pcd_campaign.sql. If both are stacked into one cube they are not
---   distinguishable by mne alone - keep them on separate sheets, or add a
---   scope column.
+-- mne distinguishes this file from its campaign sibling (pp_pcd_campaign.sql), so both
+--   can be stacked into one cube safely.
 -- SCOPE: **EXPERIMENT** — the async mobile banner carve-out inside PCD, NOT
 --   the whole campaign. Companion file pcd_campaign_vintage.sql is the
 --   campaign-scope curve.
@@ -267,7 +266,10 @@ dense_grid AS (
 )
 
 SELECT
-    CAST('PCD' AS VARCHAR(3))          AS mne,
+    -- VARCHAR(20) in EVERY file on purpose: in a Teradata UNION ALL the character
+    -- length is fixed by the FIRST SELECT block, so stacking a 3-char 'PCD' block
+    -- ahead of 'PCD Sales Modal' would silently truncate the longer labels.
+    CAST('PCD Async' AS VARCHAR(20))   AS mne,
     g.cohort_month,
     CAST('All' AS VARCHAR(20))         AS segment,
     g.grp,
