@@ -157,12 +157,30 @@
 --   one metric per file, and Andre's instruction was explicit: use ANY-PRODUCT.
 -- ----------------------------------------------------------------------------
 -- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file).
--- FLOOR: every scan >= DATE '2026-01-01' (contract rule 6).
+-- FLOOR: population floor guard >= DATE '2026-01-01' (contract rule 6) stays in place;
+--   population is now ALSO filtered to treatmt_end_dt in the Q3 window (see QUARTER WINDOW
+--   block below) — end-date is the SELECTOR, treatmt_strt_dt remains the cohort/day-0 anchor.
+--   Success-side scan (CR_CRD_ACCT_EVNT_DLY + DLY_FULL_PORTFOLIO) tightened to
+--   [2026-02-01, 2026-08-01) — see <<WINDOW>> tags below.
 -- ----------------------------------------------------------------------------
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_auh_experiment_cells;
 --   DROP TABLE vt_auh_experiment_spine;
+-- ----------------------------------------------------------------------------
+-- SCOPE: this file is scoped to deployments ENDING in the quarter window below
+--   (population filtered on treatmt_end_dt). cohort_month and day-0 still
+--   anchor on treatmt_strt_dt (the START column) — unchanged. Retargeting a
+--   quarter = editing the two <<WINDOW>> literals below only.
 -- ============================================================================
+
+-- ============================================================================
+-- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+--   Selects deployments whose END date (treatmt_end_dt) falls in the window.
+--   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
+--     Q3 FY2026 = 2026-05-01 .. 2026-07-31
+-- ============================================================================
+-- WINDOW START : DATE '2026-05-01'
+-- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
 -- STEP 1: denominator cells (cohort_month x segment x grp -> base)
@@ -172,6 +190,7 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
         SELECT
             CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
             treatmt_strt_dt,
+            treatmt_end_dt,
             CAST(
                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
@@ -193,7 +212,9 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
             END                                      AS grp
         FROM DG6V01.tactic_evnt_ip_ar_hist
         WHERE tactic_id IN ('2026042AUH', '2026119AUH')
-          AND treatmt_strt_dt >= DATE '2026-01-01'
+          AND treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
     ),
     -- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins (never expected to fire — see header)
     cohort_first AS (
@@ -256,7 +277,9 @@ population_raw AS (
         END                                      AS grp
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
-      AND treatmt_strt_dt >= DATE '2026-01-01'
+      AND treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
+      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
+      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
 ),
 
 -- [NOTE] first-touch: grp/segment come from the account's earliest row this month (never expected to fire — see header)
@@ -295,7 +318,10 @@ events AS (
         AND a.acct_no = c.acct_no
     WHERE a.dtl_evnt_typ_cd = 191
       AND a.ADD_RELTN_CD    = 3
-      AND a.evnt_dt         >= DATE '2026-01-01'
+      AND a.evnt_dt         >= DATE '2026-02-01'                            -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
+      AND a.evnt_dt         <  DATE '2026-08-01'                            -- <<WINDOW>> upper: no selected deployment runs past this
+      AND c.DT_RECORD_EXT   >= DATE '2026-02-01'                            -- <<WINDOW>> direct bound on DLY_FULL_PORTFOLIO (the expensive table)
+      AND c.DT_RECORD_EXT   <  DATE '2026-08-01'                            -- <<WINDOW>>
 ),
 
 -- ANY-PRODUCT success: single earliest add date per account (no prod_cd split —

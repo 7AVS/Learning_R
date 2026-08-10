@@ -72,7 +72,22 @@
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_pcd_experiment_cells;
 --   DROP TABLE vt_pcd_experiment_spine;
+-- ----------------------------------------------------------------------------
+-- SCOPE: this file is scoped to deployments ENDING in the quarter window below
+--   (population filtered on response_end, confirmed column on the curated table,
+--   schemas/pcd_curated_schemas.md #5). cohort_month and day-0 still anchor on
+--   response_start (the START column) — unchanged. Retargeting a quarter = editing
+--   the two <<WINDOW>> literals below only.
 -- ============================================================================
+
+-- ============================================================================
+-- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+--   Selects deployments whose END date (response_end) falls in the window.
+--   Cohort month and day 0 still anchor on response_start (START), not these.
+--     Q3 FY2026 = 2026-05-01 .. 2026-07-31
+-- ============================================================================
+-- WINDOW START : DATE '2026-05-01'
+-- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
 -- STEP 1: denominator cells (cohort_month x grp -> base)
@@ -85,7 +100,9 @@ CREATE VOLATILE TABLE vt_pcd_experiment_cells AS (
             MIN(response_start)                    AS response_start
         FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
         WHERE tactic_id_parent IN ('2026111PCD', '2026125PCD')
-          AND response_start >= DATE '2026-01-01'
+          AND response_start >= DATE '2026-01-01'                           -- floor guard
+          AND response_end   >= DATE '2026-05-01'                           -- <<WINDOW>>
+          AND response_end   <  DATE '2026-08-01'                           -- <<WINDOW>>
           AND strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6',
                                    'MFB8UJPY','MFB9BX97','MFB9HYQ7')
         GROUP BY clnt_no, tactic_id_parent
@@ -153,7 +170,9 @@ wave_pop AS (
         MIN(response_start)                    AS response_start
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent IN ('2026111PCD', '2026125PCD')
-      AND response_start >= DATE '2026-01-01'
+      AND response_start >= DATE '2026-01-01'                               -- floor guard
+      AND response_end   >= DATE '2026-05-01'                               -- <<WINDOW>>
+      AND response_end   <  DATE '2026-08-01'                               -- <<WINDOW>>
       AND strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6',
                                'MFB8UJPY','MFB9BX97','MFB9HYQ7')
     GROUP BY clnt_no, tactic_id_parent
@@ -206,7 +225,9 @@ success_events AS (
         dt_prod_change    AS success_dt_abs
     FROM dl_mr_prod.cards_pcd_ongoing_decis_resp
     WHERE tactic_id_parent IN ('2026111PCD', '2026125PCD')
-      AND response_start >= DATE '2026-01-01'
+      AND response_start >= DATE '2026-01-01'                               -- floor guard
+      AND response_end   >= DATE '2026-05-01'                               -- <<WINDOW>> keeps success scan aligned to selected deployments
+      AND response_end   <  DATE '2026-08-01'                               -- <<WINDOW>>
       AND strategy_seg_cd IN ('MSC8YUS3','MAO28CJ5','MAO2EDB1','MFB8L6X6',
                                'MFB8UJPY','MFB9BX97','MFB9HYQ7')
       AND responder_targetproduct = 1

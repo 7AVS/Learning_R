@@ -63,6 +63,22 @@
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_vbu_cells;
 --   DROP TABLE vt_vbu_spine;
+-- ----------------------------------------------------------------------------
+-- SCOPE: this file is scoped to deployments ENDING in the quarter window below
+--   (population filtered on treatmt_end_dt). cohort_month and day-0 still anchor
+--   on treatmt_strt_dt (the START column) — unchanged. Success-side scan (Casper
+--   + SCOT event tables) tightened separately — see <<WINDOW>> tags below.
+--   Retargeting a quarter = editing the two <<WINDOW>> literals below only.
+-- ============================================================================
+
+-- ============================================================================
+-- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+--   Selects deployments whose END date (treatmt_end_dt) falls in the window.
+--   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
+--     Q3 FY2026 = 2026-05-01 .. 2026-07-31
+-- ============================================================================
+-- WINDOW START : DATE '2026-05-01'
+-- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
 -- STEP 1: cells — base (denominator) per (cohort_month, grp)
@@ -70,13 +86,15 @@
 CREATE VOLATILE TABLE vt_vbu_cells AS (
     WITH pop_wave AS (
         SELECT
-            clnt_no, tactic_id, treatmt_strt_dt,
+            clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
             CASE
                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
             END AS grp
         FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-        WHERE treatmt_strt_dt >= DATE '2026-01-01'
+        WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
           AND SUBSTR(tactic_id, 8, 3) = 'VBU'
           AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
         QUALIFY ROW_NUMBER() OVER (
@@ -130,7 +148,9 @@ pop_wave AS (
             WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
         END AS grp
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE treatmt_strt_dt >= DATE '2026-01-01'
+    WHERE treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
+      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
+      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
       AND SUBSTR(tactic_id, 8, 3) = 'VBU'
       AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
     QUALIFY ROW_NUMBER() OVER (
@@ -171,7 +191,8 @@ population AS (
 casper_events AS (
     SELECT DISTINCT app.bus_clnt_no AS clnt_no, app.app_rcv_dt AS event_date
     FROM p3c.appl_fact_dly app
-    WHERE app.app_rcv_dt >= DATE '2026-01-01'
+    WHERE app.app_rcv_dt >= DATE '2026-02-01'                               -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
+      AND app.app_rcv_dt <  DATE '2026-08-01'                               -- <<WINDOW>> upper: no selected deployment runs past this
       AND app.Status IN ('A')
       AND app.PROD_APPRVD IN ('B', 'E')
       AND app.CR_LMT_CHG_IND = 'N'
@@ -191,7 +212,8 @@ scot_events_raw AS (
     FROM edl0_im.prod_yg80_pcbsharedzone.tsz_00222_data_credit_application_snapshot
     WHERE creditapplication_borrowers_facilities_facilityborroweroptions_products_productcategory
           IN ('CREDIT_CARD')
-      AND creditapplication_createddatetime >= DATE '2026-01-01'
+      AND creditapplication_createddatetime >= DATE '2026-02-01'            -- <<WINDOW>> lower: earliest start of a Q3-ending deployment
+      AND creditapplication_createddatetime <  DATE '2026-08-01'            -- <<WINDOW>> upper: no selected deployment runs past this
     GROUP BY 1
 ),
 scot_events AS (

@@ -68,6 +68,25 @@
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_pcl_camp_cells;
 --   DROP TABLE vt_pcl_camp_spine;
+-- ----------------------------------------------------------------------------
+-- SCOPE: this file is scoped to deployments ENDING in the quarter window below
+--   (population filtered on treatmt_end_dt, confirmed column on
+--   schemas/crv_pcl_curated_schemas.md §3a). cohort_month and day-0 still anchor
+--   on treatmt_strt_dt (the START column) — unchanged. Success (dt_cl_change) is
+--   read from the SAME curated row as population, so the end-date filter below
+--   tightens both the population AND the success-side scan in one change — no
+--   separate event table to bound here. Retargeting a quarter = editing the two
+--   <<WINDOW>> literals below only.
+-- ============================================================================
+
+-- ============================================================================
+-- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+--   Selects deployments whose END date (treatmt_end_dt) falls in the window.
+--   Cohort month and day 0 still anchor on treatmt_strt_dt (START), not these.
+--     Q3 FY2026 = 2026-05-01 .. 2026-07-31
+-- ============================================================================
+-- WINDOW START : DATE '2026-05-01'
+-- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
 -- STEP 1: denominator cells — cohort_month x grp
@@ -84,7 +103,9 @@ CREATE VOLATILE TABLE vt_pcl_camp_cells AS (
             AS VARCHAR(7))                                AS cohort_month,
             CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp          -- [VERIFY] raw pass-through, see header
         FROM DL_MR_PROD.cards_pli_decision_resp
-        WHERE treatmt_strt_dt >= DATE '2026-01-01'
+        WHERE treatmt_strt_dt >= DATE '2026-01-01'                          -- floor guard
+          AND treatmt_end_dt  >= DATE '2026-05-01'                          -- <<WINDOW>>
+          AND treatmt_end_dt  <  DATE '2026-08-01'                          -- <<WINDOW>>
           AND TRIM(tst_grp_cd) IS NOT NULL
           AND TRIM(tst_grp_cd) <> ''
     ),
@@ -129,7 +150,9 @@ raw_rows AS (
         CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp,          -- [VERIFY] raw pass-through, see header
         CASE WHEN responder_cli = 1 THEN dt_cl_change END AS success_dt_abs
     FROM DL_MR_PROD.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2026-01-01'
+    WHERE treatmt_strt_dt >= DATE '2026-01-01'                              -- floor guard
+      AND treatmt_end_dt  >= DATE '2026-05-01'                              -- <<WINDOW>>
+      AND treatmt_end_dt  <  DATE '2026-08-01'                              -- <<WINDOW>>
       AND TRIM(tst_grp_cd) IS NOT NULL
       AND TRIM(tst_grp_cd) <> ''
 ),

@@ -74,6 +74,26 @@
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_pcq_camp_cells;
 --   DROP TABLE vt_pcq_camp_spine;
+-- ----------------------------------------------------------------------------
+-- SCOPE: this file is scoped to deployments ENDING in the quarter window below
+--   (population filtered on treatmt_end_dt, confirmed column on
+--   DL_MR_PROD.cards_tpa_pcq_decision_resp — see value_capture/value_capture_report_v3.sql:95-98
+--   which uses the identical pattern). cohort_month and day-0 still anchor on treatmt_start_dt
+--   (the START column) — unchanged. Success (app_approved/asc_on_app_source, success date =
+--   treatmt_start_dt + days_to_respond) is read from the SAME curated row as population, so the
+--   end-date filter below tightens both the population AND the success-side scan in one change —
+--   no separate event table to bound here. Retargeting a quarter = editing the two <<WINDOW>>
+--   literals below only.
+-- ============================================================================
+
+-- ============================================================================
+-- QUARTER WINDOW — EDIT THESE TWO DATES TO RETARGET THE PACK
+--   Selects deployments whose END date (treatmt_end_dt) falls in the window.
+--   Cohort month and day 0 still anchor on treatmt_start_dt (START), not these.
+--     Q3 FY2026 = 2026-05-01 .. 2026-07-31
+-- ============================================================================
+-- WINDOW START : DATE '2026-05-01'
+-- WINDOW END   : DATE '2026-07-31'   (inclusive; coded as < DATE '2026-08-01')
 
 -- ============================================================================
 -- STEP 1: denominator cells — cohort_month x grp
@@ -93,7 +113,9 @@ CREATE VOLATILE TABLE vt_pcq_camp_cells AS (
             END                                            AS grp          -- [VERIFY] partial coverage, see header
         FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
         WHERE tpa_ita           = 'TPA'
-          AND treatmt_start_dt  >= DATE '2026-01-01'
+          AND treatmt_start_dt  >= DATE '2026-01-01'                        -- floor guard
+          AND treatmt_end_dt    >= DATE '2026-05-01'                        -- <<WINDOW>>
+          AND treatmt_end_dt    <  DATE '2026-08-01'                        -- <<WINDOW>>
           AND decsn_year        = 2026  -- [LANDMINE] hard-coded year; silently returns nothing from 2027-01-01. Revisit before FY27.
     ),
     cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
@@ -143,7 +165,9 @@ mapped_rows AS (
         END                                            AS success_dt_abs
     FROM DL_MR_PROD.cards_tpa_pcq_decision_resp
     WHERE tpa_ita           = 'TPA'
-      AND treatmt_start_dt  >= DATE '2026-01-01'
+      AND treatmt_start_dt  >= DATE '2026-01-01'                            -- floor guard
+      AND treatmt_end_dt    >= DATE '2026-05-01'                            -- <<WINDOW>>
+      AND treatmt_end_dt    <  DATE '2026-08-01'                            -- <<WINDOW>>
       AND decsn_year        = 2026  -- [LANDMINE] hard-coded year; silently returns nothing from 2027-01-01. Revisit before FY27.
 ),
 
