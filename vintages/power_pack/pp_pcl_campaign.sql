@@ -1,13 +1,13 @@
 -- pcl_campaign_vintage.sql
--- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added
---   2026-08-10). Emits EXACTLY 8 columns: cohort_month VARCHAR(7) 'YYYY-MM', deployment
---   VARCHAR(30), segment VARCHAR(20) [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment
---   split above tst_grp_cd for PCL], grp VARCHAR(20) [binary], vintage_day INTEGER
---   (0..90 continuous), base INTEGER (fixed per cohort x deployment x segment x grp),
---   responders INTEGER, responders_cum INTEGER. Counts only, no rates.
+-- OUTPUT CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED
+--   2026-08-10). Emits EXACTLY 7 columns: cohort_month VARCHAR(7) 'YYYY-MM', segment VARCHAR(20)
+--   [CAST('All' AS VARCHAR(20)) — constant, no pre-treatment split above tst_grp_cd for PCL],
+--   grp VARCHAR(20) [see grp note below — NOT true binary in this file], vintage_day INTEGER
+--   (0..90 continuous), base INTEGER (fixed per cohort x segment x grp), responders INTEGER,
+--   responders_cum INTEGER. Counts only, no rates.
 --
 -- SCOPE: *** CAMPAIGN *** — whole PCL campaign. NO modal / sales-modal population filter.
---   (The EXPERIMENT-scope sibling is pcl_experiment_vintage.sql — sales-modal WMS/NMS only.)
+--   (The EXPERIMENT-scope sibling is pcl_sales_modal.sql — sales-modal WMS/NMS only.)
 --
 -- Engine   : Teradata-direct. SYS_CALENDAR spine in a VOLATILE TABLE + COLLECT STATISTICS before
 --            the cross join (TDWM product-join guard). CTEs for everything else (rerun-safety).
@@ -20,32 +20,42 @@
 --            anything") — carried forward, not resolved.
 -- Population filter: treatmt_strt_dt >= DATE '2026-01-01' only. No report_groups_period filter,
 --            no tst_grp_cd exclusion — this is the WHOLE campaign, every arm, every deployment.
--- Deployment: parent_tactic_id, TRIM'd, CAST VARCHAR(30). Curves are grouped by
---            (cohort_month, deployment, grp) and never pooled across deployments (contract rule).
---            Because grouping is now per-deployment (not per-cohort-bin like the old
---            vintages/pcl_vintage_monthly.sql), the old "first-in-bin deployment wins" dedup logic
---            is retired: the curated table is one row per (acct_no, deployment), so
---            COUNT(DISTINCT acct_no) at (cohort_month, deployment, grp) grain is a direct, safe
---            aggregate — no tie-break needed.
+--
+-- *** deployment DROPPED, 2026-08-10 *** — was parent_tactic_id. PCL runs ~25 deployments/quarter
+--   and Andre will not build a curve per deployment. Curve grain is now COHORT MONTH.
+--
+-- DEDUP IDENTIFIER: acct_no — this file's grain and success are both acct_no throughout.
+--
+-- *** [NOTE] grp tie-break = FIRST-TOUCH ***
+--   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
+--   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
+--   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
+--   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
+--   confirms it — expect zeros.
+--
+-- *** DEDUP — one row per (acct_no, cohort_month), anchored on first wave ***
+--   1. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
+--      ORDER BY treatmt_strt_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
+--   2. Success (dt_cl_change, already an absolute date on the curated row when responder_cli=1)
+--      is pooled across EVERY wave the account touched that month: success_pooled takes
+--      MIN(dt_cl_change) across all the account's rows in the cohort_month, then rebases to the
+--      first-touch anchor date. An account that didn't respond on wave 1 but did on wave 2 (same
+--      month) is no longer silently dropped, and base is not inflated by counting the account
+--      once per wave.
 --
 -- grp (arm) — *** [VERIFY] BLOCKING, UNRESOLVED — READ BEFORE TRUSTING grp ON THIS FILE ***
---   PCL tst_grp_cd Test/Control code mapping is UNCONFIRMED anywhere in this repo. Two separate
---   files carry open TODOs on this exact point (campaigns/CRV/crv_pcl_overlap_summary.sql lines
---   33 & 74: "TODO: exclude PCL Control once tst_grp_cd code is confirmed"). No code value for
---   PCL Control/Test has ever been resolved in this codebase — profiling query C4 in that same
---   file was written to do it but has apparently never been run/logged.
---   The contract requires grp to be BINARY (Test/Control). Because the actual code->arm mapping
---   cannot be derived from anything in the repo, this file does NOT invent one. `grp` below is
---   TRIM(tst_grp_cd) passed through RAW, CAST to VARCHAR(20) — i.e. it will show whatever raw
---   codes exist (may be more than 2 values), NOT a true binary collapse. This is a deliberate
---   deviation from contract rule 5, flagged here rather than guessed.
---   BEFORE using this file's grp for any Test-vs-Control read: run
+--   PCL tst_grp_cd Test/Control code mapping is UNCONFIRMED anywhere in this repo (unchanged by
+--   the deployment drop — this was already true in the 8-column version). `grp` below is
+--   TRIM(tst_grp_cd) passed through RAW from the account's first-touch wave, CAST to VARCHAR(20)
+--   — i.e. it will show whatever raw codes exist (may be more than 2 values), NOT a true binary
+--   collapse. This is a deliberate deviation from contract rule 5, flagged here rather than
+--   guessed. BEFORE using this file's grp for any Test-vs-Control read: run
 --   campaigns/CRV/crv_pcl_overlap_summary.sql §C4 (or equivalent) to get the actual code list,
---   then edit the two CASE-free `grp` expressions below into a real
+--   then edit the grp expressions below into a real
 --   CASE WHEN TRIM(tst_grp_cd) IN (...) THEN 'Test' WHEN ... THEN 'Control' END.
 --
--- Success  : responder_cli = 1 (CLI response flag); event day = dt_cl_change - treatmt_strt_dt.
---            Same primary success metric as pcl_vintage_monthly.sql / pcl_experiment_vintage.sql —
+-- Success  : responder_cli = 1 (CLI response flag); event date = dt_cl_change (already absolute).
+--            Same primary success metric as pcl_vintage_monthly.sql / pcl_sales_modal.sql —
 --            preserved unchanged, not invented. One metric per file per contract rule 4.
 -- Spine    : 0..90 days, continuous, COALESCE(responders,0) on empty days.
 --
@@ -54,26 +64,37 @@
 --   DROP TABLE vt_pcl_camp_spine;
 
 -- ============================================================================
--- STEP 1: denominator cells — cohort_month x deployment x grp
+-- STEP 1: denominator cells — cohort_month x grp
 -- ============================================================================
 CREATE VOLATILE TABLE vt_pcl_camp_cells AS (
-    SELECT
-        CAST(
-            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7))                                AS cohort_month,
-        CAST(TRIM(parent_tactic_id) AS VARCHAR(30))    AS deployment,
-        CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp,          -- [VERIFY] raw pass-through, see header
-        COUNT(DISTINCT acct_no)                        AS base
-    FROM DL_MR_PROD.cards_pli_decision_resp
-    WHERE treatmt_strt_dt >= DATE '2026-01-01'
-      AND TRIM(tst_grp_cd) IS NOT NULL
-      AND TRIM(tst_grp_cd) <> ''
-    GROUP BY 1, 2, 3
-) WITH DATA PRIMARY INDEX (cohort_month, deployment, grp) ON COMMIT PRESERVE ROWS;
+    WITH raw_rows AS (
+        SELECT
+            acct_no,
+            treatmt_strt_dt,
+            CAST(
+                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(7))                                AS cohort_month,
+            CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp          -- [VERIFY] raw pass-through, see header
+        FROM DL_MR_PROD.cards_pli_decision_resp
+        WHERE treatmt_strt_dt >= DATE '2026-01-01'
+          AND TRIM(tst_grp_cd) IS NOT NULL
+          AND TRIM(tst_grp_cd) <> ''
+    ),
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+        SELECT acct_no, cohort_month, grp
+        FROM raw_rows
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+        ) = 1
+    )
+    SELECT cohort_month, grp, COUNT(DISTINCT acct_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, grp
+) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_pcl_camp_cells COLUMN (cohort_month, deployment, grp);
+COLLECT STATISTICS ON vt_pcl_camp_cells COLUMN (cohort_month, grp);
 
 -- ============================================================================
 -- STEP 2: day spine 0-90
@@ -90,42 +111,64 @@ COLLECT STATISTICS ON vt_pcl_camp_spine COLUMN (vintage_day);
 -- STEP 3: final curve
 -- ============================================================================
 WITH
-population AS (
+raw_rows AS (
     SELECT
         acct_no,
+        treatmt_strt_dt,
         CAST(
             CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
             CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
             CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
         AS VARCHAR(7))                                AS cohort_month,
-        CAST(TRIM(parent_tactic_id) AS VARCHAR(30))    AS deployment,
         CAST(TRIM(tst_grp_cd) AS VARCHAR(20))          AS grp,          -- [VERIFY] raw pass-through, see header
-        CASE WHEN responder_cli = 1
-             THEN CAST(dt_cl_change - treatmt_strt_dt AS INTEGER)
-        END                                            AS vintage_day_raw
+        CASE WHEN responder_cli = 1 THEN dt_cl_change END AS success_dt_abs
     FROM DL_MR_PROD.cards_pli_decision_resp
     WHERE treatmt_strt_dt >= DATE '2026-01-01'
       AND TRIM(tst_grp_cd) IS NOT NULL
       AND TRIM(tst_grp_cd) <> ''
 ),
 
+cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+    SELECT acct_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
+    FROM raw_rows
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
+    ) = 1
+),
+
+-- pool success across every wave the account touched this cohort_month
+success_pooled AS (
+    SELECT acct_no, cohort_month, MIN(success_dt_abs) AS success_dt_abs
+    FROM raw_rows
+    WHERE success_dt_abs IS NOT NULL
+    GROUP BY acct_no, cohort_month
+),
+
+population AS (
+    SELECT
+        cf.cohort_month, cf.grp, cf.acct_no,
+        CAST(sp.success_dt_abs - cf.anchor_dt AS INTEGER) AS vintage_day_raw
+    FROM cohort_first cf
+    LEFT JOIN success_pooled sp
+        ON sp.acct_no = cf.acct_no AND sp.cohort_month = cf.cohort_month
+),
+
 daily_counts AS (
-    SELECT cohort_month, deployment, grp, vintage_day_raw AS vintage_day,
+    SELECT cohort_month, grp, vintage_day_raw AS vintage_day,
            COUNT(DISTINCT acct_no) AS responders
     FROM population
     WHERE vintage_day_raw BETWEEN 0 AND 90
-    GROUP BY cohort_month, deployment, grp, vintage_day_raw
+    GROUP BY cohort_month, grp, vintage_day_raw
 ),
 
 dense_grid AS (
-    SELECT c.cohort_month, c.deployment, c.grp, c.base, s.vintage_day
+    SELECT c.cohort_month, c.grp, c.base, s.vintage_day
     FROM vt_pcl_camp_cells c
     CROSS JOIN vt_pcl_camp_spine s
 )
 
 SELECT
     g.cohort_month,
-    g.deployment,
     CAST('All' AS VARCHAR(20))                              AS segment,
     g.grp,
     CAST(g.vintage_day AS INTEGER)                          AS vintage_day,
@@ -133,7 +176,7 @@ SELECT
     CAST(COALESCE(dc.responders, 0) AS INTEGER)              AS responders,
     CAST(
         SUM(COALESCE(dc.responders, 0)) OVER (
-            PARTITION BY g.cohort_month, g.deployment, g.grp
+            PARTITION BY g.cohort_month, g.grp
             ORDER BY g.vintage_day
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         )
@@ -141,10 +184,31 @@ SELECT
 FROM dense_grid g
 LEFT JOIN daily_counts dc
     ON  dc.cohort_month = g.cohort_month
-    AND dc.deployment    = g.deployment
     AND dc.grp           = g.grp
     AND dc.vintage_day    = g.vintage_day
-ORDER BY g.cohort_month, g.deployment, g.grp, g.vintage_day;
+ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
 DROP TABLE vt_pcl_camp_cells;
 DROP TABLE vt_pcl_camp_spine;
+
+-- ============================================================================
+-- DIAGNOSTIC (commented out): how many accounts hit both arms in one month?
+-- ============================================================================
+-- SELECT cohort_month, COUNT(*) AS conflicted_accounts FROM (
+--     SELECT acct_no, cohort_month FROM (
+--         SELECT
+--             acct_no,
+--             CAST(
+--                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
+--             CAST(TRIM(tst_grp_cd) AS VARCHAR(20)) AS grp
+--         FROM DL_MR_PROD.cards_pli_decision_resp
+--         WHERE treatmt_strt_dt >= DATE '2026-01-01'
+--           AND TRIM(tst_grp_cd) IS NOT NULL
+--           AND TRIM(tst_grp_cd) <> ''
+--     ) raw
+--     GROUP BY acct_no, cohort_month
+--     HAVING COUNT(DISTINCT grp) > 1
+-- ) x GROUP BY 1 ORDER BY 1;

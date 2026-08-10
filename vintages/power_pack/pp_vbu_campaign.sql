@@ -1,6 +1,6 @@
 -- vbu_campaign_vintage.sql
--- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
---             8 columns only: cohort_month, deployment, segment, grp, vintage_day, base,
+-- Contract  : vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
+--             7 columns only: cohort_month, segment, grp, vintage_day, base,
 --             responders, responders_cum.
 -- segment   : CAST('All' AS VARCHAR(20)) — constant. VBU has no pre-treatment population split
 --             above Test/Control; segment carries real values only for AUH.
@@ -18,56 +18,55 @@
 --             campaigns/VBA_VBU/vbu_summary_vintage_cell.py, REPLACING the earlier AIB/
 --             dly_full_portfolio product-change definition ("Daniel Chin's original
 --             framework", campaigns/VBA_VBU/vbu_vintage_original.sql — left in the repo,
---             untouched). This is a bigger swap than "add a second source" and was already
---             flagged to Andre in the prior file; carried forward here, not re-litigated.
+--             untouched). Carried forward unchanged by the deployment drop.
 -- Population: SUBSTR(tactic_id,8,3)='VBU', treatmt_strt_dt >= DATE '2026-01-01'. DELETED the
---             dead filter SUBSTR(tactic_id,8,1)<>'J' — position 8 is always 'V' for VBA/VBU,
---             so that filter could never exclude anything.
--- deployment: CAST(TRIM(tactic_id) AS VARCHAR(30)) — the wave, directly available.
--- grp       : LEFT(TRIM(tst_grp_cd),1): 'C'->Control, 'T'->Test. Anything else is EXCLUDED
---             from the population (not routed to a third bucket — contract requires grp
---             strictly binary). [VERIFY] the C/T-prefix split itself is not documented in the
---             original campaigns/VBA_VBU/vbu_vintage_original.sql (which uses tst_grp_cd
---             positions 6-8 as a FROM-product code, not an Action/Control split); confirmed
---             instead in the sibling harness campaigns/VBA_VBU/vbu_summary_vintage_cell.py
---             (`tc()`, ~line 64) as VBA/VBU's real Test/Control rollup rule.
--- Success   : UNCHANGED — Casper + SCOT unioned and deduped to one earliest-approval event.
---             Casper: Status='A', PROD_APPRVD IN ('B','E'), CR_LMT_CHG_IND='N', visa_prod_cd
---             NOT IN ('CCL','BXX'), Cell_Code NOT IN ('PATACT','GV0320'), event date =
---             app_rcv_dt. SCOT: productcategory='CREDIT_CARD', statuscode='FULFILLED', event
---             date = creditapplication_createddatetime (one row per client — SCOT's snapshot
---             structure supports only one signal ever per client). Union is a plain UNION
---             (not UNION ALL) on (clnt_no, event_date) to dedupe the same physical event
---             reported by both systems, done BEFORE deployment attribution. Same tables/
---             filters as vba_campaign_vintage.sql.
--- STRUCTURAL CHANGE from vbu_vintage_monthly.sql: the old file had no deployment output
---             column, so it collapsed multiple deployments per (client, cohort_month) to a
---             "first-in-bin" denominator and resolved numerator conflicts across overlapping
---             deployment windows via last-touch (most recent treatmt_strt_dt wins). The new
---             contract mandates deployment as an explicit dimension and forbids pooling across
---             deployments, so that cross-deployment resolution is GONE: each (clnt_no,
---             tactic_id) pop row is measured against its OWN window only. A client active in
---             two overlapping deployments can now show a responder in BOTH deployment curves
---             — expected under "curves never pool across deployments," not a bug, but
---             different from the old last-touch behavior. The Casper/SCOT union-dedup of the
---             physical event is preserved (guards against double-counting the same approval
---             from two systems); only the cross-deployment attribution layer was removed.
--- Spine     : fixed 0-90 — preserved as a deliberate cap (source used a hard 0-90 window, not
---             data-driven; not changed here).
+--             dead filter SUBSTR(tactic_id,8,1)<>'J' — position 8 is always 'V' for VBA/VBU.
+--
+-- *** deployment DROPPED, 2026-08-10 *** — was tactic_id. Curve grain is now COHORT MONTH.
+--
+-- DEDUP IDENTIFIER: clnt_no — this file's success join keys on clnt_no throughout.
+--
+-- *** [NOTE] grp tie-break = FIRST-TOUCH ***
+--   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
+--   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
+--   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
+--   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
+--   confirms it — expect zeros.
+--
+-- *** DEDUP — one row per (clnt_no, cohort_month), anchored on first wave ***
+--   1. pop_wave: one row per (clnt_no, tactic_id) — the original per-wave dedup (multiple event
+--      rows for the same client+wave collapse to the earliest treatmt_strt_dt), unchanged.
+--   2. cohort_first: QUALIFY ROW_NUMBER() OVER (PARTITION BY clnt_no, cohort_month
+--      ORDER BY treatmt_strt_dt ASC) = 1 — first-touch wave wins grp and becomes Day 0.
+--   3. cohort_window: MAX(treatmt_end_dt) across ALL of that client's waves in the cohort_month,
+--      so a later wave's window is never truncated by only looking at the first-touch wave's own
+--      end date. Search window for success = [anchor_dt, window_end].
+-- grp       : LEFT(TRIM(tst_grp_cd),1): 'C'->Control, 'T'->Test, from the client's first-touch
+--             wave. Anything else is EXCLUDED from the population (not a third bucket — contract
+--             requires grp strictly binary). [VERIFY] the C/T-prefix split itself is not
+--             documented in the original campaigns/VBA_VBU/vbu_vintage_original.sql (which uses
+--             tst_grp_cd positions 6-8 as a FROM-product code, not an Action/Control split);
+--             confirmed instead in campaigns/VBA_VBU/vbu_summary_vintage_cell.py (`tc()`, ~line
+--             64) as VBA/VBU's real Test/Control rollup rule.
+-- Success   : UNCHANGED definition — Casper + SCOT unioned and deduped to one earliest-approval
+--             event. Same tables/filters as vba_campaign.sql. Union is a plain UNION (not UNION
+--             ALL) on (clnt_no, event_date) to dedupe the same physical event reported by both
+--             systems, done BEFORE cohort attribution. Only the cross-wave pooling layer
+--             changed — see DEDUP above; each client's cohort-month window now spans ALL their
+--             VBU waves that month instead of measuring against a single wave's window.
+-- Spine     : fixed 0-90 — preserved as a deliberate cap.
 -- Floor     : DATE '2026-01-01' on every scan (contract rule 6), including Casper/SCOT event
---             tables (source had no floor on those — added here; safe, since an event can only
---             match a window starting >= 2026-01-01 anyway, so this is a pushdown/perf fix,
---             not a behavior change).
+--             tables.
 --
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_vbu_cells;
 --   DROP TABLE vt_vbu_spine;
 
 -- ============================================================================
--- STEP 1: cells — base (denominator) per (cohort_month, deployment, grp)
+-- STEP 1: cells — base (denominator) per (cohort_month, grp)
 -- ============================================================================
 CREATE VOLATILE TABLE vt_vbu_cells AS (
-    WITH pop AS (
+    WITH pop_wave AS (
         SELECT
             clnt_no, tactic_id, treatmt_strt_dt,
             CASE
@@ -81,21 +80,30 @@ CREATE VOLATILE TABLE vt_vbu_cells AS (
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
         ) = 1
+    ),
+    pop_raw AS (
+        SELECT
+            clnt_no, treatmt_strt_dt, grp,
+            CAST(
+                CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+                CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+                CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+            AS VARCHAR(7))                        AS cohort_month
+        FROM pop_wave
+    ),
+    cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+        SELECT clnt_no, cohort_month, grp
+        FROM pop_raw
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
+        ) = 1
     )
-    SELECT
-        CAST(
-            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7))                        AS cohort_month,
-        CAST(TRIM(tactic_id) AS VARCHAR(30))   AS deployment,
-        grp,
-        COUNT(DISTINCT clnt_no)                AS base
-    FROM pop
-    GROUP BY 1, 2, 3
-) WITH DATA PRIMARY INDEX (cohort_month, deployment, grp) ON COMMIT PRESERVE ROWS;
+    SELECT cohort_month, grp, COUNT(DISTINCT clnt_no) AS base
+    FROM cohort_first
+    GROUP BY 1, 2
+) WITH DATA PRIMARY INDEX (cohort_month, grp) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_vbu_cells COLUMN (cohort_month, deployment, grp);
+COLLECT STATISTICS ON vt_vbu_cells COLUMN (cohort_month, grp);
 
 -- ============================================================================
 -- STEP 2: day spine 0-90 (deliberate fixed cap, preserved from source)
@@ -112,7 +120,7 @@ COLLECT STATISTICS ON vt_vbu_spine COLUMN (vintage_day);
 -- STEP 3: final curve
 -- ============================================================================
 WITH
-pop AS (
+pop_wave AS (
     SELECT
         clnt_no, tactic_id, treatmt_strt_dt, treatmt_end_dt,
         CASE
@@ -126,6 +134,35 @@ pop AS (
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY clnt_no, tactic_id ORDER BY treatmt_strt_dt ASC
     ) = 1
+),
+pop_raw AS (
+    SELECT
+        clnt_no, treatmt_strt_dt, treatmt_end_dt, grp,
+        CAST(
+            CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+            CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+            CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+        AS VARCHAR(7))                        AS cohort_month
+    FROM pop_wave
+),
+cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire — see header)
+    SELECT clnt_no, cohort_month, grp, treatmt_strt_dt AS anchor_dt
+    FROM pop_raw
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clnt_no, cohort_month ORDER BY treatmt_strt_dt ASC
+    ) = 1
+),
+cohort_window AS (
+    -- widen search window to the latest end date across ALL the client's waves this month
+    SELECT clnt_no, cohort_month, MAX(treatmt_end_dt) AS window_end
+    FROM pop_raw
+    GROUP BY clnt_no, cohort_month
+),
+population AS (
+    SELECT cf.clnt_no, cf.cohort_month, cf.grp, cf.anchor_dt, cw.window_end
+    FROM cohort_first cf
+    INNER JOIN cohort_window cw
+        ON cw.clnt_no = cf.clnt_no AND cw.cohort_month = cf.cohort_month
 ),
 
 -- raw candidate success events, Casper (PRIMARY) — no deployment key on the event table itself
@@ -160,72 +197,83 @@ scot_events AS (
 ),
 
 -- union FIRST, dedupe the physical event (clnt_no, event_date) — plain UNION, not UNION ALL —
--- BEFORE joining to a deployment window
+-- BEFORE joining to a cohort window
 events AS (
     SELECT clnt_no, event_date FROM casper_events
     UNION
     SELECT clnt_no, event_date FROM scot_events
 ),
 
--- each pop row is measured against its OWN window only — no cross-deployment attribution
+-- each client-month is measured against its OWN pooled window only (anchor_dt to window_end)
 success AS (
     SELECT
-        CAST(
-            CAST(EXTRACT(YEAR FROM p.treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM p.treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM p.treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7))                        AS cohort_month,
-        CAST(TRIM(p.tactic_id) AS VARCHAR(30)) AS deployment,
+        p.cohort_month,
         p.grp,
-        MIN(CAST(e.event_date - p.treatmt_strt_dt AS INTEGER)) AS vintage_day
-    FROM pop p
+        p.clnt_no,
+        MIN(CAST(e.event_date - p.anchor_dt AS INTEGER)) AS vintage_day
+    FROM population p
     INNER JOIN events e
         ON  e.clnt_no    = p.clnt_no
-        AND e.event_date BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
-    GROUP BY
-        p.clnt_no,
-        CAST(
-            CAST(EXTRACT(YEAR FROM p.treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-            CASE WHEN EXTRACT(MONTH FROM p.treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
-            CAST(EXTRACT(MONTH FROM p.treatmt_strt_dt) AS VARCHAR(2))
-        AS VARCHAR(7)),
-        CAST(TRIM(p.tactic_id) AS VARCHAR(30)),
-        p.grp
+        AND e.event_date BETWEEN p.anchor_dt AND p.window_end
+    GROUP BY p.clnt_no, p.cohort_month, p.grp
 ),
 
 daily_counts AS (
-    SELECT cohort_month, deployment, grp, vintage_day, COUNT(*) AS responders
+    SELECT cohort_month, grp, vintage_day, COUNT(*) AS responders
     FROM success
     WHERE vintage_day BETWEEN 0 AND 90
-    GROUP BY cohort_month, deployment, grp, vintage_day
+    GROUP BY cohort_month, grp, vintage_day
 ),
 
 dense_grid AS (
-    SELECT c.cohort_month, c.deployment, c.grp, c.base, s.vintage_day
+    SELECT c.cohort_month, c.grp, c.base, s.vintage_day
     FROM vt_vbu_cells c
     CROSS JOIN vt_vbu_spine s
 )
 
 SELECT
     g.cohort_month,
-    g.deployment,
     CAST('All' AS VARCHAR(20)) AS segment,
     g.grp,
     g.vintage_day,
     g.base,
     COALESCE(dc.responders, 0) AS responders,
     SUM(COALESCE(dc.responders, 0)) OVER (
-        PARTITION BY g.cohort_month, g.deployment, g.grp
+        PARTITION BY g.cohort_month, g.grp
         ORDER BY g.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS responders_cum
 FROM dense_grid g
 LEFT JOIN daily_counts dc
     ON  dc.cohort_month = g.cohort_month
-    AND dc.deployment    = g.deployment
     AND dc.grp           = g.grp
     AND dc.vintage_day    = g.vintage_day
-ORDER BY g.cohort_month, g.deployment, g.grp, g.vintage_day;
+ORDER BY g.cohort_month, g.grp, g.vintage_day;
 
 DROP TABLE vt_vbu_cells;
 DROP TABLE vt_vbu_spine;
+
+-- ============================================================================
+-- DIAGNOSTIC (commented out): how many clients hit both arms in one month?
+-- ============================================================================
+-- SELECT cohort_month, COUNT(*) AS conflicted_clients FROM (
+--     SELECT clnt_no, cohort_month FROM (
+--         SELECT
+--             clnt_no,
+--             CAST(
+--                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
+--             CASE
+--                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'C' THEN CAST('Control' AS VARCHAR(20))
+--                 WHEN LEFT(TRIM(tst_grp_cd), 1) = 'T' THEN CAST('Test'    AS VARCHAR(20))
+--             END AS grp
+--         FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+--         WHERE treatmt_strt_dt >= DATE '2026-01-01'
+--           AND SUBSTR(tactic_id, 8, 3) = 'VBU'
+--           AND LEFT(TRIM(tst_grp_cd), 1) IN ('C', 'T')
+--     ) raw
+--     GROUP BY clnt_no, cohort_month
+--     HAVING COUNT(DISTINCT grp) > 1
+-- ) x GROUP BY 1 ORDER BY 1;

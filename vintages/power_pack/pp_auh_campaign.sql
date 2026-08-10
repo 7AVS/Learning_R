@@ -1,7 +1,7 @@
 -- auh_experiment_vintage.sql
 -- ============================================================================
--- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, segment column added 2026-08-10).
---   Exactly 8 columns, this order: cohort_month | deployment | segment | grp | vintage_day
+-- CONTRACT: vintages/OUTPUT_CONTRACT.md (locked 2026-08-10, `deployment` DROPPED 2026-08-10).
+--   Exactly 7 columns, this order: cohort_month | segment | grp | vintage_day
 --   | base | responders | responders_cum. Counts only.
 -- SCOPE: **EXPERIMENT** — for AUH the whole deployment IS the experiment;
 --   there is no coarser "campaign" superset (per EXPERIMENT_VS_CAMPAIGN_MAP.md
@@ -20,13 +20,62 @@
 -- Grain: account. acct_no = CAST(TACTIC_EVNT_ID AS BIGINT) — the tactic event's
 --   own surrogate id, same convention as auh_vintage_reconstructed.sql and the
 --   repo's prior auh_vintage_monthly.sql (not a portfolio account number).
+--   *** DEDUP IDENTIFIER: acct_no *** (this file's success join keys on acct_no
+--   throughout — see SUCCESS below — so acct_no is what the first-touch dedup
+--   below is keyed on, per task instruction to use whichever id the success
+--   join already uses).
+-- ----------------------------------------------------------------------------
+-- *** [WARNING] DROPPING `deployment` MERGES PHASE 1 AND PHASE 2, 2026-08-10 ***
+--   Both AUH waves start in the SAME cohort_month: 2026042AUH and 2026119AUH
+--   both begin 2026-04-30 -> cohort_month = '2026-04' for BOTH. With
+--   `deployment` gone, there is only ONE '2026-04' cohort row per segment x
+--   grp — Phase 1 and Phase 2 are now the SAME row, not two rows Andre could
+--   tell apart.
+--   Phase 1 (2026042AUH) is 100% NonReward. Phase 2 (2026119AUH) has all three
+--   segments (NonReward, Rewards_NoOffer, Rewards_Offer). Because both phases
+--   land in cohort_month '2026-04', the '2026-04' x NonReward x {Test,Control}
+--   line now MIXES Phase 1 clients and Phase 2-NonReward-arm clients into one
+--   base/responders count. There is no way to separate them back out of this
+--   file's output — the Rewards_* segment lines are pure Phase 2 (since Phase 1
+--   has no rewards segments), but the NonReward line is NOT pure either phase.
+--   This is a real interpretive hazard, not a cosmetic one: any Phase-1-only or
+--   Phase-2-only read off the NonReward line will be wrong. If a clean
+--   phase-separated cut is ever needed again, it has to come from a
+--   deployment-aware file (the analytical AUH_P2_Vintage.sql), not this one.
+-- ----------------------------------------------------------------------------
+-- *** [NOTE] grp tie-break = FIRST-TOUCH ***
+--   If a client appeared twice in one cohort_month with opposing arms, grp comes from their
+--   FIRST treatment. Per Andre (2026-08-10) this should never fire: a client already live in a
+--   deployment is not re-decisioned until it ends (trigger-style decisioning). Kept as a cheap
+--   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
+--   confirms it — expect zeros.
+--   For AUH specifically this is doubly moot (the two waves are also disjoint
+--   populations per Andre — see DEDUP note below) but the rule is still applied
+--   uniformly for consistency with every other Power Pack file. segment is
+--   resolved by the SAME first-touch row as grp (both live on one tactic-event
+--   row), so a first-touch segment/grp pair always travels together.
+-- ----------------------------------------------------------------------------
+-- *** DEDUP — REQUIRED, EVEN THOUGH IT SHOULD BE A NO-OP HERE ***
+--   Per Andre: the two AUH waves are DISJOINT populations (no client is
+--   targeted by both 2026042AUH and 2026119AUH). So first-touch dedup at
+--   (acct_no, cohort_month) should collapse zero rows in practice. It is
+--   applied anyway for consistency with every other Power Pack file and as a
+--   safety net if that disjointness assumption is ever wrong.
+--   One row per (acct_no, cohort_month), anchored on that account's earliest
+--   treatmt_strt_dt within the month:
+--     QUALIFY ROW_NUMBER() OVER (PARTITION BY acct_no, cohort_month
+--                                ORDER BY treatmt_strt_dt ASC) = 1
+--   The success-window join below uses [MIN(treatmt_strt_dt), MAX(treatmt_end_dt)]
+--   across all of that account's rows in the cohort_month (not just the
+--   first-touch row's own window) so a later wave's window is never silently
+--   truncated by picking only the first-touch wave's dates.
 -- ----------------------------------------------------------------------------
 -- *** SEGMENT — REWARDS vs NON-REWARDS, ADDED 2026-08-10 ***
 --   Andre: "don't separate by model arm, but do separate rewards and
 --   non-rewards, then test and control for non-rewards and test and control
 --   for rewards." segment is a PRE-TREATMENT split, derived from tst_grp_cd,
 --   that sits ABOVE grp (Test/Control) — base is now computed at
---   cohort_month x deployment x segment x grp grain.
+--   cohort_month x segment x grp grain (deployment dropped 2026-08-10).
 --   Mapping, transcribed from the work-env AUH_P2_Vintage.sql (per deployment,
 --   the code alphabets differ between the two waves):
 --     2026042AUH (Phase 1) — all non-rewards:
@@ -36,30 +85,16 @@
 --       SUBSTR(tst_grp_cd,1,3) IN ('RNM','RNW')       -> 'Rewards_NoOffer'
 --       SUBSTR(tst_grp_cd,1,3) IN ('ROR','ROM','ROW') -> 'Rewards_Offer'
 --     Anything unmatched -> 'Unknown' (NOT silently folded into a real segment).
---   THREE segment values are emitted on purpose, not two. Rewards_Offer vs
---   Rewards_NoOffer is Phase 2's primary DOE contrast (Comm+Offer vs Comm
---   Only) — Andre asked for a two-way rewards/non-rewards view, but emitting
---   only two segment values would pool that contrast into 'Rewards' and
---   destroy it IRREVERSIBLY (can't be recovered downstream). Emitting three
---   lets Andre pool Rewards_Offer + Rewards_NoOffer himself in the pivot to
---   get the two-way view, while the DOE contrast stays available underneath.
---   [VERIFY NOTE — deployment scope] Phase 1 (2026042AUH) is entirely
---   NonReward — the Rewards_NoOffer / Rewards_Offer segments exist ONLY for
---   Phase 2 (2026119AUH). A rewards-vs-non-rewards comparison is therefore
---   valid WITHIN Phase 2 only. Comparing Phase 1 NonReward against Phase 2
---   Rewards would confound segment with deployment and time — do not do this.
+--   THREE segment values are emitted on purpose, not two — see prior header
+--   revision for the full DOE-contrast rationale (unchanged by the deployment
+--   drop). [WARNING] block above explains why the NonReward line now mixes
+--   phases even though the segment derivation logic itself is untouched.
 -- ----------------------------------------------------------------------------
 -- *** GRP COLLAPSE — DELIBERATE, READ BEFORE USING ***
 --   model_arm (Web / Random / Model) is COLLAPSED ENTIRELY — Andre explicitly
---   does NOT want that slicer broken out here. strategy_arm is now exposed as
---   the segment column above (the one change from the prior version of this
---   file, which collapsed strategy_arm too). grp itself stays binary Test vs
---   Control, per deployment AND per segment. Both are fully derivable from
---   tst_grp_cd (see the work-env AUH_P2_Vintage.sql structure, transcribed in
---   EXPERIMENT_VS_CAMPAIGN_MAP.md section 5) — model_arm is just not wanted
---   in this cube. If per-model_arm cuts are ever needed, build them as a
---   SEPARATE file; do not add columns here (contract rule 5).
---   grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' -> 'Control', ELSE -> 'Test'.
+--   does NOT want that slicer broken out here. grp itself stays binary Test vs
+--   Control, per segment. grp derivation: RIGHT(TRIM(tst_grp_cd), 2) = '_C' ->
+--   'Control', ELSE -> 'Test'.
 --
 --   [VERIFY] *** the '_C' = Control convention is an UNCONFIRMED WORKING
 --   ASSUMPTION for BOTH waves (2026042AUH and 2026119AUH) and is LOAD-BEARING
@@ -78,11 +113,10 @@
 --     - 2026119AUH (Phase 2): 50/50 between strategy arms, 70/30 test/control
 --       WITHIN each arm. Same ratio both sides -> pooling is SAFE.
 --     - 2026042AUH (Phase 1): NRGA/NRR/NRS ratios are UNVERIFIED.
---   base is output at (deployment x segment x grp) grain specifically so this
---   is self-checking — if the Test:Control ratio drifts between the two
---   deployments, or between segments (or looks structurally off within
---   2026042AUH), IT IS VISIBLE ON THE FACE OF THE CUBE. Check base before
---   trusting the Phase 1 line.
+--   base is output at (cohort_month x segment x grp) grain — with deployment
+--   gone, Phase 1 vs Phase 2 ratio drift is NO LONGER separately visible on
+--   the face of the cube for the NonReward line (see [WARNING] above). Check
+--   the Rewards_* lines (pure Phase 2) against NonReward with this in mind.
 -- ----------------------------------------------------------------------------
 -- SUCCESS (ONE metric, per contract rule 4) — WORK-ENV version (transcribed
 --   from screenshots 2026-08-10; more correct than the repo's prior
@@ -94,27 +128,16 @@
 --       ON a.clnt_no = c.clnt_no AND a.evnt_dt = c.DT_RECORD_EXT AND a.acct_no = c.acct_no
 --     WHERE a.dtl_evnt_typ_cd = 191 AND a.ADD_RELTN_CD = 3 AND a.evnt_dt >= DATE '2026-01-01'
 --   first_owned_dt = MIN(evnt_dt) per acct_no (ANY product — see note below).
---   Attribution: INNER JOIN cohort ON acct_no, AND first_owned_dt BETWEEN
---   treatmt_strt_dt AND treatmt_end_dt.
+--   Attribution: INNER JOIN cohort ON acct_no, AND first_owned_dt BETWEEN the
+--   cohort's pooled window [MIN(treatmt_strt_dt), MAX(treatmt_end_dt)] for that
+--   (acct_no, cohort_month) — see DEDUP note above.
 --   METRIC CHOICE: this is the ANY-PRODUCT success (first_app_dt in the
 --   work-env file), used as the single primary metric per contract rule 4.
---   The work-env file's target-product variant (first_app_dt_target, grouped
---   by acct_no + prod_cd, matched to the offered product via
---   SUBSTR(tactic_decisn_vrb_info,21,3)) is DROPPED here on purpose — one
---   metric per file, and Andre's instruction was explicit: use ANY-PRODUCT.
---   Because only the ANY-PRODUCT metric is kept, first_owned_dt is computed
---   as a single MIN(evnt_dt) per acct_no (no prod_cd grouping needed) — this
---   also means no last-touch/overlap resolution is required the way the
---   prior repo file did it: a single pre-collapsed date per account either
---   falls inside a given deployment's window or it doesn't, so it can
---   legitimately land in BOTH 2026042AUH's and 2026119AUH's curves if the
---   account and windows genuinely overlap — that is correct under this
---   contract (deployments are never pooled, each curve stands on its own),
---   not double-counting.
+--   The work-env file's target-product variant is DROPPED here on purpose —
+--   one metric per file, and Andre's instruction was explicit: use ANY-PRODUCT.
 -- ----------------------------------------------------------------------------
 -- SPINE: vintage_day 0-30 (AUH's deliberate cap, unchanged from prior file).
--- FLOOR: every scan >= DATE '2026-01-01' (contract rule 6; the old file used
---   2026-01-01 — widened here per contract).
+-- FLOOR: every scan >= DATE '2026-01-01' (contract rule 6).
 -- ----------------------------------------------------------------------------
 -- Drop residual volatile tables if rerunning in the same session:
 --   DROP TABLE vt_auh_experiment_cells;
@@ -122,20 +145,19 @@
 -- ============================================================================
 
 -- ============================================================================
--- STEP 1: denominator cells (cohort_month x deployment x grp -> base)
+-- STEP 1: denominator cells (cohort_month x segment x grp -> base)
 -- ============================================================================
 CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
-    WITH population AS (
+    WITH population_raw AS (
         SELECT
             CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
-            tactic_id                              AS deployment,
             treatmt_strt_dt,
             CAST(
                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
             AS VARCHAR(7))                          AS cohort_month,
-            -- segment: rewards vs non-rewards, derived per-deployment from tst_grp_cd — see header
+            -- segment: rewards vs non-rewards, derived per-wave from tst_grp_cd — see header
             CASE
                 WHEN tactic_id = '2026042AUH'
                      AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
@@ -158,17 +180,21 @@ CREATE VOLATILE TABLE vt_auh_experiment_cells AS (
         FROM DG6V01.tactic_evnt_ip_ar_hist
         WHERE tactic_id IN ('2026042AUH', '2026119AUH')
           AND treatmt_strt_dt >= DATE '2026-01-01'
+    ),
+    -- [NOTE] first-touch: one row per (acct_no, cohort_month), earliest treatmt_strt_dt wins (never expected to fire — see header)
+    cohort_first AS (
+        SELECT acct_no, cohort_month, segment, grp
+        FROM population_raw
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY CAST(tactic_evnt_id AS BIGINT), tactic_id
-            ORDER BY treatmt_strt_dt ASC
+            PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
         ) = 1
     )
-    SELECT cohort_month, deployment, segment, grp, COUNT(DISTINCT acct_no) AS base
-    FROM population
-    GROUP BY cohort_month, deployment, segment, grp
-) WITH DATA PRIMARY INDEX (cohort_month, deployment, segment, grp) ON COMMIT PRESERVE ROWS;
+    SELECT cohort_month, segment, grp, COUNT(DISTINCT acct_no) AS base
+    FROM cohort_first
+    GROUP BY cohort_month, segment, grp
+) WITH DATA PRIMARY INDEX (cohort_month, segment, grp) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, deployment, segment, grp);
+COLLECT STATISTICS ON vt_auh_experiment_cells COLUMN (cohort_month, segment, grp);
 
 -- ============================================================================
 -- STEP 2: day spine 0-30
@@ -185,10 +211,9 @@ COLLECT STATISTICS ON vt_auh_experiment_spine COLUMN (vintage_day);
 -- STEP 3: final curve
 -- ============================================================================
 WITH
-population AS (
+population_raw AS (
     SELECT
         CAST(tactic_evnt_id AS BIGINT)         AS acct_no,
-        tactic_id                              AS deployment,
         treatmt_strt_dt,
         treatmt_end_dt,
         CAST(
@@ -196,7 +221,6 @@ population AS (
             CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
             CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
         AS VARCHAR(7))                          AS cohort_month,
-        -- segment: rewards vs non-rewards, derived per-deployment from tst_grp_cd — see header
         CASE
             WHEN tactic_id = '2026042AUH'
                  AND TRIM(tst_grp_cd) IN ('NRGA','NRGA_C','NRR','NRR_C','NRS','NRS_C')
@@ -219,10 +243,30 @@ population AS (
     FROM DG6V01.tactic_evnt_ip_ar_hist
     WHERE tactic_id IN ('2026042AUH', '2026119AUH')
       AND treatmt_strt_dt >= DATE '2026-01-01'
+),
+
+-- [NOTE] first-touch: grp/segment come from the account's earliest row this month (never expected to fire — see header)
+cohort_first AS (
+    SELECT acct_no, cohort_month, segment, grp, treatmt_strt_dt AS anchor_dt
+    FROM population_raw
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY CAST(tactic_evnt_id AS BIGINT), tactic_id
-        ORDER BY treatmt_strt_dt ASC
+        PARTITION BY acct_no, cohort_month ORDER BY treatmt_strt_dt ASC
     ) = 1
+),
+
+-- pooled search window: earliest start to latest end across ALL of the account's
+-- rows in the cohort_month, so a later wave's window is never truncated
+cohort_window AS (
+    SELECT acct_no, cohort_month, MAX(treatmt_end_dt) AS window_end
+    FROM population_raw
+    GROUP BY acct_no, cohort_month
+),
+
+population AS (
+    SELECT cf.acct_no, cf.cohort_month, cf.segment, cf.grp, cf.anchor_dt, cw.window_end
+    FROM cohort_first cf
+    INNER JOIN cohort_window cw
+        ON cw.acct_no = cf.acct_no AND cw.cohort_month = cf.cohort_month
 ),
 
 -- raw success events: authorized-user add, any product, no deployment key on the event table itself
@@ -248,52 +292,74 @@ first_owned AS (
     GROUP BY acct_no
 ),
 
--- attribute to every deployment window the account's first-owned date actually falls in
--- (can legitimately match both waves if windows overlap for that account — see header)
+-- attribute within the pooled cohort window; vintage_day is relative to the
+-- first-touch anchor date, not necessarily the window the event fell in
 success_raw AS (
     SELECT
-        p.cohort_month, p.deployment, p.segment, p.grp, p.acct_no,
-        CAST(fo.first_owned_dt - p.treatmt_strt_dt AS INTEGER) AS vintage_day
+        p.cohort_month, p.segment, p.grp, p.acct_no,
+        CAST(fo.first_owned_dt - p.anchor_dt AS INTEGER) AS vintage_day
     FROM population p
     INNER JOIN first_owned fo
         ON  fo.acct_no        = p.acct_no
-        AND fo.first_owned_dt BETWEEN p.treatmt_strt_dt AND p.treatmt_end_dt
+        AND fo.first_owned_dt BETWEEN p.anchor_dt AND p.window_end
 ),
 
 daily_counts AS (
-    SELECT cohort_month, deployment, segment, grp, vintage_day, COUNT(DISTINCT acct_no) AS responders
+    SELECT cohort_month, segment, grp, vintage_day, COUNT(DISTINCT acct_no) AS responders
     FROM success_raw
     WHERE vintage_day BETWEEN 0 AND 30
-    GROUP BY cohort_month, deployment, segment, grp, vintage_day
+    GROUP BY cohort_month, segment, grp, vintage_day
 ),
 
 dense_grid AS (
-    SELECT c.cohort_month, c.deployment, c.segment, c.grp, c.base, s.vintage_day
+    SELECT c.cohort_month, c.segment, c.grp, c.base, s.vintage_day
     FROM vt_auh_experiment_cells c
     CROSS JOIN vt_auh_experiment_spine s
 )
 
 SELECT
     g.cohort_month,
-    CAST(g.deployment AS VARCHAR(30))  AS deployment,
     g.segment,
     g.grp,
     g.vintage_day,
     g.base,
     CAST(COALESCE(dc.responders, 0) AS INTEGER) AS responders,
     CAST(SUM(COALESCE(dc.responders, 0)) OVER (
-        PARTITION BY g.cohort_month, g.deployment, g.segment, g.grp
+        PARTITION BY g.cohort_month, g.segment, g.grp
         ORDER BY g.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS INTEGER) AS responders_cum
 FROM dense_grid g
 LEFT JOIN daily_counts dc
     ON  dc.cohort_month = g.cohort_month
-    AND dc.deployment    = g.deployment
     AND dc.segment       = g.segment
     AND dc.grp           = g.grp
     AND dc.vintage_day   = g.vintage_day
-ORDER BY g.cohort_month, g.deployment, g.segment, g.grp, g.vintage_day;
+ORDER BY g.cohort_month, g.segment, g.grp, g.vintage_day;
 
 DROP TABLE vt_auh_experiment_cells;
 DROP TABLE vt_auh_experiment_spine;
+
+-- ============================================================================
+-- DIAGNOSTIC (commented out): how many accounts hit both arms in one month?
+-- ============================================================================
+-- SELECT cohort_month, COUNT(*) AS conflicted_accounts FROM (
+--     SELECT acct_no, cohort_month FROM (
+--         SELECT
+--             CAST(tactic_evnt_id AS BIGINT) AS acct_no,
+--             CAST(
+--                 CAST(EXTRACT(YEAR FROM treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+--                 CASE WHEN EXTRACT(MONTH FROM treatmt_strt_dt) < 10 THEN '0' ELSE '' END ||
+--                 CAST(EXTRACT(MONTH FROM treatmt_strt_dt) AS VARCHAR(2))
+--             AS VARCHAR(7)) AS cohort_month,
+--             CASE
+--                 WHEN RIGHT(TRIM(tst_grp_cd), 2) = '_C' THEN CAST('Control' AS VARCHAR(20))
+--                 ELSE                                        CAST('Test'    AS VARCHAR(20))
+--             END AS grp
+--         FROM DG6V01.tactic_evnt_ip_ar_hist
+--         WHERE tactic_id IN ('2026042AUH', '2026119AUH')
+--           AND treatmt_strt_dt >= DATE '2026-01-01'
+--     ) raw
+--     GROUP BY acct_no, cohort_month
+--     HAVING COUNT(DISTINCT grp) > 1
+-- ) x GROUP BY 1 ORDER BY 1;
