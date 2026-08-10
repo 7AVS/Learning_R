@@ -75,6 +75,12 @@
 --   (tactic_id, clnt_no)  both column names confirmed against schemas/cards_bizups_vbu_descresp_clnt.md
 --   lines 15-16.
 --
+-- *** JOIN-KEY FIX 2026-08-10 *** the vbu_arm <-> curated-table join is normalised on BOTH sides:
+--   TRIM() on tactic_id, CAST(...AS DECIMAL(38,0)) on clnt_no. Same documented trap as CRV's
+--   (references/vintage_datalab_method.md, "JOIN-KEY FORMAT TRAP"): one side numeric, one side a
+--   padded/typed string, raw equality silently matches nothing. Unnormalised, this join returned
+--   ZERO rows on 2026-08-10 (empty wave_pop -> empty vt_vbu_cells -> empty output).
+--
 -- DEDUP IDENTIFIER: clnt_no. Same two-stage pattern as every other pp_*.sql file: wave_pop (one
 --   row per clnt_no, tactic_id, earliest response_start wins) -> cohort_first (one row per
 --   clnt_no, cohort_month, first-touch wins grp + anchor date). Applied defensively  the
@@ -166,14 +172,14 @@ CREATE VOLATILE TABLE vt_vbu_cells AS (
     -- grp source: TACTIC table, NOT the curated table's test_group/control (see GRP header note)
     vbu_arm AS (
         SELECT
-              TACTIC_ID                                          AS tactic_id
+              TRIM(TACTIC_ID)                                    AS tactic_id
             , CLNT_NO                                            AS clnt_no
             , CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
                         ELSE 'Action' END AS VARCHAR(20))        AS grp
         FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
         WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU'
           AND TREATMT_STRT_DT >= DATE '2026-01-01'
-        GROUP BY TACTIC_ID, CLNT_NO,
+        GROUP BY TRIM(TACTIC_ID), CLNT_NO,
                  CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
                            ELSE 'Action' END AS VARCHAR(20))
     ),
@@ -185,7 +191,8 @@ CREATE VOLATILE TABLE vt_vbu_cells AS (
             va.grp
         FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
         INNER JOIN vbu_arm va
-            ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+            ON  TRIM(va.tactic_id) = TRIM(vc.tactic_id)
+            AND CAST(va.clnt_no AS DECIMAL(38,0)) = CAST(vc.clnt_no AS DECIMAL(38,0))
         WHERE vc.response_start >= DATE '2026-01-01'                          -- floor guard
           AND vc.response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
           AND vc.response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
@@ -237,14 +244,14 @@ WITH
 -- grp source: TACTIC table, NOT the curated table's test_group/control (see GRP header note)
 vbu_arm AS (
     SELECT
-          TACTIC_ID                                          AS tactic_id
+          TRIM(TACTIC_ID)                                    AS tactic_id
         , CLNT_NO                                            AS clnt_no
         , CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
                     ELSE 'Action' END AS VARCHAR(20))        AS grp
     FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
     WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU'
       AND TREATMT_STRT_DT >= DATE '2026-01-01'
-    GROUP BY TACTIC_ID, CLNT_NO,
+    GROUP BY TRIM(TACTIC_ID), CLNT_NO,
              CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control'
                        ELSE 'Action' END AS VARCHAR(20))
 ),
@@ -257,7 +264,8 @@ wave_pop AS (
         va.grp
     FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
     INNER JOIN vbu_arm va
-        ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+        ON  TRIM(va.tactic_id) = TRIM(vc.tactic_id)
+        AND CAST(va.clnt_no AS DECIMAL(38,0)) = CAST(vc.clnt_no AS DECIMAL(38,0))
     WHERE vc.response_start >= DATE '2026-01-01'                          -- floor guard
       AND vc.response_end   >= DATE '2026-05-01'                          -- <<WINDOW>>
       AND vc.response_end   <  DATE '2026-08-01'                          -- <<WINDOW>>
@@ -384,12 +392,12 @@ ORDER BY g.cohort_month, g.grp, g.vintage_day;
 --             SELECT vc.clnt_no, vc.tactic_id, vc.response_start, va.grp
 --             FROM dl_mr_prod.cards_bizups_vbu_descresp_clnt vc
 --             INNER JOIN (
---                 SELECT TACTIC_ID AS tactic_id, CLNT_NO AS clnt_no,
+--                 SELECT TRIM(TACTIC_ID) AS tactic_id, CLNT_NO AS clnt_no,
 --                     CAST(CASE WHEN SUBSTR(TRIM(TST_GRP_CD),1,1) = 'C' THEN 'Control' ELSE 'Action' END AS VARCHAR(20)) AS grp
 --                 FROM DTZV01.TACTIC_EVNT_IP_AR_H60M
 --                 WHERE SUBSTR(TACTIC_ID, 8, 3) = 'VBU' AND TREATMT_STRT_DT >= DATE '2026-01-01'
 --                 GROUP BY 1, 2, 3
---             ) va ON va.tactic_id = vc.tactic_id AND va.clnt_no = vc.clnt_no
+--             ) va ON TRIM(va.tactic_id) = TRIM(vc.tactic_id) AND CAST(va.clnt_no AS DECIMAL(38,0)) = CAST(vc.clnt_no AS DECIMAL(38,0))
 --             WHERE vc.response_start >= DATE '2026-01-01'
 --             QUALIFY ROW_NUMBER() OVER (PARTITION BY vc.clnt_no, vc.tactic_id ORDER BY vc.response_start ASC) = 1
 --         ) wp
