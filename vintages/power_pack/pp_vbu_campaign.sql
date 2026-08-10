@@ -87,6 +87,17 @@
 --   every sibling file. Dedup uses QUALIFY ROW_NUMBER() ... = 1 (Teradata-native), not a ranked
 --   subquery with an outer WHERE rn = 1.
 --
+-- *** SEED EXCLUSION 2026-08-10 (Andre confirmed) ***
+--   Deployments with an empty Control arm are excluded  a deployment with no control clients
+--   is not an experiment and cannot produce a valid curve. This is a DATA-DRIVEN rule, not a
+--   hard-coded tactic_id list: any tactic_id where COUNT(DISTINCT clnt_no) in grp='Control' = 0
+--   is dropped before wave_arm/cohort_first are built (see valid_deployments CTE below, applied
+--   in both the vt_vbu_cells volatile table and the main query's numerator chain).
+--   Measured 2026-08-10 against real waves ending 2026-03-01 onward: seed/test deployments
+--   (e.g. 2026101VBU, 2026129VBU, 2026164VBU, 2026192VBU) carried 8-70 clients total and ZERO in
+--   Control; real waves (e.g. 2026070VBU, 2026103VBU, 2026133VBU) carry ~24-40K total, ~10-12K
+--   in Control. Applies at the tactic_id (deployment) grain, before the cohort_month rollup.
+--
 -- *** [NOTE] grp tie-break = FIRST-TOUCH ***  same convention as every pp_*.sql file: if a
 --   client appears twice in one cohort_month with opposing arms, grp comes from their FIRST
 --   treatment. Per Andre (2026-08-10) this should never fire (trigger-style decisioning). Bottom
@@ -171,6 +182,13 @@ CREATE VOLATILE TABLE vt_vbu_cells AS (
             PARTITION BY clnt_no, tactic_id ORDER BY response_start ASC
         ) = 1
     ),
+    -- seed exclusion: keep only tactic_ids with a non-empty Control arm (see header note above)
+    valid_deployments AS (
+        SELECT tactic_id
+        FROM wave_pop
+        GROUP BY tactic_id
+        HAVING COUNT(DISTINCT CASE WHEN grp = 'Control' THEN clnt_no END) > 0
+    ),
     wave_arm AS (
         SELECT
             wp.clnt_no,
@@ -183,6 +201,7 @@ CREATE VOLATILE TABLE vt_vbu_cells AS (
             AS VARCHAR(7)) AS cohort_month,
             wp.grp
         FROM wave_pop wp
+        INNER JOIN valid_deployments vd ON vd.tactic_id = wp.tactic_id
         WHERE wp.grp IS NOT NULL
     ),
     cohort_first AS (   -- [NOTE] first-touch: earliest wave wins grp + anchor date (never expected to fire  see header)
@@ -222,6 +241,14 @@ wave_pop AS (
     ) = 1
 ),
 
+-- seed exclusion: keep only tactic_ids with a non-empty Control arm (see header note above)
+valid_deployments AS (
+    SELECT tactic_id
+    FROM wave_pop
+    GROUP BY tactic_id
+    HAVING COUNT(DISTINCT CASE WHEN grp = 'Control' THEN clnt_no END) > 0
+),
+
 wave_arm AS (
     SELECT
         wp.clnt_no,
@@ -234,6 +261,7 @@ wave_arm AS (
         AS VARCHAR(7)) AS cohort_month,
         wp.grp
     FROM wave_pop wp
+    INNER JOIN valid_deployments vd ON vd.tactic_id = wp.tactic_id
     WHERE wp.grp IS NOT NULL
 ),
 

@@ -51,6 +51,16 @@
 --   guard for reminder-style sends inside a deployment. The diagnostic at the bottom of this file
 --   confirms it  expect zeros.
 --
+-- *** SEED EXCLUSION 2026-08-10 (Andre confirmed) ***
+--   Deployments with an empty Control arm are excluded  a deployment with no control clients
+--   is not an experiment and cannot produce a valid curve. This is a DATA-DRIVEN rule, not a
+--   hard-coded tactic_id list: any tactic_id where COUNT(DISTINCT clnt_no) in grp='Control' = 0
+--   is dropped before pop_raw/vba_cells are built (see valid_deployments CTE below).
+--   Measured 2026-08-10 against real waves ending 2026-03-01 onward: seed/test deployments
+--   (e.g. 2026059VBA, 2026125VBA, 2026174VBA, 2026196VBA) carried 3-7 clients total and ZERO in
+--   Control; real waves (e.g. 2026099VBA, 2026133VBA, 2026161VBA) carry ~95-99K total, ~5,300 in
+--   Control. Applies at the tactic_id (deployment) grain, before the cohort_month rollup.
+--
 -- *** DEDUP  one row per (clnt_no, cohort_month), anchored on first wave ***
 --   1. pop_wave: one row per (clnt_no, tactic_id)  the original per-wave dedup (multiple event
 --      rows for the same client+wave collapse to the earliest treatmt_strt_dt), unchanged.
@@ -120,11 +130,19 @@ pop_wave AS (
     ) ranked
     WHERE rn = 1
 ),
+-- seed exclusion: keep only tactic_ids with a non-empty Control arm (see header note above)
+valid_deployments AS (
+    SELECT tactic_id
+    FROM pop_wave
+    GROUP BY tactic_id
+    HAVING COUNT(DISTINCT CASE WHEN grp = 'Control' THEN clnt_no END) > 0
+),
 pop_raw AS (
     SELECT
-        clnt_no, treatmt_strt_dt, treatmt_end_dt, grp,
-        DATE_TRUNC('month', treatmt_strt_dt) AS cohort_month
-    FROM pop_wave
+        w.clnt_no, w.treatmt_strt_dt, w.treatmt_end_dt, w.grp,
+        DATE_TRUNC('month', w.treatmt_strt_dt) AS cohort_month
+    FROM pop_wave w
+    INNER JOIN valid_deployments vd ON vd.tactic_id = w.tactic_id
 ),
 -- stage 2 dedup: one row per (clnt_no, cohort_month)  first-touch wave wins grp + anchor date
 -- (never expected to fire  see header)
