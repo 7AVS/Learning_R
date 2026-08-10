@@ -274,13 +274,15 @@ success_primary AS (
     LEFT JOIN prior_aib prior
         ON prior.tactic_id = ac.tactic_id AND prior.acct_no = ac.acct_no
     WHERE ac.new_product = 'AIB'
-      -- ==== LEVER 2 (currently ON) ====================================
-      -- Comment out the next line to STOP excluding clients who already held AIB
-      -- before treatment. Dashboard target-product counts may not apply this
-      -- exclusion. If FIX 1 alone does not close the gap to 471 / 5, disable this
-      -- line and rerun.
+      -- ==== LEVER 2 (currently OFF, disabled 2026-08-10) ==============
+      -- FIX 1 (widening the change window to the full 90-day spine) moved the
+      -- count by only ~1 conversion per cohort - nowhere near the 42 needed.
+      -- So the window was NOT the cause. Disabling the prior-AIB exclusion is
+      -- the remaining lever: it drops clients who already held AIB before
+      -- treatment, and the dashboard's target-product count appears not to.
+      -- Re-enable by uncommenting the line below.
+      --   AND prior.acct_no IS NULL
       -- ===============================================================
-      AND prior.acct_no IS NULL
     GROUP BY ac.clnt_no, ac.tactic_id, ac.Treat_Start_DT, ac.Treat_End_DT, ac.grp
 ),
 
