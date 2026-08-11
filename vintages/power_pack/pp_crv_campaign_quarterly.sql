@@ -160,12 +160,16 @@ cohort_cells AS (
 
 -- success pooled across every wave the client touched in the quarter: MIN(event_date) across
 -- the client's own pooled window (anchor_dt to window_end), rebased to the first-touch anchor.
+-- FIX 2026-08-10: was DATE_DIFF('day', p.anchor_dt, MIN(m.event_date)), which Trino
+-- rejects -- anchor_dt is neither aggregated nor in the GROUP BY. Taking MIN of the
+-- day-difference is equivalent (anchor_dt is constant within the group and DATE_DIFF
+-- is monotonic in its second argument) and is what pp_vba_campaign_quarterly.sql uses.
 success AS (
     SELECT
         p.quarter,
         p.grp,
         p.visa_acct_no,
-        DATE_DIFF('day', p.anchor_dt, MIN(m.event_date)) AS vintage_day
+        MIN(DATE_DIFF('day', p.anchor_dt, m.event_date)) AS vintage_day
     FROM population p
     JOIN edl0_im.prod_zp10_prod_staging.measurement_events_v2 m
         ON CAST(p.visa_acct_no AS DECIMAL(38,0)) = CAST(m.acct_no AS DECIMAL(38,0))
