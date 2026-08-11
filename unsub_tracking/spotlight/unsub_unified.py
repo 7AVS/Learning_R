@@ -2761,3 +2761,574 @@ else:
             print("  DELETED:", _old_path)
         else:
             print("  FAILED to delete", _old_path, "-", _rc.stderr.strip()[:300])
+
+
+# %% [19] PART B2 CONFIG (NEW 2026-08-11) - quarterly unsub VINTAGES, flow not stock. Leaver(q) =
+# first-ever cards-marketing unsub (disposition_cd=4, mne IN CARDS_MKT_MNES) lands inside q's
+# window - replaces Piece B's stock-at-anchor design for this section only. Piece B ([12]-[15b])
+# is UNTOUCHED and keeps shipping b_before_after_cube/b_delta_summary; this is an ADDITIVE section,
+# own HDFS namespace (b2_*), own schema version. Reuses CARDS_MKT_MNES/CARDS_MKT_LIST_SQL,
+# COHORT_B_FLOOR (== the repo 2024-01-01 floor), MASTER_FLOOR_B, TACTIC_ID_SQL, N_BITES, SMOKE,
+# write_cube/_stamp/_landed/_write_chunks/_write_spark_marker/_read_bite_or_empty, and
+# _read_ucp_snapshot_b (Cell [14b]) verbatim - nothing here is re-derived that already exists.
+# SCOPE TRIM (Andre, post-spec): spend deciles only (no profit deciles); matched-both + all_pre
+# bases only (no zero-fill sensitivity variant). Cells [26]/[27] are NOT re-pointed.
+# List-pair breakout dropped from v_repeat_anomaly (scope trim; add later if the anomaly count warrants it).
+
+B2_BUILD = "build 2026-08-11 | Part B2 quarterly unsub vintages (2025Q1/Q2 leaver-flow cohorts)"
+print("=" * 88); print("B2_BUILD:", B2_BUILD); print("=" * 88)
+
+VINTAGE_QS = {
+    "2025Q1": {"tag": "q1", "floor": "2025-01-01", "ceil": "2025-04-01",
+               "pre_month": "2024-12-31", "post_month": "2026-03-31",
+               "spend_pre": [202410, 202411, 202412], "spend_post": [202601, 202602, 202603]},
+    "2025Q2": {"tag": "q2", "floor": "2025-04-01", "ceil": "2025-07-01",
+               "pre_month": "2025-03-31", "post_month": "2026-06-30",
+               "spend_pre": [202501, 202502, 202503], "spend_post": [202604, 202605, 202606]},
+}
+for _qn, _q in VINTAGE_QS.items():
+    assert datetime.date.fromisoformat(_q["floor"]) >= datetime.date.fromisoformat(COHORT_B_FLOOR), \
+        _qn + ": below repo floor"
+
+B2_SCAN_FLOOR = COHORT_B_FLOOR                        # reused - "2024-01-01", same constant Cell [12] uses
+B2_SCAN_CEIL = "2026-07-01"                            # half-open, covers both quarters' POST month-ends
+B2_LEAVER_FLOOR = min(q["floor"] for q in VINTAGE_QS.values())   # "2025-01-01" - cheap population scan
+B2_LEAVER_CEIL = max(q["ceil"] for q in VINTAGE_QS.values())     # "2025-07-01" - Q1+Q2 windows are contiguous
+B2_MASTER_FLOOR = _months_before(B2_LEAVER_FLOOR, 3)
+
+_b2_all_spend_yms = sorted(set(sum([q["spend_pre"] + q["spend_post"] for q in VINTAGE_QS.values()], [])))
+B2_SPEND_YMS_SQL = ", ".join(str(y) for y in _b2_all_spend_yms)
+B2_SPEND_FLOOR = _ym_to_month_start(_b2_all_spend_yms[0]).isoformat()
+B2_SPEND_CEIL = _add_months(_ym_to_month_start(_b2_all_spend_yms[-1]), 1).isoformat()
+assert datetime.date.fromisoformat(B2_SPEND_FLOOR) >= datetime.date(2024, 1, 1), "B2 spend floor below repo floor"
+
+B2_SCHEMA_VERSION = 1
+B2COHORT_DIR = BASE + "b2_cohort_v%d/" % B2_SCHEMA_VERSION
+B2DFP_DIR = BASE + "b2_dfp_v%d/" % B2_SCHEMA_VERSION
+B2UCP_DIR = BASE + "b2_ucp_v%d/" % B2_SCHEMA_VERSION
+RUN_B2_PULLS = True   # own switch - independent of RUN_PULLS (Cell [0], untouched)
+
+print("B2 CONFIG loaded | quarters:", list(VINTAGE_QS), "| scan:", B2_SCAN_FLOOR, "->", B2_SCAN_CEIL,
+      "| leaver-population scan:", B2_LEAVER_FLOOR, "->", B2_LEAVER_CEIL,
+      "| spend yms:", _b2_all_spend_yms)
+
+
+# %% [20] PULL B2_COHORT (NEW 2026-08-11) - one bitten pull, both quarters: mailed_q1/mailed_q2
+# flags, first/second-ever cards-mkt unsub date (ROW_NUMBER, same deterministic tie-break as Cell
+# [12]'s cards_unsub_ranked), n_cards_unsub_events (repeat-anomaly source), and ent_unsub_dt_min
+# (enterprise-wide any-mne unsub - the any_unsub_by_anchor LOGIC reused, tracking a date instead of
+# a flag so it can be compared against each quarter's own POST ceiling downstream). Landed
+# population = mailed_q1 OR mailed_q2 OR first-ever cards unsub falls inside the Q1+Q2 window -
+# everyone Piece B2's cubes could possibly need, nothing enterprise-wide. ENGINE: Teradata-direct.
+
+B2COHORT_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("mailed_q1", IntegerType(), True),
+    StructField("mailed_q2", IntegerType(), True),
+    StructField("ent_unsub_dt_min", StringType(), True),        # ISO date string, genuine None if never
+    StructField("n_cards_unsub_events", IntegerType(), True),   # cards-mkt unsubs, floor 2024-01-01
+    StructField("first_cards_unsub_dt", StringType(), True),
+    StructField("second_cards_unsub_dt", StringType(), True),   # None if n_cards_unsub_events < 2
+])
+
+
+def _b2cohort_sql(bite):
+    _q1, _q2 = VINTAGE_QS["2025Q1"], VINTAGE_QS["2025Q2"]
+    return """
+    WITH ek AS (
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd, MIN(disposition_dt_tm) AS dt
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd IN (1, 4)
+          AND disposition_dt_tm >= DATE '%(floor)s'
+          AND disposition_dt_tm <  DATE '%(ceil)s'%(tactic)s
+        GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
+    ),
+    joined AS (
+        SELECT m.CLNT_NO AS clnt_no, SUBSTR(ek.TREATMENT_ID, 8, 3) AS mne,
+               ek.disposition_cd AS disposition_cd, CAST(ek.dt AS DATE) AS dt, ek.TREATMENT_ID AS treatment_id
+        FROM ek
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(mfloor)s' AND CLNT_NO IS NOT NULL
+                      AND MOD(ABS(CLNT_NO), %(n_bites)d) = %(bite)d) m
+          ON m.consumer_id_hashed = ek.consumer_id_hashed AND m.TREATMENT_ID = ek.TREATMENT_ID
+    ),
+    mailed_flags AS (
+        SELECT clnt_no,
+               MAX(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s)
+                         AND dt >= DATE '%(q1f)s' AND dt < DATE '%(q1c)s' THEN 1 ELSE 0 END) AS mailed_q1,
+               MAX(CASE WHEN disposition_cd = 1 AND mne IN (%(cards)s)
+                         AND dt >= DATE '%(q2f)s' AND dt < DATE '%(q2c)s' THEN 1 ELSE 0 END) AS mailed_q2,
+               MIN(CASE WHEN disposition_cd = 4 THEN dt END) AS ent_unsub_dt_min
+        FROM joined GROUP BY clnt_no
+    ),
+    cards_unsub_ranked AS (
+        -- Same-day multi-list unsub batch-shave: 3 lists unsubbed same calendar day = 1 event, not 3 -
+        -- dedup to distinct (clnt_no, dt) before ranking so gap_days is never 0 from same-day pairs.
+        SELECT clnt_no, dt,
+               ROW_NUMBER() OVER (PARTITION BY clnt_no ORDER BY dt ASC) AS rn
+        FROM (SELECT clnt_no, dt FROM joined WHERE disposition_cd = 4 AND mne IN (%(cards)s) GROUP BY clnt_no, dt) dedup
+    ),
+    cards_unsub_agg AS (
+        SELECT clnt_no, COUNT(*) AS n_cards_unsub_events,
+               MIN(CASE WHEN rn = 1 THEN dt END) AS first_cards_unsub_dt,
+               MIN(CASE WHEN rn = 2 THEN dt END) AS second_cards_unsub_dt
+        FROM cards_unsub_ranked GROUP BY clnt_no
+    )
+    SELECT f.clnt_no, f.mailed_q1, f.mailed_q2, f.ent_unsub_dt_min,
+           COALESCE(a.n_cards_unsub_events, 0) AS n_cards_unsub_events,
+           a.first_cards_unsub_dt, a.second_cards_unsub_dt
+    FROM mailed_flags f
+    LEFT JOIN cards_unsub_agg a ON a.clnt_no = f.clnt_no
+    WHERE f.mailed_q1 = 1 OR f.mailed_q2 = 1
+       OR (a.first_cards_unsub_dt >= DATE '%(lfloor)s' AND a.first_cards_unsub_dt < DATE '%(lceil)s')
+    """ % {"floor": B2_SCAN_FLOOR, "ceil": B2_SCAN_CEIL, "tactic": TACTIC_ID_SQL, "mfloor": MASTER_FLOOR_B,
+           "n_bites": N_BITES, "bite": bite, "cards": CARDS_MKT_LIST_SQL,
+           "q1f": _q1["floor"], "q1c": _q1["ceil"], "q2f": _q2["floor"], "q2c": _q2["ceil"],
+           "lfloor": B2_LEAVER_FLOOR, "lceil": B2_LEAVER_CEIL}
+
+
+def _iso_date_col(pdf, col):
+    """Coerce a Teradata DATE column to an ISO string, genuine None (not NaT/NaN) on missing -
+    same None-not-NaN discipline as Cell [13]'s spend NULL guard, so isNull() catches it downstream."""
+    _dt = pd.to_datetime(pdf[col], errors="coerce")
+    _s = _dt.dt.strftime("%Y-%m-%d").astype(object)
+    _s[_dt.isna()] = None
+    return _s
+
+
+def _prep_b2cohort(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    assert pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum() == 0, "clnt_no has nulls"
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    for c in ["mailed_q1", "mailed_q2", "n_cards_unsub_events"]:
+        pdf[c] = pd.to_numeric(pdf[c], errors="coerce").fillna(0).astype("int32")
+    for c in ["ent_unsub_dt_min", "first_cards_unsub_dt", "second_cards_unsub_dt"]:
+        pdf[c] = _iso_date_col(pdf, c)
+    return pdf[[f.name for f in B2COHORT_SCHEMA.fields]]
+
+
+def land_b2cohort_bite(bite):
+    name = "b2_cohort_v%d/bite_%d" % (B2_SCHEMA_VERSION, bite)
+    if _landed(name):
+        print(name, ": already landed - SKIP"); return
+    pdf = edw_pd(_b2cohort_sql(bite))
+    if len(pdf) == 0:
+        print(name, ": zero B2 clients in this bite - continuing."); return
+    pdf = _prep_b2cohort(pdf)
+    nback = _write_chunks(pdf, B2COHORT_SCHEMA, name)
+    assert nback == len(pdf), name + " readback mismatch: %d vs %d" % (len(pdf), nback)
+    print(name, ": landed", len(pdf), "B2 clients, readback", nback)
+
+
+if RUN_B2_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_b2cohort_bite(_b)
+    print("PULL B2_COHORT done - landed at", B2COHORT_DIR + "*")
+else:
+    print("PULL B2_COHORT skipped - RUN_B2_PULLS is False")
+
+
+def read_b2cohort_bite(bite):
+    return _read_bite_or_empty(B2COHORT_DIR, bite, B2COHORT_SCHEMA).withColumn(
+        "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+B2_COHORT_N = sum(read_b2cohort_bite(_b).count() for _b in (range(1) if SMOKE else range(N_BITES)))
+print("B2_COHORT | union of mailed_q1/mailed_q2/first-unsub-in-window populations |", B2_COHORT_N, "clients.")
+
+
+# %% [21] PULL B2_DFP (NEW 2026-08-11) - 3-mo spend PRE/POST x 2 quarters (4 windows), same
+# SPEND_YMS_* CASE-sum + NULL-vs-zero-row-guard pattern as Cell [13], extended from 2 windows to 4.
+# Population is a CHEAP, self-contained re-derivation (mailed OR cards-mkt-unsubbed inside the
+# combined Jan-Jun 2025 window) - same "self-contained, independently resumable" reasoning as Cell
+# [13]'s _cohort_cte_sql, not a read of Cell [20]'s landed table. ENGINE: Teradata-direct
+# (D3CV12A.DLY_FULL_PORTFOLIO).
+
+assert "ACCUM_VALIDATED" in globals() and ACCUM_VALIDATED, "Run Cell [11] first."
+
+B2DFP_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True),
+    StructField("spend_pre_q1", DoubleType(), True), StructField("spend_post_q1", DoubleType(), True),
+    StructField("spend_pre_q2", DoubleType(), True), StructField("spend_post_q2", DoubleType(), True),
+])
+
+
+def _b2_population_cte_sql(bite):
+    return """
+    population_ek AS (
+        SELECT consumer_id_hashed, TREATMENT_ID, disposition_cd, MIN(disposition_dt_tm) AS dt
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT
+        WHERE disposition_cd IN (1, 4)
+          AND disposition_dt_tm >= DATE '%(pfloor)s' AND disposition_dt_tm < DATE '%(pceil)s'
+          AND SUBSTR(TREATMENT_ID, 8, 3) IN (%(cards)s)%(tactic)s
+        GROUP BY 1, 2, 3, CAST(disposition_dt_tm AS DATE)
+    ),
+    population AS (
+        SELECT DISTINCT m.CLNT_NO AS clnt_no
+        FROM population_ek
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE load_tm >= DATE '%(pmfloor)s' AND CLNT_NO IS NOT NULL
+                      AND MOD(ABS(CLNT_NO), %(n_bites)d) = %(bite)d) m
+          ON m.consumer_id_hashed = population_ek.consumer_id_hashed AND m.TREATMENT_ID = population_ek.TREATMENT_ID
+    )""" % {"pfloor": B2_LEAVER_FLOOR, "pceil": B2_LEAVER_CEIL, "cards": CARDS_MKT_LIST_SQL,
+            "tactic": TACTIC_ID_SQL, "pmfloor": B2_MASTER_FLOOR, "n_bites": N_BITES, "bite": bite}
+
+
+def _spend_case(yms):
+    return "SUM(CASE WHEN ym IN (%s) THEN acct_month_spend ELSE 0 END)" % ", ".join(str(y) for y in yms)
+
+
+def _rows_case(yms):
+    return "SUM(CASE WHEN ym IN (%s) THEN 1 ELSE 0 END)" % ", ".join(str(y) for y in yms)
+
+
+def _b2dfp_sql(bite):
+    _q1, _q2 = VINTAGE_QS["2025Q1"], VINTAGE_QS["2025Q2"]
+    return """
+    WITH %(pop)s,
+    dfp_scoped AS (
+        SELECT p.clnt_no, p.acct_no, p.dt_record_ext,
+               EXTRACT(YEAR FROM p.dt_record_ext) * 100 + EXTRACT(MONTH FROM p.dt_record_ext) AS ym,
+               CAST(p.net_prch_amt_mtd AS FLOAT) AS net_prch_amt_mtd
+        FROM D3CV12A.DLY_FULL_PORTFOLIO p
+        INNER JOIN population pop ON pop.clnt_no = p.clnt_no
+        WHERE p.dt_record_ext >= DATE '%(sfloor)s' AND p.dt_record_ext < DATE '%(sceil)s'
+          AND p.clnt_no IS NOT NULL
+          AND EXTRACT(YEAR FROM p.dt_record_ext) * 100 + EXTRACT(MONTH FROM p.dt_record_ext) IN (%(yms)s)
+    ),
+    ranked AS (
+        SELECT clnt_no, acct_no, ym, net_prch_amt_mtd,
+               ROW_NUMBER() OVER (PARTITION BY acct_no, ym ORDER BY dt_record_ext DESC) AS rn
+        FROM dfp_scoped
+    ),
+    acct_month AS (
+        SELECT clnt_no, acct_no, ym, net_prch_amt_mtd AS acct_month_spend FROM ranked WHERE rn = 1
+    ),
+    acct_wide AS (
+        SELECT clnt_no, acct_no,
+               %(sp_pre_q1)s AS spend_pre_q1, %(rw_pre_q1)s AS rows_pre_q1,
+               %(sp_post_q1)s AS spend_post_q1, %(rw_post_q1)s AS rows_post_q1,
+               %(sp_pre_q2)s AS spend_pre_q2, %(rw_pre_q2)s AS rows_pre_q2,
+               %(sp_post_q2)s AS spend_post_q2, %(rw_post_q2)s AS rows_post_q2
+        FROM acct_month GROUP BY clnt_no, acct_no
+    )
+    SELECT clnt_no,
+       CASE WHEN SUM(rows_pre_q1) = 0  THEN NULL ELSE SUM(spend_pre_q1)  END AS spend_pre_q1,
+       CASE WHEN SUM(rows_post_q1) = 0 THEN NULL ELSE SUM(spend_post_q1) END AS spend_post_q1,
+       CASE WHEN SUM(rows_pre_q2) = 0  THEN NULL ELSE SUM(spend_pre_q2)  END AS spend_pre_q2,
+       CASE WHEN SUM(rows_post_q2) = 0 THEN NULL ELSE SUM(spend_post_q2) END AS spend_post_q2
+    FROM acct_wide GROUP BY clnt_no
+    """ % {"pop": _b2_population_cte_sql(bite), "sfloor": B2_SPEND_FLOOR, "sceil": B2_SPEND_CEIL,
+           "yms": B2_SPEND_YMS_SQL,
+           "sp_pre_q1": _spend_case(_q1["spend_pre"]), "rw_pre_q1": _rows_case(_q1["spend_pre"]),
+           "sp_post_q1": _spend_case(_q1["spend_post"]), "rw_post_q1": _rows_case(_q1["spend_post"]),
+           "sp_pre_q2": _spend_case(_q2["spend_pre"]), "rw_pre_q2": _rows_case(_q2["spend_pre"]),
+           "sp_post_q2": _spend_case(_q2["spend_post"]), "rw_post_q2": _rows_case(_q2["spend_post"])}
+
+
+def _prep_b2dfp(pdf):
+    pdf = pdf.copy()
+    pdf.columns = [c.lower() for c in pdf.columns]
+    _n_null = pd.to_numeric(pdf["clnt_no"], errors="coerce").isna().sum()
+    assert _n_null == 0, "clnt_no has %d nulls" % _n_null
+    pdf["clnt_no"] = pd.to_numeric(pdf["clnt_no"], errors="coerce").astype("int64")
+    for c in ["spend_pre_q1", "spend_post_q1", "spend_pre_q2", "spend_post_q2"]:
+        pdf[c] = pd.to_numeric(pdf[c], errors="coerce")
+        _isna = pdf[c].isna()
+        pdf[c] = pdf[c].astype(object)
+        pdf.loc[_isna, c] = None   # genuine NULL (zero DFP rows that window), never a fake $0 - Cell [13] rule
+    return pdf[[f.name for f in B2DFP_SCHEMA.fields]]
+
+
+def land_b2dfp_bite(bite):
+    name = "b2_dfp_v%d/bite_%d" % (B2_SCHEMA_VERSION, bite)
+    if _landed(name):
+        print(name, ": already landed - SKIP"); return
+    pdf = edw_pd(_b2dfp_sql(bite))
+    if len(pdf) == 0:
+        print(name, ": zero rows this bite - continuing."); return
+    pdf = _prep_b2dfp(pdf)
+    nback = _write_chunks(pdf, B2DFP_SCHEMA, name)
+    assert nback == len(pdf), name + " readback mismatch"
+    print(name, ": landed", len(pdf), "rows, readback", nback)
+
+
+if RUN_B2_PULLS:
+    for _b in (range(1) if SMOKE else range(N_BITES)):
+        land_b2dfp_bite(_b)
+    print("PULL B2_DFP done - landed at", B2DFP_DIR + "*")
+else:
+    print("PULL B2_DFP skipped - RUN_B2_PULLS is False")
+
+
+def read_b2dfp_bite(bite):
+    return _read_bite_or_empty(B2DFP_DIR, bite, B2DFP_SCHEMA).withColumn(
+        "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+# %% [22] PULL B2_UCP (NEW 2026-08-11) - 4 snapshot months (PRE/POST x 2 quarters), reusing
+# _read_ucp_snapshot_b (Cell [14b]) VERBATIM for the single-table read+prune+enrich - only the
+# per-bite join loop is new, generalized from 2 periods to 4. held_c/prod_cnt coalesced to -1
+# (no-UCP-match sentinel) AFTER each join, never before - a pre-join coalesce would be silently
+# overwritten by the LEFT JOIN's own NULL on a true miss. prof_* is NEVER coalesced (continuous
+# estimate, not a count - same rule as Cell [14b]). ENGINE: PySpark (YARN) reading HDFS parquet.
+
+B2_UCP_MONTHS = {}
+for _qn, _q in VINTAGE_QS.items():
+    B2_UCP_MONTHS["pre_" + _q["tag"]] = _q["pre_month"]
+    B2_UCP_MONTHS["post_" + _q["tag"]] = _q["post_month"]
+
+B2UCP_SCHEMA = StructType(
+    [StructField("clnt_no", LongType(), True)] +
+    sum([[StructField("prof_" + t, DoubleType(), True),
+          StructField("held_c_" + t, IntegerType(), True),
+          StructField("prodcnt_" + t, IntegerType(), True)] for t in B2_UCP_MONTHS], []))
+
+if RUN_B2_PULLS:
+    _b2_ucp_snaps = {t: _read_ucp_snapshot_b(m, t) for t, m in B2_UCP_MONTHS.items()}
+    for _bite in (range(1) if SMOKE else range(N_BITES)):
+        _name = "b2_ucp_v%d/bite_%d" % (B2_SCHEMA_VERSION, _bite)
+        if _landed(_name):
+            print(_name, ": already landed - SKIP"); continue
+        _base = read_b2cohort_bite(_bite).select("clnt_no")
+        _n_base = _base.count()
+        if _n_base == 0:
+            print(_name, ": zero B2 clients - skipping."); continue
+        for _t, _snap in _b2_ucp_snaps.items():
+            _base = (_base
+                     .join(_snap.select(F.col("clnt_no_long").alias("clnt_no"), "prof", "held_c", "prod_cnt"),
+                           "clnt_no", "left")
+                     .withColumnRenamed("prof", "prof_" + _t)
+                     .withColumn("held_c_" + _t, F.coalesce(F.col("held_c"), F.lit(-1))).drop("held_c")
+                     .withColumn("prodcnt_" + _t, F.coalesce(F.col("prod_cnt"), F.lit(-1))).drop("prod_cnt"))
+        _n_out = _base.count()
+        assert _n_out == _n_base, "%s: %d rows joining 4 UCP snapshots onto %d B2 clients - fan-out." % (_name, _n_out, _n_base)
+        _base.write.mode("overwrite").parquet(BASE + _name)
+        _write_spark_marker(_name, _n_out)
+        print(_name, ": landed", _n_out, "rows (4 UCP snapshots joined).")
+    for _snap in _b2_ucp_snaps.values():
+        _snap.unpersist()
+    print("PULL B2_UCP done - landed at", B2UCP_DIR + "*")
+else:
+    print("PULL B2_UCP skipped - RUN_B2_PULLS is False")
+
+
+def read_b2ucp_bite(bite):
+    return _read_bite_or_empty(B2UCP_DIR, bite, B2UCP_SCHEMA).withColumn(
+        "clnt_no", F.col("clnt_no").cast("decimal(18,0)").cast("long"))
+
+
+# %% [23] B2 PANEL BUILD (NEW 2026-08-11) - bite-looped join (cohort x dfp x ucp, same bite
+# discipline as Cell [15]), then ONE long-format row per (clnt_no, cohort_q) the client qualifies
+# for as STAYER or LEAVER - a client can appear in BOTH quarters (e.g. mailed+stayer in both) but
+# at most ONCE per quarter (LEAVER/STAYER are mutually exclusive by construction: is_leaver_q
+# requires the first unsub INSIDE q's window, which is always <= q's POST month-end, so
+# is_stayer_q's "no unsub through POST" can never also be true for the same client/quarter).
+# spend_decile_pre = exact ntile(10) over stayers+leavers COMBINED per quarter, non-null spend_pre
+# only; decile 0 = no PRE spend match, kept visible (never dropped). ENGINE: PySpark (YARN).
+
+from pyspark.sql import Window
+
+
+def _b2_quarter_slice(joined, qname, q):
+    t = q["tag"]
+    first_dt = F.to_date(F.col("first_cards_unsub_dt"))
+    ent_dt = F.to_date(F.col("ent_unsub_dt_min"))
+    post_dt = F.to_date(F.lit(q["post_month"]))
+    is_leaver = first_dt.isNotNull() & (first_dt >= F.to_date(F.lit(q["floor"]))) & (first_dt < F.to_date(F.lit(q["ceil"])))
+    is_stayer = (F.col("mailed_" + t) == 1) & (first_dt.isNull() | (first_dt > post_dt))
+    _n_mailed_excluded = joined.filter((F.col("mailed_" + t) == 1) & ~is_leaver & ~is_stayer).count()
+    print("B2", qname, ": mailed but excluded (first cards unsub predates window): n=" + str(_n_mailed_excluded))
+    ent_unsub_by_post = (ent_dt.isNotNull() & (ent_dt <= post_dt)).cast("int")
+    prodcnt_pre_raw = F.col("prodcnt_pre_" + t)
+    prodcnt_post_raw = F.col("prodcnt_post_" + t)
+    return (joined
+            .filter(is_leaver | is_stayer)
+            .withColumn("cohort_q", F.lit(qname))
+            .withColumn("group_tag", F.when(is_leaver, F.lit("LEAVERS")).otherwise(F.lit("STAYERS")))
+            .withColumn("spend_pre", F.col("spend_pre_" + t)).withColumn("spend_post", F.col("spend_post_" + t))
+            .withColumn("prof_pre", F.col("prof_pre_" + t)).withColumn("prof_post", F.col("prof_post_" + t))
+            .withColumn("prodcnt_pre", F.when(prodcnt_pre_raw != -1, prodcnt_pre_raw))     # -1 sentinel -> NULL for metric use
+            .withColumn("prodcnt_post", F.when(prodcnt_post_raw != -1, prodcnt_post_raw))
+            .withColumn("held_c_pre", F.col("held_c_pre_" + t)).withColumn("held_c_post", F.col("held_c_post_" + t))
+            .withColumn("ent_unsub_by_post", ent_unsub_by_post)
+            .select("clnt_no", "cohort_q", "group_tag", "spend_pre", "spend_post", "prof_pre", "prof_post",
+                    "prodcnt_pre", "prodcnt_post", "held_c_pre", "held_c_post", "ent_unsub_by_post",
+                    "n_cards_unsub_events", "first_cards_unsub_dt", "second_cards_unsub_dt"))
+
+
+_B2_PANEL_SCHEMA = StructType([
+    StructField("clnt_no", LongType(), True), StructField("cohort_q", StringType(), True),
+    StructField("group_tag", StringType(), True),
+    StructField("spend_pre", DoubleType(), True), StructField("spend_post", DoubleType(), True),
+    StructField("prof_pre", DoubleType(), True), StructField("prof_post", DoubleType(), True),
+    StructField("prodcnt_pre", IntegerType(), True), StructField("prodcnt_post", IntegerType(), True),
+    StructField("held_c_pre", IntegerType(), True), StructField("held_c_post", IntegerType(), True),
+    StructField("ent_unsub_by_post", IntegerType(), True), StructField("n_cards_unsub_events", IntegerType(), True),
+    StructField("first_cards_unsub_dt", StringType(), True), StructField("second_cards_unsub_dt", StringType(), True),
+])
+
+_b2_panel_parts = []
+for _bite in (range(1) if SMOKE else range(N_BITES)):
+    _cohort_bite = read_b2cohort_bite(_bite)
+    _n_cohort_bite = _cohort_bite.count()
+    if _n_cohort_bite == 0:
+        print("B2 PANEL bite", _bite, ": zero B2 clients - skipping."); continue
+    _joined_bite = (_cohort_bite
+                     .join(read_b2dfp_bite(_bite), "clnt_no", "left")
+                     .join(read_b2ucp_bite(_bite), "clnt_no", "left")
+                     .cache())
+    for _qn, _q in VINTAGE_QS.items():
+        _b2_panel_parts.append(_b2_quarter_slice(_joined_bite, _qn, _q))
+    print("B2 PANEL bite", _bite, "of", N_BITES, ":", _n_cohort_bite, "B2 clients joined + sliced into", len(VINTAGE_QS), "quarters.")
+
+if _b2_panel_parts:
+    b2_panel = _b2_panel_parts[0]
+    for _p in _b2_panel_parts[1:]:
+        b2_panel = b2_panel.unionByName(_p)
+else:
+    print("WARNING: every B2 bite had zero clients - shipping an EMPTY b2_panel.")
+    b2_panel = spark.createDataFrame([], schema=_B2_PANEL_SCHEMA)
+b2_panel = b2_panel.cache()
+_n_b2_panel = b2_panel.count()
+_n_b2_dupe_check = b2_panel.groupBy("clnt_no", "cohort_q").count().filter(F.col("count") > 1).count()
+assert _n_b2_dupe_check == 0, "%d (clnt_no, cohort_q) duplicates in b2_panel - a bite join fanned out." % _n_b2_dupe_check
+print("B2_PANEL | grain: one row per (clnt_no, cohort_q) |", _n_b2_panel, "rows cached, 0 duplicates confirmed.")
+b2_panel.groupBy("cohort_q", "group_tag").agg(F.count("*").alias("n")).orderBy("cohort_q", "group_tag").show(truncate=False)
+
+_dec_window = Window.partitionBy("cohort_q").orderBy("spend_pre")
+_dec_nonnull = b2_panel.filter(F.col("spend_pre").isNotNull()).withColumn("spend_decile_pre", F.ntile(10).over(_dec_window))
+_dec_null = b2_panel.filter(F.col("spend_pre").isNull()).withColumn("spend_decile_pre", F.lit(0))
+b2_panel_dec = _dec_nonnull.unionByName(_dec_null).cache()
+assert b2_panel_dec.count() == _n_b2_panel, "decile union lost/gained rows vs b2_panel"
+print("B2 spend deciles (PRE, per cohort_q, non-null only; decile 0 = no PRE spend match) computed.")
+
+
+# %% [24] LOCAL OUTPUT DIR + write helper for the 4 v_ cubes (NEW 2026-08-11). Same local-dir
+# probe as Cell [16] (own variable, does not touch Cell [16]'s LOCAL_OUT), same destination
+# (~/unsub_unified_out/) so the notebook's load_cube() finds them without any extra config. Every
+# cube lands on HDFS via write_cube (verbatim helper) AND locally via toPandas().to_csv - the
+# "COLLECT-to-pandas + to_csv" pattern the brief asked for, matching Cell [16]'s own fallback path.
+
+import os as _os
+
+_b2_leaf = "unsub_unified_out_smoke" if SMOKE else "unsub_unified_out"
+B2_LOCAL_OUT = None
+for _cand in ("/home/jovyan", _os.path.expanduser("~"), _os.getcwd(), "/tmp"):
+    try:
+        _try = _os.path.join(_cand, _b2_leaf)
+        _os.makedirs(_try, exist_ok=True)
+        _t = _os.path.join(_try, ".writetest_b2")
+        open(_t, "w").write("x"); _os.remove(_t)
+        B2_LOCAL_OUT = _try
+        break
+    except Exception:
+        continue
+print("B2 local output dir:", B2_LOCAL_OUT if B2_LOCAL_OUT else "NONE - v_ cubes land on HDFS only at " + OUT_DIR)
+
+
+def _write_v_cube(df, name, window_label, population_label):
+    stamped = _stamp(df, window_label, population_label)
+    pdf = stamped.toPandas()
+    print(name.upper(), "|", len(pdf), "rows")
+    print(pdf.to_string(index=False))
+    write_cube(stamped, name)
+    if B2_LOCAL_OUT:
+        _p = _os.path.join(B2_LOCAL_OUT, name + ".csv")
+        pdf.to_csv(_p, index=False)
+        print("   also wrote local:", _p)
+    return pdf
+
+
+_B2_WINDOW_LABEL = "2025Q1 [2025-01-01,2025-04-01) -> +12m 2026-03-31 | 2025Q2 [2025-04-01,2025-07-01) -> +12m 2026-06-30"
+_B2_POP_LABEL = "cards-mkt LEAVERS (first-ever unsub in quarter) + STAYERS (cards-mailed in quarter, no unsub through POST)"
+
+
+# %% [25] v_cohort_ledger.csv (NEW 2026-08-11) - grain cohort_q x group. n_offbook_post_of_card_pre
+# is ADDITIVE beyond the brief's literal column list - the notebook's card-at-PRE 3-way split
+# (still has cards / lost cards still client / left-bank proxy) needs a THIRD held_c_pre=1-
+# conditioned count; n_offbook_post and n_card_post alone are group-wide (unconditioned on PRE
+# holding), so they cannot rebuild that split. Flagged here, not silently added.
+# Also beyond-spec: n_card_pre, n_card_post, n_ent_unsub_by_post. And n_lost_cards_post (the
+# brief's name) was renamed n_lostcard_still_client_post here - same column, clearer name.
+
+v_cohort_ledger = (b2_panel_dec
+    .groupBy("cohort_q", "group_tag")
+    .agg(F.count("*").alias("n"),
+         F.sum(F.when(F.col("held_c_pre") == 1, 1).otherwise(0)).alias("n_card_pre"),
+         F.sum(F.when(F.col("held_c_post") != -1, 1).otherwise(0)).alias("n_matched_post"),
+         F.sum(F.when(F.col("held_c_post") == -1, 1).otherwise(0)).alias("n_offbook_post"),
+         F.sum(F.when(F.col("held_c_post") == 1, 1).otherwise(0)).alias("n_card_post"),
+         F.sum(F.when((F.col("held_c_pre") == 1) & (F.col("held_c_post") == 0), 1).otherwise(0)).alias("n_lostcard_still_client_post"),
+         F.sum(F.when((F.col("held_c_pre") == 1) & (F.col("held_c_post") == -1), 1).otherwise(0)).alias("n_offbook_post_of_card_pre"),
+         F.sum("ent_unsub_by_post").alias("n_ent_unsub_by_post"))
+    .orderBy("cohort_q", "group_tag"))
+v_cohort_ledger_pd = _write_v_cube(v_cohort_ledger, "v_cohort_ledger", _B2_WINDOW_LABEL, _B2_POP_LABEL)
+
+
+# %% [26] v_then_now.csv (NEW 2026-08-11) - grain cohort_q x group x metric x basis. matched_both =
+# non-null at BOTH periods; all_pre = non-null at PRE regardless of POST (sum_post is Spark's
+# null-ignoring SUM over whatever subset also matched at POST - NULL, never 0, if none did).
+
+_B2_METRICS = {"spend_3mo": ("spend_pre", "spend_post"), "prof_annual": ("prof_pre", "prof_post"),
+               "prod_cnt": ("prodcnt_pre", "prodcnt_post")}
+_tn_rows = []
+for _cq in VINTAGE_QS:
+    for _grp in ["STAYERS", "LEAVERS"]:
+        _scope = b2_panel_dec.filter((F.col("cohort_q") == _cq) & (F.col("group_tag") == _grp))
+        for _metric, (_pre_c, _post_c) in _B2_METRICS.items():
+            for _basis, _filt in [("matched_both", F.col(_pre_c).isNotNull() & F.col(_post_c).isNotNull()),
+                                   ("all_pre", F.col(_pre_c).isNotNull())]:
+                _agg = _scope.filter(_filt).agg(F.count("*").alias("n"), F.sum(_pre_c).alias("sum_pre"),
+                                                 F.sum(_post_c).alias("sum_post")).collect()[0]
+                _tn_rows.append((_cq, _grp, _metric, _basis, int(_agg["n"]), _agg["sum_pre"], _agg["sum_post"]))
+_v_then_now_pd = pd.DataFrame(_tn_rows, columns=["cohort_q", "group_tag", "metric", "basis", "n", "sum_pre", "sum_post"])
+v_then_now = spark.createDataFrame(_v_then_now_pd, schema=StructType([
+    StructField("cohort_q", StringType(), True), StructField("group_tag", StringType(), True),
+    StructField("metric", StringType(), True), StructField("basis", StringType(), True),
+    StructField("n", LongType(), True), StructField("sum_pre", DoubleType(), True), StructField("sum_post", DoubleType(), True)]))
+v_then_now_pd = _write_v_cube(v_then_now, "v_then_now", _B2_WINDOW_LABEL, _B2_POP_LABEL)
+
+
+# %% [27] v_decile.csv (NEW 2026-08-11) - grain cohort_q x group x spend_decile_pre (0-10). Spend
+# deciles ONLY, per the post-spec scope trim - no profit decile variant.
+
+v_decile = (b2_panel_dec
+    .groupBy("cohort_q", "group_tag", "spend_decile_pre")
+    .agg(F.count("*").alias("n"), F.sum("spend_pre").alias("sum_spend_pre"),
+         F.sum(F.when(F.col("held_c_post") == -1, 1).otherwise(0)).alias("n_offbook_post"))
+    .orderBy("cohort_q", "group_tag", "spend_decile_pre"))
+v_decile_pd = _write_v_cube(v_decile, "v_decile", _B2_WINDOW_LABEL, _B2_POP_LABEL)
+
+
+# %% [28] v_repeat_anomaly.csv (NEW 2026-08-11) - grain cohort_q x repeat_band, LEAVERS only.
+# FLOOR CAVEAT: n_cards_unsub_events / first-second gap only see events since the repo's
+# 2024-01-01 floor - a client whose TRUE first unsub predates 2024 reads as band '1' here even if
+# they had an earlier, undetectable unsub. Feeds evidence_repeat_unsub.sql.
+
+_leavers_b2 = b2_panel_dec.filter(F.col("group_tag") == "LEAVERS")
+_n_zero_events = _leavers_b2.filter(F.col("n_cards_unsub_events") == 0).count()
+if _n_zero_events > 0:
+    print("WARNING:", _n_zero_events, "LEAVERS rows have n_cards_unsub_events=0 - Cell [20]'s "
+          "aggregation missed an event; these read as repeat_band '1' below (fallback, not silently dropped).")
+
+_repeat_band_expr = (F.when(F.col("n_cards_unsub_events") <= 1, F.lit("1"))
+                      .when(F.col("n_cards_unsub_events") == 2, F.lit("2"))
+                      .otherwise(F.lit("3+")))
+_gap_days = F.datediff(F.to_date(F.col("second_cards_unsub_dt")), F.to_date(F.col("first_cards_unsub_dt")))
+v_repeat_anomaly = (_leavers_b2
+    .withColumn("repeat_band", _repeat_band_expr)
+    .withColumn("gap_days_1to2", _gap_days)
+    .groupBy("cohort_q", "repeat_band")
+    .agg(F.count("*").alias("n_clients"),
+         F.expr("percentile_approx(gap_days_1to2, 0.5)").alias("median_gap_days_1to2"))
+    .orderBy("cohort_q", "repeat_band"))
+v_repeat_anomaly_pd = _write_v_cube(v_repeat_anomaly, "v_repeat_anomaly", _B2_WINDOW_LABEL,
+                                     "LEAVERS only, repeat-unsub bands - floor caveat: 2024-01-01")
+
+print("=" * 88)
+print("PART B2 DONE | 4 cubes written:", ["v_cohort_ledger", "v_then_now", "v_decile", "v_repeat_anomaly"])
+print("=" * 88)

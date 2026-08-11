@@ -1606,3 +1606,174 @@ print(f'Total leavers in cohort: {total_leavers_d6:,}')
 print(f'Shown in D6 (High/Mid/Low tiers): {total_leavers_d6 - excl_tier_n:,} '
       f'({(total_leavers_d6 - excl_tier_n) * 100 / total_leavers_d6:.1f}%)')
 print(f'Excluded (tiers {excl_tier_labels}): {excl_tier_n:,} ({excl_pct:.1f}%)')
+
+# %% [markdown]
+# # Part B2 — quarterly unsub vintages (supersedes 19-series/22-series for slide use)
+# Leaver(q) = first-ever cards-marketing unsub INSIDE q's window (flow, not
+# a stock at a fixed anchor). 2025Q1: unsub Jan-Mar 2025, PRE Dec-2024,
+# POST +12m Mar-2026. 2025Q2: unsub Apr-Jun 2025, PRE Mar-2025, POST +12m
+# Jun-2026. Stayer(q) = cards-mailed in q's window, zero cards unsub
+# through q's POST month-end. Source: unsub_unified.py Part B2 (Cells
+# [19]-[28]) -> v_cohort_ledger / v_then_now / v_decile / v_repeat_anomaly.
+# Cells [19]-[27] above are UNTOUCHED (19-series/22-series still work off
+# the old stock-at-anchor cubes) - this section is additive, not a re-point.
+
+# %% [30] [B2 · COHORT 25Q1/Q2+12m] load
+V_FILES = ["v_cohort_ledger.csv", "v_then_now.csv", "v_decile.csv", "v_repeat_anomaly.csv"]
+HAS_V = all(os.path.exists(os.path.join(BASE, f)) for f in V_FILES)
+if not HAS_V:
+    print(f"SKIP Part B2: not all of {V_FILES} present in {BASE} - run unsub_unified.py's Part B2 first.")
+else:
+    v_ledger = load_cube("v_cohort_ledger.csv")
+    v_then_now = load_cube("v_then_now.csv")
+    v_decile = load_cube("v_decile.csv")
+    v_repeat = load_cube("v_repeat_anomaly.csv")
+    display(v_ledger); display(v_then_now); display(v_decile); display(v_repeat)
+
+# %% [markdown]
+# ## B2 LEDGER — of clients who had cards PRE, where are they +12m POST?
+# Three mutually exclusive states (still has cards / lost cards, still a
+# client / no longer in bank data). n_offbook_post_of_card_pre is an
+# ADDITIVE column beyond the brief's literal cube spec — needed to build
+# this exact 3-way split of the card-at-PRE base (see pipeline Cell [25]
+# comment).
+
+# %% [31] [B2 · COHORT 25Q1/Q2+12m] LEDGER table — card-at-PRE 3-way split
+if HAS_V:
+    _qs_v = ["2025Q1", "2025Q2"]
+    _grps_v = ["STAYERS", "LEAVERS"]
+    _led_idx = v_ledger.set_index(["cohort_q", "group_tag"])
+    _led_rows = []
+    for _q in _qs_v:
+        for _g in _grps_v:
+            if (_q, _g) not in _led_idx.index:
+                print(f"WARNING: v_ledger missing ({_q}, {_g}) - skipping this cohort/group combo.")
+                continue
+            _r = _led_idx.loc[(_q, _g)]
+            _base = float(_r["n_card_pre"])
+            _lost = float(_r["n_lostcard_still_client_post"])
+            _gone = float(_r["n_offbook_post_of_card_pre"])
+            _still = _base - _lost - _gone
+            _led_rows.append({
+                "cohort_q": _q, "group_tag": _g, "n_card_pre": _base,
+                "still_has_cards": _still, "lost_cards_still_client": _lost, "left_bank_proxy": _gone,
+                "pct_still": _still / _base * 100 if _base else np.nan,
+                "pct_lost": _lost / _base * 100 if _base else np.nan,
+                "pct_gone": _gone / _base * 100 if _base else np.nan,
+            })
+    led_pivot = pd.DataFrame(_led_rows)
+    display(led_pivot)
+
+# %% [31b] LEDGER chart — 100%-stacked, Q1/Q2 x STAYERS/LEAVERS (4 bars)
+if HAS_V:
+    _labels_v = [f"{r['cohort_q']}\n{r['group_tag']}\nn(card@PRE)={compact_n(r['n_card_pre'])}"
+                 for r in led_pivot.to_dict("records")]
+    _x = np.arange(len(led_pivot))
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.bar(_x, led_pivot["pct_still"], color="#899299", label="still has cards")
+    ax.bar(_x, led_pivot["pct_lost"], bottom=led_pivot["pct_still"], color=C_THEN,
+           label="lost cards, still a client")
+    _bot2 = led_pivot["pct_still"] + led_pivot["pct_lost"]
+    ax.bar(_x, led_pivot["pct_gone"], bottom=_bot2, color=C_LINE,
+           label="no longer in bank data (left-bank proxy)")
+    for _xi, _r in zip(_x, led_pivot.to_dict("records")):
+        ax.text(_xi, _r["pct_still"] / 2, f"{_r['pct_still']:.1f}%", ha="center", va="center",
+                fontsize=9, color="white", fontweight="bold")
+        ax.text(_xi, _r["pct_still"] + _r["pct_lost"] / 2, f"{_r['pct_lost']:.1f}%", ha="center",
+                va="center", fontsize=9, color="white", fontweight="bold")
+        ax.text(_xi, _r["pct_still"] + _r["pct_lost"] + _r["pct_gone"] / 2, f"{_r['pct_gone']:.1f}%",
+                ha="center", va="center", fontsize=9, color="white", fontweight="bold")
+    ax.set_xticks(_x); ax.set_xticklabels(_labels_v, fontsize=8.5)
+    ax.set_ylim(0, 100); ax.set_ylabel("% of card-at-PRE clients")
+    ax.legend(frameon=False, fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3)
+    ax.set_title("B2 LEDGER: of clients who had cards PRE, where are they +12m POST?\n"
+                 "(left-bank = no UCP match — proxy)", fontweight="bold")
+    style_ax(ax)
+    plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## B2 DECILE — PRE-spend distribution, leavers vs stayers
+# Decile 1 = lowest PRE spend; decile 0 = no PRE spend match (DFP no-row),
+# shown separately at the left. Flat 10% line = what an even split would
+# look like.
+
+# %% [32] [B2 · COHORT 25Q1/Q2+12m] DECILE table
+if HAS_V:
+    _dec = v_decile.copy()
+    _dec["cohort_q"] = _dec["cohort_q"].astype(str)
+    _dec["pct"] = _dec["n"] / _dec.groupby(["cohort_q", "group_tag"])["n"].transform("sum") * 100
+    dec_pivot = (_dec.pivot_table(index=["cohort_q", "spend_decile_pre"], columns="group_tag",
+                                  values="pct").reset_index())
+    display(dec_pivot)
+
+# %% [32b] DECILE chart — leavers vs stayers paired bars, Q1/Q2 subplots
+if HAS_V:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), sharey=True)
+    for ax, _q in zip(axes, ["2025Q1", "2025Q2"]):
+        _sub = _dec[_dec["cohort_q"] == _q].sort_values("spend_decile_pre")
+        _deciles = sorted(_sub["spend_decile_pre"].unique())
+        _xg = np.arange(len(_deciles)); _w = 0.38
+        _stay_pct = [_sub[(_sub["spend_decile_pre"] == d) & (_sub["group_tag"] == "STAYERS")]["pct"].sum()
+                     for d in _deciles]
+        _leave_pct = [_sub[(_sub["spend_decile_pre"] == d) & (_sub["group_tag"] == "LEAVERS")]["pct"].sum()
+                      for d in _deciles]
+        ax.bar(_xg - _w / 2, _stay_pct, _w, color=C_THEN, label="STAYERS")
+        ax.bar(_xg + _w / 2, _leave_pct, _w, color=C_LINE, label="LEAVERS")
+        ax.axhline(10, color="grey", linestyle="--", linewidth=1, label="10% flat reference")
+        ax.set_xticks(_xg)
+        ax.set_xticklabels(["0\n(no PRE spend)"] + [str(int(d)) for d in _deciles[1:]], fontsize=8.5)
+        ax.set_title(_q, fontweight="bold"); ax.set_xlabel("PRE-spend decile (1 = lowest)")
+        style_ax(ax)
+    axes[0].set_ylabel("% of group"); axes[0].legend(frameon=False, fontsize=8.5)
+    fig.suptitle("B2 DECILE: PRE-spend distribution, leavers vs stayers", fontweight="bold")
+    plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## B2 THEN/NOW — avg spend and profit, PRE vs POST (matched-both basis)
+# matched_both = clients with a non-null value at BOTH periods for that
+# metric — the primary, conservative read (all_pre is in the CSV for
+# reference but not charted here).
+
+# %% [33] [B2 · COHORT 25Q1/Q2+12m] THEN/NOW table
+if HAS_V:
+    _tn = v_then_now[v_then_now["basis"] == "matched_both"].copy()
+    _tn["avg_pre"] = _tn["sum_pre"] / _tn["n"]
+    _tn["avg_post"] = _tn["sum_post"] / _tn["n"]
+    _tn["delta_pct"] = np.where((_tn["n"] != 0) & (_tn["avg_pre"] != 0),
+                                 (_tn["avg_post"] - _tn["avg_pre"]) / _tn["avg_pre"] * 100, np.nan)
+    tn_show = (_tn[_tn["metric"].isin(["spend_3mo", "prof_annual"])]
+               [["cohort_q", "group_tag", "metric", "n", "avg_pre", "avg_post", "delta_pct"]]
+               .sort_values(["metric", "cohort_q", "group_tag"]))
+    display(tn_show)
+
+# %% [33b] THEN/NOW chart — delta % bars, spend + profit subplots
+if HAS_V:
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    for ax, _metric, _ttl in zip(axes, ["spend_3mo", "prof_annual"],
+                                  ["avg spend (3mo, matched-both)", "avg annual profit (UCP, matched-both)"]):
+        _sub = tn_show[tn_show["metric"] == _metric]
+        _labels_tn = [f"{r.cohort_q}\n{r.group_tag}" for r in _sub.itertuples()]
+        _xg = np.arange(len(_sub))
+        _colors = [C_POS if v >= 0 else C_LINE for v in _sub["delta_pct"]]
+        ax.bar(_xg, _sub["delta_pct"], color=_colors)
+        for _xi, _v in zip(_xg, _sub["delta_pct"]):
+            ax.text(_xi, _v, f"{_v:+.1f}%", ha="center", va="bottom" if _v >= 0 else "top",
+                    fontsize=9, fontweight="bold")
+        ax.axhline(0, color="black", linewidth=0.8)
+        ax.set_xticks(_xg); ax.set_xticklabels(_labels_tn, fontsize=8.5)
+        ax.set_title(_ttl, fontweight="bold", fontsize=10.5)
+        style_ax(ax)
+    axes[0].set_ylabel("% change, PRE -> POST")
+    fig.suptitle("B2 THEN/NOW: % change PRE -> POST, matched-both basis", fontweight="bold")
+    plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## B2 REPEAT ANOMALY — leavers with more than one cards-mkt unsub
+# Repeat unsub = the client unsubscribed, was re-subscribed to a cards-mkt
+# list at some point, then unsubscribed again — median_gap_days_1to2 is
+# the gap between their 1st and 2nd unsub for bands '2' and '3+'. Feeds
+# `evidence_repeat_unsub.sql`.
+
+# %% [34] [B2 · COHORT 25Q1/Q2+12m] REPEAT ANOMALY — table only, no chart
+if HAS_V:
+    display(v_repeat)
