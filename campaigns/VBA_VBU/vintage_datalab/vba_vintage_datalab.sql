@@ -15,8 +15,11 @@
 -- capped at 120. A cohort treated last month shows a short curve on purpose —
 -- that is missing observation time, not a missing value. Do not fill it forward.
 
+-- seed must reference a table (Teradata 3706/8842) — this returns exactly 1 row
 WITH RECURSIVE spine (vintage_day) AS (
         SELECT 0
+        FROM SYS_CALENDAR.CALENDAR
+        WHERE calendar_date = DATE '2024-01-01'
     UNION ALL
         SELECT vintage_day + 1 FROM spine WHERE vintage_day < 120
 )
