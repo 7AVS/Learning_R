@@ -20,7 +20,11 @@
 -- GRAIN WARNING (probe P1): the source is a reporting snapshot, ~4.1 rows per
 --   (clnt_no, tactic_id) across report_date/comparison/segment. The GROUP BY in
 --   step 1 is what makes the base a client count. Do not remove it.
+--
+-- POPULATION: mnc = 'VBA' only. The table stacks two campaigns (VBA + BOL/RBOL);
+--   BOL is a different track and is excluded. Matches vba_deployment_baseline.sql.
 
+-- Re-run: these must be dropped first or you get "table already exists".
 -- DROP TABLE vt_vba_base; DROP TABLE vt_vba_cells; DROP TABLE vt_vba_spine;
 
 
@@ -36,14 +40,16 @@ CREATE VOLATILE TABLE vt_vba_base AS (
       , MAX(CASE WHEN COALESCE(net_response,0) > 0 THEN 1 ELSE 0 END)            AS conv_flag
       , MIN(CASE WHEN COALESCE(net_response,0) > 0 THEN response_dt END)         AS conv_dt
     FROM DL_MR_PROD.NBO_VBA_RBOL_COMBINED
-    WHERE treatmt_strt_dt IS NOT NULL
+    WHERE TRIM(mnc) = 'VBA'                        -- VBA only. BOL is the RBOL track, not this campaign.
+      AND treatmt_strt_dt IS NOT NULL
       AND treatmt_strt_dt >= DATE '2024-01-01'
       AND TRIM(control) IN ('Action','Control')
     GROUP BY 1,2,3,4
 ) WITH DATA
-PRIMARY INDEX (mnc, cohort_month, arm)
-ON COMMIT PRESERVE ROWS;
+PRIMARY INDEX (clnt_no)                            -- high cardinality. Do NOT use (mnc,cohort_month,arm):
+ON COMMIT PRESERVE ROWS;                           -- ~64 distinct values over millions of rows = AMP skew = hang.
 
+COLLECT STATISTICS ON vt_vba_base COLUMN (clnt_no);
 COLLECT STATISTICS ON vt_vba_base COLUMN (mnc, cohort_month, arm);
 
 
@@ -71,12 +77,13 @@ COLLECT STATISTICS ON vt_vba_cells COLUMN (mnc, cohort_month, arm);
 COLLECT STATISTICS ON vt_vba_cells COLUMN (max_day);
 
 
--- 3. Day spine (materialized + stats before the cross join — TDWM blocks it otherwise)
+-- 3. Day spine 0..365, flat. Materialized + stats before the cross join (TDWM).
+--    No scalar subquery here on purpose — it made the calendar scan unpredictable.
+--    The per-cell cap happens in the join in step 4.
 CREATE VOLATILE TABLE vt_vba_spine AS (
     SELECT CAST(calendar_date - DATE '2000-01-01' AS INTEGER) AS vintage_day
     FROM SYS_CALENDAR.CALENDAR
-    WHERE calendar_date >= DATE '2000-01-01'
-      AND calendar_date <= DATE '2000-01-01' + (SELECT MAX(max_day) FROM vt_vba_cells)
+    WHERE calendar_date BETWEEN DATE '2000-01-01' AND DATE '2000-12-31'
 ) WITH DATA
 PRIMARY INDEX (vintage_day)
 ON COMMIT PRESERVE ROWS;
