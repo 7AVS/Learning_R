@@ -1,27 +1,35 @@
--- 31: 10 clients who flipped 1002/1012/1014 after 2025 — entire raw dump. Teradata-direct.
+-- 31: 10 clients whose CPC says No. Did the vendor feedback table see an unsub before it?
+-- Teradata-direct. One query. Right-hand columns NULL = no unsub signal behind the No.
 
--- QUERY 1 — full CPC history for 10 such clients. Self-contained, nothing to paste.
-SELECT c.*
+SELECT
+    c.CLNT_NO,
+    c.PREF_ID,
+    c.CLNT_CONSENT_TYP,
+    c.APP_SYS_CD,
+    c.CHG_TMSTMP,
+    e.TREATMENT_ID,
+    e.disposition_cd,
+    e.disposition_dt_tm
 FROM DDWV01.CPC_RB_PREF_LOG c
-WHERE c.CLNT_NO IN (
-    SELECT CLNT_NO FROM (
-        SELECT DISTINCT CLNT_NO
-        FROM DDWV01.CPC_RB_PREF_LOG
-        WHERE PREF_ID IN (1002, 1012, 1014)          -- editable: which switches
-          AND CLNT_CONSENT_TYP = 5002                -- editable: 5002=No/opted-out, 5001=Yes, 5003=blank
-          AND CHG_TMSTMP >= DATE '2025-01-01'        -- editable: after 2025
-    ) d
-    SAMPLE 10                                        -- editable: how many clients
-)
-ORDER BY c.CLNT_NO, c.CHG_TMSTMP;
-
-
--- QUERY 2 — same clients' raw vendor feedback rows.
--- SAMPLE is random, so paste the CLNT_NOs Query 1 returned or you get different clients.
-SELECT e.*
-FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-WHERE e.consumer_id_hashed IN (
-    SELECT consumer_id_hashed FROM DTZV01.VENDOR_FEEDBACK_MASTER
-    WHERE CLNT_NO IN (000000000, 000000000)          -- <<< paste here
-)
-ORDER BY e.consumer_id_hashed, e.disposition_dt_tm;
+LEFT JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+    ON  m.CLNT_NO = c.CLNT_NO
+    AND m.load_tm >= DATE '2024-01-01'
+LEFT JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+    ON  e.consumer_id_hashed  = m.consumer_id_hashed
+    AND e.TREATMENT_ID        = m.TREATMENT_ID
+    AND e.disposition_cd      = 4
+    AND e.disposition_dt_tm  <= c.CHG_TMSTMP
+WHERE c.PREF_ID IN (1002, 1012, 1014)          -- editable: which switches
+  AND c.CLNT_CONSENT_TYP = 5002                -- editable: 5002=No, 5001=Yes, 5003=blank
+  AND c.CHG_TMSTMP >= DATE '2025-01-01'        -- editable: after 2025
+  AND c.CLNT_NO IN (
+        SELECT CLNT_NO FROM (
+            SELECT DISTINCT CLNT_NO
+            FROM DDWV01.CPC_RB_PREF_LOG
+            WHERE PREF_ID IN (1002, 1012, 1014)
+              AND CLNT_CONSENT_TYP = 5002
+              AND CHG_TMSTMP >= DATE '2025-01-01'
+        ) d
+        SAMPLE 10                              -- editable: how many clients
+      )
+ORDER BY c.CLNT_NO, c.CHG_TMSTMP, e.disposition_dt_tm;
