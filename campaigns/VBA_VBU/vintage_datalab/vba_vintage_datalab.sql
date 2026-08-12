@@ -3,17 +3,24 @@
 -- Source: DL_MR_PROD.NBO_VBA_RBOL_COMBINED
 --
 -- OUTPUT: mnc | cohort_month | arm | vintage_day | base | conv_day | conv_cum
+--   Every day 0..max is present for every cohort+arm. conv_day is 0 on days
+--   nobody converted; conv_cum carries forward. No gaps.
 --
 -- Population : mnc='VBA' (the table also carries BOL/RBOL — different track)
 -- Arm        : control IN ('Action','Control')
 -- Cohort     : month of treatmt_strt_dt
 -- Conversion : net_response > 0, dated by response_dt
--- vintage_day: response_dt - treatmt_strt_dt
 --
--- Rows are emitted only for days on which someone converted. Days with zero
--- conversions are absent — conv_cum is still correct at every row it prints.
+-- Each cohort stops at its own maturity (CURRENT_DATE - treatmt_strt_dt),
+-- capped at 120. A cohort treated last month shows a short curve on purpose —
+-- that is missing observation time, not a missing value. Do not fill it forward.
 
-WITH base AS (
+WITH RECURSIVE spine (vintage_day) AS (
+        SELECT 0
+    UNION ALL
+        SELECT vintage_day + 1 FROM spine WHERE vintage_day < 120
+)
+, base AS (
     SELECT
         TRIM(mnc)                                                              AS mnc
       , CAST(treatmt_strt_dt - (EXTRACT(DAY FROM treatmt_strt_dt) - 1) AS DATE) AS cohort_month
@@ -27,32 +34,44 @@ WITH base AS (
       AND treatmt_strt_dt >= DATE '2024-01-01'
     GROUP BY 1,2,3,4
 )
+-- one pass over base; agg is ~thousands of rows so referencing it twice is free
 , agg AS (
     SELECT
         mnc, cohort_month, arm
-      , conv_dt - anchor_dt   AS vintage_day     -- NULL for non-converters
-      , COUNT(*)              AS n
+      , conv_dt - anchor_dt                AS vintage_day   -- NULL = never converted
+      , COUNT(*)                           AS n
+      , MIN(CURRENT_DATE - anchor_dt)      AS maturity
     FROM base
     GROUP BY 1,2,3,4
 )
-, with_base AS (
+, cells AS (
     SELECT
-        mnc, cohort_month, arm, vintage_day, n
-      , SUM(n) OVER (PARTITION BY mnc, cohort_month, arm) AS base   -- includes non-converters
+        mnc, cohort_month, arm
+      , SUM(n) AS base
+      , CASE WHEN MIN(maturity) < 0   THEN 0
+             WHEN MIN(maturity) > 120 THEN 120
+             ELSE MIN(maturity) END AS max_day
     FROM agg
+    GROUP BY 1,2,3
 )
 SELECT
-    mnc
-  , cohort_month
-  , arm
-  , vintage_day
-  , base
-  , n AS conv_day
-  , SUM(n) OVER (
-        PARTITION BY mnc, cohort_month, arm
-        ORDER BY vintage_day
+    c.mnc
+  , c.cohort_month
+  , c.arm
+  , s.vintage_day
+  , c.base
+  , COALESCE(d.n,0) AS conv_day
+  , SUM(COALESCE(d.n,0)) OVER (
+        PARTITION BY c.mnc, c.cohort_month, c.arm
+        ORDER BY s.vintage_day
         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS conv_cum
-FROM with_base
-WHERE vintage_day IS NOT NULL
+FROM cells c
+JOIN spine s
+  ON s.vintage_day <= c.max_day
+LEFT JOIN agg d
+  ON  c.mnc          = d.mnc
+  AND c.cohort_month = d.cohort_month
+  AND c.arm          = d.arm
+  AND s.vintage_day  = d.vintage_day
 ORDER BY 1,2,3,4;
