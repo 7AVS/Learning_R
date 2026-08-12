@@ -11,22 +11,22 @@
 -- Cohort     : month of treatmt_strt_dt
 -- Conversion : net_response > 0, dated by response_dt
 --
--- Horizon is derived per cohort+arm from the data, not hardcoded:
---   window_day   = MAX(treatmt_end_dt - treatmt_strt_dt)  -- the deployment length
---   maturity_day = MIN(CURRENT_DATE   - treatmt_strt_dt)  -- observation time so far
---   max_day      = the smaller of the two
--- A recent cohort shows a short curve on purpose — that is missing observation
--- time, not a missing value. Do not fill it forward.
+-- Horizon: fixed 60 days, so every cohort is read at the same point.
+--   max_day = LEAST(60, maturity)
+--   maturity_day = MIN(CURRENT_DATE - treatmt_strt_dt) — observation time so far
+-- Cohorts younger than 60 days stop early on purpose: that is missing
+-- observation time, not a missing value. Never fill it forward.
+-- window_day (= MAX(treatmt_end_dt - treatmt_strt_dt), the deployment length)
+-- is carried in `cells` for reference but no longer cuts the curve.
 
--- 400 is a safety rail on the recursion, not a business horizon. The real cut is
--- per cell in `cells` below, derived from the deployment window in the data.
--- Seed must reference a table (Teradata 8842) — this returns exactly 1 row.
+-- Spine 0..60. Change 60 in BOTH places (here and max_day in `cells`) to move
+-- the horizon. Seed must reference a table (Teradata 8842) — returns 1 row.
 WITH RECURSIVE spine (vintage_day) AS (
         SELECT 0
         FROM SYS_CALENDAR.CALENDAR
         WHERE calendar_date = DATE '2024-01-01'
     UNION ALL
-        SELECT vintage_day + 1 FROM spine WHERE vintage_day < 400
+        SELECT vintage_day + 1 FROM spine WHERE vintage_day < 60
 )
 , base AS (
     SELECT
@@ -64,9 +64,8 @@ WITH RECURSIVE spine (vintage_day) AS (
       , SUM(n)           AS base
       , MAX(window_day)  AS window_day
       , MIN(maturity)    AS maturity_day
-      , CASE WHEN MIN(maturity)   < 0 THEN 0
-             WHEN MAX(window_day) < 0 THEN 0
-             WHEN MAX(window_day) <= MIN(maturity) THEN MAX(window_day)
+      , CASE WHEN MIN(maturity) < 0  THEN 0
+             WHEN MIN(maturity) > 60 THEN 60      -- fixed 60-day horizon
              ELSE MIN(maturity) END AS max_day
     FROM agg
     GROUP BY 1,2,3
