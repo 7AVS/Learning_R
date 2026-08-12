@@ -1,9 +1,21 @@
--- 20: Multi-unsub probe — repeat-unsub span vs MNE breadth (H-lag vs H-percampaign), standalone re-derive of 19's window
--- ENGINE: Teradata-direct. Decides suppression lag (short span, 1 MNE) vs per-campaign unsub (long span, 2+ MNE)
--- Rerun: DROP TABLE block at EOF (1 table), then rerun from top
+-- 20: Same-day multi-MNE unsub — RAW EVIDENCE DUMP (replaces the old banded-counts version, 2026-08-12)
+-- ENGINE: Teradata-direct. Two-part addressing DTZV01.<table>, no catalog prefix.
+-- QUESTION: do real clients fire 2+ unsub events on the SAME CALENDAR DAY against DIFFERENT campaigns (MNEs)?
+-- OUTPUT: not bands, not counts — the actual rows as they sit in VENDOR_FEEDBACK_EVENT / _MASTER.
+-- Rerun: DROP TABLE block at EOF (2 tables), then rerun from top.
+--
+-- READING THE OUTPUT
+--   Q1  1 row       scale: how many clients / client-days show the pattern, out of how many unsubbers
+--   Q2  ~20-40 rows THE EVIDENCE. Every EVENT column, verbatim, for 10 sampled client-days.
+--                   Read down a single clnt_no block: same date, different mne, different treatment_id.
+--   Q3  ~50-200 rows the surrounding journey (sent/open/click/unsub) for those same treatment_ids
+--   Q4  ~20-40 rows the raw MASTER rows behind them (SELECT * — all 29 columns, nothing hidden)
 
--- VT: unsub events (disp=4, window-bounded), CLNT_NO resolved via MASTER +/-1mo margin, deduped
-CREATE VOLATILE TABLE vt_multi_unsub_events AS (
+
+------------------------------------------------------------------------------
+-- VT 1: unsub events in window, CLNT_NO resolved via MASTER (+/-1mo load_tm margin)
+------------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_mu_events AS (
     WITH unsub_events AS (
         SELECT
             e.consumer_id_hashed,
@@ -11,72 +23,136 @@ CREATE VOLATILE TABLE vt_multi_unsub_events AS (
             e.disposition_dt_tm
         FROM DTZV01.VENDOR_FEEDBACK_EVENT e
         WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= DATE '2026-04-01'   -- editable: SPOTLIGHT start (inclusive)
-          AND e.disposition_dt_tm <  DATE '2026-07-01'   -- editable: SPOTLIGHT end (exclusive)
+          AND e.disposition_dt_tm >= DATE '2026-04-01'   -- editable: window start (inclusive)
+          AND e.disposition_dt_tm <  DATE '2026-07-01'   -- editable: window end (exclusive)
     )
     SELECT DISTINCT
         m.CLNT_NO,
+        u.consumer_id_hashed,
         u.TREATMENT_ID,
         u.disposition_dt_tm,
-        SUBSTR(u.TREATMENT_ID, 8, 3) AS mne
+        CAST(u.disposition_dt_tm AS DATE) AS unsub_dt,
+        SUBSTR(u.TREATMENT_ID, 8, 3)      AS mne
     FROM unsub_events u
     INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
         ON  m.consumer_id_hashed = u.consumer_id_hashed
         AND m.TREATMENT_ID       = u.TREATMENT_ID
-    WHERE m.load_tm >= ADD_MONTHS(DATE '2026-04-01', -1)   -- editable: SPOTLIGHT start - 1mo margin
-      AND m.load_tm <  ADD_MONTHS(DATE '2026-07-01',  1)   -- editable: SPOTLIGHT end + 1mo margin
+    WHERE m.load_tm >= ADD_MONTHS(DATE '2026-04-01', -1)   -- editable: window start - 1mo margin
+      AND m.load_tm <  ADD_MONTHS(DATE '2026-07-01',  1)   -- editable: window end + 1mo margin
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
 
-COLLECT STATISTICS ON vt_multi_unsub_events COLUMN (CLNT_NO);
+COLLECT STATISTICS ON vt_mu_events COLUMN (CLNT_NO);
 
 
--- per-client span_days / n_distinct_mne / n_events, keep clients with >=2 unsub events
-WITH client_stats AS (
-    SELECT
-        CLNT_NO,
-        COUNT(*)                                                                    AS n_events,
-        COUNT(DISTINCT mne)                                                         AS n_distinct_mne,
-        CAST(MAX(disposition_dt_tm) AS DATE) - CAST(MIN(disposition_dt_tm) AS DATE)  AS span_days
-    FROM vt_multi_unsub_events
-    GROUP BY CLNT_NO
-    HAVING COUNT(*) >= 2
-)
--- DECISION: repeat unsubs = suppression lag (0-3d, 1 MNE) or per-campaign unsubs (8d+, 2+ MNEs)?
+------------------------------------------------------------------------------
+-- Q1: SCALE — is the pattern real and how common? 1 row.
+------------------------------------------------------------------------------
 SELECT
-    CASE WHEN span_days = 0              THEN '0 days'
-         WHEN span_days BETWEEN 1 AND 3  THEN '1-3'
-         WHEN span_days BETWEEN 4 AND 7  THEN '4-7'
-         WHEN span_days BETWEEN 8 AND 30 THEN '8-30'
-         ELSE '31+' END AS span_band,             -- editable: span bands
-    CASE WHEN n_distinct_mne = 1 THEN '1'
-         WHEN n_distinct_mne = 2 THEN '2'
-         ELSE '3+' END AS mne_band,                -- editable: mne bands
-    COUNT(*) AS n_clients
-FROM client_stats
-GROUP BY 1, 2
-ORDER BY 1, 2;
+    (SELECT COUNT(DISTINCT CLNT_NO) FROM vt_mu_events)                     AS clients_any_unsub,
+    COUNT(DISTINCT CLNT_NO)                                                AS clients_sameday_multi_mne,
+    COUNT(*)                                                               AS client_days_sameday_multi_mne,
+    MAX(n_mne)                                                             AS max_mnes_in_one_day
+FROM (
+    SELECT CLNT_NO, unsub_dt, COUNT(DISTINCT mne) AS n_mne
+    FROM vt_mu_events
+    GROUP BY CLNT_NO, unsub_dt
+    HAVING COUNT(DISTINCT mne) >= 2          -- editable: >=2 MNEs on one calendar day
+) d;
 
 
--- OPTIONAL: top MNE-pair patterns, 2+ MNE clients only
-WITH client_mne_list AS (
-    SELECT DISTINCT CLNT_NO, mne FROM vt_multi_unsub_events
-),
-multi_mne_clients AS (
-    SELECT CLNT_NO FROM client_mne_list GROUP BY CLNT_NO HAVING COUNT(DISTINCT mne) >= 2
-),
-mne_pairs AS (
-    SELECT
-        a.CLNT_NO,
-        CASE WHEN a.mne < b.mne THEN a.mne ELSE b.mne END AS mne_lo,
-        CASE WHEN a.mne < b.mne THEN b.mne ELSE a.mne END AS mne_hi
-    FROM client_mne_list a
-    INNER JOIN client_mne_list b ON a.CLNT_NO = b.CLNT_NO AND a.mne < b.mne
-    INNER JOIN multi_mne_clients m ON m.CLNT_NO = a.CLNT_NO
-)
-SELECT mne_lo, mne_hi, COUNT(DISTINCT CLNT_NO) AS n_clients
-FROM mne_pairs
-GROUP BY 1, 2
-ORDER BY 3 DESC;
+------------------------------------------------------------------------------
+-- VT 2: 10 sampled qualifying client-days (widest MNE spread first, then stable by CLNT_NO)
+------------------------------------------------------------------------------
+CREATE VOLATILE TABLE vt_mu_sample AS (
+    SELECT CLNT_NO, unsub_dt, n_mne, n_events
+    FROM (
+        SELECT
+            CLNT_NO,
+            unsub_dt,
+            COUNT(DISTINCT mne) AS n_mne,
+            COUNT(*)            AS n_events
+        FROM vt_mu_events
+        GROUP BY CLNT_NO, unsub_dt
+        HAVING COUNT(DISTINCT mne) >= 2
+    ) d
+    QUALIFY ROW_NUMBER() OVER (ORDER BY n_mne DESC, n_events DESC, CLNT_NO) <= 10   -- editable: sample size
+) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_mu_sample COLUMN (CLNT_NO);
 
 
-DROP TABLE vt_multi_unsub_events;
+------------------------------------------------------------------------------
+-- Q2: THE RAW UNSUB ROWS. Every VENDOR_FEEDBACK_EVENT column, unmodified.
+--     mne is the only derived column (SUBSTR of treatment_id, pos 8-10) so the pattern is readable.
+------------------------------------------------------------------------------
+SELECT
+    v.CLNT_NO,
+    v.unsub_dt,
+    SUBSTR(e.treatment_id, 8, 3)  AS mne,
+    e.consumer_id_hashed,
+    e.srvc_provdr_nm,
+    e.legal_entity_cd,
+    e.source_evnt_id,
+    e.disposition_dt_tm,
+    e.disposition_tm_zone,
+    e.disposition_cd,
+    e.treatment_id,
+    e.load_tm
+FROM vt_mu_sample s
+INNER JOIN vt_mu_events v
+    ON v.CLNT_NO = s.CLNT_NO AND v.unsub_dt = s.unsub_dt
+INNER JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+    ON  e.consumer_id_hashed        = v.consumer_id_hashed
+    AND e.treatment_id              = v.treatment_id
+    AND e.disposition_cd            = 4
+    AND CAST(e.disposition_dt_tm AS DATE) = v.unsub_dt
+ORDER BY v.CLNT_NO, e.disposition_dt_tm, e.treatment_id;
+
+
+------------------------------------------------------------------------------
+-- Q3: SURROUNDING JOURNEY — every disposition (1 sent / 2 open / 3 click / 4 unsub / 5 bounce / 6 complaint)
+--     on those same treatment_ids, so the send that triggered each unsub is visible.
+------------------------------------------------------------------------------
+SELECT
+    v.CLNT_NO,
+    SUBSTR(e.treatment_id, 8, 3) AS mne,
+    e.treatment_id,
+    e.disposition_dt_tm,
+    e.disposition_cd,
+    CASE e.disposition_cd
+        WHEN 1 THEN 'sent' WHEN 2 THEN 'opened' WHEN 3 THEN 'clicked'
+        WHEN 4 THEN 'UNSUB' WHEN 5 THEN 'hardbounce' WHEN 6 THEN 'complaint'
+        ELSE 'other' END         AS disposition_label,
+    e.source_evnt_id,
+    e.consumer_id_hashed,
+    e.load_tm
+FROM vt_mu_sample s
+INNER JOIN vt_mu_events v
+    ON v.CLNT_NO = s.CLNT_NO AND v.unsub_dt = s.unsub_dt
+INNER JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+    ON  e.consumer_id_hashed = v.consumer_id_hashed
+    AND e.treatment_id       = v.treatment_id
+ORDER BY v.CLNT_NO, e.treatment_id, e.disposition_dt_tm;
+
+
+------------------------------------------------------------------------------
+-- Q4: RAW MASTER ROWS behind the sampled treatment_ids — SELECT *, all columns, nothing filtered out.
+------------------------------------------------------------------------------
+SELECT m.*
+FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+INNER JOIN (
+    SELECT DISTINCT v.consumer_id_hashed, v.treatment_id
+    FROM vt_mu_sample s
+    INNER JOIN vt_mu_events v
+        ON v.CLNT_NO = s.CLNT_NO AND v.unsub_dt = s.unsub_dt
+) k
+    ON  m.consumer_id_hashed = k.consumer_id_hashed
+    AND m.treatment_id       = k.treatment_id
+WHERE m.load_tm >= ADD_MONTHS(DATE '2026-04-01', -1)   -- editable: keep aligned with VT 1 margins
+  AND m.load_tm <  ADD_MONTHS(DATE '2026-07-01',  1)
+ORDER BY m.clnt_no, m.treatment_id;
+
+
+------------------------------------------------------------------------------
+DROP TABLE vt_mu_sample;
+DROP TABLE vt_mu_events;
