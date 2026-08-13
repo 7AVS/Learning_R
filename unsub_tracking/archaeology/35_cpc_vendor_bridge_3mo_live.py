@@ -449,20 +449,18 @@ plt.suptitle("Slice window: mail out vs unsubscribes captured - the universe the
              fontweight="bold")
 plt.tight_layout(); plt.show()
 
-# %% [9] Other switches, same lens as [3] - matched-record samples for 1002 and 1014
-# Same query as [3], run once per switch. 1014 caveat: blank (5003) also reads as No on
-# that switch - explicit 5002 writes only here, so 1014 volumes are a floor.
-SQL_SAMPLE_PREF = """
+# %% [9] Other switches, same lens as [2] - gap to nearest prior unsubscribe, 1002 and 1014
+# Same query and chart as [2], run once per switch. 1014 caveat: blank (5003) also reads
+# as No on that switch - explicit 5002 writes only here, so 1014 volumes are a floor.
+SQL_BRIDGE_PREF = """
 WITH flips AS (
-    SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD,
-           CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2026-05-01'
 ),
 unsubs AS (
-    SELECT DISTINCT m.CLNT_NO, e.consumer_id_hashed, e.TREATMENT_ID,
-           e.disposition_dt_tm AS unsub_tm
+    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
@@ -472,41 +470,42 @@ unsubs AS (
       AND m.load_tm           >= DATE '2026-03-01'
 ),
 nearest AS (
-    SELECT f.CLNT_NO, u.consumer_id_hashed, u.TREATMENT_ID, u.unsub_tm
+    SELECT f.CLNT_NO, f.flip_dt, u.unsub_dt
     FROM flips f
     JOIN unsubs u
       ON  u.CLNT_NO = f.CLNT_NO
-      AND CAST(u.unsub_tm AS DATE) <= f.flip_dt
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_tm DESC) = 1
-),
-mail_sent AS (
-    SELECT n.CLNT_NO, MIN(e2.disposition_dt_tm) AS mail_sent_tm
-    FROM nearest n
-    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e2
-      ON  e2.consumer_id_hashed = n.consumer_id_hashed
-      AND e2.TREATMENT_ID       = n.TREATMENT_ID
-      AND e2.disposition_cd     = 1
-      AND e2.disposition_dt_tm >= DATE '2026-03-01'
-    GROUP BY 1
+      AND u.unsub_dt <= f.flip_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_dt DESC) = 1
 )
-SELECT f.CLNT_NO,
-       n.TREATMENT_ID,
-       SUBSTR(n.TREATMENT_ID, 8, 3)              AS mne,
-       s.mail_sent_tm,
-       n.unsub_tm,
-       f.CHG_TMSTMP                              AS cpc_write_tm,
-       f.PREF_ID                                 AS gate,
-       f.CLNT_CONSENT_TYP                        AS consent_cd,
-       f.APP_SYS_CD                              AS written_by,
-       f.flip_dt - CAST(n.unsub_tm AS DATE)      AS gap_days
+SELECT CASE WHEN n.unsub_dt IS NULL              THEN '5_no_unsub_found'
+            WHEN f.flip_dt - n.unsub_dt <= 1     THEN '1_same_or_next_day'
+            WHEN f.flip_dt - n.unsub_dt <= 7     THEN '2_within_week'
+            WHEN f.flip_dt - n.unsub_dt <= 30    THEN '3_within_month'
+            ELSE                                      '4_over_30_days' END AS gap_bucket,
+       COUNT(*) AS n_clients
 FROM flips f
-JOIN nearest n   ON n.CLNT_NO = f.CLNT_NO
-LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
-SAMPLE 20
+LEFT JOIN nearest n ON n.CLNT_NO = f.CLNT_NO
+GROUP BY 1 ORDER BY 1
 """
+labels = {"1_same_or_next_day": "same/next day", "2_within_week": "2-7 days",
+          "3_within_month": "8-30 days", "4_over_30_days": ">30 days",
+          "5_no_unsub_found": "no unsub found"}
 for pref in (1002, 1014):
-    print(f"--- PREF_ID {pref}: matched records, full columns from both tables (20 clients) ---")
-    display(edw_pd(SQL_SAMPLE_PREF.format(pref=pref)))
+    bp = edw_pd(SQL_BRIDGE_PREF.format(pref=pref))
+    bp["share_pct"] = (bp["n_clients"] / bp["n_clients"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: nearest unsubscribe before each switch-off ---")
+    display(bp)
+    rp = bp.set_index("gap_bucket").reindex(list(labels))
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.barh(list(labels.values())[::-1], rp["n_clients"][::-1].fillna(0), color="#2a78d6")
+    for i, v in enumerate(rp["n_clients"][::-1]):
+        if pd.notna(v):
+            ax.text(v, i, f" {int(v):,} ({rp['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
+    ax.set_xlabel("clients")
+    ax.set_title(f"3-month live slice: nearest unsubscribe before each {pref} switch-off",
+                 fontweight="bold")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout(); plt.show()
 
 # %% [10] Other switches, same lens as [4] - writer system of the 1002 and 1014 changes
 # SYS_DESC decode comes from [4] - run that cell first.
