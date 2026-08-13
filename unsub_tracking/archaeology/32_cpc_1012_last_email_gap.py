@@ -123,6 +123,34 @@ JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
   ON t.CLNT_NO = f.CLNT_NO AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
 """))
 
+# %% [P6] PROBE — what the raw tables look like after our filters (top 10 each)
+# So a reader sees the actual rows feeding the analysis, columns intact.
+# (CPC side: P3 above already shows the 1012->No rows. Here: the tactic/email side,
+#  plus the extracted channel snippet so the EM match is visible, not magic.)
+pd.set_option("display.max_colwidth", 160)
+print("--- DG6V01.TACTIC_EVNT_IP_AR_HIST after the EM (email) filter — top 10 ---")
+display(edw_pd("""
+SELECT TOP 10 CLNT_NO, TACTIC_ID,
+       SUBSTR(TACTIC_ID, 8, 3)                    AS mne,             -- campaign code inside the id
+       TREATMT_STRT_DT, TREATMT_END_DT, TST_GRP_CD,
+       SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30)    AS vrb_channel_part, -- the piece our filter reads
+       ADDNL_DECISN_DATA1,
+       TACTIC_DECISN_VRB_INFO
+FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+WHERE TREATMT_STRT_DT >= DATE '2024-01-01'
+  AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+        OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+ORDER BY TREATMT_STRT_DT DESC
+"""))
+print("--- DDWV01.CPC_RB_PREF_LOG after our 1012->No filter — top 10 (same as P3, all columns) ---")
+display(edw_pd("""
+SELECT TOP 10 *
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+ORDER BY CHG_TMSTMP DESC
+"""))
+
 # %% [1] Q0 — the story opener: monthly volume of 1012 changes to No
 # Simplest possible count, no QUALIFY: every 1012->No change event in the window.
 # n_change_events = rows in the log; n_clients = distinct clients that month.
