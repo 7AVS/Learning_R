@@ -46,7 +46,7 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
-# %% [P1] RAW LOOK — 10 unsubscribe events, straight off the vendor table
+# %% [P1] Sample rows — vendor feedback event table (10 unsubscribe events)
 pd.set_option("display.max_colwidth", 120)
 print("--- DTZV01.VENDOR_FEEDBACK_EVENT, disposition_cd = 4 (unsubscribe), May window ---")
 display(edw_pd("""
@@ -58,7 +58,7 @@ ORDER BY disposition_dt_tm DESC
 SAMPLE 10
 """))
 
-# %% [P2] RAW LOOK — 10 clients whose 1012 standing is No, changed in the window
+# %% [P2] Sample rows — CPC preference table (10 clients, 1012 standing = No)
 print("--- DDWV01.CPC_RB_PREF, PREF_ID 1012 (Banking E-Mail consent), standing = No ---")
 display(edw_pd("""
 SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
@@ -70,7 +70,7 @@ ORDER BY CHG_TMSTMP DESC
 SAMPLE 10
 """))
 
-# %% [1] SCALE — the two sides of the bridge, by month
+# %% [1] Monthly volumes — both tables
 print("--- unsubscribe events + clients per month (vendor side, resolved to CLNT_NO) ---")
 display(edw_pd("""
 SELECT TRIM(EXTRACT(YEAR FROM e.disposition_dt_tm)) || '-' ||
@@ -99,7 +99,7 @@ WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
 GROUP BY 1 ORDER BY 1
 """))
 
-# %% [2] THE BRIDGE — for each flip, the nearest unsubscribe before it (one query, 4 steps)
+# %% [2] Gap between the 1012 change and the nearest prior unsubscribe (one query, 4 steps)
 SQL_BRIDGE = """
 WITH flips AS (
     -- step 1: clients whose 1012 standing became No in the window - one row per client
@@ -158,7 +158,7 @@ ax.set_title("3-month live slice: nearest unsubscribe before each 1012 switch-of
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [3] SEE IT RAW — 20 full journeys: email sent -> unsub captured -> switch written
+# %% [3] Sample of matched records — full columns from both tables (20 clients)
 # Every column straight off the source tables: vendor side (treatment id, when the mail
 # went out, when the disposition-4 unsub was captured) and CPC side (the gate, the
 # position it was set to, the exact write timestamp, and WHICH SYSTEM wrote it).
@@ -207,7 +207,7 @@ SELECT f.CLNT_NO,
        n.unsub_tm,                                              -- unsub captured (disp=4)
        f.CHG_TMSTMP                              AS cpc_write_tm, -- switch written
        f.PREF_ID                                 AS gate,
-       f.CLNT_CONSENT_TYP                        AS position,     -- 5002 = No
+       f.CLNT_CONSENT_TYP                        AS consent_cd,    -- 5002 = No (POSITION is reserved)
        f.APP_SYS_CD                              AS written_by,   -- WHICH SYSTEM wrote it
        f.flip_dt - CAST(n.unsub_tm AS DATE)      AS gap_days
 FROM flips f
@@ -216,7 +216,7 @@ LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
 SAMPLE 20
 """))
 
-# %% [5] WHO WROTE THE BRIDGED FLIPS — writer system, bridged (unsub <=1d before) vs not
+# %% [5] Writer system distribution — changes with an unsubscribe 0-1 days before vs without
 display(edw_pd("""
 WITH flips AS (
     SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
@@ -249,7 +249,7 @@ GROUP BY 1, 2
 ORDER BY 1, 3 DESC
 """))
 
-# %% [4] WHICH CAMPAIGNS — bridged clients (unsub 0-1 days before flip) by mnemonic
+# %% [4] Bridged clients by campaign mnemonic (unsubscribe 0-1 days before the change)
 # One row per client. Several campaigns unsubbed in that same 0-1d window -> 'MULTI'
 # (shown as-is, never an arbitrary winner). TREATMENT_ID 'DEFAULT' -> 'UNTAGGED'.
 display(edw_pd("""
