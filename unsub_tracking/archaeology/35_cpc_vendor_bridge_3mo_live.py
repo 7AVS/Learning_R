@@ -71,16 +71,20 @@ SAMPLE 10
 """))
 
 # %% [1] SCALE — the two sides of the bridge, by month
-print("--- unsubscribe events + clients per month (vendor side) ---")
+print("--- unsubscribe events + clients per month (vendor side, resolved to CLNT_NO) ---")
 display(edw_pd("""
-SELECT TRIM(EXTRACT(YEAR FROM disposition_dt_tm)) || '-' ||
-         TRIM(CASE WHEN EXTRACT(MONTH FROM disposition_dt_tm) < 10 THEN '0' ELSE '' END) ||
-         TRIM(EXTRACT(MONTH FROM disposition_dt_tm))  AS mth,
-       COUNT(*)                        AS n_unsub_events,
-       COUNT(DISTINCT consumer_id_hashed) AS n_consumers
-FROM DTZV01.VENDOR_FEEDBACK_EVENT
-WHERE disposition_cd = 4
-  AND disposition_dt_tm >= DATE '2026-04-01'
+SELECT TRIM(EXTRACT(YEAR FROM e.disposition_dt_tm)) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM e.disposition_dt_tm) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM e.disposition_dt_tm))  AS mth,
+       COUNT(*)                   AS n_unsub_events,
+       COUNT(DISTINCT m.CLNT_NO)  AS n_clients          -- same resolution as the bridge below
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON  m.consumer_id_hashed = e.consumer_id_hashed      -- vendor id -> client number
+  AND m.TREATMENT_ID       = e.TREATMENT_ID
+WHERE e.disposition_cd = 4
+  AND e.disposition_dt_tm >= DATE '2026-04-01'
+  AND m.load_tm           >= DATE '2026-03-01'          -- load-stamp margin
 GROUP BY 1 ORDER BY 1
 """))
 print("--- 1012 switched to No per month (CPC side) ---")
