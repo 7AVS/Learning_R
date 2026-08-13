@@ -136,8 +136,8 @@ SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
 FROM DDWV01.CPC_RB_PREF_LOG
 WHERE PREF_ID = 1012
   AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
-GROUP BY 1
+  AND CHG_TMSTMP >= DATE '2024-01-01'   -- full data floor: whole log on screen
+GROUP BY 1                              -- (gap analysis below still uses last 18 months)
 ORDER BY 1
 """
 tot = edw_pd(SQL_TOTALS)
@@ -148,7 +148,7 @@ ax.bar(tot["chg_month"], tot["n_clients"], color="#2a78d6")
 for x, v in zip(tot["chg_month"], tot["n_clients"]):
     ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=8.5)
 ax.set_ylabel("distinct clients")
-ax.set_title(f"1012 (Banking E-Mail consent) changed to No — clients per month · total {tot['n_clients'].sum():,}",
+ax.set_title(f"1012 (Banking E-Mail consent) changed to No — clients per month since 2024 · total {tot['n_clients'].sum():,}",
              fontweight="bold")
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
@@ -324,7 +324,7 @@ SELECT PREF_ID,
 FROM DDWV01.CPC_RB_PREF_LOG
 WHERE PREF_ID IN (1002, 1012, 1014)
   AND CLNT_CONSENT_TYP = 5002                       -- changed to No
-  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+  AND CHG_TMSTMP >= DATE '2024-01-01'               -- full data floor
 GROUP BY 1, 2
 ORDER BY 1, 2
 """
