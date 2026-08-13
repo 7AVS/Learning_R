@@ -88,16 +88,14 @@ WITH flips AS (
       AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 )
-SELECT COUNT(*) AS n_flip_clients,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
-                              WHERE t.CLNT_NO = f.CLNT_NO
-                                AND t.TREATMT_STRT_DT >= DATE '2024-01-01')
-                THEN 1 ELSE 0 END) AS n_any_tactic_row,
-       CAST(100.0 * SUM(CASE WHEN EXISTS (SELECT 1 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
-                              WHERE t.CLNT_NO = f.CLNT_NO
-                                AND t.TREATMT_STRT_DT >= DATE '2024-01-01')
-                THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0) AS DECIMAL(5,1)) AS pct_any_tactic
+SELECT COUNT(DISTINCT f.CLNT_NO)  AS n_flip_clients,
+       COUNT(DISTINCT t.CLNT_NO)  AS n_with_any_tactic,   -- matched clients only (NULLs drop out)
+       CAST(100.0 * COUNT(DISTINCT t.CLNT_NO) / NULLIF(COUNT(DISTINCT f.CLNT_NO),0)
+            AS DECIMAL(5,1))      AS pct_any_tactic
 FROM flips f
+LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+  ON  t.CLNT_NO = f.CLNT_NO
+  AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- any channel, any decision
 """))
 
 # %% [P5] PROBE — is the EM filter catching a sane share of decisions?
