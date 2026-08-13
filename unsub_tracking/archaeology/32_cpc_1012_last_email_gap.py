@@ -44,6 +44,86 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
+# %% [P1] PROBE — what does PREF_ID actually contain? (type/format trap)
+# Expect: 1012 present with material volume. If 1012 is missing but a padded/char
+# variant appears, our numeric filter is silently matching nothing.
+display(edw_pd("""
+SELECT PREF_ID, COUNT(*) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients,
+       MIN(CAST(CHG_TMSTMP AS DATE)) AS first_dt, MAX(CAST(CHG_TMSTMP AS DATE)) AS last_dt
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE CHG_TMSTMP >= DATE '2024-01-01'
+GROUP BY 1 ORDER BY 2 DESC
+"""))
+
+# %% [P2] PROBE — consent-type mix for 1012 specifically
+# Expect: 5001/5002/5003 style codes. If "No" lives under a different code than 5002,
+# our volume is wrong. Blank(5003)=Yes for 1012, so 5002 is the only "No" we want.
+display(edw_pd("""
+SELECT CLNT_CONSENT_TYP, COUNT(*) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID = 1012 AND CHG_TMSTMP >= DATE '2024-01-01'
+GROUP BY 1 ORDER BY 2 DESC
+"""))
+
+# %% [P3] PROBE — raw eyeball: 10 actual 1012->5002 rows, no transformation
+# Look at CHG_TMSTMP format, CLNT_NO length/leading zeros, APP_SYS_CD (who writes these).
+display(edw_pd("""
+SELECT TOP 10 CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD, SYS_FUNC_CD
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+ORDER BY CHG_TMSTMP DESC
+"""))
+
+# %% [P4] PROBE — join-key integrity: do flip clients exist in the tactic table AT ALL?
+# The killer check. If CLNT_NO formats mismatch (char vs numeric, padding), the join
+# silently returns nothing and "no email found" is an artifact.
+# Expect: pct_any_tactic HIGH (most bank clients get decisioned for something).
+# If it is near zero -> formats differ -> STOP, fix the join before trusting anything.
+display(edw_pd("""
+WITH flips AS (
+    SELECT CLNT_NO
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+)
+SELECT COUNT(*) AS n_flip_clients,
+       SUM(CASE WHEN EXISTS (SELECT 1 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+                              WHERE t.CLNT_NO = f.CLNT_NO
+                                AND t.TREATMT_STRT_DT >= DATE '2024-01-01')
+                THEN 1 ELSE 0 END) AS n_any_tactic_row,
+       CAST(100.0 * SUM(CASE WHEN EXISTS (SELECT 1 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+                              WHERE t.CLNT_NO = f.CLNT_NO
+                                AND t.TREATMT_STRT_DT >= DATE '2024-01-01')
+                THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0) AS DECIMAL(5,1)) AS pct_any_tactic
+FROM flips f
+"""))
+
+# %% [P5] PROBE — is the EM filter catching a sane share of decisions?
+# For flip clients' tactic rows: how many match the EM (email) pattern vs total?
+# Expect: a material share EM. If pct_em is ~0, the channel filter is the artifact
+# behind "no email found", not reality.
+display(edw_pd("""
+WITH flips AS (
+    SELECT CLNT_NO
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+)
+SELECT COUNT(*) AS n_tactic_rows,
+       SUM(CASE WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
+                THEN 1 ELSE 0 END) AS n_em_rows,
+       CAST(100.0 * SUM(CASE WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
+                THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0) AS DECIMAL(5,1)) AS pct_em
+FROM flips f
+JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+  ON t.CLNT_NO = f.CLNT_NO AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+"""))
+
 # %% [1] Q0 — the story opener: monthly volume of 1012 changes to No
 # Simplest possible count, no QUALIFY: every 1012->No change event in the window.
 # n_change_events = rows in the log; n_clients = distinct clients that month.
