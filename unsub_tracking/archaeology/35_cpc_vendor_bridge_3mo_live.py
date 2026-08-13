@@ -448,3 +448,156 @@ for ax in axes:
 plt.suptitle("Slice window: mail out vs unsubscribes captured - the universe the bridge lives inside",
              fontweight="bold")
 plt.tight_layout(); plt.show()
+
+# %% [9] Other switches, same lens as [3] - matched-record samples for 1002 and 1014
+# Same query as [3], run once per switch. 1014 caveat: blank (5003) also reads as No on
+# that switch - explicit 5002 writes only here, so 1014 volumes are a floor.
+SQL_SAMPLE_PREF = """
+WITH flips AS (
+    SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD,
+           CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+),
+unsubs AS (
+    SELECT DISTINCT m.CLNT_NO, e.consumer_id_hashed, e.TREATMENT_ID,
+           e.disposition_dt_tm AS unsub_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+),
+nearest AS (
+    SELECT f.CLNT_NO, u.consumer_id_hashed, u.TREATMENT_ID, u.unsub_tm
+    FROM flips f
+    JOIN unsubs u
+      ON  u.CLNT_NO = f.CLNT_NO
+      AND CAST(u.unsub_tm AS DATE) <= f.flip_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_tm DESC) = 1
+),
+mail_sent AS (
+    SELECT n.CLNT_NO, MIN(e2.disposition_dt_tm) AS mail_sent_tm
+    FROM nearest n
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e2
+      ON  e2.consumer_id_hashed = n.consumer_id_hashed
+      AND e2.TREATMENT_ID       = n.TREATMENT_ID
+      AND e2.disposition_cd     = 1
+      AND e2.disposition_dt_tm >= DATE '2026-03-01'
+    GROUP BY 1
+)
+SELECT f.CLNT_NO,
+       n.TREATMENT_ID,
+       SUBSTR(n.TREATMENT_ID, 8, 3)              AS mne,
+       s.mail_sent_tm,
+       n.unsub_tm,
+       f.CHG_TMSTMP                              AS cpc_write_tm,
+       f.PREF_ID                                 AS gate,
+       f.CLNT_CONSENT_TYP                        AS consent_cd,
+       f.APP_SYS_CD                              AS written_by,
+       f.flip_dt - CAST(n.unsub_tm AS DATE)      AS gap_days
+FROM flips f
+JOIN nearest n   ON n.CLNT_NO = f.CLNT_NO
+LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
+SAMPLE 20
+"""
+for pref in (1002, 1014):
+    print(f"--- PREF_ID {pref}: matched records, full columns from both tables (20 clients) ---")
+    display(edw_pd(SQL_SAMPLE_PREF.format(pref=pref)))
+
+# %% [10] Other switches, same lens as [4] - writer system of the 1002 and 1014 changes
+# SYS_DESC decode comes from [4] - run that cell first.
+SQL_WRITERS_PREF = """
+WITH flips AS (
+    SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+),
+unsubs AS (
+    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+)
+SELECT f.APP_SYS_CD,
+       COUNT(*) AS n_changes,
+       SUM(CASE WHEN u.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS n_with_unsub_0_1d
+FROM flips f
+LEFT JOIN (
+    SELECT DISTINCT f2.CLNT_NO
+    FROM flips f2
+    JOIN unsubs u2
+      ON  u2.CLNT_NO = f2.CLNT_NO
+      AND f2.flip_dt - u2.unsub_dt BETWEEN 0 AND 1
+) u ON u.CLNT_NO = f.CLNT_NO
+GROUP BY 1 ORDER BY 2 DESC
+"""
+for pref in (1002, 1014):
+    w = edw_pd(SQL_WRITERS_PREF.format(pref=pref))
+    w.insert(1, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in w["APP_SYS_CD"]])
+    w["share_pct"] = (w["n_changes"] / w["n_changes"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: writer system, n_changes + n_with_unsub_0_1d ---")
+    display(w)
+
+# %% [11] Other switches, same lens as [6] - ESP-written (7020) accounting for 1002 and 1014
+SQL_ESP_PREF = """
+WITH esp_flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+      AND APP_SYS_CD = 7020
+),
+vf AS (
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    JOIN esp_flips f ON f.CLNT_NO = m.CLNT_NO
+    WHERE m.load_tm >= DATE '2023-10-01'
+    GROUP BY 1, 2, 3
+),
+unsub4 AS (
+    SELECT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
+    FROM vf v
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+      ON  e.consumer_id_hashed = v.consumer_id_hashed
+      AND e.TREATMENT_ID       = v.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+),
+per_client AS (
+    SELECT f.CLNT_NO, f.flip_dt,
+           MAX(CASE WHEN u.unsub_dt <= f.flip_dt THEN u.unsub_dt END) AS last_unsub_before,
+           MIN(CASE WHEN u.unsub_dt >  f.flip_dt THEN u.unsub_dt END) AS first_unsub_after,
+           MAX(CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)     AS in_master
+    FROM esp_flips f
+    LEFT JOIN (SELECT DISTINCT CLNT_NO FROM vf) v ON v.CLNT_NO = f.CLNT_NO
+    LEFT JOIN unsub4 u                            ON u.CLNT_NO = f.CLNT_NO
+    GROUP BY 1, 2
+)
+SELECT CASE
+         WHEN flip_dt - last_unsub_before <= 1  THEN '1_unsub_0_1d_before_write'
+         WHEN flip_dt - last_unsub_before <= 30 THEN '2_unsub_2_30d_before_write'
+         WHEN last_unsub_before IS NOT NULL     THEN '3_unsub_over_30d_before_write'
+         WHEN first_unsub_after IS NOT NULL     THEN '4_unsub_only_AFTER_write'
+         WHEN in_master = 1                     THEN '5_in_vendor_tables_no_unsub_ever'
+         ELSE                                        '6_clnt_no_absent_from_master' END AS evidence,
+       COUNT(*) AS n_clients
+FROM per_client
+GROUP BY 1 ORDER BY 1
+"""
+for pref in (1002, 1014):
+    ep = edw_pd(SQL_ESP_PREF.format(pref=pref))
+    if len(ep) == 0:
+        print(f"--- PREF_ID {pref}: no 7020-written switch-offs in the window ---")
+        continue
+    ep["share_pct"] = (ep["n_clients"] / ep["n_clients"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: 7020-written switch-offs, vendor-feedback evidence per client ---")
+    display(ep)
