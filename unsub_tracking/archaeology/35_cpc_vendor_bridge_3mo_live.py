@@ -380,6 +380,65 @@ for pref in (1012, 1002, 1014):
     print(f"--- PREF_ID {pref}: 7020-written switch-offs - where is the unsubscribe behind each write? ---")
     display(esp)
 
+# %% [6b] The 7020-written 1012 switch-offs by campaign mnemonic
+# Which campaign's mail sits behind each ESP-written switch-off. Attribution = the
+# nearest prior unsubscribe (2024 lookback, no window, same frame as [6]); several
+# distinct campaigns on that nearest day -> 'MULTI'. DEFAULT/malformed ids -> 'UNTAGGED'
+# (same conventions as [5]). Clients with no prior unsub at all -> 'NO_PRIOR_UNSUB',
+# so the table sums to the full 7020 count from [4].
+m6b = edw_pd("""
+WITH esp_flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+      AND APP_SYS_CD = 7020
+),
+vf AS (
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    JOIN esp_flips f ON f.CLNT_NO = m.CLNT_NO
+    WHERE m.load_tm >= DATE '2023-10-01'
+    GROUP BY 1, 2, 3
+),
+unsub_ev AS (
+    SELECT DISTINCT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt,
+           CASE WHEN UPPER(v.TREATMENT_ID) = 'DEFAULT'                                THEN 'UNTAGGED'
+                WHEN SUBSTR(v.TREATMENT_ID, 1, 7) NOT BETWEEN '0000000' AND '9999999' THEN 'UNTAGGED'
+                WHEN UPPER(SUBSTR(v.TREATMENT_ID, 8, 3)) NOT BETWEEN 'AAA' AND 'ZZZ'  THEN 'UNTAGGED'
+                ELSE UPPER(SUBSTR(v.TREATMENT_ID, 8, 3)) END AS mne
+    FROM vf v
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+      ON  e.consumer_id_hashed = v.consumer_id_hashed
+      AND e.TREATMENT_ID       = v.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+),
+nearest_day AS (
+    -- per client, the LAST unsub day on/before the write
+    SELECT f.CLNT_NO, MAX(u.unsub_dt) AS nd
+    FROM esp_flips f
+    JOIN unsub_ev u ON u.CLNT_NO = f.CLNT_NO AND u.unsub_dt <= f.flip_dt
+    GROUP BY 1
+),
+attributed AS (
+    -- all unsub events on that nearest day; one campaign -> it, several -> MULTI
+    SELECT n.CLNT_NO,
+           CASE WHEN COUNT(DISTINCT u.mne) = 1 THEN MIN(u.mne) ELSE 'MULTI' END AS attributed_mne
+    FROM nearest_day n
+    JOIN unsub_ev u ON u.CLNT_NO = n.CLNT_NO AND u.unsub_dt = n.nd
+    GROUP BY 1
+)
+SELECT COALESCE(a.attributed_mne, 'NO_PRIOR_UNSUB') AS attributed_mne,
+       COUNT(*) AS n_clients
+FROM esp_flips f
+LEFT JOIN attributed a ON a.CLNT_NO = f.CLNT_NO
+GROUP BY 1 ORDER BY 2 DESC
+""")
+m6b["share_pct"] = (m6b["n_clients"] / m6b["n_clients"].sum() * 100).round(1)
+print("--- 7020-written 1012 switch-offs: campaign behind the nearest prior unsubscribe ---")
+display(m6b)
+
 # %% [7] The untraced ESP writes - raw rows, what little vendor trail exists (15 clients)
 # Buckets 5 and 6 from [6]: the ESP wrote the switch, but no unsubscribe event exists
 # anywhere since 2024. Per client: the CPC write, how many identity rows MASTER holds,
