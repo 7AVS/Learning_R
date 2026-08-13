@@ -402,6 +402,7 @@ for pid in [1002, 1012, 1014]:
          .pivot_table(index="APP_SYS_CD", columns="CLNT_CONSENT_TYP",
                       values="n_rows", aggfunc="sum", fill_value=0))
     p["TOTAL"] = p.sum(axis=1)
+    p["share_pct"] = (p["TOTAL"] / p["TOTAL"].sum() * 100).round(1)   # % of this switch's rows
     p.insert(0, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in p.index])
     display(p.sort_values("TOTAL", ascending=False))
 
