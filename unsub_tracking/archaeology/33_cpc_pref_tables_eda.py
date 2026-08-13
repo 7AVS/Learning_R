@@ -40,9 +40,10 @@ display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
 # %% [1] CONFIG — the candidate tables. Add/fix names here and rerun everything below.
 TABLES = [
+    "DG6V01.CPC_CLNT_PREF_CHC",   # client preference CHC - the 4th table from the pic
     "DDWV01.CPC_RB_PREF",         # current-state snapshot (per schema doc)
     "DDWV01.CPC_RB_PREF_MTHLY",   # monthly snapshots - needs a month-end filter
-    "DDWV01.CPC_RB_PREF_LOG",     # change log (the one that gave us trouble)
+    "DDWV01.CPC_RB_PREF_LOG",     # change log (~1% capture for 1012 - demoted)
 ]
 
 # %% [2] REACHABILITY — can we read each table at all? Verbatim error if not.
