@@ -180,3 +180,47 @@ display((no_unsub.groupBy("APP_SYS_CD").agg(F.count("*").alias("clients"))
 
 print("[5] read: who writes the vendor-proximate No's vs the rest - a writer that dominates 'within 7")
 print("    days' but not 'no unsub found' is a candidate pipe; even split across both = coincidence.")
+
+# %% [6] BRIDGE ATTRIBUTION BY CAMPAIGN - which mnemonics does the pipe carry?
+# Rule: attribution window = ALL unsub events 0-1 days before the flip (the pipe is a
+# next-day batch - see [3]); one attribution decision per client (flips are 1 row per
+# client); several distinct MNEs in-window -> explicit MULTI bucket, never an arbitrary
+# winner. MNE = SUBSTR(TREATMENT_ID, 8, 3); 'DEFAULT'/unparseable -> UNTAGGED.
+ATTR_DAYS = 1   # primary window; sensitivity below reruns at 7
+
+def bridge_attribution(attr_days):
+    ev = (flips.join(unsub_l.select("CLNT_NO", "unsub_dt", "TREATMENT_ID"), "CLNT_NO")
+               .withColumn("d", F.datediff(F.col("flip_dt"), F.col("unsub_dt")))
+               .filter((F.col("d") >= 0) & (F.col("d") <= attr_days))
+               .withColumn("mne", F.when(F.upper(F.col("TREATMENT_ID")) == "DEFAULT", F.lit("UNTAGGED"))
+                                   .otherwise(F.upper(F.substring("TREATMENT_ID", 8, 3))))
+               .withColumn("mne", F.when(F.col("mne").rlike("^[A-Z0-9]{3}$"), F.col("mne"))
+                                   .otherwise(F.lit("UNTAGGED"))))
+    per_client = (ev.groupBy("CLNT_NO")
+                    .agg(F.countDistinct("mne").alias("n_mnes"),
+                         F.min("mne").alias("only_mne"),
+                         F.concat_ws("+", F.sort_array(F.collect_set("mne"))).alias("mne_combo"),
+                         F.count("*").alias("n_events"))
+                    .withColumn("attributed_mne",
+                                F.when(F.col("n_mnes") == 1, F.col("only_mne")).otherwise(F.lit("MULTI"))))
+    return ev, per_client
+
+ev1, pc1 = bridge_attribution(ATTR_DAYS)
+n_bridged = pc1.count()
+print(f"[6] bridged clients (>=1 unsub within {ATTR_DAYS}d before flip): {n_bridged:,} - each counted ONCE")
+print("[6] attribution by campaign (distinct clients; MULTI = several MNEs in-window, shown as-is):")
+display(pc1.groupBy("attributed_mne").agg(F.count("*").alias("clients"))
+          .withColumn("pct", F.round(100.0 * F.col("clients") / n_bridged, 1))
+          .orderBy(F.desc("clients")).toPandas().head(25))
+print("[6] the MULTI combos (top 15) - the batch multi-list clicks:")
+display(pc1.filter("attributed_mne = 'MULTI'").groupBy("mne_combo")
+          .agg(F.count("*").alias("clients")).orderBy(F.desc("clients")).toPandas().head(15))
+
+# sensitivity: same attribution at <=7 days - if the campaign ranking holds, the
+# window choice is not driving the story
+_, pc7 = bridge_attribution(7)
+n7 = pc7.count()
+print(f"[6] sensitivity <=7d: {n7:,} bridged clients; attribution:")
+display(pc7.groupBy("attributed_mne").agg(F.count("*").alias("clients"))
+          .withColumn("pct", F.round(100.0 * F.col("clients") / n7, 1))
+          .orderBy(F.desc("clients")).toPandas().head(25))
