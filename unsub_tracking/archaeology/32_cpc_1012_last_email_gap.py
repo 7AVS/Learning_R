@@ -164,9 +164,10 @@ SQL_BUCKETS = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012
-      AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    WHERE PREF_ID = 1012                 -- email consent switch
+      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+    -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
 last_email AS (
@@ -174,10 +175,11 @@ last_email AS (
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+    -- one row per client: the email CLOSEST to the flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 ),
 gapped AS (
@@ -185,9 +187,9 @@ gapped AS (
            TRIM(EXTRACT(YEAR FROM f.flip_dt)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM f.flip_dt) < 10 THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM f.flip_dt))              AS flip_month,
-           f.flip_dt - em.email_dt                            AS gap_days
+           f.flip_dt - em.email_dt                            AS gap_days   -- days between them
     FROM flips f
-    LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
+    LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO   -- LEFT: keep clients with no email (gap NULL)
 )
 SELECT flip_month,
        CASE WHEN gap_days IS NULL   THEN '6_no_email_found'
@@ -229,9 +231,10 @@ SQL_DAYS = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012
-      AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    WHERE PREF_ID = 1012                 -- email consent switch
+      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+    -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
 last_email AS (
@@ -239,17 +242,18 @@ last_email AS (
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+    -- one row per client: the email CLOSEST to the flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 )
-SELECT f.flip_dt - em.email_dt AS gap_days,
+SELECT f.flip_dt - em.email_dt AS gap_days,   -- days between email and flip
        COUNT(*)                AS n_clients
 FROM flips f
 JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
-WHERE f.flip_dt - em.email_dt <= 90
+WHERE f.flip_dt - em.email_dt <= 90           -- chart window: first 90 days only
 GROUP BY 1
 ORDER BY 1
 """
@@ -276,9 +280,10 @@ SQL_MNE = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012
-      AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    WHERE PREF_ID = 1012                 -- email consent switch
+      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+    -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
 last_email AS (
@@ -287,10 +292,11 @@ last_email AS (
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+    -- one row per client: the email CLOSEST to the flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 )
 SELECT em.mne,
