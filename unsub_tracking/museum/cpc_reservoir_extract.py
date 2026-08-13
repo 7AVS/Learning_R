@@ -624,7 +624,7 @@ WHERE e.disposition_cd = 4
 
 # %% [27] VERIFICATION - unsub_topup readback: non-empty, date range matches the complement it was
 # meant to cover (proves the bites actually landed the gap, not a re-pull of unsub_base's own range)
-_topup_all = spark.read.parquet(BASE + "unsub_topup/*")
+_topup_all = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_topup")
 _topup_rows = _topup_all.count()
 assert _topup_rows > 0, "unsub_topup landed but is EMPTY - investigate before 34b reads it"
 _topup_range = _topup_all.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
@@ -632,12 +632,18 @@ print("unsub_topup total:", _topup_rows, "rows | unsub_tm range:", _topup_range[
 print("unsub_base covers 2025-07-01..2026-07-01 (its own EVENT filter, cells [3]-[6]) - together")
 print("unsub_topup + unsub_base should span 2024-02-01 through this run's date, no gap")
 
+# completeness: every expected month bite actually landed (same landed() path the skip logic in
+# cell [25] uses) - a partial land() failure would otherwise slip through as "non-empty" above
+_topup_missing = [t[0] for t in _TOPUP_MONTHS if not landed("unsub_topup/" + t[0])]
+assert not _topup_missing, "unsub_topup missing month bite(s): " + str(_topup_missing)
+print("all", len(_TOPUP_MONTHS), "unsub_topup month bites landed - no gaps")
+
 # %% [28] SIZE PROBE + EXTRACT cpc_pref_1012_no - current-state 1012=No slice off DDWV01.CPC_RB_PREF
 # (NOT the _LOG history table cell [7] pulls - CPC_RB_PREF is one row per CLNT_NO/PREF_ID, current
 # standing only). ~3.26M rows expected - single pull, no bites needed. Feeds 34b's flip cohort.
 print("size probe (rows to land):")
 print(edw_pd("""
-SELECT COUNT(*) AS rows_1012_no
+SELECT COUNT(*) AS rows_1012_no, COUNT(DISTINCT CLNT_NO) AS clients_1012_no
 FROM DDWV01.CPC_RB_PREF
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
 """))

@@ -24,8 +24,8 @@ BASE = "hdfs:///user/427966379/unsub_cpc/"
 WIN_FLOOR  = "2025-02-01"   # flips window - same pin as pack 34
 LOOK_FLOOR = "2024-02-01"   # unsub lookback floor - same pin as pack 34
 
-ub = spark.read.parquet(BASE + "unsub_base/*")
-ut = spark.read.parquet(BASE + "unsub_topup/*")
+ub = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_base")
+ut = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_topup")
 unsub = (ub.select("CLNT_NO", "unsub_tm", "TREATMENT_ID")
            .unionByName(ut.select("CLNT_NO", "unsub_tm", "TREATMENT_ID"))
            .dropDuplicates(["CLNT_NO", "unsub_tm"]))
@@ -45,13 +45,15 @@ print("[0] cpc_pref_1012_no:", pref.count(), "rows |", _pf_r["mn"], "to", _pf_r[
       "| distinct clients:", pref.select("CLNT_NO").distinct().count())
 assert unsub.count() > 0 and pref.count() > 0, \
     "reservoir empty - run cpc_reservoir_extract.py cells [3]-[6] and [24]-[28] first"
+assert pref.count() == pref.select("CLNT_NO").distinct().count(), \
+    "cpc_pref_1012_no is not 1 row per client"
 
 # %% [1] flips (chg_dt >= WIN_FLOOR) -> nearest prior unsub per client (unsub_dt <= flip_dt, MAX unsub_dt)
 flips = pref.filter(F.col("chg_dt") >= WIN_FLOOR).select("CLNT_NO", F.col("chg_dt").alias("flip_dt"))
 
 unsub_l = unsub.filter(F.col("unsub_tm") >= LOOK_FLOOR).withColumn("unsub_dt", F.to_date("unsub_tm"))
 
-_w = W.partitionBy("CLNT_NO").orderBy(F.col("unsub_dt").desc())
+_w = W.partitionBy("CLNT_NO").orderBy(F.col("unsub_tm").desc())
 nearest = (flips.join(unsub_l, "CLNT_NO")
                  .filter(F.col("unsub_dt") <= F.col("flip_dt"))
                  .withColumn("rn", F.row_number().over(_w))
