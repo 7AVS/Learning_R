@@ -167,8 +167,7 @@ ax.bar(arr["chg_month"], arr["n_clients_arrived_at_no"], color="#2a78d6")
 for x, v in zip(arr["chg_month"], arr["n_clients_arrived_at_no"]):
     ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=8)
 ax.set_ylabel("clients")
-ax.set_title("1012: clients whose CURRENT standing became No, by month of last change (CPC_RB_PREF)
-"
+ax.set_title("1012: clients whose CURRENT standing became No, by month of last change (CPC_RB_PREF)\n"
              "compare against the log-based ~140/mo from pack 32",
              fontweight="bold")
 ax.tick_params(axis="x", rotation=45)
