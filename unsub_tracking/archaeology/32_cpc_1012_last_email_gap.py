@@ -29,10 +29,18 @@ TD_HOST = "Teradata-dns-sysa.fg.rbc.com"
 EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
 
 def edw_pd(sql, chunksize=1_000_000):
-    parts, n = [], 0
-    for c in pd.read_sql(sql, EDW, chunksize=chunksize):
-        parts.append(c); n += len(c)
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    # cursor-based (pack 01 idiom): same DataFrame, no pandas DBAPI warning
+    cur = EDW.cursor()
+    cur.execute(sql)
+    cols = [d[0] for d in cur.description]
+    parts = []
+    while True:
+        rows = cur.fetchmany(chunksize)
+        if not rows:
+            break
+        parts.append(pd.DataFrame(rows, columns=cols))
+    cur.close()
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
