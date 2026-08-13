@@ -44,7 +44,39 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
-# %% [1] Q1 — flip_month x gap_bucket
+# %% [1] Q0 — the story opener: monthly volume of 1012 changes to No
+# Simplest possible count, no QUALIFY: every 1012->No change event in the window.
+# n_change_events = rows in the log; n_clients = distinct clients that month.
+# (The gap analysis below then keeps ONE row per client - their most recent flip -
+#  so its per-month numbers sit slightly below n_clients here. That is expected.)
+SQL_TOTALS = """
+SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       COUNT(*)                                              AS n_change_events,
+       COUNT(DISTINCT CLNT_NO)                               AS n_clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID = 1012
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+GROUP BY 1
+ORDER BY 1
+"""
+tot = edw_pd(SQL_TOTALS)
+display(tot)
+
+fig, ax = plt.subplots(figsize=(12, 4.5))
+ax.bar(tot["chg_month"], tot["n_clients"], color="#2a78d6")
+for x, v in zip(tot["chg_month"], tot["n_clients"]):
+    ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=8.5)
+ax.set_ylabel("distinct clients")
+ax.set_title(f"1012 (Banking E-Mail consent) changed to No — clients per month · total {tot['n_clients'].sum():,}",
+             fontweight="bold")
+ax.tick_params(axis="x", rotation=45)
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
+
+# %% [2] Q1 — flip_month x gap_bucket
 # flips      : most recent 1012 change-to-No per client, past 18 months (5002 = No)
 # last_email : last email decision on/before the flip date (EM per channel_codes; floor 2024-01-01)
 # gapped     : one row per flipping client; gap NULL = no email decision found since floor
@@ -93,7 +125,7 @@ bk = edw_pd(SQL_BUCKETS)
 display(bk.pivot_table(index="flip_month", columns="gap_bucket",
                        values="n_clients", aggfunc="sum", fill_value=0))
 
-# %% [2] rollup + meeting bar — the decision view
+# %% [3] rollup + meeting bar — the decision view
 roll = bk.groupby("gap_bucket", as_index=False)["n_clients"].sum()
 roll["share_pct"] = (roll["n_clients"] / roll["n_clients"].sum() * 100).round(1)
 display(roll)
@@ -112,7 +144,7 @@ ax.set_title("Where the last email decision sits relative to the 1012 change", f
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [3] Q2 — day-level gaps 0-90 + histogram (the chart that decides it)
+# %% [4] Q2 — day-level gaps 0-90 + histogram (the chart that decides it)
 SQL_DAYS = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
@@ -157,3 +189,37 @@ ax.set_title("Most recent 1012 change to No (18 mo) — days since last email de
              fontweight="bold")
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
+
+# %% [5] what WAS that last email? campaign (MNE) mix of the matched decisions
+# Same two CTEs; instead of the gap we show which campaign the last email belonged to.
+SQL_MNE = """
+WITH flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+),
+last_email AS (
+    SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt,
+           SUBSTR(t.TACTIC_ID, 8, 3) AS mne
+    FROM flips f
+    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+      ON  t.CLNT_NO = f.CLNT_NO
+      AND t.TREATMT_STRT_DT <= f.flip_dt
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
+      AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
+)
+SELECT em.mne,
+       COUNT(*)                                              AS n_clients,
+       SUM(CASE WHEN f.flip_dt - em.email_dt <= 7 THEN 1 ELSE 0 END) AS n_within_week
+FROM flips f
+JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
+GROUP BY 1
+ORDER BY 2 DESC
+"""
+mne = edw_pd(SQL_MNE)
+display(mne.head(20))
