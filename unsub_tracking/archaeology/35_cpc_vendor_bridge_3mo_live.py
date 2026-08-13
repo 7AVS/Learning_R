@@ -380,12 +380,12 @@ for pref in (1012, 1002, 1014):
     print(f"--- PREF_ID {pref}: 7020-written switch-offs - where is the unsubscribe behind each write? ---")
     display(esp)
 
-# %% [6b] The 7020-written 1012 switch-offs by campaign mnemonic
-# Which campaign's mail sits behind each ESP-written switch-off. Attribution = the
-# nearest prior unsubscribe (2024 lookback, no window, same frame as [6]); several
-# distinct campaigns on that nearest day -> 'MULTI'. DEFAULT/malformed ids -> 'UNTAGGED'
-# (same conventions as [5]). Clients with no prior unsub at all -> 'NO_PRIOR_UNSUB',
-# so the table sums to the full 7020 count from [4].
+# %% [6b] The 7020-written 1012 switch-offs - which campaign's mail were they holding?
+# No unsub anywhere in this cell. Attribution = the LAST email SENT (disposition 1) to
+# the client on/before the write, 2024 lookback: the mail in hand when the switch-off
+# happened. Several distinct campaigns on that last send day -> 'MULTI'. DEFAULT or
+# malformed ids -> 'UNTAGGED' (same conventions as [5]). No send on record at all ->
+# 'NO_SEND_FOUND'. Table sums to the full 7020 count from [4].
 m6b = edw_pd("""
 WITH esp_flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
@@ -401,8 +401,9 @@ vf AS (
     WHERE m.load_tm >= DATE '2023-10-01'
     GROUP BY 1, 2, 3
 ),
-unsub_ev AS (
-    SELECT DISTINCT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt,
+sends AS (
+    -- every email SENT to these clients since 2024, campaign-classified
+    SELECT DISTINCT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS send_dt,
            CASE WHEN UPPER(v.TREATMENT_ID) = 'DEFAULT'                                THEN 'UNTAGGED'
                 WHEN SUBSTR(v.TREATMENT_ID, 1, 7) NOT BETWEEN '0000000' AND '9999999' THEN 'UNTAGGED'
                 WHEN UPPER(SUBSTR(v.TREATMENT_ID, 8, 3)) NOT BETWEEN 'AAA' AND 'ZZZ'  THEN 'UNTAGGED'
@@ -411,32 +412,32 @@ unsub_ev AS (
     JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
       ON  e.consumer_id_hashed = v.consumer_id_hashed
       AND e.TREATMENT_ID       = v.TREATMENT_ID
-    WHERE e.disposition_cd = 4
+    WHERE e.disposition_cd = 1
       AND e.disposition_dt_tm >= DATE '2024-01-01'
 ),
-nearest_day AS (
-    -- per client, the LAST unsub day on/before the write
-    SELECT f.CLNT_NO, MAX(u.unsub_dt) AS nd
+last_send_day AS (
+    -- per client, the LAST send day on/before the write
+    SELECT f.CLNT_NO, MAX(s.send_dt) AS lsd
     FROM esp_flips f
-    JOIN unsub_ev u ON u.CLNT_NO = f.CLNT_NO AND u.unsub_dt <= f.flip_dt
+    JOIN sends s ON s.CLNT_NO = f.CLNT_NO AND s.send_dt <= f.flip_dt
     GROUP BY 1
 ),
 attributed AS (
-    -- all unsub events on that nearest day; one campaign -> it, several -> MULTI
-    SELECT n.CLNT_NO,
-           CASE WHEN COUNT(DISTINCT u.mne) = 1 THEN MIN(u.mne) ELSE 'MULTI' END AS attributed_mne
-    FROM nearest_day n
-    JOIN unsub_ev u ON u.CLNT_NO = n.CLNT_NO AND u.unsub_dt = n.nd
+    -- all sends on that last day; one campaign -> it, several -> MULTI
+    SELECT l.CLNT_NO,
+           CASE WHEN COUNT(DISTINCT s.mne) = 1 THEN MIN(s.mne) ELSE 'MULTI' END AS attributed_mne
+    FROM last_send_day l
+    JOIN sends s ON s.CLNT_NO = l.CLNT_NO AND s.send_dt = l.lsd
     GROUP BY 1
 )
-SELECT COALESCE(a.attributed_mne, 'NO_PRIOR_UNSUB') AS attributed_mne,
+SELECT COALESCE(a.attributed_mne, 'NO_SEND_FOUND') AS attributed_mne,
        COUNT(*) AS n_clients
 FROM esp_flips f
 LEFT JOIN attributed a ON a.CLNT_NO = f.CLNT_NO
 GROUP BY 1 ORDER BY 2 DESC
 """)
 m6b["share_pct"] = (m6b["n_clients"] / m6b["n_clients"].sum() * 100).round(1)
-print("--- 7020-written 1012 switch-offs: campaign behind the nearest prior unsubscribe ---")
+print("--- 7020-written 1012 switch-offs: campaign of the last email sent before the write ---")
 display(m6b)
 
 # %% [7] The untraced ESP writes - raw rows, what little vendor trail exists (15 clients)
