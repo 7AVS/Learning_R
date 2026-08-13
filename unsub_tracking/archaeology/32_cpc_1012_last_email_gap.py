@@ -72,7 +72,7 @@ display(edw_pd("""
 SELECT TOP 10 CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD, SYS_FUNC_CD
 FROM DDWV01.CPC_RB_PREF_LOG
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+  AND CHG_TMSTMP >= DATE '2025-02-01'
 ORDER BY CHG_TMSTMP DESC
 """))
 
@@ -86,7 +86,7 @@ WITH flips AS (
     SELECT CLNT_NO
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+      AND CHG_TMSTMP >= DATE '2025-02-01'
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 )
 SELECT COUNT(DISTINCT f.CLNT_NO)  AS n_flip_clients,
@@ -108,7 +108,7 @@ WITH flips AS (
     SELECT CLNT_NO
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+      AND CHG_TMSTMP >= DATE '2025-02-01'
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 )
 SELECT COUNT(*) AS n_tactic_rows,
@@ -147,7 +147,7 @@ display(edw_pd("""
 SELECT TOP 10 *
 FROM DDWV01.CPC_RB_PREF_LOG
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)
+  AND CHG_TMSTMP >= DATE '2025-02-01'
 ORDER BY CHG_TMSTMP DESC
 """))
 
@@ -193,7 +193,7 @@ WITH flips AS (
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = 1012                 -- email consent switch
       AND CLNT_CONSENT_TYP = 5002        -- flipped to No
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
     -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
@@ -263,7 +263,7 @@ WITH flips AS (
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = 1012                 -- email consent switch
       AND CLNT_CONSENT_TYP = 5002        -- flipped to No
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
     -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
@@ -312,7 +312,7 @@ WITH flips AS (
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = 1012                 -- email consent switch
       AND CLNT_CONSENT_TYP = 5002        -- flipped to No
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
     -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
@@ -442,7 +442,7 @@ WITH flips AS (
     FROM DDWV01.CPC_RB_PREF_LOG
     WHERE PREF_ID = __PID__                -- this switch
       AND CLNT_CONSENT_TYP = 5002          -- flipped to No
-      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
     -- one row per client: their most recent flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
