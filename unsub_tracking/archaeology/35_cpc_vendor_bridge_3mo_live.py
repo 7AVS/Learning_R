@@ -413,3 +413,38 @@ LEFT JOIN ev       ON ev.CLNT_NO = f.CLNT_NO
 WHERE COALESCE(ev.n_unsub_events, 0) = 0              -- no disposition-4 anywhere since 2024
 SAMPLE 15
 """))
+
+# %% [8] Size of the universe - emails sent vs unsubscribes captured, per month (slice window)
+# Both sides straight off DTZV01.VENDOR_FEEDBACK_EVENT, no MASTER join (stays light).
+# disposition 1 = send, disposition 4 = unsubscribe. Grain = email address
+# (consumer_id_hashed), ~1.1 addresses per client. This is the denominator the bridge
+# lives inside: of all mail going out, how much unsubscribing does the vendor table
+# even capture - before asking how much of THAT reaches CPC.
+uv = edw_pd("""
+SELECT TRIM(EXTRACT(YEAR FROM disposition_dt_tm)) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM disposition_dt_tm) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM disposition_dt_tm))  AS mth,
+       CAST(SUM(CASE WHEN disposition_cd = 1 THEN 1 ELSE 0 END) AS BIGINT) AS n_sends,
+       COUNT(DISTINCT CASE WHEN disposition_cd = 1 THEN consumer_id_hashed END) AS n_addresses_mailed,
+       SUM(CASE WHEN disposition_cd = 4 THEN 1 ELSE 0 END)                 AS n_unsub_events,
+       COUNT(DISTINCT CASE WHEN disposition_cd = 4 THEN consumer_id_hashed END) AS n_addresses_unsubbed
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd IN (1, 4)
+  AND disposition_dt_tm >= DATE '2026-04-01'          -- same slice floor as the pack
+GROUP BY 1 ORDER BY 1
+""")
+uv["unsub_per_1k_mailed"] = (1000.0 * uv["n_addresses_unsubbed"] / uv["n_addresses_mailed"]).round(2)
+display(uv)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+axes[0].bar(uv["mth"], uv["n_addresses_mailed"], color="#2a78d6")
+axes[0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v/1e6:.0f}M"))
+axes[0].set_title("addresses mailed (disp 1)", fontweight="bold")
+axes[1].bar(uv["mth"], uv["n_addresses_unsubbed"], color="#2a78d6")
+axes[1].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v/1e3:.0f}K"))
+axes[1].set_title("addresses unsubscribed (disp 4)", fontweight="bold")
+for ax in axes:
+    ax.spines[["top", "right"]].set_visible(False)
+plt.suptitle("Slice window: mail out vs unsubscribes captured - the universe the bridge lives inside",
+             fontweight="bold")
+plt.tight_layout(); plt.show()
