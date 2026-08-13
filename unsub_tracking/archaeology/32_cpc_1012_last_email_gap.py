@@ -13,11 +13,14 @@
 # All outputs inline. No files written. Connection = same as unsub_unified.
 
 # %% [0] connect (same idiom as unsub_unified) + proof round-trip
-get_ipython().system("./environment/bin/python -m pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+try:
+    import teradatasql
+except ImportError:
+    get_ipython().system("pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+    import teradatasql
 import getpass
 import pandas as pd
 import matplotlib.pyplot as plt
-import teradatasql
 
 username = input("Enter your username: ")
 password = getpass.getpass("Enter your password: ")
@@ -62,9 +65,9 @@ gapped AS (
            TRIM(EXTRACT(YEAR FROM f.flip_dt)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM f.flip_dt) < 10 THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM f.flip_dt))              AS flip_month,
-           f.flip_dt - le.email_dt                            AS gap_days
+           f.flip_dt - em.email_dt                            AS gap_days
     FROM flips f
-    LEFT JOIN last_email le ON le.CLNT_NO = f.CLNT_NO
+    LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
 )
 SELECT flip_month,
        CASE WHEN gap_days IS NULL   THEN '6_no_email_found'
@@ -122,11 +125,11 @@ last_email AS (
             OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 )
-SELECT f.flip_dt - le.email_dt AS gap_days,
+SELECT f.flip_dt - em.email_dt AS gap_days,
        COUNT(*)                AS n_clients
 FROM flips f
-JOIN last_email le ON le.CLNT_NO = f.CLNT_NO
-WHERE f.flip_dt - le.email_dt <= 90
+JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
+WHERE f.flip_dt - em.email_dt <= 90
 GROUP BY 1
 ORDER BY 1
 """
