@@ -1,19 +1,19 @@
 # %% [markdown]
-# # 32 — CPC 1012 flips → last email decision before the flip
+# # 32 v2 — CPC 1012 flips (from CPC_RB_PREF) → last email decision before the flip
 #
-# **Question (skeptics' framing, inverted):** take every client whose most recent
-# Banking E-Mail consent (PREF_ID 1012) changed to **No** in the past 18 months.
-# For each, find the **last email decision** in tactic history **before** that change.
-# How close are they?
+# **v2 (2026-08-13): rebuilt on DDWV01.CPC_RB_PREF (current state).** Pack 33 EDA showed
+# CPC_RB_PREF_LOG captures ~1% of 1012 No's (34,150 ever vs 3,258,923 standing) — every
+# v1 volume was wrong. Here a "flip" = a client whose CURRENT standing is 1012=No, dated
+# by CHG_TMSTMP (when that standing was last set). Known limit: clients who flipped No
+# and later re-consented are invisible here (cross-check = MTHLY month-pair transitions).
 #
-# **Descriptive only — no claims.** This measures the proximity of the nearest
-# prior email DECISION record (not delivered email) to each flip. Emails are
-# frequent, so nearby decisions are expected by chance; nothing here attributes
-# any flip to any email, in either direction.
+# **Descriptive only — no claims.** Nearest prior email DECISION record (not delivered
+# email) per flip. Emails are frequent, so nearby decisions are expected by chance;
+# nothing here attributes any flip to any email, in either direction.
 #
 # All outputs inline. No files written. Connection = same as unsub_unified.
 
-# %% [0] connect (same idiom as unsub_unified) + proof round-trip
+# %% [0] connect + proof round-trip
 try:
     import teradatasql
 except ImportError:
@@ -30,7 +30,6 @@ TD_HOST = "Teradata-dns-sysa.fg.rbc.com"
 EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
 
 def edw_pd(sql, chunksize=1_000_000):
-    # cursor-based (pack 01 idiom): same DataFrame, no pandas DBAPI warning
     cur = EDW.cursor()
     cur.execute(sql)
     cols = [d[0] for d in cur.description]
@@ -45,130 +44,63 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
-# %% [P1] PROBE — what does PREF_ID actually contain? (type/format trap)
-# Expect: 1012 present with material volume. If 1012 is missing but a padded/char
-# variant appears, our numeric filter is silently matching nothing.
+# %% [P1] PROBE — 1012 consent mix on CPC_RB_PREF (expect ~3.26M at No, per pack 33)
 display(edw_pd("""
-SELECT PREF_ID, COUNT(*) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients,
-       MIN(CAST(CHG_TMSTMP AS DATE)) AS first_dt, MAX(CAST(CHG_TMSTMP AS DATE)) AS last_dt
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE CHG_TMSTMP >= DATE '2024-01-01'
+SELECT CLNT_CONSENT_TYP, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012
 GROUP BY 1 ORDER BY 2 DESC
 """))
 
-# %% [P2] PROBE — consent-type mix for 1012 specifically
-# Expect: 5001/5002/5003 style codes. If "No" lives under a different code than 5002,
-# our volume is wrong. Blank(5003)=Yes for 1012, so 5002 is the only "No" we want.
-display(edw_pd("""
-SELECT CLNT_CONSENT_TYP, COUNT(*) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID = 1012 AND CHG_TMSTMP >= DATE '2024-01-01'
-GROUP BY 1 ORDER BY 2 DESC
-"""))
-
-# %% [P3] PROBE — raw eyeball: 10 actual 1012->5002 rows, no transformation
-# Look at CHG_TMSTMP format, CLNT_NO length/leading zeros, APP_SYS_CD (who writes these).
-display(edw_pd("""
-SELECT TOP 10 CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD, SYS_FUNC_CD
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= DATE '2025-02-01'
-ORDER BY CHG_TMSTMP DESC
-"""))
-
-# %% [P4] PROBE — join-key integrity: do flip clients exist in the tactic table AT ALL?
-# The killer check. If CLNT_NO formats mismatch (char vs numeric, padding), the join
-# silently returns nothing and "no email found" is an artifact.
-# Expect: pct_any_tactic HIGH (most bank clients get decisioned for something).
-# If it is near zero -> formats differ -> STOP, fix the join before trusting anything.
-display(edw_pd("""
-WITH flips AS (
-    SELECT CLNT_NO
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2025-02-01'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
-)
-SELECT COUNT(DISTINCT f.CLNT_NO)  AS n_flip_clients,
-       COUNT(DISTINCT t.CLNT_NO)  AS n_with_any_tactic,   -- matched clients only (NULLs drop out)
-       CAST(100.0 * COUNT(DISTINCT t.CLNT_NO) / NULLIF(COUNT(DISTINCT f.CLNT_NO),0)
-            AS DECIMAL(5,1))      AS pct_any_tactic
-FROM flips f
-LEFT JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-  ON  t.CLNT_NO = f.CLNT_NO
-  AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- any channel, any decision
-"""))
-
-# %% [P5] PROBE — is the EM filter catching a sane share of decisions?
-# For flip clients' tactic rows: how many match the EM (email) pattern vs total?
-# Expect: a material share EM. If pct_em is ~0, the channel filter is the artifact
-# behind "no email found", not reality.
-display(edw_pd("""
-WITH flips AS (
-    SELECT CLNT_NO
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2025-02-01'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
-)
-SELECT COUNT(*) AS n_tactic_rows,
-       SUM(CASE WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
-                THEN 1 ELSE 0 END) AS n_em_rows,
-       CAST(100.0 * SUM(CASE WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
-                THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0) AS DECIMAL(5,1)) AS pct_em
-FROM flips f
-JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-  ON t.CLNT_NO = f.CLNT_NO AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
-"""))
-
-# %% [P6] PROBE — what the raw tables look like after our filters (top 10 each)
-# So a reader sees the actual rows feeding the analysis, columns intact.
-# (CPC side: P3 above already shows the 1012->No rows. Here: the tactic/email side,
-#  plus the extracted channel snippet so the EM match is visible, not magic.)
-pd.set_option("display.max_colwidth", 160)
-print("--- DG6V01.TACTIC_EVNT_IP_AR_HIST after the EM (email) filter — top 10 ---")
-display(edw_pd("""
-SELECT CLNT_NO, TACTIC_ID,
-       SUBSTR(TACTIC_ID, 8, 3)                    AS mne,             -- campaign code inside the id
-       TREATMT_STRT_DT, TREATMT_END_DT, TST_GRP_CD,
-       SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30)    AS vrb_channel_part, -- the piece our filter reads
-       ADDNL_DECISN_DATA1,
-       TACTIC_DECISN_VRB_INFO
-FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-WHERE TREATMT_STRT_DT >= DATE '2024-01-01'
-  AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-        OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
-ORDER BY TREATMT_STRT_DT DESC
-SAMPLE 10
-"""))
-print("--- DDWV01.CPC_RB_PREF_LOG after our 1012->No filter — top 10 (same as P3, all columns) ---")
+# %% [P2] PROBE — raw rows: 10 clients standing at 1012=No, all columns
+pd.set_option("display.max_colwidth", 120)
 display(edw_pd("""
 SELECT *
-FROM DDWV01.CPC_RB_PREF_LOG
+FROM DDWV01.CPC_RB_PREF
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= DATE '2025-02-01'
 ORDER BY CHG_TMSTMP DESC
 SAMPLE 10
 """))
 
-# %% [1] Q0 — the story opener: monthly volume of 1012 changes to No
-# Simplest possible count, no QUALIFY: every 1012->No change event in the window.
-# n_change_events = rows in the log; n_clients = distinct clients that month.
-# (The gap analysis below then keeps ONE row per client - their most recent flip -
-#  so its per-month numbers sit slightly below n_clients here. That is expected.)
+# %% [P3] PROBE — the attribution, raw: 20 matched flip↔last-email pairs on screen
+# One row = one client: when their standing became No, the closest email decision
+# before it, and the gap. This is the join everything below aggregates.
+display(edw_pd("""
+WITH flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012                 -- email consent switch
+      AND CLNT_CONSENT_TYP = 5002        -- standing = No
+      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window
+),
+last_email AS (
+    SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt,
+           SUBSTR(t.TACTIC_ID, 8, 3) AS mne, t.TACTIC_ID
+    FROM flips f
+    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+      ON  t.CLNT_NO = f.CLNT_NO
+      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+    -- one row per client: the email CLOSEST to the flip
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
+)
+SELECT CLNT_NO, flip_dt, email_dt, flip_dt - email_dt AS gap_days, mne, TACTIC_ID
+FROM last_email
+SAMPLE 20
+"""))
+
+# %% [1] Q0 — monthly arrivals into No (the volume story, now from the right table)
 SQL_TOTALS = """
 SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
          TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
          TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
-       COUNT(*)                                              AS n_change_events,
-       COUNT(DISTINCT CLNT_NO)                               AS n_clients
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID = 1012
-  AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= DATE '2024-01-01'   -- full data floor: whole log on screen
-GROUP BY 1                              -- (gap analysis below still uses last 18 months)
+       COUNT(*)                                              AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2024-01-01'   -- full data floor
+GROUP BY 1
 ORDER BY 1
 """
 tot = edw_pd(SQL_TOTALS)
@@ -177,38 +109,32 @@ display(tot)
 fig, ax = plt.subplots(figsize=(12, 4.5))
 ax.bar(tot["chg_month"], tot["n_clients"], color="#2a78d6")
 for x, v in zip(tot["chg_month"], tot["n_clients"]):
-    ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=8.5)
-ax.set_ylabel("distinct clients")
-ax.set_title(f"1012 (Banking E-Mail consent) changed to No — clients per month since 2024 · total {tot['n_clients'].sum():,}",
+    ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=7.5, rotation=90)
+ax.set_ylabel("clients")
+ax.set_title(f"1012 standing became No, by month of last change (CPC_RB_PREF) · total since 2024: {tot['n_clients'].sum():,}",
              fontweight="bold")
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [2] Q1 — flip_month x gap_bucket
-# flips      : most recent 1012 change-to-No per client, past 18 months (5002 = No)
-# last_email : last email decision on/before the flip date (EM per channel_codes; floor 2024-01-01)
-# gapped     : one row per flipping client; gap NULL = no email decision found since floor
+# %% [2] Q1 — flip_month x gap_bucket (flips pinned >= 2025-02-01)
 SQL_BUCKETS = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012                 -- email consent switch
-      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
-    -- one row per client: their most recent flip
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ),
 last_email AS (
     SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND t.TREATMT_STRT_DT <= f.flip_dt
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
-    -- one row per client: the email CLOSEST to the flip
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 ),
 gapped AS (
@@ -216,7 +142,7 @@ gapped AS (
            TRIM(EXTRACT(YEAR FROM f.flip_dt)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM f.flip_dt) < 10 THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM f.flip_dt))              AS flip_month,
-           f.flip_dt - em.email_dt                            AS gap_days   -- days between them
+           f.flip_dt - em.email_dt                            AS gap_days
     FROM flips f
     LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO   -- LEFT: keep clients with no email (gap NULL)
 )
@@ -235,11 +161,11 @@ ORDER BY 1, 2
 bk = edw_pd(SQL_BUCKETS)
 _piv = bk.pivot_table(index="flip_month", columns="gap_bucket",
                       values="n_clients", aggfunc="sum", fill_value=0)
-_piv["TOTAL"] = _piv.sum(axis=1)           # row total per month
-_piv.loc["TOTAL"] = _piv.sum(axis=0)       # column totals at the bottom
+_piv["TOTAL"] = _piv.sum(axis=1)
+_piv.loc["TOTAL"] = _piv.sum(axis=0)
 display(_piv)
 
-# %% [3] rollup + meeting bar — the decision view
+# %% [3] rollup + meeting bar
 roll = bk.groupby("gap_bucket", as_index=False)["n_clients"].sum()
 roll["share_pct"] = (roll["n_clients"] / roll["n_clients"].sum() * 100).round(1)
 display(roll)
@@ -249,43 +175,40 @@ order = ["1_same_or_next_day", "2_within_week", "3_within_month",
 labels = ["same/next day", "2-7 days", "8-30 days", "31-90 days", ">90 days", "no email found"]
 r = roll.set_index("gap_bucket").reindex(order)
 fig, ax = plt.subplots(figsize=(10, 5))
-ax.barh(labels[::-1], r["n_clients"][::-1], color="#2a78d6")
+ax.barh(labels[::-1], r["n_clients"][::-1].fillna(0), color="#2a78d6")
 for i, v in enumerate(r["n_clients"][::-1]):
     if pd.notna(v):
         ax.text(v, i, f" {int(v):,} ({r['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
 ax.set_xlabel("clients")
-ax.set_title("Where the last email decision sits relative to the 1012 change", fontweight="bold")
+ax.set_title("Where the last email decision sits relative to the 1012 change (CPC_RB_PREF flips)",
+             fontweight="bold")
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [4] Q2 — day-level gaps 0-90 + histogram (the chart that decides it)
+# %% [4] day-level gaps 0-90 + histogram
 SQL_DAYS = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012                 -- email consent switch
-      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
-      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
-    -- one row per client: their most recent flip
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
 ),
 last_email AS (
     SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND t.TREATMT_STRT_DT <= f.flip_dt
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
-    -- one row per client: the email CLOSEST to the flip
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 )
-SELECT f.flip_dt - em.email_dt AS gap_days,   -- days between email and flip
+SELECT f.flip_dt - em.email_dt AS gap_days,
        COUNT(*)                AS n_clients
 FROM flips f
 JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
-WHERE f.flip_dt - em.email_dt <= 90           -- chart window: first 90 days only
+WHERE f.flip_dt - em.email_dt <= 90
 GROUP BY 1
 ORDER BY 1
 """
@@ -300,23 +223,19 @@ ax.annotate(f"day 0-1: {d01:,}", xy=(1, dy[dy["gap_days"] <= 1]["n_clients"].max
             arrowprops=dict(arrowstyle="->", color="#52514e"))
 ax.set_xlabel("days from last email decision to the 1012 change")
 ax.set_ylabel("clients")
-ax.set_title("Most recent 1012 change to No (18 mo) — days since last email decision\n"
+ax.set_title("1012 standing became No (pinned window) — days since last email decision\n"
              "Descriptive timing only: nearest prior decision record; no attribution implied.",
              fontweight="bold")
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [5] what WAS that last email? campaign (MNE) mix of the matched decisions
-# Same two CTEs; instead of the gap we show which campaign the last email belonged to.
+# %% [5] campaign (MNE) mix of the matched last email
 SQL_MNE = """
 WITH flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012                 -- email consent switch
-      AND CLNT_CONSENT_TYP = 5002        -- flipped to No
-      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
-    -- one row per client: their most recent flip
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
 ),
 last_email AS (
     SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt,
@@ -324,15 +243,14 @@ last_email AS (
     FROM flips f
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND t.TREATMT_STRT_DT <= f.flip_dt
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
-    -- one row per client: the email CLOSEST to the flip
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
 )
 SELECT em.mne,
-       COUNT(*)                                              AS n_clients,
+       COUNT(*)                                                     AS n_clients,
        SUM(CASE WHEN f.flip_dt - em.email_dt <= 7 THEN 1 ELSE 0 END) AS n_within_week
 FROM flips f
 JOIN last_email em ON em.CLNT_NO = f.CLNT_NO
@@ -342,172 +260,43 @@ ORDER BY 2 DESC
 mne = edw_pd(SQL_MNE)
 display(mne.head(20))
 
-# %% [6] WIDER LENS — 1002 / 1012 / 1014: monthly flips to No, side by side
-# Same chart as Q0, one panel per switch. Kept at the bottom so the 1012 story stays focused.
-# 1002 = entity Do-Not-Solicit; 1012 = Banking E-Mail consent; 1014 = decisioning-read switch.
-SQL_3SW = """
-SELECT PREF_ID,
-       TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
-         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
-         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
-       COUNT(*)                 AS n_change_events,
-       COUNT(DISTINCT CLNT_NO)  AS n_clients
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID IN (1002, 1012, 1014)
-  AND CLNT_CONSENT_TYP = 5002                       -- changed to No
-  AND CHG_TMSTMP >= DATE '2024-01-01'               -- full data floor
-GROUP BY 1, 2
-ORDER BY 1, 2
-"""
-sw = edw_pd(SQL_3SW)
-display(sw.pivot_table(index="chg_month", columns="PREF_ID",
-                       values="n_clients", aggfunc="sum", fill_value=0))
-
-fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-for ax, pid in zip(axes, [1002, 1012, 1014]):
-    d = sw[sw["PREF_ID"] == pid]
-    ax.bar(d["chg_month"], d["n_clients"], color="#2a78d6")
-    ax.set_title(f"{pid} changed to No — clients per month · total {d['n_clients'].sum():,}",
-                 fontweight="bold", fontsize=11, loc="left")
-    ax.set_ylabel("clients")
-    ax.spines[["top", "right"]].set_visible(False)
-axes[-1].tick_params(axis="x", rotation=45)
-plt.tight_layout(); plt.show()
-
-# %% [7] WHO WRITES EACH SWITCH — APP_SYS_CD by PREF_ID and direction, since 2024
-# Which systems feed these switches. Yes(5001) vs No(5002) split shows what each
-# system is doing (opt-in capture vs opt-out writes).
-SQL_WRITERS = """
-SELECT PREF_ID, APP_SYS_CD, CLNT_CONSENT_TYP,
-       COUNT(*)                 AS n_rows,
-       COUNT(DISTINCT CLNT_NO)  AS n_clients
-FROM DDWV01.CPC_RB_PREF_LOG
-WHERE PREF_ID IN (1002, 1012, 1014)
-  AND CHG_TMSTMP >= DATE '2024-01-01'
-GROUP BY 1, 2, 3
-ORDER BY 1, 4 DESC
-"""
-wr = edw_pd(SQL_WRITERS)
-
-# APP_SYS_CD decode — official Data Dictionary valid values (2026-08-13 screenshot),
-# full list in schemas/cpc_rb_pref_log_schema.md. 7025/7030 are context-dependent
-# (CPC-PC decodes them CASL Tool / ADHOC Data Source).
+# %% [6] writers of the standing No's (CPC_RB_PREF) — who set the current state
+wr2 = edw_pd("""
+SELECT APP_SYS_CD, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+GROUP BY 1 ORDER BY 2 DESC
+""")
 SYS_DESC = {
-    7001: "Sales Platform (branch/service delivery staff)",
-    7002: "DI Client Source",
-    7003: "Royal Direct / Client View (contact centre)",
-    7004: "Online Banking",
-    7005: "Service Platform",
-    7006: "RBC Banking (STaR UI, batch maintenance/purge)",
-    7007: "RBC Express",
-    7008: "DS Client Source",
-    7009: "BridgeTrack",
-    7010: "CASPER",
-    7012: "Retail Banking Investment System F200",
-    7013: "Retail Banking Investment System 5G10",
-    7014: "Term Investment System 4V00",
-    7015: "SAP / RCT-LINX desktop",
-    7016: "RBC.COM",
-    7017: "D&H/AMIA/CMG (telemarketer)",
-    7018: "CART",
-    7019: "IRIS",
-    7020: "Exact Target (email ESP)",
-    7021: "TSYS",
-    7022: "RD Fulfillment",
-    7023: "Assisted Multi Product Application",
-    7024: "VOX (telemarketing vendor)",
-    7025: "ZEDD telemarketing / CASL Tool (context-dep.)",
-    7026: "APAC (telemarketing vendor)",
-    7027: "D&H",
-    7028: "CPC-CA (MCA)",
-    7029: "RCL TPA",
-    7030: "GISP (WM) / ADHOC Data Source (context-dep.)",
-    7999: "Default Application System",
+    7001: "Sales Platform (branch/service delivery staff)", 7002: "DI Client Source",
+    7003: "Royal Direct / Client View (contact centre)", 7004: "Online Banking",
+    7005: "Service Platform", 7006: "RBC Banking (STaR UI, batch/purge)",
+    7007: "RBC Express", 7008: "DS Client Source", 7009: "BridgeTrack", 7010: "CASPER",
+    7012: "Retail Banking Investment System F200", 7013: "Retail Banking Investment System 5G10",
+    7014: "Term Investment System 4V00", 7015: "SAP / RCT-LINX desktop", 7016: "RBC.COM",
+    7017: "D&H/AMIA/CMG (telemarketer)", 7018: "CART", 7019: "IRIS",
+    7020: "Exact Target (email ESP)", 7021: "TSYS", 7022: "RD Fulfillment",
+    7023: "Assisted Multi Product Application", 7024: "VOX (telemarketing vendor)",
+    7025: "ZEDD telemarketing / CASL Tool (context-dep.)", 7026: "APAC (telemarketing vendor)",
+    7027: "D&H", 7028: "CPC-CA (MCA)", 7029: "RCL TPA",
+    7030: "GISP (WM) / ADHOC Data Source (context-dep.)", 7999: "Default Application System",
     99999: "batch update (SRF consolidation)",
 }
+wr2["system"] = [SYS_DESC.get(c, "?? not in dictionary") for c in wr2["APP_SYS_CD"]]
+wr2["share_pct"] = (wr2["n_clients"] / wr2["n_clients"].sum() * 100).round(1)
+display(wr2)
 
-for pid in [1002, 1012, 1014]:
-    print(f"--- PREF_ID {pid}: rows by writing system x consent value ---")
-    p = (wr[wr["PREF_ID"] == pid]
-         .pivot_table(index="APP_SYS_CD", columns="CLNT_CONSENT_TYP",
-                      values="n_rows", aggfunc="sum", fill_value=0))
-    p["TOTAL"] = p.sum(axis=1)
-    p["share_pct"] = (p["TOTAL"] / p["TOTAL"].sum() * 100).round(1)   # % of this switch's rows
-    p.insert(0, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in p.index])
-    display(p.sort_values("TOTAL", ascending=False))
-
-# %% [8] GAP ANALYSIS x 3 SWITCHES — same last-email-decision logic for 1002 / 1012 / 1014
-# Identical CTEs as Q1, parameterized by switch. Descriptive timing only, no attribution.
-SQL_GAP_TPL = """
-WITH flips AS (
-    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = __PID__                -- this switch
-      AND CLNT_CONSENT_TYP = 5002          -- flipped to No
-      AND CHG_TMSTMP >= DATE '2025-02-01'   -- pinned window (reruns reproduce exactly)
-    -- one row per client: their most recent flip
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
-),
-last_email AS (
-    SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
-    FROM flips f
-    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
-      ON  t.CLNT_NO = f.CLNT_NO
-      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
-      AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
-    -- one row per client: the email CLOSEST to the flip
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
-)
-SELECT CASE WHEN em.email_dt IS NULL           THEN '6_no_email_found'
-            WHEN f.flip_dt - em.email_dt <= 1  THEN '1_same_or_next_day'
-            WHEN f.flip_dt - em.email_dt <= 7  THEN '2_within_week'
-            WHEN f.flip_dt - em.email_dt <= 30 THEN '3_within_month'
-            WHEN f.flip_dt - em.email_dt <= 90 THEN '4_within_quarter'
-            ELSE                                    '5_over_90_days' END AS gap_bucket,
-       COUNT(*)                                                          AS n_clients
-FROM flips f
-LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO   -- LEFT: keep clients with no email
-GROUP BY 1
-ORDER BY 1
-"""
-order = ["1_same_or_next_day", "2_within_week", "3_within_month",
-         "4_within_quarter", "5_over_90_days", "6_no_email_found"]
-gap3 = {}
-for pid in [1002, 1012, 1014]:
-    g = edw_pd(SQL_GAP_TPL.replace("__PID__", str(pid)))
-    g["share_pct"] = (g["n_clients"] / g["n_clients"].sum() * 100).round(1)
-    gap3[pid] = g.set_index("gap_bucket").reindex(order)
-    print(f"--- PREF_ID {pid} -> No, last 18 months: n = {int(g['n_clients'].sum()):,} ---")
-    display(gap3[pid])
-
-labels = ["same/next day", "2-7 days", "8-30 days", "31-90 days", ">90 days", "no email found"]
-fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
-for ax, pid in zip(axes, [1002, 1012, 1014]):
-    d = gap3[pid]
-    ax.barh(labels[::-1], d["n_clients"][::-1].fillna(0), color="#2a78d6")
-    for i, (v, s) in enumerate(zip(d["n_clients"][::-1], d["share_pct"][::-1])):
-        if pd.notna(v):
-            ax.text(v, i, f" {int(v):,} ({s}%)", va="center", fontsize=9)
-    ax.set_title(f"{pid} → No · n={int(d['n_clients'].sum()):,}", fontweight="bold", loc="left")
-    ax.spines[["top", "right"]].set_visible(False)
-fig.suptitle("Days from last email decision to the flip — three switches, same logic", fontweight="bold")
-plt.tight_layout(); plt.show()
-
-# %% [9] THE OTHER SIDE OF THE EQUATION — distinct clients emailed per month (all of them)
-# Denominator context: every client with at least one email decision that month,
-# counted once regardless of how many emails. Decision records, not delivery proof.
+# %% [7] the other side of the equation — distinct clients emailed per month (unchanged from v1)
 SQL_EMAILED = """
 SELECT TRIM(EXTRACT(YEAR FROM TREATMT_STRT_DT)) || '-' ||
          TRIM(CASE WHEN EXTRACT(MONTH FROM TREATMT_STRT_DT) < 10 THEN '0' ELSE '' END) ||
          TRIM(EXTRACT(MONTH FROM TREATMT_STRT_DT))  AS email_month,
-       COUNT(*)                 AS n_email_decisions,
-       COUNT(DISTINCT CLNT_NO)  AS n_clients_emailed   -- one per client per month
+       CAST(COUNT(*) AS BIGINT)  AS n_email_decisions,
+       COUNT(DISTINCT CLNT_NO)   AS n_clients_emailed   -- one per client per month
 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
 WHERE TREATMT_STRT_DT >= DATE '2025-02-01'   -- pinned window, same frame as the flips
   AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-        OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+        OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
 GROUP BY 1
 ORDER BY 1
 """
@@ -525,46 +314,3 @@ ax.set_title("Clients with at least one email decision, per month (each client c
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
-
-# %% [10] IF WE SHOW ONE THING — clients emailed vs 1012 flips, same months, side by side
-# Uses ONLY the two sources the audience trusts (tactic events + CPC). No vendor
-# feedback, no attribution. One comparison per row. Heavy query (~5-10 min): re-scans
-# the tactic table like [9].
-SQL_ONE = """
-WITH emailed AS (
-    -- clients with at least one email decision that month, counted once
-    SELECT TRIM(EXTRACT(YEAR FROM TREATMT_STRT_DT)) || '-' ||
-             TRIM(CASE WHEN EXTRACT(MONTH FROM TREATMT_STRT_DT) < 10 THEN '0' ELSE '' END) ||
-             TRIM(EXTRACT(MONTH FROM TREATMT_STRT_DT))  AS ym,
-           COUNT(DISTINCT CLNT_NO)                      AS clients_emailed
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-    WHERE TREATMT_STRT_DT >= DATE '2025-02-01'
-      AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-            OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
-    GROUP BY 1
-),
-flips AS (
-    -- clients whose Banking E-Mail consent (1012) changed to No that month
-    SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
-             TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
-             TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS ym,
-           COUNT(DISTINCT CLNT_NO)                                AS cpc_1012_to_no
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2025-02-01'
-    GROUP BY 1
-)
-SELECT e.ym                                    AS month_,
-       e.clients_emailed,
-       f.cpc_1012_to_no,
-       CAST(1000000.0 * f.cpc_1012_to_no / NULLIF(e.clients_emailed, 0)
-            AS DECIMAL(8,1))                   AS flips_per_million_emailed
-FROM emailed e
-LEFT JOIN flips f ON f.ym = e.ym
-ORDER BY 1
-"""
-one = edw_pd(SQL_ONE)
-display(one)
-print(f"18-month medians: {one['clients_emailed'].median()/1e6:.1f}M clients emailed/mo, "
-      f"{one['cpc_1012_to_no'].median():.0f} flips/mo, "
-      f"{one['flips_per_million_emailed'].median():.0f} flips per MILLION emailed clients")
