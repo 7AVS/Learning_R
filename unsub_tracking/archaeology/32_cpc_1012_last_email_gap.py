@@ -525,3 +525,46 @@ ax.set_title("Clients with at least one email decision, per month (each client c
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
+
+# %% [10] IF WE SHOW ONE THING — clients emailed vs 1012 flips, same months, side by side
+# Uses ONLY the two sources the audience trusts (tactic events + CPC). No vendor
+# feedback, no attribution. One comparison per row. Heavy query (~5-10 min): re-scans
+# the tactic table like [9].
+SQL_ONE = """
+WITH emailed AS (
+    -- clients with at least one email decision that month, counted once
+    SELECT TRIM(EXTRACT(YEAR FROM TREATMT_STRT_DT)) || '-' ||
+             TRIM(CASE WHEN EXTRACT(MONTH FROM TREATMT_STRT_DT) < 10 THEN '0' ELSE '' END) ||
+             TRIM(EXTRACT(MONTH FROM TREATMT_STRT_DT))  AS ym,
+           COUNT(DISTINCT CLNT_NO)                      AS clients_emailed
+    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+    WHERE TREATMT_STRT_DT >= DATE '2025-02-01'
+      AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+            OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
+    GROUP BY 1
+),
+flips AS (
+    -- clients whose Banking E-Mail consent (1012) changed to No that month
+    SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+             TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+             TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS ym,
+           COUNT(DISTINCT CLNT_NO)                                AS cpc_1012_to_no
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY 1
+)
+SELECT e.ym                                    AS month_,
+       e.clients_emailed,
+       f.cpc_1012_to_no,
+       CAST(1000000.0 * f.cpc_1012_to_no / NULLIF(e.clients_emailed, 0)
+            AS DECIMAL(8,1))                   AS flips_per_million_emailed
+FROM emailed e
+LEFT JOIN flips f ON f.ym = e.ym
+ORDER BY 1
+"""
+one = edw_pd(SQL_ONE)
+display(one)
+print(f"18-month medians: {one['clients_emailed'].median()/1e6:.1f}M clients emailed/mo, "
+      f"{one['cpc_1012_to_no'].median():.0f} flips/mo, "
+      f"{one['flips_per_million_emailed'].median():.0f} flips per MILLION emailed clients")
