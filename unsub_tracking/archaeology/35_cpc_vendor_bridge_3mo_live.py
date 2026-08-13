@@ -197,7 +197,11 @@ WITH flips AS (
 win_events AS (
     -- ALL unsub events 0-1 days before the flip (the pipe is a next-day batch)
     SELECT DISTINCT f.CLNT_NO,
-           CASE WHEN UPPER(m.TREATMENT_ID) = 'DEFAULT' THEN 'UNTAGGED'
+           -- campaign rows = program emails ONLY: id must start with 7 digits (the date part)
+           -- then a 3-letter code. DEFAULT and anything malformed -> UNTAGGED, kept visible.
+           CASE WHEN UPPER(m.TREATMENT_ID) = 'DEFAULT'                             THEN 'UNTAGGED'
+                WHEN SUBSTR(m.TREATMENT_ID, 1, 7) NOT BETWEEN '0000000' AND '9999999' THEN 'UNTAGGED'
+                WHEN UPPER(SUBSTR(m.TREATMENT_ID, 8, 3)) NOT BETWEEN 'AAA' AND 'ZZZ'  THEN 'UNTAGGED'
                 ELSE UPPER(SUBSTR(m.TREATMENT_ID, 8, 3)) END AS mne
     FROM flips f
     JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
