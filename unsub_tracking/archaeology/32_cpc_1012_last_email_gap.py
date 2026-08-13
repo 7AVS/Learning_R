@@ -516,9 +516,11 @@ display(emd)
 
 fig, ax = plt.subplots(figsize=(12, 4.5))
 ax.bar(emd["email_month"], emd["n_clients_emailed"], color="#2a78d6")
-ax.set_ylabel("distinct clients emailed")
-ax.set_title("Clients with an email decision per month (deduplicated) — the scale of the email program\n"
-             "vs ~100-200 CPC 1012 flips to No per month",
+for x, v in zip(emd["email_month"], emd["n_clients_emailed"]):
+    ax.text(x, v, f"{v/1e6:.1f}M", ha="center", va="bottom", fontsize=8)
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v/1e6:.0f}M"))
+ax.set_ylabel("distinct clients (millions)")
+ax.set_title("Clients with at least one email decision, per month (each client counted once)",
              fontweight="bold")
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
