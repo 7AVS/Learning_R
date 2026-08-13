@@ -44,6 +44,12 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
+# %% [C] WINDOWS - one convention, used by every cell below
+WIN_FLOOR  = "2025-02-01"   # flips window: last 18 months, pinned
+LOOK_FLOOR = "2024-02-01"   # history lookback: 12 months BEFORE the window opens,
+                            # so early-window flips have real lookback and
+                            # 'no_*_found' means none in 12-30 months, not an artifact
+
 # %% [P1] PROBE — 1012 consent mix on CPC_RB_PREF (expect ~3.26M at No, per pack 33)
 display(edw_pd("""
 SELECT CLNT_CONSENT_TYP, CAST(COUNT(*) AS BIGINT) AS n_clients
@@ -80,7 +86,7 @@ last_email AS (
     JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
       AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
-      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND t.TREATMT_STRT_DT >= DATE '2024-02-01'   -- lookback: 12mo before window
       AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
             OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
     -- one row per client: the email CLOSEST to the flip
@@ -99,7 +105,7 @@ SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
        COUNT(*)                                              AS n_clients
 FROM DDWV01.CPC_RB_PREF
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-  AND CHG_TMSTMP >= DATE '2024-01-01'   -- full data floor
+  AND CHG_TMSTMP >= DATE '2025-02-01'   -- 18-month window, pinned
 GROUP BY 1
 ORDER BY 1
 """
@@ -111,7 +117,7 @@ ax.bar(tot["chg_month"], tot["n_clients"], color="#2a78d6")
 for x, v in zip(tot["chg_month"], tot["n_clients"]):
     ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=7.5, rotation=90)
 ax.set_ylabel("clients")
-ax.set_title(f"1012 standing became No, by month of last change (CPC_RB_PREF) · total since 2024: {tot['n_clients'].sum():,}",
+ax.set_title(f"1012 standing became No, by month of last change (CPC_RB_PREF) · 18mo total: {tot['n_clients'].sum():,}",
              fontweight="bold")
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
