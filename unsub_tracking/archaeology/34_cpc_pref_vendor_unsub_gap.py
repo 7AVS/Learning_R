@@ -94,7 +94,7 @@ nearest AS (
     FROM flips f
     JOIN vt_unsub34 u
       ON  u.CLNT_NO = f.CLNT_NO
-      AND u.unsub_tm <= f.CHG_TMSTMP + INTERVAL '1' DAY   -- unsub on/before the flip
+      AND CAST(u.unsub_tm AS DATE) <= f.flip_dt           -- unsub on/before the flip
     -- one row per client: the unsub CLOSEST to the flip
     QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_tm DESC) = 1
 )
