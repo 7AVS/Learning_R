@@ -359,25 +359,41 @@ ORDER BY 1, 4 DESC
 """
 wr = edw_pd(SQL_WRITERS)
 
-# APP_SYS_CD decode — schemas/cpc_rb_pref_log_schema.md (dictionary pics 2026-07-15)
+# APP_SYS_CD decode — official Data Dictionary valid values (2026-08-13 screenshot),
+# full list in schemas/cpc_rb_pref_log_schema.md. 7025/7030 are context-dependent
+# (CPC-PC decodes them CASL Tool / ADHOC Data Source).
 SYS_DESC = {
-    7001: "Sales Platform / branch staff",
-    7002: "DI staff",
-    7003: "Royal Direct contact centre",
+    7001: "Sales Platform (branch/service delivery staff)",
+    7002: "DI Client Source",
+    7003: "Royal Direct / Client View (contact centre)",
     7004: "Online Banking",
     7005: "Service Platform",
-    7006: "RBC Banking internal/batch (STAR UI, purge)",
-    7009: "Bridgetrack/Sapient",
-    7015: "SAP (RCT/LINUX)",
+    7006: "RBC Banking (STaR UI, batch maintenance/purge)",
+    7007: "RBC Express",
+    7008: "DS Client Source",
+    7009: "BridgeTrack",
+    7010: "CASPER",
+    7012: "Retail Banking Investment System F200",
+    7013: "Retail Banking Investment System 5G10",
+    7014: "Term Investment System 4V00",
+    7015: "SAP / RCT-LINX desktop",
     7016: "RBC.COM",
-    7017: "telemarketing vendor",
+    7017: "D&H/AMIA/CMG (telemarketer)",
+    7018: "CART",
+    7019: "IRIS",
     7020: "Exact Target (email ESP)",
     7021: "TSYS",
-    7024: "telemarketing vendor",
-    7025: "telemarketing vendor",
-    7026: "telemarketing vendor",
-    7999: "default",
-    99999: "batch SRF consolidation",
+    7022: "RD Fulfillment",
+    7023: "Assisted Multi Product Application",
+    7024: "VOX (telemarketing vendor)",
+    7025: "ZEDD telemarketing / CASL Tool (context-dep.)",
+    7026: "APAC (telemarketing vendor)",
+    7027: "D&H",
+    7028: "CPC-CA (MCA)",
+    7029: "RCL TPA",
+    7030: "GISP (WM) / ADHOC Data Source (context-dep.)",
+    7999: "Default Application System",
+    99999: "batch update (SRF consolidation)",
 }
 
 for pid in [1002, 1012, 1014]:
