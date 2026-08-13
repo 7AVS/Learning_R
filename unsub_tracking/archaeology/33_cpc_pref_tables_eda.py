@@ -72,7 +72,7 @@ for t in TABLES:
     try:
         display(edw_pd(f"""
 SELECT '{t}' AS table_name,
-       COUNT(*)                 AS n_rows,
+       CAST(COUNT(*) AS BIGINT) AS n_rows,      -- BIGINT: MTHLY >2.1B rows overflows COUNT
        COUNT(DISTINCT CLNT_NO)  AS n_clients,
        COUNT(DISTINCT PREF_ID)  AS n_pref_ids
 FROM {t}
@@ -102,12 +102,13 @@ for t, s in samples.items():
 # multiplies everything. Count rows per snapshot period to see the cadence and
 # find the column to filter on (edit the column name below if [3] shows a different one).
 MTHLY = "DDWV01.CPC_RB_PREF_MTHLY"
-MTHLY_SNAP_COL = None   # <- set from the [3] sample, e.g. "MTH_END_DT"; None = skip
+MTHLY_SNAP_COL = "MTH_END_DT"   # confirmed from [3]/[5] run 2026-08-13
 if MTHLY in samples and MTHLY_SNAP_COL:
     display(edw_pd(f"""
 SELECT {MTHLY_SNAP_COL} AS snapshot_period,
-       COUNT(*) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients
+       CAST(COUNT(*) AS BIGINT) AS n_rows, COUNT(DISTINCT CLNT_NO) AS n_clients
 FROM {MTHLY}
+WHERE PREF_ID = 1012          -- one switch only: full-table GROUP BY is >2.1B rows
 GROUP BY 1 ORDER BY 1 DESC
 """))
 else:
@@ -143,3 +144,60 @@ GROUP BY 2 ORDER BY 3 DESC
         print(f"{t}: 1012 standing failed — {str(e)[:200]}")
 # NOTE: for the MTHLY table this counts across ALL snapshots until [6]'s column is
 # known — read its numbers only after adding the month-end filter.
+
+# %% [8] TRUE FLIP TIMING from the CURRENT-STATE table
+# CPC_RB_PREF row = client's standing NOW + CHG_TMSTMP of the LAST change.
+# Grouping the 3.26M standing No's by change-month = monthly arrivals into No.
+# (Censored only by later re-flips, which the log showed are rare.)
+# THIS replaces the pack-32 log-based monthly volume — the log holds ~1% of No's.
+arr = edw_pd("""
+SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       COUNT(*)                                              AS n_clients_arrived_at_no
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2024-01-01'
+GROUP BY 1
+ORDER BY 1
+""")
+display(arr)
+fig, ax = plt.subplots(figsize=(12, 4.5))
+ax.bar(arr["chg_month"], arr["n_clients_arrived_at_no"], color="#2a78d6")
+for x, v in zip(arr["chg_month"], arr["n_clients_arrived_at_no"]):
+    ax.text(x, v, f"{int(v):,}", ha="center", va="bottom", fontsize=8)
+ax.set_ylabel("clients")
+ax.set_title("1012: clients whose CURRENT standing became No, by month of last change (CPC_RB_PREF)
+"
+             "compare against the log-based ~140/mo from pack 32",
+             fontweight="bold")
+ax.tick_params(axis="x", rotation=45)
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
+
+# %% [9] WHO WROTE the standing No's — writers on the current-state table
+# Same writers question as pack 32 [7], but on the table that actually has the volume.
+wr2 = edw_pd("""
+SELECT APP_SYS_CD, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+GROUP BY 1 ORDER BY 2 DESC
+""")
+SYS_DESC = {
+    7001: "Sales Platform (branch/service delivery staff)", 7002: "DI Client Source",
+    7003: "Royal Direct / Client View (contact centre)", 7004: "Online Banking",
+    7005: "Service Platform", 7006: "RBC Banking (STaR UI, batch/purge)",
+    7007: "RBC Express", 7008: "DS Client Source", 7009: "BridgeTrack", 7010: "CASPER",
+    7012: "Retail Banking Investment System F200", 7013: "Retail Banking Investment System 5G10",
+    7014: "Term Investment System 4V00", 7015: "SAP / RCT-LINX desktop", 7016: "RBC.COM",
+    7017: "D&H/AMIA/CMG (telemarketer)", 7018: "CART", 7019: "IRIS",
+    7020: "Exact Target (email ESP)", 7021: "TSYS", 7022: "RD Fulfillment",
+    7023: "Assisted Multi Product Application", 7024: "VOX (telemarketing vendor)",
+    7025: "ZEDD telemarketing / CASL Tool (context-dep.)", 7026: "APAC (telemarketing vendor)",
+    7027: "D&H", 7028: "CPC-CA (MCA)", 7029: "RCL TPA",
+    7030: "GISP (WM) / ADHOC Data Source (context-dep.)", 7999: "Default Application System",
+    99999: "batch update (SRF consolidation)",
+}
+wr2["system"] = [SYS_DESC.get(c, "?? not in dictionary") for c in wr2["APP_SYS_CD"]]
+wr2["share_pct"] = (wr2["n_clients"] / wr2["n_clients"].sum() * 100).round(1)
+display(wr2)
