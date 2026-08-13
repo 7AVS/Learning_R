@@ -307,3 +307,109 @@ SELECT attributed_mne, COUNT(*) AS n_clients
 FROM per_client
 GROUP BY 1 ORDER BY 2 DESC
 """))
+
+# %% [6] ESP-written changes (APP_SYS_CD 7020) - vendor-feedback accounting, no window
+# Reverse direction of [4]: start from the 1012 switch-offs WRITTEN BY the email ESP
+# itself (7020 = Exact Target). These writes originate inside the email channel, so the
+# vendor tables should hold the unsubscribe that caused each one. Lookback widened to
+# 2024-01-01 (not the April slice floor) - the question is "does the trail exist at
+# all", not "is it inside the window". Every 7020-written flip lands in exactly one
+# bucket. Client filter pushed into MASTER first, so the wide scan stays small.
+esp = edw_pd("""
+WITH esp_flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+      AND APP_SYS_CD = 7020                             -- written by the ESP itself
+),
+vf AS (
+    -- every vendor identity row for JUST these clients (small driver, wide history)
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    JOIN esp_flips f ON f.CLNT_NO = m.CLNT_NO
+    WHERE m.load_tm >= DATE '2023-10-01'                -- 3-mo load-stamp margin on 2024 floor
+    GROUP BY 1, 2, 3
+),
+unsub4 AS (
+    -- ALL their disposition-4 events since 2024, before OR after the write
+    SELECT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
+    FROM vf v
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+      ON  e.consumer_id_hashed = v.consumer_id_hashed
+      AND e.TREATMENT_ID       = v.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+),
+per_client AS (
+    SELECT f.CLNT_NO, f.flip_dt,
+           MAX(CASE WHEN u.unsub_dt <= f.flip_dt THEN u.unsub_dt END) AS last_unsub_before,
+           MIN(CASE WHEN u.unsub_dt >  f.flip_dt THEN u.unsub_dt END) AS first_unsub_after,
+           MAX(CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)     AS in_master
+    FROM esp_flips f
+    LEFT JOIN (SELECT DISTINCT CLNT_NO FROM vf) v ON v.CLNT_NO = f.CLNT_NO
+    LEFT JOIN unsub4 u                            ON u.CLNT_NO = f.CLNT_NO
+    GROUP BY 1, 2
+)
+SELECT CASE
+         WHEN flip_dt - last_unsub_before <= 1  THEN '1_unsub_0_1d_before_write'
+         WHEN flip_dt - last_unsub_before <= 30 THEN '2_unsub_2_30d_before_write'
+         WHEN last_unsub_before IS NOT NULL     THEN '3_unsub_over_30d_before_write'
+         WHEN first_unsub_after IS NOT NULL     THEN '4_unsub_only_AFTER_write'
+         WHEN in_master = 1                     THEN '5_in_vendor_tables_no_unsub_ever'
+         ELSE                                        '6_clnt_no_absent_from_master' END AS evidence,
+       COUNT(*) AS n_clients
+FROM per_client
+GROUP BY 1 ORDER BY 1
+""")
+esp["share_pct"] = (esp["n_clients"] / esp["n_clients"].sum() * 100).round(1)
+print("--- 7020-written 1012 switch-offs: where is the unsubscribe that caused each write? ---")
+print("--- (bucket 6 caveat: master rows loaded before 2023-10 are outside this scan) ---")
+display(esp)
+
+# %% [7] The untraced ESP writes - raw rows, what little vendor trail exists (15 clients)
+# Buckets 5 and 6 from [6]: the ESP wrote the switch, but no unsubscribe event exists
+# anywhere since 2024. Per client: the CPC write, how many identity rows MASTER holds,
+# how many events of ANY disposition, and the last time any email activity was seen.
+display(edw_pd("""
+WITH esp_flips AS (
+    SELECT CLNT_NO, CHG_TMSTMP, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+      AND APP_SYS_CD = 7020
+),
+vf AS (
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID
+    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    JOIN esp_flips f ON f.CLNT_NO = m.CLNT_NO
+    WHERE m.load_tm >= DATE '2023-10-01'
+    GROUP BY 1, 2, 3
+),
+ev AS (
+    SELECT v.CLNT_NO,
+           COUNT(*)                                                    AS n_events_any_disp,
+           SUM(CASE WHEN e.disposition_cd = 4 THEN 1 ELSE 0 END)       AS n_unsub_events,
+           MAX(e.disposition_dt_tm)                                    AS last_event_tm
+    FROM vf v
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
+      ON  e.consumer_id_hashed = v.consumer_id_hashed
+      AND e.TREATMENT_ID       = v.TREATMENT_ID
+    WHERE e.disposition_dt_tm >= DATE '2024-01-01'
+    GROUP BY 1
+),
+mrows AS (
+    SELECT CLNT_NO, COUNT(*) AS n_master_identity_rows
+    FROM vf GROUP BY 1
+)
+SELECT f.CLNT_NO,
+       f.CHG_TMSTMP                                   AS cpc_write_tm,
+       COALESCE(mr.n_master_identity_rows, 0)         AS n_master_identity_rows,
+       COALESCE(ev.n_events_any_disp, 0)              AS n_events_any_disp,
+       ev.last_event_tm
+FROM esp_flips f
+LEFT JOIN mrows mr ON mr.CLNT_NO = f.CLNT_NO
+LEFT JOIN ev       ON ev.CLNT_NO = f.CLNT_NO
+WHERE COALESCE(ev.n_unsub_events, 0) = 0              -- no disposition-4 anywhere since 2024
+SAMPLE 15
+"""))
