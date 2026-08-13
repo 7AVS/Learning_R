@@ -547,3 +547,104 @@ assert all(s == "STILL PRESENT" for _, s in _live_status), \
     "cleanup must not have touched live datasets - investigate immediately"
 
 print("housekeeping complete - sends_12m family removed, live reservoir intact")
+
+# UNSUB_TOPUP + CPC_PREF_1012_NO (2026-08) - fallback reservoir for archaeology/34's live-Teradata
+# analysis (34_cpc_pref_vendor_unsub_gap.py cell [1] gets TDWM-killed on the heavy EVENT->MASTER
+# join run live). unsub_base (cells [3]-[6]) only covers unsub_tm in [2025-07-01, 2026-07-01) -
+# these cells land the COMPLEMENT so archaeology/34b can rebuild pack 34's LOOK_FLOOR=2024-02-01
+# lookback and current flips entirely off HDFS. Same land()/monthly-bite/size-probe discipline as
+# cells [18]-[22]; unsub_topup/* is schema-identical to unsub_base/* (CLNT_NO, unsub_tm, TREATMENT_ID)
+# so 34b can read both with the same glob and UNION them.
+
+# %% [24] unsub_topup MONTHS - complement of unsub_base's covered range, monthly bites (same
+# -1mo/+1mo MASTER load_tm margin convention as q2_recipients/sends_cards_q2 above)
+def _month_bounds(y, m):
+    start = "%04d-%02d-01" % (y, m)
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    return start, "%04d-%02d-01" % (ny, nm)
+
+def _load_bounds(event_start, event_end):
+    sy, sm = int(event_start[:4]), int(event_start[5:7])
+    ey, em = int(event_end[:4]), int(event_end[5:7])
+    ls_y, ls_m = (sy - 1, 12) if sm == 1 else (sy, sm - 1)
+    le_y, le_m = (ey + 1, 1) if em == 12 else (ey, em + 1)
+    return "%04d-%02d-01" % (ls_y, ls_m), "%04d-%02d-01" % (le_y, le_m)
+
+_TOPUP_MONTHS = []
+# pre-range: BEFORE unsub_base's floor, matching pack 34's LOOK_FLOOR = 2024-02-01
+_y, _m = 2024, 2
+while (_y, _m) < (2025, 7):
+    _es, _ee = _month_bounds(_y, _m)
+    _ls, _le = _load_bounds(_es, _ee)
+    _TOPUP_MONTHS.append(("m%04d_%02d" % (_y, _m), _es, _ee, _ls, _le))
+    _y, _m = (_y + 1, 1) if _m == 12 else (_y, _m + 1)
+# post-range: AFTER unsub_base's ceiling. 2026-09-01 is a hardcoded literal bound (this file uses
+# no CURRENT_DATE anywhere) one calendar month past this cell's build date (2026-08-13) - if run
+# much later than 2026-09, extend the bound and re-run (land() re-pulls automatically on SQL change).
+_y, _m = 2026, 7
+while (_y, _m) < (2026, 9):
+    _es, _ee = _month_bounds(_y, _m)
+    _ls, _le = _load_bounds(_es, _ee)
+    _TOPUP_MONTHS.append(("m%04d_%02d" % (_y, _m), _es, _ee, _ls, _le))
+    _y, _m = (_y + 1, 1) if _m == 12 else (_y, _m + 1)
+
+print("unsub_topup bites to land (complement of unsub_base's 2025-07-01..2026-07-01 coverage):")
+for _t in _TOPUP_MONTHS:
+    print("  ", _t)
+
+# %% [25] SIZE PROBE - unlanded unsub_topup months only (event-only, no join, no DISTINCT)
+_unlanded_topup = [t for t in _TOPUP_MONTHS if not landed("unsub_topup/" + t[0])]
+if not _unlanded_topup:
+    print("SIZE PROBE - all unsub_topup months already landed - SKIP (nothing left to size)")
+else:
+    _probe_rows = []
+    for _name, _es, _ee, _ls, _le in _unlanded_topup:
+        _pdf = edw_pd("""
+SELECT COUNT(*) AS event_rows
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd = 4
+  AND disposition_dt_tm >= DATE '%s' AND disposition_dt_tm < DATE '%s'
+""" % (_es, _ee))
+        _probe_rows.append((_name, int(_pdf["event_rows"][0])))
+    _probe = pd.DataFrame(_probe_rows, columns=["month", "event_rows"])
+    print("SIZE PROBE - disp_cd=4 unsub_topup, unlanded months only:")
+    print(_probe.to_string(index=False))
+
+# %% [26] EXTRACT unsub_topup - monthly bites, same EVENT->MASTER shape as unsub_base cells [3]-[6]
+for _name, _es, _ee, _ls, _le in _TOPUP_MONTHS:
+    land("unsub_topup/" + _name, """
+SELECT DISTINCT m.CLNT_NO, e.disposition_dt_tm AS unsub_tm, m.TREATMENT_ID
+FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+INNER JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+  ON m.consumer_id_hashed = e.consumer_id_hashed AND m.TREATMENT_ID = e.TREATMENT_ID
+WHERE e.disposition_cd = 4
+  AND e.disposition_dt_tm >= DATE '%s' AND e.disposition_dt_tm < DATE '%s'
+  AND m.load_tm >= DATE '%s' AND m.load_tm < DATE '%s'
+""" % (_es, _ee, _ls, _le))
+
+# %% [27] VERIFICATION - unsub_topup readback: non-empty, date range matches the complement it was
+# meant to cover (proves the bites actually landed the gap, not a re-pull of unsub_base's own range)
+_topup_all = spark.read.parquet(BASE + "unsub_topup/*")
+_topup_rows = _topup_all.count()
+assert _topup_rows > 0, "unsub_topup landed but is EMPTY - investigate before 34b reads it"
+_topup_range = _topup_all.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
+print("unsub_topup total:", _topup_rows, "rows | unsub_tm range:", _topup_range["mn"], "to", _topup_range["mx"])
+print("unsub_base covers 2025-07-01..2026-07-01 (its own EVENT filter, cells [3]-[6]) - together")
+print("unsub_topup + unsub_base should span 2024-02-01 through this run's date, no gap")
+
+# %% [28] SIZE PROBE + EXTRACT cpc_pref_1012_no - current-state 1012=No slice off DDWV01.CPC_RB_PREF
+# (NOT the _LOG history table cell [7] pulls - CPC_RB_PREF is one row per CLNT_NO/PREF_ID, current
+# standing only). ~3.26M rows expected - single pull, no bites needed. Feeds 34b's flip cohort.
+print("size probe (rows to land):")
+print(edw_pd("""
+SELECT COUNT(*) AS rows_1012_no
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+"""))
+land("cpc_pref_1012_no", """
+SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS chg_dt, APP_SYS_CD
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+""")
+
+print("unsub_topup + cpc_pref_1012_no reservoir complete - feeds archaeology/34b_cpc_vendor_gap_spark.py")

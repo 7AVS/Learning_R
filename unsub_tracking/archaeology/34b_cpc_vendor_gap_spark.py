@@ -1,0 +1,157 @@
+# %% [markdown]
+# # 34b — CPC 1012 flips -> nearest prior VENDOR unsub, off the HDFS reservoir (Spark)
+#
+# Reservoir fallback for pack 34 (34_cpc_pref_vendor_unsub_gap.py), whose cell [1] gets killed
+# live by TDWM on the heavy EVENT->MASTER join. Same question, same windows, same buckets -
+# rebuilt entirely off cpc_reservoir_extract.py's landed parquet (unsub_base + unsub_topup +
+# cpc_pref_1012_no, cells [3]-[6] and [24]-[28]). NO Teradata in this file.
+#
+# **Descriptive only - no claims.** Proximity, not attribution, in either direction.
+# PREREQ: cpc_reservoir_extract.py cells [3]-[6] (unsub_base) and [24]-[28] (unsub_topup,
+# cpc_pref_1012_no) must be landed first.
+
+# %% [0] reservoir + helpers - read unsub_base + unsub_topup (union, deduped) and cpc_pref_1012_no
+from pyspark.sql import functions as F, Window as W
+import pandas as pd
+import matplotlib.pyplot as plt
+
+spark.sparkContext.setLogLevel("ERROR")          # silence Spark WARN noise - cosmetic only
+import logging, warnings
+logging.getLogger("py4j").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore")
+BASE = "hdfs:///user/427966379/unsub_cpc/"
+
+WIN_FLOOR  = "2025-02-01"   # flips window - same pin as pack 34
+LOOK_FLOOR = "2024-02-01"   # unsub lookback floor - same pin as pack 34
+
+ub = spark.read.parquet(BASE + "unsub_base/*")
+ut = spark.read.parquet(BASE + "unsub_topup/*")
+unsub = (ub.select("CLNT_NO", "unsub_tm", "TREATMENT_ID")
+           .unionByName(ut.select("CLNT_NO", "unsub_tm", "TREATMENT_ID"))
+           .dropDuplicates(["CLNT_NO", "unsub_tm"]))
+pref = spark.read.parquet(BASE + "cpc_pref_1012_no")   # one row per CLNT_NO: current 1012=No standing
+
+# PROOF, not prints - counts + date ranges of every source before any join runs on top of them
+_ub_r = ub.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
+_ut_r = ut.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
+_un_r = unsub.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
+_pf_r = pref.agg(F.min("chg_dt").alias("mn"), F.max("chg_dt").alias("mx")).collect()[0]
+
+print("[0] unsub_base   :", ub.count(), "rows |", _ub_r["mn"], "to", _ub_r["mx"])
+print("[0] unsub_topup  :", ut.count(), "rows |", _ut_r["mn"], "to", _ut_r["mx"])
+print("[0] unsub (union, deduped CLNT_NO+unsub_tm):", unsub.count(), "rows |", _un_r["mn"], "to", _un_r["mx"],
+      "| distinct clients:", unsub.select("CLNT_NO").distinct().count())
+print("[0] cpc_pref_1012_no:", pref.count(), "rows |", _pf_r["mn"], "to", _pf_r["mx"],
+      "| distinct clients:", pref.select("CLNT_NO").distinct().count())
+assert unsub.count() > 0 and pref.count() > 0, \
+    "reservoir empty - run cpc_reservoir_extract.py cells [3]-[6] and [24]-[28] first"
+
+# %% [1] flips (chg_dt >= WIN_FLOOR) -> nearest prior unsub per client (unsub_dt <= flip_dt, MAX unsub_dt)
+flips = pref.filter(F.col("chg_dt") >= WIN_FLOOR).select("CLNT_NO", F.col("chg_dt").alias("flip_dt"))
+
+unsub_l = unsub.filter(F.col("unsub_tm") >= LOOK_FLOOR).withColumn("unsub_dt", F.to_date("unsub_tm"))
+
+_w = W.partitionBy("CLNT_NO").orderBy(F.col("unsub_dt").desc())
+nearest = (flips.join(unsub_l, "CLNT_NO")
+                 .filter(F.col("unsub_dt") <= F.col("flip_dt"))
+                 .withColumn("rn", F.row_number().over(_w))
+                 .filter("rn = 1")
+                 .select("CLNT_NO", "unsub_dt"))
+
+gapped = (flips.join(nearest, "CLNT_NO", "left")             # LEFT: keep flips with no unsub (gap NULL)
+                .withColumn("gap_days", F.datediff(F.col("flip_dt"), F.col("unsub_dt")))
+                .cache())
+
+print("[1] flips (1012 -> No, chg_dt >=", WIN_FLOOR, "):", flips.count())
+print("[1] flips matched to a nearest prior unsub (lookback >=", LOOK_FLOOR, "):", nearest.count())
+print("[1] flips with NO prior unsub found:", gapped.filter(F.col("gap_days").isNull()).count())
+
+# %% [2] gap buckets - rollup + horizontal bar (same buckets/labels as pack 34 cell [3])
+gapped_b = gapped.withColumn("gap_bucket",
+    F.when(F.col("gap_days").isNull(), F.lit("6_no_unsub_found"))
+     .when(F.col("gap_days") <= 1, F.lit("1_same_or_next_day"))
+     .when(F.col("gap_days") <= 7, F.lit("2_within_week"))
+     .when(F.col("gap_days") <= 30, F.lit("3_within_month"))
+     .when(F.col("gap_days") <= 90, F.lit("4_within_quarter"))
+     .otherwise(F.lit("5_over_90_days")))
+
+roll = gapped_b.groupBy("gap_bucket").agg(F.count("*").alias("n_clients")).toPandas()
+roll["share_pct"] = (roll["n_clients"] / roll["n_clients"].sum() * 100).round(1)
+display(roll)
+
+order = ["1_same_or_next_day", "2_within_week", "3_within_month",
+         "4_within_quarter", "5_over_90_days", "6_no_unsub_found"]
+labels = ["same/next day", "2-7 days", "8-30 days", "31-90 days", ">90 days", "no unsub found"]
+r = roll.set_index("gap_bucket").reindex(order)
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.barh(labels[::-1], r["n_clients"][::-1].fillna(0), color="#2a78d6")
+for i, v in enumerate(r["n_clients"][::-1]):
+    if pd.notna(v):
+        ax.text(v, i, f" {int(v):,} ({r['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
+ax.set_xlabel("clients")
+ax.set_title("Where the nearest vendor unsub (disp=4) sits relative to the 1012 change\n"
+             "(reservoir: unsub_base + unsub_topup)", fontweight="bold")
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
+
+# %% [3] day-level 0-90 histogram (same style as pack 34 cell [4])
+vdy = (gapped.filter(F.col("gap_days").isNotNull() & (F.col("gap_days") <= 90))
+             .groupBy("gap_days").agg(F.count("*").alias("n_clients"))
+             .orderBy("gap_days").toPandas())
+display(vdy.head(15))
+
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.bar(vdy["gap_days"], vdy["n_clients"], width=0.9, color="#2a78d6")
+d01 = vdy[vdy["gap_days"] <= 1]["n_clients"].sum()
+ax.annotate(f"day 0-1: {d01:,}", xy=(1, vdy[vdy["gap_days"] <= 1]["n_clients"].max() if d01 else 0),
+            xytext=(8, vdy["n_clients"].max() * 0.9), fontsize=11, fontweight="bold",
+            arrowprops=dict(arrowstyle="->", color="#52514e"))
+ax.set_xlabel("days from vendor unsub to the 1012 change")
+ax.set_ylabel("clients")
+ax.set_title("1012 standing became No - days since nearest prior vendor unsub (disp=4)\n"
+             "Descriptive timing only; no attribution implied. (reservoir)", fontweight="bold")
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
+
+# %% [4] reverse direction - of vendor unsubbers (first unsub >= WIN_FLOOR), % who flip 1012 within
+# 90 days after (same logic as pack 34 cell [5]; flips here are ALL current 1012=No standings, unfiltered
+# by date, matching pack 34's unwindowed "flips" CTE in that cell)
+first_unsub = (unsub.filter(F.col("unsub_tm") >= WIN_FLOOR)
+                     .withColumn("unsub_dt", F.to_date("unsub_tm"))
+                     .groupBy("CLNT_NO").agg(F.min("unsub_dt").alias("first_unsub_dt")))
+
+all_flips = pref.select("CLNT_NO", F.col("chg_dt").alias("flip_dt"))
+
+rev = (first_unsub.join(all_flips, "CLNT_NO", "left")
+                   .withColumn("flipped_90d",
+                       F.when((F.col("flip_dt") >= F.col("first_unsub_dt")) &
+                              (F.col("flip_dt") < F.date_add(F.col("first_unsub_dt"), 90)), 1)
+                        .otherwise(0)))
+
+n_unsub_clients = first_unsub.select("CLNT_NO").distinct().count()
+n_flipped = rev.filter("flipped_90d = 1").select("CLNT_NO").distinct().count()
+pct = round(100.0 * n_flipped / n_unsub_clients, 2) if n_unsub_clients else 0
+print("[4] unsub clients (first unsub >=", WIN_FLOOR, "):", n_unsub_clients)
+print("[4] of those, flipped 1012 -> No within 90 days after:", n_flipped, "(", pct, "% )")
+print("[4] caveat: flips visible here are arrivals into CURRENT standing only - re-consented clients don't count.")
+
+# %% [5] BONUS - writers cut: APP_SYS_CD (the system that wrote the 1012 flip) for flips WITH an
+# unsub within 7 days vs flips with NO unsub found. Label: who writes the vendor-proximate No's vs the rest.
+gap_writer = gapped.join(pref.select("CLNT_NO", "APP_SYS_CD"), "CLNT_NO", "left")
+
+within7 = gap_writer.filter(F.col("gap_days").isNotNull() & (F.col("gap_days") <= 7)).cache()
+no_unsub = gap_writer.filter(F.col("gap_days").isNull()).cache()
+n7, nn = within7.count(), no_unsub.count()
+
+print("[5] writers cut - APP_SYS_CD distribution, flips WITH an unsub within 7 days (n =", n7, "):")
+display((within7.groupBy("APP_SYS_CD").agg(F.count("*").alias("clients"))
+                 .withColumn("pct", F.round(100.0 * F.col("clients") / n7, 1))
+                 .orderBy(F.desc("clients")).toPandas()))
+
+print("[5] writers cut - APP_SYS_CD distribution, flips with NO unsub found (n =", nn, "):")
+display((no_unsub.groupBy("APP_SYS_CD").agg(F.count("*").alias("clients"))
+                  .withColumn("pct", F.round(100.0 * F.col("clients") / nn, 1))
+                  .orderBy(F.desc("clients")).toPandas()))
+
+print("[5] read: who writes the vendor-proximate No's vs the rest - a writer that dominates 'within 7")
+print("    days' but not 'no unsub found' is a candidate pipe; even split across both = coincidence.")
