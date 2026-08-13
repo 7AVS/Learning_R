@@ -505,7 +505,7 @@ SELECT TRIM(EXTRACT(YEAR FROM TREATMT_STRT_DT)) || '-' ||
        COUNT(*)                 AS n_email_decisions,
        COUNT(DISTINCT CLNT_NO)  AS n_clients_emailed   -- one per client per month
 FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
-WHERE TREATMT_STRT_DT >= DATE '2024-01-01'
+WHERE TREATMT_STRT_DT >= DATE '2025-02-01'   -- pinned window, same frame as the flips
   AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
         OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
 GROUP BY 1
