@@ -130,7 +130,7 @@ JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
 pd.set_option("display.max_colwidth", 160)
 print("--- DG6V01.TACTIC_EVNT_IP_AR_HIST after the EM (email) filter — top 10 ---")
 display(edw_pd("""
-SELECT TOP 10 CLNT_NO, TACTIC_ID,
+SELECT CLNT_NO, TACTIC_ID,
        SUBSTR(TACTIC_ID, 8, 3)                    AS mne,             -- campaign code inside the id
        TREATMT_STRT_DT, TREATMT_END_DT, TST_GRP_CD,
        SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30)    AS vrb_channel_part, -- the piece our filter reads
@@ -141,14 +141,16 @@ WHERE TREATMT_STRT_DT >= DATE '2024-01-01'
   AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
         OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
 ORDER BY TREATMT_STRT_DT DESC
+SAMPLE 10
 """))
 print("--- DDWV01.CPC_RB_PREF_LOG after our 1012->No filter — top 10 (same as P3, all columns) ---")
 display(edw_pd("""
-SELECT TOP 10 *
+SELECT *
 FROM DDWV01.CPC_RB_PREF_LOG
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
   AND CHG_TMSTMP >= DATE '2025-02-01'
 ORDER BY CHG_TMSTMP DESC
+SAMPLE 10
 """))
 
 # %% [1] Q0 — the story opener: monthly volume of 1012 changes to No
