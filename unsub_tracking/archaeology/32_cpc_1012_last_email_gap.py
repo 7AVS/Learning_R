@@ -6,9 +6,10 @@
 # For each, find the **last email decision** in tactic history **before** that change.
 # How close are they?
 #
-# **Read rule:** emails are frequent, so a nearby email is expected by chance.
-# If email clicks drive 1012 flips, **day 0–1 towers** over everything.
-# A flat spread across 0–30+ days = contact-cadence coincidence, not attribution.
+# **Descriptive only — no claims.** This measures the proximity of the nearest
+# prior email DECISION record (not delivered email) to each flip. Emails are
+# frequent, so nearby decisions are expected by chance; nothing here attributes
+# any flip to any email, in either direction.
 #
 # All outputs inline. No files written. Connection = same as unsub_unified.
 
@@ -270,7 +271,7 @@ ax.annotate(f"day 0-1: {d01:,}", xy=(1, dy[dy["gap_days"] <= 1]["n_clients"].max
 ax.set_xlabel("days from last email decision to the 1012 change")
 ax.set_ylabel("clients")
 ax.set_title("Most recent 1012 change to No (18 mo) — days since last email decision\n"
-             "If email clicks drove the change, day 0-1 towers. Flat = contact-cadence coincidence.",
+             "Descriptive timing only: nearest prior decision record; no attribution implied.",
              fontweight="bold")
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
@@ -357,10 +358,33 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 4 DESC
 """
 wr = edw_pd(SQL_WRITERS)
+
+# APP_SYS_CD decode — schemas/cpc_rb_pref_log_schema.md (dictionary pics 2026-07-15)
+SYS_DESC = {
+    7001: "Sales Platform / branch staff",
+    7002: "DI staff",
+    7003: "Royal Direct contact centre",
+    7004: "Online Banking",
+    7005: "Service Platform",
+    7006: "RBC Banking internal/batch (STAR UI, purge)",
+    7009: "Bridgetrack/Sapient",
+    7015: "SAP (RCT/LINUX)",
+    7016: "RBC.COM",
+    7017: "telemarketing vendor",
+    7020: "Exact Target (email ESP)",
+    7021: "TSYS",
+    7024: "telemarketing vendor",
+    7025: "telemarketing vendor",
+    7026: "telemarketing vendor",
+    7999: "default",
+    99999: "batch SRF consolidation",
+}
+
 for pid in [1002, 1012, 1014]:
     print(f"--- PREF_ID {pid}: rows by writing system x consent value ---")
     p = (wr[wr["PREF_ID"] == pid]
          .pivot_table(index="APP_SYS_CD", columns="CLNT_CONSENT_TYP",
                       values="n_rows", aggfunc="sum", fill_value=0))
     p["TOTAL"] = p.sum(axis=1)
+    p.insert(0, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in p.index])
     display(p.sort_values("TOTAL", ascending=False))
