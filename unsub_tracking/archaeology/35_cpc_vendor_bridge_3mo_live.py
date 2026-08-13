@@ -216,7 +216,7 @@ LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
 SAMPLE 20
 """))
 
-# %% [5] Writer system distribution — changes with an unsubscribe 0-1 days before vs without
+# %% [4] Writer system distribution — changes with an unsubscribe 0-1 days before vs without
 display(edw_pd("""
 WITH flips AS (
     SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
@@ -249,7 +249,7 @@ GROUP BY 1, 2
 ORDER BY 1, 3 DESC
 """))
 
-# %% [4] Bridged clients by campaign mnemonic (unsubscribe 0-1 days before the change)
+# %% [5] Bridged clients by campaign mnemonic (unsubscribe 0-1 days before the change)
 # One row per client. Several campaigns unsubbed in that same 0-1d window -> 'MULTI'
 # (shown as-is, never an arbitrary winner). TREATMENT_ID 'DEFAULT' -> 'UNTAGGED'.
 display(edw_pd("""
