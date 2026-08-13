@@ -388,3 +388,91 @@ for pid in [1002, 1012, 1014]:
     p["TOTAL"] = p.sum(axis=1)
     p.insert(0, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in p.index])
     display(p.sort_values("TOTAL", ascending=False))
+
+# %% [8] GAP ANALYSIS x 3 SWITCHES — same last-email-decision logic for 1002 / 1012 / 1014
+# Identical CTEs as Q1, parameterized by switch. Descriptive timing only, no attribution.
+SQL_GAP_TPL = """
+WITH flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = __PID__                -- this switch
+      AND CLNT_CONSENT_TYP = 5002          -- flipped to No
+      AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+    -- one row per client: their most recent flip
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+),
+last_email AS (
+    SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
+    FROM flips f
+    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
+      ON  t.CLNT_NO = f.CLNT_NO
+      AND t.TREATMT_STRT_DT <= f.flip_dt           -- only emails BEFORE the flip
+      AND t.TREATMT_STRT_DT >= DATE '2024-01-01'   -- data floor
+      AND ( SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+            OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+    -- one row per client: the email CLOSEST to the flip
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY t.TREATMT_STRT_DT DESC) = 1
+)
+SELECT CASE WHEN em.email_dt IS NULL           THEN '6_no_email_found'
+            WHEN f.flip_dt - em.email_dt <= 1  THEN '1_same_or_next_day'
+            WHEN f.flip_dt - em.email_dt <= 7  THEN '2_within_week'
+            WHEN f.flip_dt - em.email_dt <= 30 THEN '3_within_month'
+            WHEN f.flip_dt - em.email_dt <= 90 THEN '4_within_quarter'
+            ELSE                                    '5_over_90_days' END AS gap_bucket,
+       COUNT(*)                                                          AS n_clients
+FROM flips f
+LEFT JOIN last_email em ON em.CLNT_NO = f.CLNT_NO   -- LEFT: keep clients with no email
+GROUP BY 1
+ORDER BY 1
+"""
+order = ["1_same_or_next_day", "2_within_week", "3_within_month",
+         "4_within_quarter", "5_over_90_days", "6_no_email_found"]
+gap3 = {}
+for pid in [1002, 1012, 1014]:
+    g = edw_pd(SQL_GAP_TPL.replace("__PID__", str(pid)))
+    g["share_pct"] = (g["n_clients"] / g["n_clients"].sum() * 100).round(1)
+    gap3[pid] = g.set_index("gap_bucket").reindex(order)
+    print(f"--- PREF_ID {pid} -> No, last 18 months: n = {int(g['n_clients'].sum()):,} ---")
+    display(gap3[pid])
+
+labels = ["same/next day", "2-7 days", "8-30 days", "31-90 days", ">90 days", "no email found"]
+fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
+for ax, pid in zip(axes, [1002, 1012, 1014]):
+    d = gap3[pid]
+    ax.barh(labels[::-1], d["n_clients"][::-1].fillna(0), color="#2a78d6")
+    for i, (v, s) in enumerate(zip(d["n_clients"][::-1], d["share_pct"][::-1])):
+        if pd.notna(v):
+            ax.text(v, i, f" {int(v):,} ({s}%)", va="center", fontsize=9)
+    ax.set_title(f"{pid} → No · n={int(d['n_clients'].sum()):,}", fontweight="bold", loc="left")
+    ax.spines[["top", "right"]].set_visible(False)
+fig.suptitle("Days from last email decision to the flip — three switches, same logic", fontweight="bold")
+plt.tight_layout(); plt.show()
+
+# %% [9] THE OTHER SIDE OF THE EQUATION — distinct clients emailed per month (all of them)
+# Denominator context: every client with at least one email decision that month,
+# counted once regardless of how many emails. Decision records, not delivery proof.
+SQL_EMAILED = """
+SELECT TRIM(EXTRACT(YEAR FROM TREATMT_STRT_DT)) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM TREATMT_STRT_DT) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM TREATMT_STRT_DT))  AS email_month,
+       COUNT(*)                 AS n_email_decisions,
+       COUNT(DISTINCT CLNT_NO)  AS n_clients_emailed   -- one per client per month
+FROM DG6V01.TACTIC_EVNT_IP_AR_HIST
+WHERE TREATMT_STRT_DT >= DATE '2024-01-01'
+  AND ( SUBSTR(TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+        OR UPPER(COALESCE(ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )   -- EM = email channel
+GROUP BY 1
+ORDER BY 1
+"""
+emd = edw_pd(SQL_EMAILED)
+display(emd)
+
+fig, ax = plt.subplots(figsize=(12, 4.5))
+ax.bar(emd["email_month"], emd["n_clients_emailed"], color="#2a78d6")
+ax.set_ylabel("distinct clients emailed")
+ax.set_title("Clients with an email decision per month (deduplicated) — the scale of the email program\n"
+             "vs ~100-200 CPC 1012 flips to No per month",
+             fontweight="bold")
+ax.tick_params(axis="x", rotation=45)
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
