@@ -307,7 +307,26 @@ GROUP BY 1
 ORDER BY 1
 """
 emd = edw_pd(SQL_EMAILED)
-display(emd)
+
+# unsub side of the same months - vendor feedback disposition 4. EVENT-only (no MASTER
+# join, so it stays light): grain = email address (consumer_id_hashed), which runs
+# ~1.1 addresses per client - close enough for a monthly rate, stated on the chart.
+SQL_UNSUBS = """
+SELECT TRIM(EXTRACT(YEAR FROM disposition_dt_tm)) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM disposition_dt_tm) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM disposition_dt_tm))  AS email_month,
+       COUNT(*)                            AS n_unsub_events,
+       COUNT(DISTINCT consumer_id_hashed)  AS n_unsubscribers   -- one per address per month
+FROM DTZV01.VENDOR_FEEDBACK_EVENT
+WHERE disposition_cd = 4
+  AND disposition_dt_tm >= DATE '2025-02-01'   -- same pinned window
+GROUP BY 1
+ORDER BY 1
+"""
+uns = edw_pd(SQL_UNSUBS)
+emd = emd.merge(uns, on="email_month", how="left")
+emd["unsub_rate_pct"] = (100.0 * emd["n_unsubscribers"] / emd["n_clients_emailed"]).round(3)
+display(emd)   # email_month | decisions | clients emailed | unsub events | unsubscribers | rate
 
 fig, ax = plt.subplots(figsize=(12, 4.5))
 ax.bar(emd["email_month"], emd["n_clients_emailed"], color="#2a78d6")
@@ -320,3 +339,63 @@ ax.set_title("Clients with at least one email decision, per month (each client c
 ax.tick_params(axis="x", rotation=45)
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots(figsize=(12, 4.5))
+ax.bar(emd["email_month"], emd["unsub_rate_pct"], color="#2a78d6")
+for x, v in zip(emd["email_month"], emd["unsub_rate_pct"]):
+    if pd.notna(v):
+        ax.text(x, v, f"{v:.2f}%", ha="center", va="bottom", fontsize=8)
+ax.set_ylabel("unsub rate (%)")
+ax.set_title("Unsubscribers per client emailed, by month (deduplicated)\n"
+             "unsub side = email-address grain (~1.1 addresses/client) - approximate rate",
+             fontweight="bold")
+ax.tick_params(axis="x", rotation=45)
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
+
+# %% [8] WIDER LENS — 1002 / 1012 / 1014: monthly arrivals into No (CPC_RB_PREF)
+# Same pinned window. 1014 caveat: blank(5003) also means No on that switch - this
+# counts explicit 5002 writes only, so 1014 is a floor.
+sw = edw_pd("""
+SELECT PREF_ID,
+       TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       COUNT(*) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID IN (1002, 1012, 1014)
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1, 2
+ORDER BY 1, 2
+""")
+_p = sw.pivot_table(index="chg_month", columns="PREF_ID", values="n_clients", aggfunc="sum", fill_value=0)
+_p["TOTAL"] = _p.sum(axis=1)
+display(_p)
+
+fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+for ax, pid, lbl in zip(axes, [1002, 1012, 1014],
+                        ["1002 (entity Do-Not-Solicit)", "1012 (Banking E-Mail consent)",
+                         "1014 (Share for Marketing - explicit No only, blank also = No)"]):
+    d = sw[sw["PREF_ID"] == pid]
+    ax.bar(d["chg_month"], d["n_clients"], color="#2a78d6")
+    ax.set_title(f"{lbl} — arrivals into No per month · total {d['n_clients'].sum():,}",
+                 fontweight="bold", fontsize=11, loc="left")
+    ax.set_ylabel("clients")
+    ax.spines[["top", "right"]].set_visible(False)
+axes[-1].tick_params(axis="x", rotation=45)
+plt.tight_layout(); plt.show()
+
+# %% [9] WIDER LENS — writers of the standing No's, per switch
+wr3 = edw_pd("""
+SELECT PREF_ID, APP_SYS_CD, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID IN (1002, 1012, 1014) AND CLNT_CONSENT_TYP = 5002
+GROUP BY 1, 2
+""")
+for pid in [1002, 1012, 1014]:
+    print(f"--- PREF_ID {pid}: writers of the standing No's ---")
+    p = wr3[wr3["PREF_ID"] == pid][["APP_SYS_CD", "n_clients"]].sort_values("n_clients", ascending=False).copy()
+    p["system"] = [SYS_DESC.get(c, "?? not in dictionary") for c in p["APP_SYS_CD"]]
+    p["share_pct"] = (p["n_clients"] / p["n_clients"].sum() * 100).round(1)
+    display(p.head(12))
