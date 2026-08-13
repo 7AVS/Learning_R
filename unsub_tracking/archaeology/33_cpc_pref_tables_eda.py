@@ -201,3 +201,28 @@ SYS_DESC = {
 wr2["system"] = [SYS_DESC.get(c, "?? not in dictionary") for c in wr2["APP_SYS_CD"]]
 wr2["share_pct"] = (wr2["n_clients"] / wr2["n_clients"].sum() * 100).round(1)
 display(wr2)
+
+# %% [10] WRITERS x YEAR — when did each system write the standing No's? (1012=5002)
+# Dates the 672,775 ESP-written No's: decade-old stock vs ongoing flow. Also
+# fingerprints the 2024-03 spike (pack 07 hypothesis: HSBC migration load).
+wy = edw_pd("""
+SELECT EXTRACT(YEAR FROM CHG_TMSTMP) AS chg_year, APP_SYS_CD,
+       CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC
+""")
+p = wy.pivot_table(index="chg_year", columns="APP_SYS_CD", values="n_clients",
+                   aggfunc="sum", fill_value=0)
+p["TOTAL"] = p.sum(axis=1)
+display(p)
+
+# %% [10b] the 2024-03 spike fingerprint — which writer owns it?
+display(edw_pd("""
+SELECT APP_SYS_CD, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2024-03-01' AND CHG_TMSTMP < DATE '2024-04-01'
+GROUP BY 1 ORDER BY 2 DESC
+"""))
