@@ -52,23 +52,22 @@ pref_pdf = pd.DataFrame(cur.fetchall(), columns=_cols)
 cur.close()
 pref = spark.createDataFrame(pref_pdf)   # one row per CLNT_NO: windowed 1012=No standing
 
-# PROOF, not prints - counts + date ranges of every source before any join runs on top of them
-_ub_r = ub.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
-_ut_r = ut.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
-_un_r = unsub.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
-_pf_r = pref.agg(F.min("chg_dt").alias("mn"), F.max("chg_dt").alias("mx")).collect()[0]
+# PROOF, not prints - ONE pass per dataset: cache, aggregate everything in a single agg
+unsub = unsub.cache()
+pref = pref.cache()
+_un = unsub.agg(F.count("*").alias("n"), F.countDistinct("CLNT_NO").alias("nc"),
+                F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
+_pf = pref.agg(F.count("*").alias("n"), F.countDistinct("CLNT_NO").alias("nc"),
+               F.min("chg_dt").alias("mn"), F.max("chg_dt").alias("mx")).collect()[0]
 
-print("[0] unsub_base   :", ub.count(), "rows |", _ub_r["mn"], "to", _ub_r["mx"])
-print("[0] unsub_topup  :", ut.count(), "rows |", _ut_r["mn"], "to", _ut_r["mx"])
-print("[0] unsub (union, deduped CLNT_NO+unsub_tm):", unsub.count(), "rows |", _un_r["mn"], "to", _un_r["mx"],
-      "| distinct clients:", unsub.select("CLNT_NO").distinct().count())
-print("[0] flips pull (1012=No, chg_dt >=", WIN_FLOOR, "):", pref.count(), "rows |",
-      _pf_r["mn"], "to", _pf_r["mx"], "| distinct clients:", pref.select("CLNT_NO").distinct().count())
-assert unsub.count() > 0, \
+print("[0] unsub (union, deduped CLNT_NO+unsub_tm):", _un["n"], "rows |", _un["mn"], "to", _un["mx"],
+      "| distinct clients:", _un["nc"])
+print("[0] flips pull (1012=No, chg_dt >=", WIN_FLOOR, "):", _pf["n"], "rows |",
+      _pf["mn"], "to", _pf["mx"], "| distinct clients:", _pf["nc"])
+assert _un["n"] > 0, \
     "reservoir empty - run cpc_reservoir_extract.py cells [3]-[6] and [24]-[27] first"
-assert pref.count() > 0, "flips pull returned nothing - check the Teradata connection"
-assert pref.count() == pref.select("CLNT_NO").distinct().count(), \
-    "flips slice is not 1 row per client"
+assert _pf["n"] > 0, "flips pull returned nothing - check the Teradata connection"
+assert _pf["n"] == _pf["nc"], "flips slice is not 1 row per client"
 
 # %% [1] flips (chg_dt >= WIN_FLOOR) -> nearest prior unsub per client (unsub_dt <= flip_dt, MAX unsub_dt)
 flips = pref.filter(F.col("chg_dt") >= WIN_FLOOR).select("CLNT_NO", F.col("chg_dt").alias("flip_dt"))
