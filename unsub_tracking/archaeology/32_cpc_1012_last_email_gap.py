@@ -202,8 +202,11 @@ GROUP BY 1, 2
 ORDER BY 1, 2
 """
 bk = edw_pd(SQL_BUCKETS)
-display(bk.pivot_table(index="flip_month", columns="gap_bucket",
-                       values="n_clients", aggfunc="sum", fill_value=0))
+_piv = bk.pivot_table(index="flip_month", columns="gap_bucket",
+                      values="n_clients", aggfunc="sum", fill_value=0)
+_piv["TOTAL"] = _piv.sum(axis=1)           # row total per month
+_piv.loc["TOTAL"] = _piv.sum(axis=0)       # column totals at the bottom
+display(_piv)
 
 # %% [3] rollup + meeting bar — the decision view
 roll = bk.groupby("gap_bucket", as_index=False)["n_clients"].sum()
@@ -307,3 +310,57 @@ ORDER BY 2 DESC
 """
 mne = edw_pd(SQL_MNE)
 display(mne.head(20))
+
+# %% [6] WIDER LENS — 1002 / 1012 / 1014: monthly flips to No, side by side
+# Same chart as Q0, one panel per switch. Kept at the bottom so the 1012 story stays focused.
+# 1002 = entity Do-Not-Solicit; 1012 = Banking E-Mail consent; 1014 = decisioning-read switch.
+SQL_3SW = """
+SELECT PREF_ID,
+       TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       COUNT(*)                 AS n_change_events,
+       COUNT(DISTINCT CLNT_NO)  AS n_clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID IN (1002, 1012, 1014)
+  AND CLNT_CONSENT_TYP = 5002                       -- changed to No
+  AND CHG_TMSTMP >= ADD_MONTHS(CURRENT_DATE, -18)   -- last 18 months
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+sw = edw_pd(SQL_3SW)
+display(sw.pivot_table(index="chg_month", columns="PREF_ID",
+                       values="n_clients", aggfunc="sum", fill_value=0))
+
+fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+for ax, pid in zip(axes, [1002, 1012, 1014]):
+    d = sw[sw["PREF_ID"] == pid]
+    ax.bar(d["chg_month"], d["n_clients"], color="#2a78d6")
+    ax.set_title(f"{pid} changed to No — clients per month · total {d['n_clients'].sum():,}",
+                 fontweight="bold", fontsize=11, loc="left")
+    ax.set_ylabel("clients")
+    ax.spines[["top", "right"]].set_visible(False)
+axes[-1].tick_params(axis="x", rotation=45)
+plt.tight_layout(); plt.show()
+
+# %% [7] WHO WRITES EACH SWITCH — APP_SYS_CD by PREF_ID and direction, since 2024
+# Which systems feed these switches. Yes(5001) vs No(5002) split shows what each
+# system is doing (opt-in capture vs opt-out writes).
+SQL_WRITERS = """
+SELECT PREF_ID, APP_SYS_CD, CLNT_CONSENT_TYP,
+       COUNT(*)                 AS n_rows,
+       COUNT(DISTINCT CLNT_NO)  AS n_clients
+FROM DDWV01.CPC_RB_PREF_LOG
+WHERE PREF_ID IN (1002, 1012, 1014)
+  AND CHG_TMSTMP >= DATE '2024-01-01'
+GROUP BY 1, 2, 3
+ORDER BY 1, 4 DESC
+"""
+wr = edw_pd(SQL_WRITERS)
+for pid in [1002, 1012, 1014]:
+    print(f"--- PREF_ID {pid}: rows by writing system x consent value ---")
+    p = (wr[wr["PREF_ID"] == pid]
+         .pivot_table(index="APP_SYS_CD", columns="CLNT_CONSENT_TYP",
+                      values="n_rows", aggfunc="sum", fill_value=0))
+    p["TOTAL"] = p.sum(axis=1)
+    display(p.sort_values("TOTAL", ascending=False))
