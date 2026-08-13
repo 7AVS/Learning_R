@@ -52,7 +52,7 @@ WITH flips AS (
 last_email AS (
     SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
     FROM flips f
-    JOIN DTZV01.TACTIC_EVNT_IP_AR_H60M t
+    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
       AND t.TREATMT_STRT_DT <= f.flip_dt
       AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
@@ -117,7 +117,7 @@ WITH flips AS (
 last_email AS (
     SELECT f.CLNT_NO, f.flip_dt, t.TREATMT_STRT_DT AS email_dt
     FROM flips f
-    JOIN DTZV01.TACTIC_EVNT_IP_AR_H60M t
+    JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t
       ON  t.CLNT_NO = f.CLNT_NO
       AND t.TREATMT_STRT_DT <= f.flip_dt
       AND t.TREATMT_STRT_DT >= DATE '2024-01-01'
