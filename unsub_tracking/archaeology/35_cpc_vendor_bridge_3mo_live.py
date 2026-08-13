@@ -216,8 +216,8 @@ LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
 SAMPLE 20
 """))
 
-# %% [4] Writer system distribution — changes with an unsubscribe 0-1 days before vs without
-display(edw_pd("""
+# %% [4] Writer system of the 1012 changes - decoded, with and without a prior unsubscribe
+wr = edw_pd("""
 WITH flips AS (
     SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
@@ -233,21 +233,39 @@ unsubs AS (
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2026-04-01'
       AND m.load_tm           >= DATE '2026-03-01'
-),
-flagged AS (
-    SELECT f.CLNT_NO, f.APP_SYS_CD,
-           MAX(CASE WHEN f.flip_dt - u.unsub_dt BETWEEN 0 AND 1 THEN 1 ELSE 0 END) AS bridged_1d
-    FROM flips f
-    LEFT JOIN unsubs u ON u.CLNT_NO = f.CLNT_NO AND u.unsub_dt <= f.flip_dt
-    GROUP BY 1, 2
 )
-SELECT CASE WHEN bridged_1d = 1 THEN '1_unsub_0-1d_before' ELSE '2_no_recent_unsub' END AS grp,
-       APP_SYS_CD                                AS written_by,
-       COUNT(*)                                  AS n_clients
-FROM flagged
-GROUP BY 1, 2
-ORDER BY 1, 3 DESC
-"""))
+SELECT f.APP_SYS_CD,
+       COUNT(*) AS n_changes,
+       SUM(CASE WHEN u.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS n_with_unsub_0_1d
+FROM flips f
+LEFT JOIN (
+    SELECT DISTINCT f2.CLNT_NO
+    FROM flips f2
+    JOIN unsubs u2
+      ON  u2.CLNT_NO = f2.CLNT_NO
+      AND f2.flip_dt - u2.unsub_dt BETWEEN 0 AND 1
+) u ON u.CLNT_NO = f.CLNT_NO
+GROUP BY 1 ORDER BY 2 DESC
+""")
+# APP_SYS_CD decode - schemas/cpc_rb_pref_log_schema.md (official dictionary 2026-08-13)
+SYS_DESC = {
+    7001: "Sales Platform (branch/service delivery staff)", 7002: "DI Client Source",
+    7003: "Royal Direct / Client View (contact centre)", 7004: "Online Banking",
+    7005: "Service Platform", 7006: "RBC Banking (STaR UI, batch/purge)",
+    7007: "RBC Express", 7008: "DS Client Source", 7009: "BridgeTrack", 7010: "CASPER",
+    7012: "Retail Banking Investment System F200", 7013: "Retail Banking Investment System 5G10",
+    7014: "Term Investment System 4V00", 7015: "SAP / RCT-LINX desktop", 7016: "RBC.COM",
+    7017: "D&H/AMIA/CMG (telemarketer)", 7018: "CART", 7019: "IRIS",
+    7020: "Exact Target (email ESP)", 7021: "TSYS", 7022: "RD Fulfillment",
+    7023: "Assisted Multi Product Application", 7024: "VOX (telemarketing vendor)",
+    7025: "ZEDD telemarketing / CASL Tool (context-dep.)", 7026: "APAC (telemarketing vendor)",
+    7027: "D&H", 7028: "CPC-CA (MCA)", 7029: "RCL TPA",
+    7030: "GISP (WM) / ADHOC Data Source (context-dep.)", 7999: "Default Application System",
+    99999: "batch update (SRF consolidation)",
+}
+wr.insert(1, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in wr["APP_SYS_CD"]])
+wr["share_pct"] = (wr["n_changes"] / wr["n_changes"].sum() * 100).round(1)
+display(wr)
 
 # %% [5] Bridged clients by campaign mnemonic (unsubscribe 0-1 days before the change)
 # One row per client. Several campaigns unsubbed in that same 0-1d window -> 'MULTI'
