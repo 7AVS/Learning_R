@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 import getpass
 
 spark.sparkContext.setLogLevel("ERROR")          # silence Spark WARN noise - cosmetic only
+_l4j = spark._jvm.org.apache.log4j                # the red boxes (CommandsHarvester etc.) log
+_l4j.LogManager.getRootLogger().setLevel(_l4j.Level.ERROR)   # from the JVM - kill WARN there too
 import logging, warnings
 logging.getLogger("py4j").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
