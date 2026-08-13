@@ -99,13 +99,15 @@ WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
 GROUP BY 1 ORDER BY 1
 """))
 
-# %% [2] Gap between the 1012 change and the nearest prior unsubscribe (one query, 4 steps)
+# %% [2] Gap between each switch change and the nearest prior unsubscribe (one query, 4 steps)
+# Run once per switch: 1012 (Banking E-Mail), then 1002 and 1014. 1014 caveat: blank
+# (5003) also reads as No on that switch - explicit 5002 writes only, so 1014 is a floor.
 SQL_BRIDGE = """
 WITH flips AS (
-    -- step 1: clients whose 1012 standing became No in the window - one row per client
+    -- step 1: clients whose {pref} standing became No in the window - one row per client
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2026-05-01'
 ),
 unsubs AS (
@@ -139,24 +141,25 @@ FROM flips f
 LEFT JOIN nearest n ON n.CLNT_NO = f.CLNT_NO      -- LEFT: flips with no unsub stay in
 GROUP BY 1 ORDER BY 1
 """
-br = edw_pd(SQL_BRIDGE)
-br["share_pct"] = (br["n_clients"] / br["n_clients"].sum() * 100).round(1)
-display(br)
-
 labels = {"1_same_or_next_day": "same/next day", "2_within_week": "2-7 days",
           "3_within_month": "8-30 days", "4_over_30_days": ">30 days",
           "5_no_unsub_found": "no unsub found"}
-r = br.set_index("gap_bucket").reindex(list(labels))
-fig, ax = plt.subplots(figsize=(10, 4.5))
-ax.barh(list(labels.values())[::-1], r["n_clients"][::-1].fillna(0), color="#2a78d6")
-for i, v in enumerate(r["n_clients"][::-1]):
-    if pd.notna(v):
-        ax.text(v, i, f" {int(v):,} ({r['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
-ax.set_xlabel("clients")
-ax.set_title("3-month live slice: nearest unsubscribe before each 1012 switch-off",
-             fontweight="bold")
-ax.spines[["top", "right"]].set_visible(False)
-plt.tight_layout(); plt.show()
+for pref in (1012, 1002, 1014):
+    br = edw_pd(SQL_BRIDGE.format(pref=pref))
+    br["share_pct"] = (br["n_clients"] / br["n_clients"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: nearest unsubscribe before each switch-off ---")
+    display(br)
+    r = br.set_index("gap_bucket").reindex(list(labels))
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.barh(list(labels.values())[::-1], r["n_clients"][::-1].fillna(0), color="#2a78d6")
+    for i, v in enumerate(r["n_clients"][::-1]):
+        if pd.notna(v):
+            ax.text(v, i, f" {int(v):,} ({r['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
+    ax.set_xlabel("clients")
+    ax.set_title(f"3-month live slice: nearest unsubscribe before each {pref} switch-off",
+                 fontweight="bold")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout(); plt.show()
 
 # %% [3] Sample of matched records — full columns from both tables (20 clients)
 # Every column straight off the source tables: vendor side (treatment id, when the mail
@@ -216,12 +219,13 @@ LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
 SAMPLE 20
 """))
 
-# %% [4] Writer system of the 1012 changes - decoded, with and without a prior unsubscribe
-wr = edw_pd("""
+# %% [4] Writer system of the changes - decoded, with and without a prior unsubscribe
+# Run once per switch: 1012, 1002, 1014 (same 1014 explicit-5002 floor caveat as [2]).
+SQL_WRITERS = """
 WITH flips AS (
     SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2026-05-01'
 ),
 unsubs AS (
@@ -246,7 +250,7 @@ LEFT JOIN (
       AND f2.flip_dt - u2.unsub_dt BETWEEN 0 AND 1
 ) u ON u.CLNT_NO = f.CLNT_NO
 GROUP BY 1 ORDER BY 2 DESC
-""")
+"""
 # APP_SYS_CD decode - schemas/cpc_rb_pref_log_schema.md (official dictionary 2026-08-13)
 SYS_DESC = {
     7001: "Sales Platform (branch/service delivery staff)", 7002: "DI Client Source",
@@ -263,9 +267,12 @@ SYS_DESC = {
     7030: "GISP (WM) / ADHOC Data Source (context-dep.)", 7999: "Default Application System",
     99999: "batch update (SRF consolidation)",
 }
-wr.insert(1, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in wr["APP_SYS_CD"]])
-wr["share_pct"] = (wr["n_changes"] / wr["n_changes"].sum() * 100).round(1)
-display(wr)
+for pref in (1012, 1002, 1014):
+    wr = edw_pd(SQL_WRITERS.format(pref=pref))
+    wr.insert(1, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in wr["APP_SYS_CD"]])
+    wr["share_pct"] = (wr["n_changes"] / wr["n_changes"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: writer system, n_changes + n_with_unsub_0_1d ---")
+    display(wr)
 
 # %% [5] Bridged clients by campaign mnemonic (unsubscribe 0-1 days before the change)
 # One row per client. Several campaigns unsubbed in that same 0-1d window -> 'MULTI'
@@ -315,11 +322,12 @@ GROUP BY 1 ORDER BY 2 DESC
 # 2024-01-01 (not the April slice floor) - the question is "does the trail exist at
 # all", not "is it inside the window". Every 7020-written flip lands in exactly one
 # bucket. Client filter pushed into MASTER first, so the wide scan stays small.
-esp = edw_pd("""
+# Run once per switch: 1012, 1002, 1014.
+SQL_ESP = """
 WITH esp_flips AS (
     SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2026-05-01'
       AND APP_SYS_CD = 7020                             -- written by the ESP itself
 ),
@@ -361,11 +369,16 @@ SELECT CASE
        COUNT(*) AS n_clients
 FROM per_client
 GROUP BY 1 ORDER BY 1
-""")
-esp["share_pct"] = (esp["n_clients"] / esp["n_clients"].sum() * 100).round(1)
-print("--- 7020-written 1012 switch-offs: where is the unsubscribe that caused each write? ---")
+"""
 print("--- (bucket 6 caveat: master rows loaded before 2023-10 are outside this scan) ---")
-display(esp)
+for pref in (1012, 1002, 1014):
+    esp = edw_pd(SQL_ESP.format(pref=pref))
+    if len(esp) == 0:
+        print(f"--- PREF_ID {pref}: no 7020-written switch-offs in the window ---")
+        continue
+    esp["share_pct"] = (esp["n_clients"] / esp["n_clients"].sum() * 100).round(1)
+    print(f"--- PREF_ID {pref}: 7020-written switch-offs - where is the unsubscribe behind each write? ---")
+    display(esp)
 
 # %% [7] The untraced ESP writes - raw rows, what little vendor trail exists (15 clients)
 # Buckets 5 and 6 from [6]: the ESP wrote the switch, but no unsubscribe event exists
@@ -448,155 +461,3 @@ for ax in axes:
 plt.suptitle("Slice window: mail out vs unsubscribes captured - the universe the bridge lives inside",
              fontweight="bold")
 plt.tight_layout(); plt.show()
-
-# %% [9] Other switches, same lens as [2] - gap to nearest prior unsubscribe, 1002 and 1014
-# Same query and chart as [2], run once per switch. 1014 caveat: blank (5003) also reads
-# as No on that switch - explicit 5002 writes only here, so 1014 volumes are a floor.
-SQL_BRIDGE_PREF = """
-WITH flips AS (
-    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2026-05-01'
-),
-unsubs AS (
-    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-      ON  m.consumer_id_hashed = e.consumer_id_hashed
-      AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND m.load_tm           >= DATE '2026-03-01'
-),
-nearest AS (
-    SELECT f.CLNT_NO, f.flip_dt, u.unsub_dt
-    FROM flips f
-    JOIN unsubs u
-      ON  u.CLNT_NO = f.CLNT_NO
-      AND u.unsub_dt <= f.flip_dt
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_dt DESC) = 1
-)
-SELECT CASE WHEN n.unsub_dt IS NULL              THEN '5_no_unsub_found'
-            WHEN f.flip_dt - n.unsub_dt <= 1     THEN '1_same_or_next_day'
-            WHEN f.flip_dt - n.unsub_dt <= 7     THEN '2_within_week'
-            WHEN f.flip_dt - n.unsub_dt <= 30    THEN '3_within_month'
-            ELSE                                      '4_over_30_days' END AS gap_bucket,
-       COUNT(*) AS n_clients
-FROM flips f
-LEFT JOIN nearest n ON n.CLNT_NO = f.CLNT_NO
-GROUP BY 1 ORDER BY 1
-"""
-labels = {"1_same_or_next_day": "same/next day", "2_within_week": "2-7 days",
-          "3_within_month": "8-30 days", "4_over_30_days": ">30 days",
-          "5_no_unsub_found": "no unsub found"}
-for pref in (1002, 1014):
-    bp = edw_pd(SQL_BRIDGE_PREF.format(pref=pref))
-    bp["share_pct"] = (bp["n_clients"] / bp["n_clients"].sum() * 100).round(1)
-    print(f"--- PREF_ID {pref}: nearest unsubscribe before each switch-off ---")
-    display(bp)
-    rp = bp.set_index("gap_bucket").reindex(list(labels))
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    ax.barh(list(labels.values())[::-1], rp["n_clients"][::-1].fillna(0), color="#2a78d6")
-    for i, v in enumerate(rp["n_clients"][::-1]):
-        if pd.notna(v):
-            ax.text(v, i, f" {int(v):,} ({rp['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
-    ax.set_xlabel("clients")
-    ax.set_title(f"3-month live slice: nearest unsubscribe before each {pref} switch-off",
-                 fontweight="bold")
-    ax.spines[["top", "right"]].set_visible(False)
-    plt.tight_layout(); plt.show()
-
-# %% [10] Other switches, same lens as [4] - writer system of the 1002 and 1014 changes
-# SYS_DESC decode comes from [4] - run that cell first.
-SQL_WRITERS_PREF = """
-WITH flips AS (
-    SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2026-05-01'
-),
-unsubs AS (
-    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
-      ON  m.consumer_id_hashed = e.consumer_id_hashed
-      AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2026-04-01'
-      AND m.load_tm           >= DATE '2026-03-01'
-)
-SELECT f.APP_SYS_CD,
-       COUNT(*) AS n_changes,
-       SUM(CASE WHEN u.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS n_with_unsub_0_1d
-FROM flips f
-LEFT JOIN (
-    SELECT DISTINCT f2.CLNT_NO
-    FROM flips f2
-    JOIN unsubs u2
-      ON  u2.CLNT_NO = f2.CLNT_NO
-      AND f2.flip_dt - u2.unsub_dt BETWEEN 0 AND 1
-) u ON u.CLNT_NO = f.CLNT_NO
-GROUP BY 1 ORDER BY 2 DESC
-"""
-for pref in (1002, 1014):
-    w = edw_pd(SQL_WRITERS_PREF.format(pref=pref))
-    w.insert(1, "system", [SYS_DESC.get(c, "?? not in dictionary") for c in w["APP_SYS_CD"]])
-    w["share_pct"] = (w["n_changes"] / w["n_changes"].sum() * 100).round(1)
-    print(f"--- PREF_ID {pref}: writer system, n_changes + n_with_unsub_0_1d ---")
-    display(w)
-
-# %% [11] Other switches, same lens as [6] - ESP-written (7020) accounting for 1002 and 1014
-SQL_ESP_PREF = """
-WITH esp_flips AS (
-    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
-    FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = {pref} AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2026-05-01'
-      AND APP_SYS_CD = 7020
-),
-vf AS (
-    SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
-    JOIN esp_flips f ON f.CLNT_NO = m.CLNT_NO
-    WHERE m.load_tm >= DATE '2023-10-01'
-    GROUP BY 1, 2, 3
-),
-unsub4 AS (
-    SELECT v.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
-    FROM vf v
-    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
-      ON  e.consumer_id_hashed = v.consumer_id_hashed
-      AND e.TREATMENT_ID       = v.TREATMENT_ID
-    WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
-),
-per_client AS (
-    SELECT f.CLNT_NO, f.flip_dt,
-           MAX(CASE WHEN u.unsub_dt <= f.flip_dt THEN u.unsub_dt END) AS last_unsub_before,
-           MIN(CASE WHEN u.unsub_dt >  f.flip_dt THEN u.unsub_dt END) AS first_unsub_after,
-           MAX(CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)     AS in_master
-    FROM esp_flips f
-    LEFT JOIN (SELECT DISTINCT CLNT_NO FROM vf) v ON v.CLNT_NO = f.CLNT_NO
-    LEFT JOIN unsub4 u                            ON u.CLNT_NO = f.CLNT_NO
-    GROUP BY 1, 2
-)
-SELECT CASE
-         WHEN flip_dt - last_unsub_before <= 1  THEN '1_unsub_0_1d_before_write'
-         WHEN flip_dt - last_unsub_before <= 30 THEN '2_unsub_2_30d_before_write'
-         WHEN last_unsub_before IS NOT NULL     THEN '3_unsub_over_30d_before_write'
-         WHEN first_unsub_after IS NOT NULL     THEN '4_unsub_only_AFTER_write'
-         WHEN in_master = 1                     THEN '5_in_vendor_tables_no_unsub_ever'
-         ELSE                                        '6_clnt_no_absent_from_master' END AS evidence,
-       COUNT(*) AS n_clients
-FROM per_client
-GROUP BY 1 ORDER BY 1
-"""
-for pref in (1002, 1014):
-    ep = edw_pd(SQL_ESP_PREF.format(pref=pref))
-    if len(ep) == 0:
-        print(f"--- PREF_ID {pref}: no 7020-written switch-offs in the window ---")
-        continue
-    ep["share_pct"] = (ep["n_clients"] / ep["n_clients"].sum() * 100).round(1)
-    print(f"--- PREF_ID {pref}: 7020-written switch-offs, vendor-feedback evidence per client ---")
-    display(ep)
