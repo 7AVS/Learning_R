@@ -52,9 +52,9 @@ display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
 # %% [C] WINDOWS - one convention, used by every cell below
 WIN_FLOOR  = "2025-02-01"   # flips window: last 18 months, pinned
-LOOK_FLOOR = "2024-02-01"   # history lookback: 12 months BEFORE the window opens,
-                            # so early-window flips have real lookback and
-                            # 'no_*_found' means none in 12-30 months, not an artifact
+LOOK_FLOOR = "2024-11-01"   # history lookback: 3 months BEFORE the window opens
+                            # (Q4-LB convention) so early-window flips have real
+                            # lookback; 'no_*_found' = none in 3-21 months
 
 # %% [1] BUILD vendor-unsub lookup ONCE per session (volatile — the one heavy join)
 # EVENT disp=4 since 2024 → MASTER resolve to CLNT_NO (load_tm bounded, 1mo margin).
@@ -73,8 +73,8 @@ CREATE VOLATILE TABLE vt_unsub34 AS (
       ON  m.consumer_id_hashed = e.consumer_id_hashed
       AND m.TREATMENT_ID       = e.TREATMENT_ID
     WHERE e.disposition_cd = 4                         -- unsubscribe event
-      AND e.disposition_dt_tm >= DATE '2024-02-01'     -- lookback: 12mo before window
-      AND m.load_tm >= DATE '2024-01-01'               -- lookback minus 1mo margin (load stamp)
+      AND e.disposition_dt_tm >= DATE '2024-11-01'     -- lookback: 3mo before window
+      AND m.load_tm >= DATE '2024-10-01'               -- lookback minus 1mo margin (load stamp)
 ) WITH DATA PRIMARY INDEX (CLNT_NO) ON COMMIT PRESERVE ROWS
 """, "vt_unsub34 built")
 edw_exec("COLLECT STATISTICS ON vt_unsub34 COLUMN (CLNT_NO)", "stats collected")

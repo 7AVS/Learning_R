@@ -571,8 +571,9 @@ def _load_bounds(event_start, event_end):
     return "%04d-%02d-01" % (ls_y, ls_m), "%04d-%02d-01" % (le_y, le_m)
 
 _TOPUP_MONTHS = []
-# pre-range: BEFORE unsub_base's floor, matching pack 34's LOOK_FLOOR = 2024-02-01
-_y, _m = 2024, 2
+# pre-range: BEFORE unsub_base's floor, matching pack 34's LOOK_FLOOR = 2024-11-01
+# (3-month pre-window lookback, Q4-LB convention; window itself starts 2025-02-01)
+_y, _m = 2024, 11
 while (_y, _m) < (2025, 7):
     _es, _ee = _month_bounds(_y, _m)
     _ls, _le = _load_bounds(_es, _ee)
@@ -638,19 +639,4 @@ _topup_missing = [t[0] for t in _TOPUP_MONTHS if not landed("unsub_topup/" + t[0
 assert not _topup_missing, "unsub_topup missing month bite(s): " + str(_topup_missing)
 print("all", len(_TOPUP_MONTHS), "unsub_topup month bites landed - no gaps")
 
-# %% [28] SIZE PROBE + EXTRACT cpc_pref_1012_no - current-state 1012=No slice off DDWV01.CPC_RB_PREF
-# (NOT the _LOG history table cell [7] pulls - CPC_RB_PREF is one row per CLNT_NO/PREF_ID, current
-# standing only). ~3.26M rows expected - single pull, no bites needed. Feeds 34b's flip cohort.
-print("size probe (rows to land):")
-print(edw_pd("""
-SELECT COUNT(*) AS rows_1012_no, COUNT(DISTINCT CLNT_NO) AS clients_1012_no
-FROM DDWV01.CPC_RB_PREF
-WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-"""))
-land("cpc_pref_1012_no", """
-SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS chg_dt, APP_SYS_CD
-FROM DDWV01.CPC_RB_PREF
-WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-""")
-
-print("unsub_topup + cpc_pref_1012_no reservoir complete - feeds archaeology/34b_cpc_vendor_gap_spark.py")
+print("unsub_topup reservoir complete - vendor feedback only; 34b pulls its own CPC flips directly")

@@ -2,18 +2,18 @@
 # # 34b — CPC 1012 flips -> nearest prior VENDOR unsub, off the HDFS reservoir (Spark)
 #
 # Reservoir fallback for pack 34 (34_cpc_pref_vendor_unsub_gap.py), whose cell [1] gets killed
-# live by TDWM on the heavy EVENT->MASTER join. Same question, same windows, same buckets -
-# rebuilt entirely off cpc_reservoir_extract.py's landed parquet (unsub_base + unsub_topup +
-# cpc_pref_1012_no, cells [3]-[6] and [24]-[28]). NO Teradata in this file.
+# live by TDWM on the heavy EVENT->MASTER join. Same question, same windows, same buckets.
+# VENDOR unsubs come from the reservoir (unsub_base + unsub_topup); the CPC flips are a SMALL
+# windowed slice pulled straight from Teradata here (the reservoir stays vendor-feedback-only).
 #
 # **Descriptive only - no claims.** Proximity, not attribution, in either direction.
-# PREREQ: cpc_reservoir_extract.py cells [3]-[6] (unsub_base) and [24]-[28] (unsub_topup,
-# cpc_pref_1012_no) must be landed first.
+# PREREQ: cpc_reservoir_extract.py cells [3]-[6] (unsub_base) and [24]-[27] (unsub_topup) landed.
 
-# %% [0] reservoir + helpers - read unsub_base + unsub_topup (union, deduped) and cpc_pref_1012_no
+# %% [0] sources - reservoir vendor unsubs + direct CPC flips pull
 from pyspark.sql import functions as F, Window as W
 import pandas as pd
 import matplotlib.pyplot as plt
+import getpass
 
 spark.sparkContext.setLogLevel("ERROR")          # silence Spark WARN noise - cosmetic only
 import logging, warnings
@@ -22,14 +22,35 @@ warnings.filterwarnings("ignore")
 BASE = "hdfs:///user/427966379/unsub_cpc/"
 
 WIN_FLOOR  = "2025-02-01"   # flips window - same pin as pack 34
-LOOK_FLOOR = "2024-02-01"   # unsub lookback floor - same pin as pack 34
+LOOK_FLOOR = "2024-11-01"   # unsub lookback: 3 months before the window (Q4-LB convention)
 
 ub = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_base")
 ut = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_topup")
 unsub = (ub.select("CLNT_NO", "unsub_tm", "TREATMENT_ID")
            .unionByName(ut.select("CLNT_NO", "unsub_tm", "TREATMENT_ID"))
            .dropDuplicates(["CLNT_NO", "unsub_tm"]))
-pref = spark.read.parquet(BASE + "cpc_pref_1012_no")   # one row per CLNT_NO: current 1012=No standing
+
+# CPC flips: windowed current-state slice, pulled live (small - a few hundred K rows)
+try:
+    import teradatasql
+except ImportError:
+    get_ipython().system("pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+    import teradatasql
+username = input("Enter your username: ")
+password = getpass.getpass("Enter your password: ")
+EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=username,
+                          password=password, logmech="LDAP")
+cur = EDW.cursor()
+cur.execute(f"""
+SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS chg_dt, APP_SYS_CD
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002       -- email switch, standing = No
+  AND CHG_TMSTMP >= DATE '{WIN_FLOOR}'                  -- window only: small pull
+""")
+_cols = [d[0] for d in cur.description]
+pref_pdf = pd.DataFrame(cur.fetchall(), columns=_cols)
+cur.close()
+pref = spark.createDataFrame(pref_pdf)   # one row per CLNT_NO: windowed 1012=No standing
 
 # PROOF, not prints - counts + date ranges of every source before any join runs on top of them
 _ub_r = ub.agg(F.min("unsub_tm").alias("mn"), F.max("unsub_tm").alias("mx")).collect()[0]
@@ -41,12 +62,13 @@ print("[0] unsub_base   :", ub.count(), "rows |", _ub_r["mn"], "to", _ub_r["mx"]
 print("[0] unsub_topup  :", ut.count(), "rows |", _ut_r["mn"], "to", _ut_r["mx"])
 print("[0] unsub (union, deduped CLNT_NO+unsub_tm):", unsub.count(), "rows |", _un_r["mn"], "to", _un_r["mx"],
       "| distinct clients:", unsub.select("CLNT_NO").distinct().count())
-print("[0] cpc_pref_1012_no:", pref.count(), "rows |", _pf_r["mn"], "to", _pf_r["mx"],
-      "| distinct clients:", pref.select("CLNT_NO").distinct().count())
-assert unsub.count() > 0 and pref.count() > 0, \
-    "reservoir empty - run cpc_reservoir_extract.py cells [3]-[6] and [24]-[28] first"
+print("[0] flips pull (1012=No, chg_dt >=", WIN_FLOOR, "):", pref.count(), "rows |",
+      _pf_r["mn"], "to", _pf_r["mx"], "| distinct clients:", pref.select("CLNT_NO").distinct().count())
+assert unsub.count() > 0, \
+    "reservoir empty - run cpc_reservoir_extract.py cells [3]-[6] and [24]-[27] first"
+assert pref.count() > 0, "flips pull returned nothing - check the Teradata connection"
 assert pref.count() == pref.select("CLNT_NO").distinct().count(), \
-    "cpc_pref_1012_no is not 1 row per client"
+    "flips slice is not 1 row per client"
 
 # %% [1] flips (chg_dt >= WIN_FLOOR) -> nearest prior unsub per client (unsub_dt <= flip_dt, MAX unsub_dt)
 flips = pref.filter(F.col("chg_dt") >= WIN_FLOOR).select("CLNT_NO", F.col("chg_dt").alias("flip_dt"))
@@ -116,8 +138,8 @@ ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
 # %% [4] reverse direction - of vendor unsubbers (first unsub >= WIN_FLOOR), % who flip 1012 within
-# 90 days after (same logic as pack 34 cell [5]; flips here are ALL current 1012=No standings, unfiltered
-# by date, matching pack 34's unwindowed "flips" CTE in that cell)
+# 90 days after. The windowed flips slice suffices: any flip within 90d of a >=WIN_FLOOR unsub is
+# itself >= WIN_FLOOR by construction.
 first_unsub = (unsub.filter(F.col("unsub_tm") >= WIN_FLOOR)
                      .withColumn("unsub_dt", F.to_date("unsub_tm"))
                      .groupBy("CLNT_NO").agg(F.min("unsub_dt").alias("first_unsub_dt")))
