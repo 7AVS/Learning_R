@@ -30,7 +30,9 @@ ub = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_base
 ut = spark.read.option("recursiveFileLookup", "true").parquet(BASE + "unsub_topup")
 unsub = (ub.select("CLNT_NO", "unsub_tm", "TREATMENT_ID")
            .unionByName(ut.select("CLNT_NO", "unsub_tm", "TREATMENT_ID"))
-           .dropDuplicates(["CLNT_NO", "unsub_tm"]))
+           .dropDuplicates(["CLNT_NO", "unsub_tm", "TREATMENT_ID"]))   # keep multi-list same-instant
+           # clicks as separate rows - [6]'s MNE attribution needs them; the gap analysis in [1]-[3]
+           # is unaffected (per-client nearest date is identical either way)
 
 # CPC flips: windowed current-state slice, pulled live (small - a few hundred K rows)
 try:
