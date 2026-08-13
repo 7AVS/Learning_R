@@ -154,17 +154,21 @@ ax.set_title("3-month live slice: nearest unsubscribe before each 1012 switch-of
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
-# %% [3] SEE IT RAW — 20 actual matched pairs (client, flip date, unsub date, gap)
+# %% [3] SEE IT RAW — 20 full journeys: email sent -> unsub captured -> switch written
+# Every column straight off the source tables: vendor side (treatment id, when the mail
+# went out, when the disposition-4 unsub was captured) and CPC side (the gate, the
+# position it was set to, the exact write timestamp, and WHICH SYSTEM wrote it).
 display(edw_pd("""
 WITH flips AS (
-    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD,
+           CAST(CHG_TMSTMP AS DATE) AS flip_dt
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2026-05-01'
 ),
 unsubs AS (
-    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt,
-           e.TREATMENT_ID
+    SELECT DISTINCT m.CLNT_NO, e.consumer_id_hashed, e.TREATMENT_ID,
+           e.disposition_dt_tm AS unsub_tm
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
@@ -172,16 +176,73 @@ unsubs AS (
     WHERE e.disposition_cd = 4
       AND e.disposition_dt_tm >= DATE '2026-04-01'
       AND m.load_tm           >= DATE '2026-03-01'
+),
+nearest AS (
+    SELECT f.CLNT_NO, u.consumer_id_hashed, u.TREATMENT_ID, u.unsub_tm
+    FROM flips f
+    JOIN unsubs u
+      ON  u.CLNT_NO = f.CLNT_NO
+      AND CAST(u.unsub_tm AS DATE) <= f.flip_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_tm DESC) = 1
+),
+mail_sent AS (
+    -- the send (disposition 1) of the SAME treatment to the SAME consumer
+    SELECT n.CLNT_NO, MIN(e2.disposition_dt_tm) AS mail_sent_tm
+    FROM nearest n
+    JOIN DTZV01.VENDOR_FEEDBACK_EVENT e2
+      ON  e2.consumer_id_hashed = n.consumer_id_hashed
+      AND e2.TREATMENT_ID       = n.TREATMENT_ID
+      AND e2.disposition_cd     = 1
+      AND e2.disposition_dt_tm >= DATE '2026-03-01'
+    GROUP BY 1
 )
-SELECT f.CLNT_NO, f.flip_dt, u.unsub_dt,
-       f.flip_dt - u.unsub_dt        AS gap_days,
-       SUBSTR(u.TREATMENT_ID, 8, 3)  AS mne          -- campaign code inside the id
+SELECT f.CLNT_NO,
+       n.TREATMENT_ID,
+       SUBSTR(n.TREATMENT_ID, 8, 3)              AS mne,
+       s.mail_sent_tm,                                          -- email went out (disp=1)
+       n.unsub_tm,                                              -- unsub captured (disp=4)
+       f.CHG_TMSTMP                              AS cpc_write_tm, -- switch written
+       f.PREF_ID                                 AS gate,
+       f.CLNT_CONSENT_TYP                        AS position,     -- 5002 = No
+       f.APP_SYS_CD                              AS written_by,   -- WHICH SYSTEM wrote it
+       f.flip_dt - CAST(n.unsub_tm AS DATE)      AS gap_days
 FROM flips f
-JOIN unsubs u
-  ON  u.CLNT_NO = f.CLNT_NO
-  AND u.unsub_dt <= f.flip_dt
-QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_dt DESC) = 1
+JOIN nearest n   ON n.CLNT_NO = f.CLNT_NO
+LEFT JOIN mail_sent s ON s.CLNT_NO = f.CLNT_NO
 SAMPLE 20
+"""))
+
+# %% [5] WHO WROTE THE BRIDGED FLIPS — writer system, bridged (unsub <=1d before) vs not
+display(edw_pd("""
+WITH flips AS (
+    SELECT CLNT_NO, APP_SYS_CD, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2026-05-01'
+),
+unsubs AS (
+    SELECT DISTINCT m.CLNT_NO, CAST(e.disposition_dt_tm AS DATE) AS unsub_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    JOIN DTZV01.VENDOR_FEEDBACK_MASTER m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-04-01'
+      AND m.load_tm           >= DATE '2026-03-01'
+),
+flagged AS (
+    SELECT f.CLNT_NO, f.APP_SYS_CD,
+           MAX(CASE WHEN f.flip_dt - u.unsub_dt BETWEEN 0 AND 1 THEN 1 ELSE 0 END) AS bridged_1d
+    FROM flips f
+    LEFT JOIN unsubs u ON u.CLNT_NO = f.CLNT_NO AND u.unsub_dt <= f.flip_dt
+    GROUP BY 1, 2
+)
+SELECT CASE WHEN bridged_1d = 1 THEN '1_unsub_0-1d_before' ELSE '2_no_recent_unsub' END AS grp,
+       APP_SYS_CD                                AS written_by,
+       COUNT(*)                                  AS n_clients
+FROM flagged
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC
 """))
 
 # %% [4] WHICH CAMPAIGNS — bridged clients (unsub 0-1 days before flip) by mnemonic
