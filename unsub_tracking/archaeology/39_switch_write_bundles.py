@@ -209,3 +209,48 @@ t3["starter_ratio"] = (t3["n_times_it_closed_FIRST"] /
                        (t3["n_times_it_closed_FIRST"] + t3["n_times_it_closed_AFTER"]).clip(lower=1)).round(2)
 print("starter_ratio near 1 = this gate starts cascades; near 0 = it receives them:")
 display(t3.sort_values("n_times_it_closed_FIRST", ascending=False).head(25))
+
+# %% [5] THE ACTION-TEMPLATE MAP - which exact switch-sets does each system write?
+# One action = one client + one writer + one clock minute. Its SIGNATURE = the ordered
+# list of switches it wrote (order = write order, so the FIRST id is the leader).
+# Every distinct signature = one screen/process template. This maps the whole trigger
+# structure: who leads, what follows, how far it reaches, and from which channel.
+tmpl = edw_pd("""
+SELECT APP_SYS_CD,
+       signature,
+       COUNT(*) AS n_actions
+FROM (
+    SELECT CLNT_NO, APP_SYS_CD,
+           TRIM(TRAILING ',' FROM (XMLAGG(TRIM(PREF_ID) || ',' ORDER BY CHG_TMSTMP, PREF_ID)
+                                   (VARCHAR(1000)))) AS signature
+    FROM DDWV01.CPC_RB_PREF
+    WHERE CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY CLNT_NO, APP_SYS_CD,
+             CAST(CHG_TMSTMP AS DATE),
+             EXTRACT(HOUR FROM CHG_TMSTMP),
+             EXTRACT(MINUTE FROM CHG_TMSTMP)
+) t
+GROUP BY 1, 2
+""")
+tmpl["system"] = [f"{s} = {SYS_DESC.get(s, '?? not in dictionary')}" for s in tmpl["APP_SYS_CD"]]
+tmpl["leader_first_switch_written"] = [
+    f"{sig.split(',')[0]} = {PREF_DESC.get(int(sig.split(',')[0]), '??')}" for sig in tmpl["signature"]]
+tmpl["n_switches_in_template"] = [sig.count(",") + 1 for sig in tmpl["signature"]]
+tmpl["pct_of_system_actions"] = (100 * tmpl["n_actions"] /
+                                 tmpl.groupby("APP_SYS_CD")["n_actions"].transform("sum")).round(1)
+
+print("The 20 most common action templates bank-wide.")
+print("Each row = one recurring screen/process: which system runs it, which switch it writes")
+print("FIRST (the leader), how many switches it touches, and the full ordered list:")
+top = tmpl.sort_values("n_actions", ascending=False).head(20)
+display(top[["system", "leader_first_switch_written", "n_switches_in_template",
+             "n_actions", "pct_of_system_actions", "signature"]])
+
+print("Per system: how many distinct templates it runs, and how much its top template dominates:")
+per_sys = (tmpl.groupby("system")
+               .agg(n_distinct_templates=("signature", "nunique"),
+                    n_actions_total=("n_actions", "sum"),
+                    biggest_template_share_pct=("pct_of_system_actions", "max"))
+               .sort_values("n_actions_total", ascending=False))
+display(per_sys.head(12))
