@@ -1,11 +1,20 @@
 # %% [markdown]
-# # 39 — do consent switches get changed TOGETHER, or one at a time?
+# # 39 — when one gate closes, do others follow? (bundles vs cascade)
 #
-# A **change moment** = all the preference rows one client got written at the exact same
-# timestamp. One moment = one action (a branch visit, a phone call, an unsubscribe click).
-# If a moment touches 20 switches, that was one "opt out of everything" action — not 20
-# separate decisions. 18-month frame, switches set to No (5002), DDWV01.CPC_RB_PREF.
-# Current-state caveat: later re-writes shrink old moments, so sizes are floors.
+# Two hypotheses, both open:
+# - **Bundle (no cascade):** one writer writes many gates in the SAME instant. Nothing
+#   propagates - it was one action.
+# - **Cascade:** closing one gate TRIGGERS other gates to close AFTER it (seconds to
+#   days later, possibly by a different system). Implies a hierarchy and a starter gate.
+#
+# Distinguishing signal = time + writer. Same instant + same writer = bundle. Lagged
+# follow-up, especially machine-written, = cascade; whichever gate is consistently
+# FIRST is the starter. No anchor gate is privileged - every gate is tested as a
+# potential starter.
+#
+# Frame: 18 months (>= 2025-02-01), switches to No (5002), DDWV01.CPC_RB_PREF.
+# Current-state caveat: only the LAST write per (client, gate) survives, so both
+# bundles and cascades are FLOORS - anything later overwritten is invisible.
 
 # %% [0] connect + proof round-trip
 try:
@@ -45,15 +54,15 @@ PREF_DESC = {
     1009: "Banking - RBC Online", 1010: "Creditor Insurance",
     1012: "Banking - E-Mail (CASL)", 1013: "Banking - Face to Face",
     1014: "Share-for-Marketing (CIDM audience selector)",
-    1016: "?? no verified decode", 1020: "?? no verified decode",
-    1021: "?? no verified decode", 1022: "?? no verified decode",
-    1023: "Investments - Registered", 1024: "Investments - Non-Registered",
-    1025: "Loans & Lines of Credit", 1026: "Mortgages",
-    1027: "?? no verified decode", 1028: "?? no verified decode",
+    1015: "?? no verified decode", 1016: "?? no verified decode",
+    1020: "?? no verified decode", 1021: "?? no verified decode",
+    1022: "?? no verified decode", 1023: "Investments - Registered",
+    1024: "Investments - Non-Registered", 1025: "Loans & Lines of Credit",
+    1026: "Mortgages", 1027: "?? no verified decode", 1028: "?? no verified decode",
     1030: "?? no verified decode", 1031: "?? no verified decode",
-    1034: "?? no verified decode", 1042: "?? no verified decode",
-    1044: "Travel Health Insurance", 1045: "E-Newsletter - Banking",
-    1046: "E-Newsletter - Rewards", 1048: "Banking - ATM",
+    1034: "?? no verified decode", 1036: "?? no verified decode",
+    1042: "?? no verified decode", 1044: "Travel Health Insurance",
+    1045: "E-Newsletter - Banking", 1046: "E-Newsletter - Rewards", 1048: "Banking - ATM",
 }
 SYS_DESC = {
     7001: "Sales Platform (branch staff)", 7002: "DI Client Source",
@@ -72,7 +81,7 @@ SYS_DESC = {
     99999: "batch update (SRF consolidation)",
 }
 
-# %% [1] Five real examples - one client's rows, so a change moment is visible on screen
+# %% [1] Five real examples - one client's rows, so bundles and lags are visible on screen
 print("Below: every switch-to-No row for 5 clients who switched off 1012.")
 print("Rows sharing one CHG_TMSTMP = written by ONE action. Different timestamps = separate actions.")
 ex = edw_pd("""
@@ -143,65 +152,59 @@ pv["% mass opt-out"] = (100 * pv.get("changed 11+ (mass opt-out)", 0) / pv["TOTA
 print("Each row = one writing system; columns = what its actions typically did:")
 display(pv.sort_values("TOTAL actions", ascending=False).head(12))
 
-# %% [4] When 1012 (email consent) goes to No - what ELSE the same action switched off
-n_1012 = edw_pd("""
-SELECT COUNT(*) AS n FROM DDWV01.CPC_RB_PREF
-WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002 AND CHG_TMSTMP >= DATE '2025-02-01'
-""")["n"].iloc[0]
-co = edw_pd("""
-SELECT p2.PREF_ID AS co_pref, COUNT(*) AS n_together
-FROM DDWV01.CPC_RB_PREF p1
-JOIN DDWV01.CPC_RB_PREF p2
-  ON  p2.CLNT_NO    = p1.CLNT_NO
-  AND p2.CHG_TMSTMP = p1.CHG_TMSTMP
-  AND p2.PREF_ID   <> 1012
-  AND p2.CLNT_CONSENT_TYP = 5002
-WHERE p1.PREF_ID = 1012 AND p1.CLNT_CONSENT_TYP = 5002
-  AND p1.CHG_TMSTMP >= DATE '2025-02-01'
-GROUP BY 1 ORDER BY 2 DESC
+# %% [4] THE CASCADE TEST - after one gate closes, does another close LATER?
+# Every gate is a candidate starter. For each client: take each switch-to-No write
+# (the anchor), and look for OTHER gates written to No AFTER it, up to 7 days later.
+# Same instant is EXCLUDED here - that is the bundle, already measured in [2]/[3].
+# A cascade shows as volume at short lags; hierarchy = who is consistently first.
+casc = edw_pd("""
+SELECT a.PREF_ID  AS gate_closed_first,
+       b.PREF_ID  AS gate_closed_after,
+       CASE WHEN (b.CHG_TMSTMP - a.CHG_TMSTMP) DAY(4) TO SECOND <= INTERVAL '0 00:01:00' DAY TO SECOND
+                 THEN '1_within_a_minute'
+            WHEN (b.CHG_TMSTMP - a.CHG_TMSTMP) DAY(4) TO SECOND <= INTERVAL '0 01:00:00' DAY TO SECOND
+                 THEN '2_within_an_hour'
+            WHEN CAST(b.CHG_TMSTMP AS DATE) = CAST(a.CHG_TMSTMP AS DATE)
+                 THEN '3_same_day'
+            WHEN CAST(b.CHG_TMSTMP AS DATE) = CAST(a.CHG_TMSTMP AS DATE) + 1
+                 THEN '4_next_day'
+            ELSE      '5_within_a_week' END AS how_long_after,
+       b.APP_SYS_CD AS follow_up_written_by,
+       COUNT(*)     AS n_clients
+FROM DDWV01.CPC_RB_PREF a
+JOIN DDWV01.CPC_RB_PREF b
+  ON  b.CLNT_NO = a.CLNT_NO
+  AND b.PREF_ID <> a.PREF_ID
+  AND b.CLNT_CONSENT_TYP = 5002
+  AND b.CHG_TMSTMP > a.CHG_TMSTMP                              -- strictly AFTER: bundles excluded
+  AND CAST(b.CHG_TMSTMP AS DATE) <= CAST(a.CHG_TMSTMP AS DATE) + 7
+WHERE a.CLNT_CONSENT_TYP = 5002
+  AND a.CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1, 2, 3, 4
 """)
-co.insert(1, "which_is", [PREF_DESC.get(p, "?? not in decode list") for p in co["co_pref"]])
-co = co.rename(columns={"co_pref": "switch_also_set_to_No",
-                        "n_together": "n_times_in_same_action"})
-co["pct_of_all_1012_switch_offs"] = (100.0 * co["n_times_in_same_action"] / n_1012).round(1)
-print(f"1012 (Banking E-Mail) was switched off {n_1012:,} times in 18 months.")
-print("Each row = another switch, and how often the SAME action turned it off too.")
-print("High % = 1012 usually falls as part of a bulk opt-out, not alone:")
-display(co.head(25))
+casc["first_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')[:28]}" for p in casc["gate_closed_first"]]
+casc["later_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')[:28]}" for p in casc["gate_closed_after"]]
+casc["written_by"]  = [f"{s} = {SYS_DESC.get(s, '??')[:28]}" for s in casc["follow_up_written_by"]]
 
-# %% [5] ESP ONLY - what does one unsubscribe-page submission change?
-# Expected if the page works as documented: only 1-switch actions (radio 2 alone) and
-# 2-switch actions (both radios / radio 1 + mandatory 1012). Anything bigger = a write
-# path the page cannot produce.
-e5 = edw_pd("""
-SELECT bundle_size, COUNT(*) AS n_actions
-FROM (
-    SELECT CLNT_NO, CHG_TMSTMP, COUNT(*) AS bundle_size
-    FROM DDWV01.CPC_RB_PREF
-    WHERE CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2025-02-01'
-      AND APP_SYS_CD = 7020
-    GROUP BY 1, 2
-) t
-GROUP BY 1 ORDER BY 1
-""")
-e5["what_one_submission_changed"] = [f"{n} switch" + ("es" if n > 1 else "") for n in e5["bundle_size"]]
-e5["pct_of_esp_actions"] = (e5["n_actions"] / e5["n_actions"].sum() * 100).round(1)
-print("Unsubscribe-page submissions (writer = 7020 Exact Target), by switches changed per submission:")
-display(e5[["what_one_submission_changed", "n_actions", "pct_of_esp_actions"]])
+print("TABLE 1 - is there ANY cascade? Follow-up closings by lag (all gate pairs pooled):")
+t1 = casc.groupby("how_long_after", as_index=False)["n_clients"].sum()
+t1["pct"] = (t1["n_clients"] / t1["n_clients"].sum() * 100).round(1)
+display(t1)
 
-print("And what the 2-switch submissions consist of (both radios picked - which pair):")
-pr = edw_pd("""
-SELECT p1.PREF_ID AS switch_a, p2.PREF_ID AS switch_b, COUNT(*) AS n_submissions
-FROM DDWV01.CPC_RB_PREF p1
-JOIN DDWV01.CPC_RB_PREF p2
-  ON  p2.CLNT_NO = p1.CLNT_NO AND p2.CHG_TMSTMP = p1.CHG_TMSTMP
-  AND p2.PREF_ID > p1.PREF_ID
-  AND p2.CLNT_CONSENT_TYP = 5002 AND p2.APP_SYS_CD = 7020
-WHERE p1.CLNT_CONSENT_TYP = 5002 AND p1.APP_SYS_CD = 7020
-  AND p1.CHG_TMSTMP >= DATE '2025-02-01'
-GROUP BY 1, 2 ORDER BY 3 DESC
-""")
-pr.insert(1, "switch_a_is", [PREF_DESC.get(p, "??") for p in pr["switch_a"]])
-pr.insert(3, "switch_b_is", [PREF_DESC.get(p, "??") for p in pr["switch_b"]])
-display(pr.head(15))
+print("TABLE 2 - the top starter->follower pairs at lags of ONE HOUR OR LESS")
+print("(machine-speed follow-ups; a hierarchy would live here):")
+fast = casc[casc["how_long_after"].isin(["1_within_a_minute", "2_within_an_hour"])]
+t2 = (fast.groupby(["first_gate", "later_gate", "written_by"], as_index=False)["n_clients"].sum()
+          .sort_values("n_clients", ascending=False))
+display(t2.head(20))
+
+print("TABLE 3 - who is consistently FIRST (starter) vs LATER (receiver), fast lags only:")
+starters  = fast.groupby("first_gate", as_index=False)["n_clients"].sum().rename(
+    columns={"first_gate": "gate", "n_clients": "n_times_it_closed_FIRST"})
+receivers = fast.groupby("later_gate", as_index=False)["n_clients"].sum().rename(
+    columns={"later_gate": "gate", "n_clients": "n_times_it_closed_AFTER"})
+t3 = starters.merge(receivers, on="gate", how="outer").fillna(0)
+t3["starter_ratio"] = (t3["n_times_it_closed_FIRST"] /
+                       (t3["n_times_it_closed_FIRST"] + t3["n_times_it_closed_AFTER"]).clip(lower=1)).round(2)
+print("starter_ratio near 1 = this gate starts cascades; near 0 = it receives them:")
+display(t3.sort_values("n_times_it_closed_FIRST", ascending=False).head(25))
