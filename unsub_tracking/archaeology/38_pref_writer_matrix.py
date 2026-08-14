@@ -73,6 +73,7 @@ else:
 # Preferences - from the Borealis production rule (channel names), the SFMC unsubscribe
 # page list (LOB names), and the EDW dictionary/operational notes. '??' = no verified decode.
 PREF_DESC = {
+    1001: "Entity Level Marketing - DI",
     1002: "Entity Level Marketing - RBC",
     1004: "Accounts & Packages",
     1006: "Credit Cards",
@@ -82,8 +83,11 @@ PREF_DESC = {
     1010: "Creditor Insurance",
     1012: "Banking - E-Mail (CASL)",
     1013: "Banking - Face to Face",
-    1014: "Share-for-Marketing (CIDM audience selector; dict: cross-entity sharing)",
+    1014: "Info Share for Marketing - Banking (CIDM audience selector)",
     1015: "Info Share for Marketing - Service (MASTER, closes first)",
+    1016: "Entity Level Marketing - Credit Bureau",
+    1036: "Info Share for Marketing - Online Personalization (MASTER, closes first)",
+    1057: "Info Share for Marketing - DI",
     1023: "Investments - Registered",
     1024: "Investments - Non-Registered",
     1025: "Loans & Lines of Credit",
