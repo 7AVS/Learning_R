@@ -35,6 +35,40 @@ def edw_pd(sql, chunksize=1_000_000):
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
+# %% [G] GRAIN PROOF - is (CLNT_NO, PREF_ID) unique in our counting frame?
+# Every count in packs 32-38 assumes one row per client x preference (current state).
+# dup_rows = 1 for all keys -> counts are distinct clients. Any dup_rows >= 2 -> inspect
+# the raw rows below before trusting any number.
+gr = edw_pd("""
+SELECT dup_rows, COUNT(*) AS n_keys
+FROM (
+    SELECT CLNT_NO, PREF_ID, COUNT(*) AS dup_rows
+    FROM DDWV01.CPC_RB_PREF
+    WHERE CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY 1, 2
+) t
+GROUP BY 1 ORDER BY 1
+""")
+display(gr)
+if len(gr) == 1 and gr["dup_rows"].iloc[0] == 1:
+    print("GRAIN OK: one row per (client, preference) - all counts are distinct clients.")
+else:
+    print("WARNING: duplicated keys exist - run the raw look below before trusting counts.")
+    display(edw_pd("""
+    SELECT *
+    FROM DDWV01.CPC_RB_PREF
+    WHERE (CLNT_NO, PREF_ID) IN (
+        SELECT CLNT_NO, PREF_ID
+        FROM DDWV01.CPC_RB_PREF
+        WHERE CLNT_CONSENT_TYP = 5002
+          AND CHG_TMSTMP >= DATE '2025-02-01'
+        GROUP BY 1, 2
+        HAVING COUNT(*) > 1
+    )
+    SAMPLE 20
+    """))
+
 # %% [1] Decodes
 # Preferences - from the Borealis production rule (channel names), the SFMC unsubscribe
 # page list (LOB names), and the EDW dictionary/operational notes. '??' = no verified decode.
