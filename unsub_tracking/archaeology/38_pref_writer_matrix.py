@@ -141,3 +141,31 @@ mat["TOTAL"] = mat.sum(axis=1)
 mat = mat.sort_values("TOTAL", ascending=False)
 mat.loc["TOTAL"] = mat.sum(axis=0)
 display(mat)
+
+# %% [4] The monitored 12 only - every writer system, plus 7020's share per preference
+# Rows = the email-unsub page universe (1012 mandatory + 10 LOB codes + 1002 legacy).
+# Columns = writer systems (top 8 by volume, rest pooled), TOTAL, and pct written by
+# the ESP (7020) - the email-driven share of each preference's opt-outs.
+MONITORED = (1012, 1046, 1006, 1004, 1025, 1026, 1002, 1023, 1010, 1024, 1044, 1045)
+mn = edw_pd(f"""
+SELECT PREF_ID, APP_SYS_CD, COUNT(*) AS n_writes_to_no
+FROM DDWV01.CPC_RB_PREF
+WHERE CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+  AND PREF_ID IN {MONITORED}
+GROUP BY 1, 2
+""")
+top_w = mn.groupby("APP_SYS_CD")["n_writes_to_no"].sum().nlargest(8).index
+mn["writer_col"] = [f"{s} {SYS_DESC.get(s, '??')[:22]}" if s in top_w else "OTHER"
+                    for s in mn["APP_SYS_CD"]]
+mn["pref_row"] = [f"{p} {PREF_DESC.get(p, '??')[:30]}" for p in mn["PREF_ID"]]
+m4 = mn.pivot_table(index="pref_row", columns="writer_col", values="n_writes_to_no",
+                    aggfunc="sum", fill_value=0)
+m4["TOTAL"] = m4.sum(axis=1)
+esp = mn[mn["APP_SYS_CD"] == 7020].groupby("pref_row")["n_writes_to_no"].sum()
+m4["pct_7020"] = (100.0 * esp.reindex(m4.index).fillna(0) / m4["TOTAL"]).round(1)
+m4 = m4.sort_values("TOTAL", ascending=False)
+tot = m4.drop(columns="pct_7020").sum(axis=0)
+tot["pct_7020"] = round(100.0 * esp.sum() / m4["TOTAL"].sum(), 1)
+m4.loc["TOTAL"] = tot
+display(m4)
