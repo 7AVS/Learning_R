@@ -521,3 +521,51 @@ for ax in axes:
 plt.suptitle("Slice window: mail out vs unsubscribes captured - the universe the bridge lives inside",
              fontweight="bold")
 plt.tight_layout(); plt.show()
+
+# %% [9] ESP footprint - every preference 7020 writes to No (18-month frame)
+# The unsubscribe page can write 1012 + ONE LOB code from the accepted list
+# (1004/1006/1010/1023-1026/1044-1046; old form also accepted 1002). Expected: rows only
+# for those codes. Any other PREF_ID with real volume = a 7020 write path the SFMC
+# blueprint does not describe.
+ACCEPTED = {1012: "Banking - Email (CASL, mandatory radio)", 1004: "Accounts & Packages",
+            1006: "Credit Cards", 1010: "Creditor Insurance", 1023: "Investments - Registered",
+            1024: "Investments - Non-Registered", 1025: "Loans & Lines of Credit",
+            1026: "Mortgages", 1044: "Travel Health Insurance", 1045: "E-Newsletter - Banking",
+            1046: "E-Newsletter - Rewards", 1002: "(old form list only)"}
+fp = edw_pd("""
+SELECT PREF_ID, COUNT(*) AS n_writes_to_no
+FROM DDWV01.CPC_RB_PREF
+WHERE APP_SYS_CD = 7020
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1 ORDER BY 2 DESC
+""")
+fp.insert(1, "on_unsub_page", [ACCEPTED.get(p, "?? NOT on the documented page") for p in fp["PREF_ID"]])
+display(fp)
+
+# %% [10] 7020 batch fingerprint - hour-of-day of the writes
+# The documented pipe is ONE automation: FTP backfeed 3:30 AM Mon-Sat, 9:00 AM Sunday.
+# If all 7020 writes cluster at those hours, the writes ARE that automation and nothing
+# else. Volume at other hours = a second, undocumented 7020 pipe.
+hr = edw_pd("""
+SELECT EXTRACT(HOUR FROM CHG_TMSTMP)                                    AS hr,
+       SUM(CASE WHEN TD_DAY_OF_WEEK(CAST(CHG_TMSTMP AS DATE)) = 1
+                THEN 1 ELSE 0 END)                                      AS n_sunday,
+       SUM(CASE WHEN TD_DAY_OF_WEEK(CAST(CHG_TMSTMP AS DATE)) <> 1
+                THEN 1 ELSE 0 END)                                      AS n_mon_sat
+FROM DDWV01.CPC_RB_PREF
+WHERE APP_SYS_CD = 7020
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1 ORDER BY 1
+""")
+display(hr)
+fig, ax = plt.subplots(figsize=(11, 4))
+ax.bar(hr["hr"] - 0.2, hr["n_mon_sat"], width=0.4, label="Mon-Sat (batch 3:30 AM)", color="#2a78d6")
+ax.bar(hr["hr"] + 0.2, hr["n_sunday"], width=0.4, label="Sunday (batch 9:00 AM)", color="#e08214")
+ax.set_xlabel("hour of CHG_TMSTMP"); ax.set_ylabel("writes")
+ax.set_xticks(range(0, 24))
+ax.set_title("7020 writes by hour - does everything land at the documented batch times?",
+             fontweight="bold")
+ax.legend(); ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout(); plt.show()
