@@ -189,6 +189,7 @@ for i, v in enumerate(r["n_clients"][::-1]):
     if pd.notna(v):
         ax.text(v, i, f" {int(v):,} ({r['share_pct'][::-1].iloc[i]}%)", va="center", fontsize=10)
 ax.set_xlabel("clients")
+ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{int(v):,}"))
 ax.set_title("Where the last email decision sits relative to the 1012 change (CPC_RB_PREF flips)",
              fontweight="bold")
 ax.spines[["top", "right"]].set_visible(False)
