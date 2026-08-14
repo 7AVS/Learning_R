@@ -160,3 +160,40 @@ print(f"1012 (Banking E-Mail) was switched off {n_1012:,} times in 18 months.")
 print("Each row = another switch, and how often the SAME action turned it off too.")
 print("High % = 1012 usually falls as part of a bulk opt-out, not alone:")
 display(co.head(25))
+
+# %% [5] ESP ONLY - what does one unsubscribe-page submission change?
+# Expected if the page works as documented: only 1-switch actions (radio 2 alone) and
+# 2-switch actions (both radios / radio 1 + mandatory 1012). Anything bigger = a write
+# path the page cannot produce.
+e5 = edw_pd("""
+SELECT bundle_size, COUNT(*) AS n_actions
+FROM (
+    SELECT CLNT_NO, CHG_TMSTMP, COUNT(*) AS bundle_size
+    FROM DDWV01.CPC_RB_PREF
+    WHERE CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+      AND APP_SYS_CD = 7020
+    GROUP BY 1, 2
+) t
+GROUP BY 1 ORDER BY 1
+""")
+e5["what_one_submission_changed"] = [f"{n} switch" + ("es" if n > 1 else "") for n in e5["bundle_size"]]
+e5["pct_of_esp_actions"] = (e5["n_actions"] / e5["n_actions"].sum() * 100).round(1)
+print("Unsubscribe-page submissions (writer = 7020 Exact Target), by switches changed per submission:")
+display(e5[["what_one_submission_changed", "n_actions", "pct_of_esp_actions"]])
+
+print("And what the 2-switch submissions consist of (both radios picked - which pair):")
+pr = edw_pd("""
+SELECT p1.PREF_ID AS switch_a, p2.PREF_ID AS switch_b, COUNT(*) AS n_submissions
+FROM DDWV01.CPC_RB_PREF p1
+JOIN DDWV01.CPC_RB_PREF p2
+  ON  p2.CLNT_NO = p1.CLNT_NO AND p2.CHG_TMSTMP = p1.CHG_TMSTMP
+  AND p2.PREF_ID > p1.PREF_ID
+  AND p2.CLNT_CONSENT_TYP = 5002 AND p2.APP_SYS_CD = 7020
+WHERE p1.CLNT_CONSENT_TYP = 5002 AND p1.APP_SYS_CD = 7020
+  AND p1.CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1, 2 ORDER BY 3 DESC
+""")
+pr.insert(1, "switch_a_is", [PREF_DESC.get(p, "??") for p in pr["switch_a"]])
+pr.insert(3, "switch_b_is", [PREF_DESC.get(p, "??") for p in pr["switch_b"]])
+display(pr.head(15))
