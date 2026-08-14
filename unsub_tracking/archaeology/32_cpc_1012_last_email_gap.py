@@ -174,7 +174,10 @@ display(_piv)
 # %% [3] rollup + meeting bar
 roll = bk.groupby("gap_bucket", as_index=False)["n_clients"].sum()
 roll["share_pct"] = (roll["n_clients"] / roll["n_clients"].sum() * 100).round(1)
-display(roll)
+# TOTAL row: all clients who flipped 1012 to No in the frame - the headline denominator
+total_row = pd.DataFrame([{"gap_bucket": "TOTAL", "n_clients": roll["n_clients"].sum(),
+                           "share_pct": 100.0}])
+display(pd.concat([roll, total_row], ignore_index=True))
 
 order = ["1_same_or_next_day", "2_within_week", "3_within_month",
          "4_within_quarter", "5_over_90_days", "6_no_email_found"]
