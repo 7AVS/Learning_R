@@ -73,7 +73,7 @@ else:
 # Preferences - from the Borealis production rule (channel names), the SFMC unsubscribe
 # page list (LOB names), and the EDW dictionary/operational notes. '??' = no verified decode.
 PREF_DESC = {
-    1002: "?? no verified decode (tracked email-consent switch)",
+    1002: "Entity Level Marketing - RBC",
     1004: "Accounts & Packages",
     1006: "Credit Cards",
     1007: "Banking - Direct Mail",
@@ -83,7 +83,7 @@ PREF_DESC = {
     1012: "Banking - E-Mail (CASL)",
     1013: "Banking - Face to Face",
     1014: "Share-for-Marketing (CIDM audience selector; dict: cross-entity sharing)",
-    1015: "?? no verified decode (blank=No family, per dictionary)",
+    1015: "Info Share for Marketing - Service (MASTER, closes first)",
     1023: "Investments - Registered",
     1024: "Investments - Non-Registered",
     1025: "Loans & Lines of Credit",

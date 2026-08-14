@@ -48,19 +48,19 @@ display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
 
 # %% [D] Decodes used by every cell below
 PREF_DESC = {
-    1002: "?? email-consent switch, no verified decode",
+    1002: "Entity Level Marketing - RBC",
     1004: "Accounts & Packages", 1006: "Credit Cards",
     1007: "Banking - Direct Mail", 1008: "Banking - Telephone",
     1009: "Banking - RBC Online", 1010: "Creditor Insurance",
     1012: "Banking - E-Mail (CASL)", 1013: "Banking - Face to Face",
-    1014: "Share-for-Marketing (CIDM audience selector)",
-    1015: "?? no verified decode", 1016: "?? no verified decode",
+    1014: "Info Share for Marketing - Banking (CIDM audience selector)",
+    1015: "Info Share for Marketing - Service (MASTER, closes first)", 1016: "Entity Level Marketing - Credit Bureau",
     1020: "?? no verified decode", 1021: "?? no verified decode",
     1022: "?? no verified decode", 1023: "Investments - Registered",
     1024: "Investments - Non-Registered", 1025: "Loans & Lines of Credit",
     1026: "Mortgages", 1027: "?? no verified decode", 1028: "?? no verified decode",
     1030: "?? no verified decode", 1031: "?? no verified decode",
-    1034: "?? no verified decode", 1036: "?? no verified decode",
+    1034: "?? no verified decode", 1036: "Info Share for Marketing - Online Personalization (MASTER, closes first)",
     1042: "?? no verified decode", 1044: "Travel Health Insurance",
     1045: "E-Newsletter - Banking", 1046: "E-Newsletter - Rewards", 1048: "Banking - ATM",
 }
