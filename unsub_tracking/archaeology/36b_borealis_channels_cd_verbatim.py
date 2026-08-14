@@ -152,3 +152,20 @@ GROUP BY 1
 df = edw_pd(SQL_VERBATIM)
 print(f"{len(df):,} rows")
 display(df.head(20))
+
+# %% [2] Summary - contactable vs not, per channel, off the strings [1] pulled
+CHANNELS = ["Banking - Direct Mail", "Banking - Telephone", "Banking - RBC Online",
+            "Banking - E-Mail", "Banking - Face to Face",
+            "Direct Investing - Direct Mail", "Direct Investing - Telephone",
+            "Direct Investing - DI Online", "Direct Investing - E-Mail",
+            "Direct Investing - Face to Face", "Banking - ATM"]
+n = len(df)
+rows = []
+for ch in CHANNELS:
+    n_false = int(df["CPC_CHANNELS_CD"].str.contains(f"{ch}:FALSE", regex=False).sum())
+    rows.append({"channel": ch, "n_false_do_not_contact": n_false,
+                 "n_true_contactable": n - n_false,
+                 "pct_false": round(100.0 * n_false / n, 2)})
+summary = pd.DataFrame(rows)
+print(f"--- production CPC_CHANNELS_CD, {n:,} clients in snapshot ---")
+display(summary)
