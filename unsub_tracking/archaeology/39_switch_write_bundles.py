@@ -45,6 +45,7 @@ def edw_pd(sql, chunksize=1_000_000):
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
+pd.set_option("display.max_colwidth", 80)
 
 # %% [D] Decodes used by every cell below
 PREF_DESC = {
@@ -182,9 +183,9 @@ WHERE a.CLNT_CONSENT_TYP = 5002
   AND a.CHG_TMSTMP >= DATE '2025-02-01'
 GROUP BY 1, 2, 3, 4
 """)
-casc["first_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')[:28]}" for p in casc["gate_closed_first"]]
-casc["later_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')[:28]}" for p in casc["gate_closed_after"]]
-casc["written_by"]  = [f"{s} = {SYS_DESC.get(s, '??')[:28]}" for s in casc["follow_up_written_by"]]
+casc["first_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')}" for p in casc["gate_closed_first"]]
+casc["later_gate"]  = [f"{p} = {PREF_DESC.get(p, '??')}" for p in casc["gate_closed_after"]]
+casc["written_by"]  = [f"{s} = {SYS_DESC.get(s, '??')}" for s in casc["follow_up_written_by"]]
 
 print("TABLE 1 - is there ANY cascade? Follow-up closings by lag (all gate pairs pooled):")
 t1 = casc.groupby("how_long_after", as_index=False)["n_clients"].sum()

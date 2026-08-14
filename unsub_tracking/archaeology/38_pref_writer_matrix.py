@@ -34,6 +34,7 @@ def edw_pd(sql, chunksize=1_000_000):
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
 
 display(edw_pd("SELECT USER AS usr, SESSION AS sess, CURRENT_TIMESTAMP AS ts"))
+pd.set_option("display.max_colwidth", 80)
 
 # %% [G] GRAIN PROOF - is (CLNT_NO, PREF_ID) unique in our counting frame?
 # Every count in packs 32-38 assumes one row per client x preference (current state).
@@ -136,9 +137,9 @@ display(px)
 
 # %% [3] Same data as a matrix - preferences down, top-10 writers across, rest pooled
 top_writers = px.groupby("APP_SYS_CD")["n_writes_to_no"].sum().nlargest(10).index
-px["writer_col"] = [f"{s} {SYS_DESC.get(s, '??')[:22]}" if s in top_writers else "OTHER"
+px["writer_col"] = [f"{s} {SYS_DESC.get(s, '??')}" if s in top_writers else "OTHER"
                     for s in px["APP_SYS_CD"]]
-px["pref_row"] = [f"{p} {PREF_DESC.get(p, '??')[:30]}" for p in px["PREF_ID"]]
+px["pref_row"] = [f"{p} {PREF_DESC.get(p, '??')}" for p in px["PREF_ID"]]
 mat = px.pivot_table(index="pref_row", columns="writer_col", values="n_writes_to_no",
                      aggfunc="sum", fill_value=0)
 mat["TOTAL"] = mat.sum(axis=1)
@@ -160,9 +161,9 @@ WHERE CLNT_CONSENT_TYP = 5002
 GROUP BY 1, 2
 """)
 top_w = mn.groupby("APP_SYS_CD")["n_writes_to_no"].sum().nlargest(8).index
-mn["writer_col"] = [f"{s} {SYS_DESC.get(s, '??')[:22]}" if s in top_w else "OTHER"
+mn["writer_col"] = [f"{s} {SYS_DESC.get(s, '??')}" if s in top_w else "OTHER"
                     for s in mn["APP_SYS_CD"]]
-mn["pref_row"] = [f"{p} {PREF_DESC.get(p, '??')[:30]}" for p in mn["PREF_ID"]]
+mn["pref_row"] = [f"{p} {PREF_DESC.get(p, '??')}" for p in mn["PREF_ID"]]
 m4 = mn.pivot_table(index="pref_row", columns="writer_col", values="n_writes_to_no",
                     aggfunc="sum", fill_value=0)
 m4["TOTAL"] = m4.sum(axis=1)
