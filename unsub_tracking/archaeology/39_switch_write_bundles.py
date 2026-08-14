@@ -59,9 +59,17 @@ SYS_DESC = {
     7001: "Sales Platform (branch staff)", 7002: "DI Client Source",
     7003: "Royal Direct / Client View (contact centre)", 7004: "Online Banking",
     7005: "Service Platform", 7006: "RBC Banking (STaR UI, batch/purge)",
-    7016: "RBC.COM", 7020: "Exact Target (email ESP - the unsubscribe page)",
-    7027: "D&H", 7033: "?? NOT in dictionary", 7053: "?? NOT in dictionary",
-    7999: "Default Application System", 99999: "batch update (SRF consolidation)",
+    7007: "RBC Express", 7008: "DS Client Source", 7009: "BridgeTrack", 7010: "CASPER",
+    7012: "Retail Banking Investment System F200", 7013: "Retail Banking Investment System 5G10",
+    7014: "Term Investment System 4V00", 7015: "SAP / RCT-LINX desktop", 7016: "RBC.COM",
+    7017: "D&H/AMIA/CMG (telemarketer)", 7018: "CART", 7019: "IRIS",
+    7020: "Exact Target (email ESP - the unsubscribe page)", 7021: "TSYS",
+    7022: "RD Fulfillment", 7023: "Assisted Multi Product Application",
+    7024: "VOX (telemarketing vendor)", 7025: "ZEDD telemarketing / CASL Tool",
+    7026: "APAC (telemarketing vendor)", 7027: "D&H", 7028: "CPC-CA (MCA)", 7029: "RCL TPA",
+    7030: "GISP (WM) / ADHOC Data Source", 7033: "?? NOT in dictionary",
+    7053: "?? NOT in dictionary", 7999: "Default Application System",
+    99999: "batch update (SRF consolidation)",
 }
 
 # %% [1] Five real examples - one client's rows, so a change moment is visible on screen
