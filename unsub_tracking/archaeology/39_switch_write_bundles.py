@@ -254,3 +254,72 @@ per_sys = (tmpl.groupby("system")
                     biggest_template_share_pct=("pct_of_system_actions", "max"))
                .sort_values("n_actions_total", ascending=False))
 display(per_sys.head(12))
+
+# %% [6] ONE WRITER OR MANY? - do multi-switch days ever mix writing systems?
+# The clean email attribution rests on this: a 7020 write = a client's unsubscribe
+# submission, ONLY IF no process exists where one event produces writes from several
+# systems. Two checks, both on the 18-month frame.
+
+print("CHECK 1 - client-days with 2+ switches set to No: how many DISTINCT writers?")
+print("If '1 writer' =~ 100%, every bulk change is one system acting alone.")
+w1 = edw_pd("""
+SELECT n_writers_that_day, COUNT(*) AS n_client_days
+FROM (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS d,
+           COUNT(DISTINCT APP_SYS_CD) AS n_writers_that_day
+    FROM DDWV01.CPC_RB_PREF
+    WHERE CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY 1, 2
+    HAVING COUNT(*) >= 2
+) t
+GROUP BY 1 ORDER BY 1
+""")
+w1["pct_of_multi_switch_days"] = (100 * w1["n_client_days"] / w1["n_client_days"].sum()).round(2)
+display(w1)
+
+print("CHECK 2 - isolate the email channel: for every 7020 write, did ANY other system")
+print("write a switch for the SAME client within +/-1 day? '0 other-writer switches' =")
+print("the unsubscribe click stands alone = attribution clean.")
+w2 = edw_pd("""
+SELECT CASE WHEN n_other_writer_switches = 0 THEN '0 other-writer switches (clean)'
+            WHEN n_other_writer_switches <= 2 THEN '1-2 other-writer switches'
+            ELSE                                   '3+ other-writer switches (bulk nearby)' END
+         AS other_systems_within_1_day,
+       COUNT(*) AS n_esp_writes
+FROM (
+    SELECT a.CLNT_NO, a.PREF_ID, a.CHG_TMSTMP,
+           COUNT(b.PREF_ID) AS n_other_writer_switches
+    FROM DDWV01.CPC_RB_PREF a
+    LEFT JOIN DDWV01.CPC_RB_PREF b
+      ON  b.CLNT_NO = a.CLNT_NO
+      AND b.APP_SYS_CD <> 7020
+      AND b.CLNT_CONSENT_TYP = 5002
+      AND CAST(b.CHG_TMSTMP AS DATE) BETWEEN CAST(a.CHG_TMSTMP AS DATE) - 1
+                                         AND CAST(a.CHG_TMSTMP AS DATE) + 1
+    WHERE a.APP_SYS_CD = 7020
+      AND a.CLNT_CONSENT_TYP = 5002
+      AND a.CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY 1, 2, 3
+) t
+GROUP BY 1 ORDER BY 1
+""")
+w2["pct_of_esp_writes"] = (100 * w2["n_esp_writes"] / w2["n_esp_writes"].sum()).round(2)
+display(w2)
+
+print("CHECK 3 - raw look at 10 mixed-writer client-days (if any): what do they actually look like?")
+display(edw_pd("""
+SELECT p.CLNT_NO, p.CHG_TMSTMP, p.PREF_ID, p.APP_SYS_CD
+FROM DDWV01.CPC_RB_PREF p
+JOIN (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS d
+    FROM DDWV01.CPC_RB_PREF
+    WHERE CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+    GROUP BY 1, 2
+    HAVING COUNT(*) >= 2 AND COUNT(DISTINCT APP_SYS_CD) >= 2
+    SAMPLE 10
+) s ON s.CLNT_NO = p.CLNT_NO AND CAST(p.CHG_TMSTMP AS DATE) = s.d
+WHERE p.CLNT_CONSENT_TYP = 5002
+ORDER BY p.CLNT_NO, p.CHG_TMSTMP
+"""))
