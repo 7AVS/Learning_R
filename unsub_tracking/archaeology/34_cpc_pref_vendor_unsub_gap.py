@@ -173,6 +173,46 @@ ax.set_title("Where the nearest vendor unsub (disp=4) sits relative to the 1012 
 ax.spines[["top", "right"]].set_visible(False)
 plt.tight_layout(); plt.show()
 
+# %% [3b] Same rollup, ESP-WRITTEN flips only (APP_SYS_CD = 7020)
+# These flips ARE email unsubscriptions (proven: unsubscribe-page pipe, pack 37/39).
+# Every one of them SHOULD have a vendor disposition-4 behind it if the vendor feed
+# captured unsubs completely - so every 'no unsub found' here is a pure capture miss,
+# no excuses. This is the vendor feed's coverage measured on ground truth.
+# Requires vt_unsub34 from [1] in this session.
+b7 = edw_pd("""
+WITH flips AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS flip_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND APP_SYS_CD = 7020                          -- ESP-written only
+      AND CHG_TMSTMP >= DATE '2025-02-01'
+),
+nearest AS (
+    SELECT f.CLNT_NO, f.flip_dt, CAST(u.unsub_tm AS DATE) AS unsub_dt
+    FROM flips f
+    JOIN vt_unsub34 u
+      ON  u.CLNT_NO = f.CLNT_NO
+      AND CAST(u.unsub_tm AS DATE) <= f.flip_dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY f.CLNT_NO ORDER BY u.unsub_tm DESC) = 1
+)
+SELECT CASE WHEN n.unsub_dt IS NULL              THEN '6_no_unsub_found'
+            WHEN f.flip_dt - n.unsub_dt <= 1     THEN '1_same_or_next_day'
+            WHEN f.flip_dt - n.unsub_dt <= 7     THEN '2_within_week'
+            WHEN f.flip_dt - n.unsub_dt <= 30    THEN '3_within_month'
+            WHEN f.flip_dt - n.unsub_dt <= 90    THEN '4_within_quarter'
+            ELSE                                      '5_over_90_days' END AS gap_bucket,
+       COUNT(*) AS n_clients
+FROM flips f
+LEFT JOIN nearest n ON n.CLNT_NO = f.CLNT_NO
+GROUP BY 1 ORDER BY 1
+""")
+b7["share_pct"] = (b7["n_clients"] / b7["n_clients"].sum() * 100).round(1)
+total_row7 = pd.DataFrame([{"gap_bucket": "TOTAL", "n_clients": b7["n_clients"].sum(),
+                            "share_pct": 100.0}])
+print("ESP-written 1012 flips (proven email unsubs): nearest vendor disposition-4 before each.")
+print("'no_unsub_found' = the vendor feed missed a REAL email unsubscription:")
+display(pd.concat([b7, total_row7], ignore_index=True))
+
 # %% [4] day-level 0-90 histogram
 SQL_VDAYS = """
 WITH flips AS (
