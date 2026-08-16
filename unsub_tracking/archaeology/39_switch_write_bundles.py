@@ -221,7 +221,10 @@ SELECT APP_SYS_CD,
        COUNT(*) AS n_actions
 FROM (
     SELECT CLNT_NO, APP_SYS_CD,
-           TRIM(TRAILING ',' FROM (XMLAGG(TRIM(PREF_ID) || ',' ORDER BY CHG_TMSTMP, PREF_ID)
+           -- XMLAGG allows ONE sort key: ISO-format timestamp text + pref id sorts
+           -- identically to (CHG_TMSTMP, PREF_ID)
+           TRIM(TRAILING ',' FROM (XMLAGG(TRIM(PREF_ID) || ','
+                                          ORDER BY CAST(CHG_TMSTMP AS VARCHAR(26)) || TRIM(PREF_ID))
                                    (VARCHAR(1000)))) AS signature
     FROM DDWV01.CPC_RB_PREF
     WHERE CLNT_CONSENT_TYP = 5002
