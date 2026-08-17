@@ -268,3 +268,30 @@ LEFT JOIN (
     WHERE PREF_ID = 1012
     QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
 ) c ON c.CLNT_NO = e.CLNT_NO;
+
+
+/* ============================================================================
+[15] METADATA SEARCH — RUNS IN STARBURST (Trino SQL), NOT Teradata Studio.
+     information_schema stores table names LOWERCASE: always lower() + lowercase
+     patterns. Swap the catalog prefix to sweep each catalog you can see:
+     edl0_im / dw00_im / dw00_im_qid / tu30_sa_crc0_bfs.
+     Keyword sweep for the backfeed hunt: %unsub% %sfmc% %exact% %optout%
+     %opt_out% %consent% %pref% %backfeed%.
+     LEADS already spotted in edl0_im (from editor history 2026-08-17):
+       prod_uq20_digital.sf_unsubscribe          <- SFMC-shaped unsub table, probe first
+       prod_dvh0_avion.avion_houselist_universe_ema...
+       prod_brt0_ess.lai0__intelligent_email_manag...
+============================================================================ */
+SELECT table_catalog, table_schema, table_name
+FROM edl0_im.information_schema.tables
+WHERE lower(table_name) LIKE '%backfeed%'
+   OR lower(table_name) LIKE '%unsub%'
+   OR lower(table_name) LIKE '%output%';
+
+-- by column name (add AND table_schema = '...' if slow)
+SELECT table_schema, table_name, column_name
+FROM edl0_im.information_schema.columns
+WHERE lower(column_name) LIKE '%unsub%';
+
+-- first look at the sf_unsubscribe lead
+SELECT * FROM edl0_im.prod_uq20_digital.sf_unsubscribe LIMIT 10;
