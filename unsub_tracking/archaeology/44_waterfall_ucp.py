@@ -55,7 +55,7 @@ j = j.withColumn("bucket",
 
 wf = j.groupBy("bucket").count().orderBy(F.desc("count")).toPandas()
 print(f"Waterfall components, {MONTH_A} -> {MONTH_B}, flag = {FLAG}:")
-print(wf.to_string(index=False))
+display(wf)
 
 # %% [3] The identity check - start + adds - drops must equal end
 import pandas as pd
@@ -72,7 +72,7 @@ summary = pd.DataFrame([
     {"waterfall element": "- attrition", "n_clients": -get_n("- attrition")},
     {"waterfall element": f"END eligible @ {MONTH_B} (computed)", "n_clients": end},
 ])
-print(summary.to_string(index=False))
+display(summary)
 direct_end = int(b.filter(col("elig_b") == 1).count())
 print(f"\nEND measured directly in {MONTH_B}: {direct_end:,} - identity {'HOLDS' if direct_end == end else 'BROKEN - investigate before using'}")
 
@@ -195,11 +195,11 @@ for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
 
 fdf = pd.concat(flows, ignore_index=True)
 print("Gross monthly flows (each month vs the previous one):")
-print(fdf.to_string(index=False))
+display(fdf)
 print("\nCopy-paste block for PowerPoint (tab-separated):")
 print(fdf.to_csv(sep="\t", index=False))
 print("\nSums over the chain vs the A-to-B waterfall (difference = within-period churn):")
-print(fdf[["opted_in", "lost_consent", "attrition", "new_to_bank", "re_entered"]].sum().to_string())
+display(fdf[["opted_in", "lost_consent", "attrition", "new_to_bank", "re_entered"]].sum().to_frame('total'))
 
 fig, ax = plt.subplots(figsize=(11, 4.8))
 x = range(len(fdf))

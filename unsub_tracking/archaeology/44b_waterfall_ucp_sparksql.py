@@ -45,7 +45,7 @@ GROUP BY 1
 ORDER BY n_clients DESC
 """).toPandas()
 print(f"Waterfall components {MONTH_A} -> {MONTH_B}, flag = {FLAG}:")
-print(wf.to_string(index=False))
+display(wf)
 print("\nCopy-paste block (tab-separated):")
 print(wf.to_csv(sep="\t", index=False))
 
@@ -97,7 +97,7 @@ for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
 
 fdf = pd.concat(flows, ignore_index=True)
 print("Gross monthly flows (each month vs the previous):")
-print(fdf.to_string(index=False))
+display(fdf)
 print("\nCopy-paste block for PowerPoint (tab-separated):")
 print(fdf.to_csv(sep="\t", index=False))
 
@@ -113,7 +113,7 @@ deck = pd.DataFrame([
     ["− Client attrition", f"{MONTH_A} → {MONTH_B}", -n_attr, round(-n_attr/1e6, 2)],
     ["Emailable base", MONTH_B, end, round(end/1e6, 2)],
 ], columns=["element", "period", "clients", "clients_MM"])
-print(deck.to_string(index=False))
+display(deck)
 print("\nCopy-paste block (tab-separated):")
 print(deck.to_csv(sep="\t", index=False))
 
@@ -217,7 +217,7 @@ ORDER BY 1, 2
 """).toPandas()
 xt["pct_of_universe"] = (100 * xt["n_clients"] / xt["n_clients"].sum()).round(2)
 print(f"Consent flag ({FLAG}) x active-address, {MONTH_B}:")
-print(xt.to_string(index=False))
+display(xt)
 print("\nCopy-paste block (tab-separated):")
 print(xt.to_csv(sep="\t", index=False))
 
@@ -248,11 +248,9 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 4 DESC
 """).toPandas()
 print(f"Eligible clients in {MONTH_A}: eligibility path x product-count path to {MONTH_B}:")
-print(pa.to_string(index=False))
+display(pa)
 print("\nCopy-paste block (tab-separated):")
 print(pa.to_csv(sep="\t", index=False))
-print("Read: '1+ -> 0' rows under 'stayed eligible' = hidden attrition candidates;")
-print("'0' in month A under 'attrition' = clients who wound down before vanishing.")
 
 # %% [9] THE FLAG-IS-1012 TEST - UCP's EM flag vs CPC monthly standing, client level
 # Andre's read from the background docs: CPC_EM_ELIGIBLE is built from the 1012 consent.
@@ -295,8 +293,6 @@ ORDER BY 1, 2
 """).toPandas()
 m9["pct"] = (100 * m9["n_clients"] / m9["n_clients"].sum()).round(2)
 print(f"UCP {FLAG} vs CPC 1012 standing, both at {MONTH_B}:")
-print(m9.to_string(index=False))
+display(m9)
 print("\nCopy-paste block (tab-separated):")
 print(m9.to_csv(sep="\t", index=False))
-print("Clean derivation = 'explicit No -> flag 0' and 'Yes/blank -> flag 1' dominate;")
-print("off-diagonal mass = the flag includes MORE than 1012 consent (address, kill, etc.).")
