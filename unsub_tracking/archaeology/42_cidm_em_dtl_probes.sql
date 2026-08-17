@@ -231,3 +231,40 @@ JOIN DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL e
 WHERE c.CLNT_CONSENT_TYP = 5001
   AND e.CPC1012_IND = 'Y'
 SAMPLE 10;
+
+
+/* ============================================================================
+[14] Opposite direction: sample EM_DTL by flag value, look up each client's
+     LATEST 1012 row (max CHG_TMSTMP) in CPC_CLNT_PREF_CHC - the table the
+     spec cites. Expected: Y sample -> 5002/employee-blank; N sample ->
+     5001/blank/no-row (nulls on CPC columns = client has no 1012 row).
+============================================================================ */
+SELECT e.CLNT_NO, e.CPC1012_IND, c.CLNT_CONSENT_TYP, c.CHG_TMSTMP, c.APP_SYS_CD
+FROM (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+      AND CPC1012_IND = 'Y'
+    SAMPLE 10
+) e
+LEFT JOIN (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
+    FROM DG6V01.CPC_CLNT_PREF_CHC
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+) c ON c.CLNT_NO = e.CLNT_NO;
+
+SELECT e.CLNT_NO, e.CPC1012_IND, c.CLNT_CONSENT_TYP, c.CHG_TMSTMP, c.APP_SYS_CD
+FROM (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+      AND CPC1012_IND = 'N'
+    SAMPLE 10
+) e
+LEFT JOIN (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
+    FROM DG6V01.CPC_CLNT_PREF_CHC
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+) c ON c.CLNT_NO = e.CLNT_NO;
