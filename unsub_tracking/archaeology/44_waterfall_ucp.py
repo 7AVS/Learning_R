@@ -96,54 +96,131 @@ deck = pd.DataFrame([
 print("Copy-paste block (tab-separated):")
 print(deck.to_csv(sep="\t", index=False))
 
-# %% [5] The waterfall chart - deck style (broken axis, MM labels, dotted connectors)
+# %% [5] The waterfall chart - mock style: ONE Subscribes bar and ONE Unsubscribes bar,
+# each stacked by component, segment labels on the stacks
 import matplotlib.pyplot as plt
 
-navy, blue, lightblue, amber, grey = "#16436e", "#2a78d6", "#7fb2e6", "#e08214", "#8a8f98"
+navy      = "#16436e"   # endpoints
+blues     = ["#2a78d6", "#7fb2e6", "#bcd7f2"]   # subscribe components (one hue, stepped)
+ambers    = ["#e08214", "#f5c26b"]              # unsubscribe components
+grey      = "#8a8f98"
 
-adds_total  = n_new + n_reent + n_open
-bars = [
-    ("Emailable\nclients\n" + MONTH_A[:7], start,       None,   "endpoint"),
-    ("Subscribes",                          adds_total,  start,  "add"),
-    ("Lost\nconsent",                      -n_lost,      start + adds_total, "drop"),
-    ("Client\nattrition",                  -n_attr,      start + adds_total - n_lost, "drop"),
-    ("Emailable\nbase\n" + MONTH_B[:7],     end,         None,   "endpoint"),
-]
+sub_parts = [("New to bank", n_new), ("Re-entered", n_reent), ("Opted in", n_open)]
+uns_parts = [("Client attrition", n_attr), ("Lost consent", n_lost)]
+adds_total, drops_total = sum(v for _, v in sub_parts), sum(v for _, v in uns_parts)
 
-lo = min(start, end) * 0.955 / 1e6      # broken-axis floor just under the smallest bar
-fig, ax = plt.subplots(figsize=(11, 5.5))
-xpos = range(len(bars))
-running_tops = []
-for i, (label, val, base_abs, kind) in enumerate(bars):
-    v = val / 1e6
-    if kind == "endpoint":
-        ax.bar(i, v - lo, bottom=lo, width=0.62, color=navy, zorder=3)
-        ax.text(i, v + 0.03, f"{v:,.2f}", ha="center", va="bottom",
-                fontsize=11, fontweight="bold", color="#222222")
-        running_tops.append(v)
-    else:
-        base = base_abs / 1e6
-        top = base + v
-        colr = blue if kind == "add" else amber
-        ax.bar(i, v, bottom=base, width=0.62, color=colr, zorder=3)
-        ax.text(i, max(base, top) + 0.03, f"{v:+.2f}", ha="center", va="bottom",
-                fontsize=11, fontweight="bold", color="#222222")
-        running_tops.append(top)
-# dotted connectors between consecutive bar tops
-for i in range(len(bars) - 1):
-    y = running_tops[i] if bars[i][3] != "drop" else (bars[i][1] + bars[i][2]) / 1e6
-    y_next_base = y
-    ax.plot([i + 0.31, i + 1 - 0.31], [y, y], ls=":", lw=1.2, color=grey, zorder=2)
+lo = min(start, end) * 0.955 / 1e6
+fig, ax = plt.subplots(figsize=(11, 5.8))
 
-ax.set_xticks(list(xpos))
-ax.set_xticklabels([b[0] for b in bars], fontsize=10)
+# endpoint bars
+ax.bar(0, start/1e6 - lo, bottom=lo, width=0.6, color=navy, zorder=3)
+ax.text(0, start/1e6 + 0.03, f"{start/1e6:,.2f}", ha="center", fontsize=11, fontweight="bold")
+ax.bar(3, end/1e6 - lo, bottom=lo, width=0.6, color=navy, zorder=3)
+ax.text(3, end/1e6 + 0.03, f"{end/1e6:,.2f}", ha="center", fontsize=11, fontweight="bold")
+
+# Subscribes: stacked upward from START
+base = start / 1e6
+for (lbl, v), c in zip(sub_parts, blues):
+    h = v / 1e6
+    ax.bar(1, h, bottom=base, width=0.6, color=c, zorder=3,
+           edgecolor="white", linewidth=1.5, label=lbl)
+    if h > 0.015:
+        ax.text(1, base + h/2, f"{h:.2f}", ha="center", va="center", fontsize=9.5,
+                color="#222222")
+    base += h
+ax.text(1, base + 0.03, f"+{adds_total/1e6:.2f}", ha="center", fontsize=11, fontweight="bold")
+top_after_adds = base
+
+# Unsubscribes: stacked downward from the post-adds level
+base = top_after_adds
+for (lbl, v), c in zip(uns_parts, ambers):
+    h = v / 1e6
+    ax.bar(2, -h, bottom=base, width=0.6, color=c, zorder=3,
+           edgecolor="white", linewidth=1.5, label=lbl)
+    if h > 0.015:
+        ax.text(2, base - h/2, f"-{h:.2f}", ha="center", va="center", fontsize=9.5,
+                color="#222222")
+    base -= h
+ax.text(2, top_after_adds + 0.03, f"-{drops_total/1e6:.2f}", ha="center", fontsize=11,
+        fontweight="bold")
+
+# dotted connectors
+ax.plot([0.3, 0.7], [start/1e6]*2, ls=":", lw=1.2, color=grey)
+ax.plot([1.3, 1.7], [top_after_adds]*2, ls=":", lw=1.2, color=grey)
+ax.plot([2.3, 2.7], [(top_after_adds - drops_total/1e6)]*2, ls=":", lw=1.2, color=grey)
+
+ax.set_xticks([0, 1, 2, 3])
+ax.set_xticklabels([f"Emailable\nclients\n{MONTH_A[:7]}", "Subscribes",
+                    "Unsubscribes", f"Emailable\nbase\n{MONTH_B[:7]}"], fontsize=10)
 ax.set_ylabel("# clients in MM")
-ax.set_ylim(lo, max(running_tops) * 1.012)
+ax.set_ylim(lo, (top_after_adds) * 1.012)
 ax.spines[["top", "right"]].set_visible(False)
-# axis-break glyph
 ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
+ax.legend(loc="upper left", fontsize=9, frameon=False)
 ax.set_title(f"Emailable base waterfall — {MONTH_A} to {MONTH_B}  (flag: {FLAG})",
              fontweight="bold", fontsize=12, loc="left")
-ax.text(0.99, -0.16, "Subscribes = new to bank + re-entered + existing opt-ins. Source: UCP monthly snapshots.",
-        transform=ax.transAxes, ha="right", fontsize=8.5, color="#555555")
+plt.tight_layout(); plt.show()
+
+# %% [6] THE PATH - the same flow components computed month by month, not A-to-B
+# A-to-B nets everything (a client flipping off and back inside the window vanishes).
+# This cell chains CONSECUTIVE month pairs and measures each month's gross flows:
+# new-to-bank, re-entered, opted in / lost consent, attrition. The monthly sums will
+# NOT equal the A-to-B bars - that difference = within-period churn, and it is real.
+MONTHS_CHAIN = ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30",
+                "2026-05-31", "2026-06-30", "2026-07-31"]   # <- edit to taste
+
+snap = {}
+for m in MONTHS_CHAIN:
+    snap[m] = load_month(m).cache()
+
+flows = []
+for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
+    p = (snap[m0].select("CLNT_NO", col("elig").alias("e0"))
+          .join(snap[m1].select(["CLNT_NO", col("elig").alias("e1")] +
+                                (["DT_OPENED"] if has_dt else [])),
+                "CLNT_NO", "full_outer"))
+    agg = p.agg(
+        F.sum(F.when((col("e0") == 0) & (col("e1") == 1), 1).otherwise(0)).alias("opted_in"),
+        F.sum(F.when((col("e0") == 1) & (col("e1") == 0), 1).otherwise(0)).alias("lost_consent"),
+        F.sum(F.when((col("e0") == 1) & col("e1").isNull(), 1).otherwise(0)).alias("attrition"),
+        F.sum(F.when(col("e0").isNull() & (col("e1") == 1) &
+                     (col("DT_OPENED") > F.lit(m0)) if has_dt
+                     else col("e0").isNull() & (col("e1") == 1), 1).otherwise(0)).alias("new_to_bank"),
+        F.sum(F.when(col("e0").isNull() & (col("e1") == 1) &
+                     ((col("DT_OPENED") <= F.lit(m0)) | col("DT_OPENED").isNull()) if has_dt
+                     else F.lit(False), 1).otherwise(0)).alias("re_entered"),
+    ).toPandas()
+    agg.insert(0, "month", m1[:7])
+    flows.append(agg)
+
+fdf = pd.concat(flows, ignore_index=True)
+print("Gross monthly flows (each month vs the previous one):")
+print(fdf.to_string(index=False))
+print("\nSums over the chain vs the A-to-B waterfall (difference = within-period churn):")
+print(fdf[["opted_in", "lost_consent", "attrition", "new_to_bank", "re_entered"]].sum().to_string())
+
+fig, ax = plt.subplots(figsize=(11, 4.8))
+x = range(len(fdf))
+pos_bottom = [0]*len(fdf)
+for lbl, colname, c in [("New to bank", "new_to_bank", blues[0]),
+                        ("Re-entered", "re_entered", blues[1]),
+                        ("Opted in", "opted_in", blues[2])]:
+    vals = (fdf[colname] / 1e3).tolist()
+    ax.bar(x, vals, bottom=pos_bottom, width=0.6, color=c, edgecolor="white",
+           linewidth=1, label=lbl, zorder=3)
+    pos_bottom = [a + b for a, b in zip(pos_bottom, vals)]
+neg_bottom = [0]*len(fdf)
+for lbl, colname, c in [("Client attrition", "attrition", ambers[0]),
+                        ("Lost consent", "lost_consent", ambers[1])]:
+    vals = (-fdf[colname] / 1e3).tolist()
+    ax.bar(x, vals, bottom=neg_bottom, width=0.6, color=c, edgecolor="white",
+           linewidth=1, label=lbl, zorder=3)
+    neg_bottom = [a + b for a, b in zip(neg_bottom, vals)]
+ax.axhline(0, color="#444444", lw=1)
+ax.set_xticks(list(x)); ax.set_xticklabels(fdf["month"], fontsize=10)
+ax.set_ylabel("clients (thousands)")
+ax.legend(loc="upper left", fontsize=9, frameon=False, ncol=2)
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_title(f"Monthly gross flows of the emailable base  (flag: {FLAG})",
+             fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
