@@ -93,8 +93,6 @@ deck = pd.DataFrame([
     ["− Client attrition", f"{MONTH_A} → {MONTH_B}", -n_attr, round(-n_attr/1e6, 2)],
     ["Emailable base", MONTH_B, end, round(end/1e6, 2)],
 ], columns=["element", "period", "clients", "clients_MM"])
-print("Copy-paste block (tab-separated):")
-print(deck.to_csv(sep="\t", index=False))
 
 # %% [5] The waterfall chart - mock style: ONE Subscribes bar and ONE Unsubscribes bar,
 # each stacked by component, segment labels on the stacks
@@ -196,8 +194,6 @@ for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
 fdf = pd.concat(flows, ignore_index=True)
 print("Gross monthly flows (each month vs the previous one):")
 display(fdf)
-print("\nCopy-paste block for PowerPoint (tab-separated):")
-print(fdf.to_csv(sep="\t", index=False))
 print("\nSums over the chain vs the A-to-B waterfall (difference = within-period churn):")
 display(fdf[["opted_in", "lost_consent", "attrition", "new_to_bank", "re_entered"]].sum().to_frame('total'))
 

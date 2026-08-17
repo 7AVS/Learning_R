@@ -46,8 +46,6 @@ ORDER BY n_clients DESC
 """).toPandas()
 print(f"Waterfall components {MONTH_A} -> {MONTH_B}, flag = {FLAG}:")
 display(wf)
-print("\nCopy-paste block (tab-separated):")
-print(wf.to_csv(sep="\t", index=False))
 
 # %% [2] Identity check - SQL both sides
 end_direct = spark.sql(f"""
@@ -98,8 +96,6 @@ for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
 fdf = pd.concat(flows, ignore_index=True)
 print("Gross monthly flows (each month vs the previous):")
 display(fdf)
-print("\nCopy-paste block for PowerPoint (tab-separated):")
-print(fdf.to_csv(sep="\t", index=False))
 
 # %% [4] Deck-ready table - the waterfall as readable rows (paste into Excel/PowerPoint)
 n_new, n_reent, n_open = g("+ new to bank"), g("+ re-entered"), g("+ opened consent")
@@ -114,8 +110,6 @@ deck = pd.DataFrame([
     ["Emailable base", MONTH_B, end, round(end/1e6, 2)],
 ], columns=["element", "period", "clients", "clients_MM"])
 display(deck)
-print("\nCopy-paste block (tab-separated):")
-print(deck.to_csv(sep="\t", index=False))
 
 # %% [5] The waterfall chart - mock style (unchanged from pack 44)
 import matplotlib.pyplot as plt
@@ -218,8 +212,6 @@ ORDER BY 1, 2
 xt["pct_of_universe"] = (100 * xt["n_clients"] / xt["n_clients"].sum()).round(2)
 print(f"Consent flag ({FLAG}) x active-address, {MONTH_B}:")
 display(xt)
-print("\nCopy-paste block (tab-separated):")
-print(xt.to_csv(sep="\t", index=False))
 
 # %% [8] Product-count attrition - did 'gone' clients wind down first, and who sits at
 # zero products while still in the snapshot (hidden attrition)?
@@ -249,8 +241,6 @@ ORDER BY 1, 4 DESC
 """).toPandas()
 print(f"Eligible clients in {MONTH_A}: eligibility path x product-count path to {MONTH_B}:")
 display(pa)
-print("\nCopy-paste block (tab-separated):")
-print(pa.to_csv(sep="\t", index=False))
 
 # %% [9] THE FLAG-IS-1012 TEST - UCP's EM flag vs CPC monthly standing, client level
 # Andre's read from the background docs: CPC_EM_ELIGIBLE is built from the 1012 consent.
@@ -294,5 +284,3 @@ ORDER BY 1, 2
 m9["pct"] = (100 * m9["n_clients"] / m9["n_clients"].sum()).round(2)
 print(f"UCP {FLAG} vs CPC 1012 standing, both at {MONTH_B}:")
 display(m9)
-print("\nCopy-paste block (tab-separated):")
-print(m9.to_csv(sep="\t", index=False))
