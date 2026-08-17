@@ -284,3 +284,141 @@ ORDER BY 1, 2
 m9["pct"] = (100 * m9["n_clients"] / m9["n_clients"].sum()).round(2)
 print(f"UCP {FLAG} vs CPC 1012 standing, both at {MONTH_B}:")
 display(m9)
+
+# %% [10] The two deck lines, monthly - consent (flag = 1) and reachable (flag = 1 AND
+# active email address). One count-SQL per month-end; the table feeds both charts below.
+import pandas as pd
+MONTHS_LINE = ["2025-01-31", "2025-02-28", "2025-03-31", "2025-04-30", "2025-05-31",
+               "2025-06-30", "2025-07-31", "2025-08-31", "2025-09-30", "2025-10-31",
+               "2025-11-30", "2025-12-31",
+               "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31",
+               "2026-06-30", "2026-07-31"]          # pack 44's full frame (mock window)
+
+LINE_SQL = f"""
+-- one snapshot: clients holding email consent, and the subset with a live address
+SELECT COUNT(CASE WHEN TRIM(CAST({FLAG} AS STRING)) = '1' THEN 1 END)  AS n_consent,
+       COUNT(CASE WHEN TRIM(CAST({FLAG} AS STRING)) = '1'
+                   AND TRIM(CAST(ACTIVE_EMAIL_IND AS STRING)) = '1'
+                  THEN 1 END)                                          AS n_reachable
+FROM ucp_m
+"""
+
+rows = []
+for m in MONTHS_LINE:
+    spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m}/").createOrReplaceTempView("ucp_m")
+    r = spark.sql(LINE_SQL).toPandas()
+    r.insert(0, "month_end", m)
+    rows.append(r)
+lines = pd.concat(rows, ignore_index=True)
+lines["n_consent_no_address"] = lines["n_consent"] - lines["n_reachable"]
+print(f"Monthly consent ({FLAG} = 1) and reachable (consent AND active email address):")
+display(lines)
+
+# %% [11] Chart 1 - consent line only (shown first; reachable held back for the follow-up)
+import matplotlib.pyplot as plt
+navy = "#16436e"
+
+fig, ax = plt.subplots(figsize=(11, 4.6))
+x = range(len(lines))
+ax.plot(x, lines["n_consent"] / 1e6, color=navy, lw=2.2, marker="o", ms=4)
+ax.text(len(lines) - 1, lines["n_consent"].iloc[-1] / 1e6 + 0.06,
+        f"{lines['n_consent'].iloc[-1]/1e6:,.2f}", ha="right", fontsize=10, fontweight="bold")
+ax.set_xticks(list(x))
+ax.set_xticklabels([m[:7] for m in lines["month_end"]], fontsize=9, rotation=45)
+ax.set_ylabel("# clients in MM")
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_title(f"Clients with email consent ({FLAG} = 1) - monthly",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
+
+# %% [12] Chart 2 - reachable line, with the consent line kept for reference (the gap
+# between them = consented clients with no active email address)
+fig, ax = plt.subplots(figsize=(11, 4.6))
+blue = "#2a78d6"
+ax.plot(x, lines["n_consent"] / 1e6, color=navy, lw=1.6, marker="o", ms=3,
+        label=f"Email consent ({FLAG} = 1)")
+ax.plot(x, lines["n_reachable"] / 1e6, color=blue, lw=2.2, marker="o", ms=4,
+        label="Reachable (consent AND active email address)")
+ax.fill_between(x, lines["n_reachable"] / 1e6, lines["n_consent"] / 1e6,
+                color=blue, alpha=0.10)
+ax.text(len(lines) - 1, lines["n_reachable"].iloc[-1] / 1e6 - 0.15,
+        f"{lines['n_reachable'].iloc[-1]/1e6:,.2f}", ha="right", fontsize=10, fontweight="bold")
+ax.set_xticks(list(x))
+ax.set_xticklabels([m[:7] for m in lines["month_end"]], fontsize=9, rotation=45)
+ax.set_ylabel("# clients in MM")
+ax.legend(loc="lower right", fontsize=9, frameon=False)
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_title("Reachable emailable base vs consent - monthly",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
+
+# %% [13] LAND today's EM_DTL snapshot to HDFS - starts the monthly archive (the table is
+# a daily-overwritten current snapshot; without this land, address/kill/spam layers have
+# no history). Idempotent: skips if this LOAD_DT is already landed. ~20M rows, chunked.
+try:
+    import teradatasql
+except ImportError:
+    get_ipython().system("pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+    import teradatasql
+import getpass, pandas as pd
+
+EM_DTL_BASE = "/user/427966379/unsub_cpc/em_dtl_snapshots/"
+
+td_user = input("Teradata username: ")
+td_pass = getpass.getpass("Teradata password: ")
+EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=td_user,
+                          password=td_pass, logmech="LDAP")
+
+cur = EDW.cursor()
+cur.execute("SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL")
+load_dt = str(cur.fetchall()[0][0])[:10]
+target = f"{EM_DTL_BASE}load_dt={load_dt}/"
+
+jvm = spark._jvm
+fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+already = fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS"))
+if already:
+    print(f"load_dt {load_dt} already landed at {target} - skipping pull")
+else:
+    chunks, total = [], 0
+    for c in pd.read_sql(f"""
+        SELECT CLNT_NO, DELIVERABLE_EM_ADDR_IND, VALID_EM_ADDR_IND, EM_ELIGIBLE_IND,
+               EM3_ELIGIBLE_IND, CPC1012_IND, EMAIL_KILL_CLNT_IND, SPAM_COMPLAINT_EM_IND
+        FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+        WHERE LOAD_DT = DATE '{load_dt}'
+    """, EDW, chunksize=1_000_000):
+        chunks.append(c); total += len(c)
+        print(f"  pulled {total:,} rows...")
+    pdf = pd.concat(chunks, ignore_index=True)
+    spark.createDataFrame(pdf).write.mode("overwrite").parquet(target)
+    landed = spark.read.parquet(target).count()
+    print(f"landed {landed:,} rows at {target} (pulled {total:,}) "
+          f"| {'MATCH' if landed == total else 'MISMATCH - investigate'}")
+
+# %% [14] ADDRESS-FLAG CROSS-CHECK - UCP's ACTIVE_EMAIL_IND vs EM_DTL's address flags,
+# client level. Question: is the address code UCP carries the same information CIDM
+# carries? Clean result = UCP active-email clients sit in EM_DTL with valid+deliverable
+# addresses; UCP no-address clients are missing from EM_DTL or flagged N.
+# Timing caveat: UCP snapshot = 2026-07-31 month-end, EM_DTL = today's load
+# (same ~17-day drift as pack 42 [11c] - expect small off-diagonals, not zero).
+spark.read.parquet(f"{EM_DTL_BASE}load_dt={load_dt}/").createOrReplaceTempView("em_dtl")
+
+xm = spark.sql(f"""
+-- every client either side: UCP address flag x EM_DTL address status
+SELECT CASE WHEN u.CLNT_NO IS NULL                                   THEN 'not in UCP (EM_DTL only)'
+            WHEN TRIM(CAST(u.ACTIVE_EMAIL_IND AS STRING)) = '1'      THEN 'UCP: active email = 1'
+            ELSE                                                          'UCP: active email = 0' END AS ucp_address_flag,
+       CASE WHEN e.CLNT_NO IS NULL                                   THEN 'not in EM_DTL'
+            WHEN e.VALID_EM_ADDR_IND = 'Y'
+             AND e.DELIVERABLE_EM_ADDR_IND = 'Y'                     THEN 'EM_DTL: valid + deliverable'
+            WHEN e.VALID_EM_ADDR_IND = 'Y'                           THEN 'EM_DTL: valid, not deliverable'
+            ELSE                                                          'EM_DTL: address not valid' END AS em_dtl_address_status,
+       COUNT(*) AS n_clients
+FROM ucp_b u
+FULL OUTER JOIN em_dtl e ON u.CLNT_NO = e.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 3 DESC
+""").toPandas()
+xm["pct"] = (100 * xm["n_clients"] / xm["n_clients"].sum()).round(2)
+print(f"UCP ACTIVE_EMAIL_IND ({MONTH_B}) x EM_DTL address flags (load {load_dt}):")
+display(xm)
