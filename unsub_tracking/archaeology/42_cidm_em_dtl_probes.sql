@@ -170,3 +170,35 @@ SELECT 'EM_DTL: CPC1012_IND = N',
 FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
 WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
   AND CPC1012_IND = 'N';
+
+
+/* ============================================================================
+[12] EMAIL DRAFT to the CIDM steward (copy below, fill in the name)
+==============================================================================
+
+Subject: EM eligibility - three questions on how EM_DTL is built
+
+Hi [name],
+
+I'm reconciling our emailable-base numbers against CIDM_CHANNEL_ELIG_EM_DTL and
+the EM Eligibility spec, and I ran into three things I'd like to confirm:
+
+1. Is the consent piece of EM_DTL built only from DG6V01.CPC_CLNT_PREF_CHC
+   (Pref 1012), or do other sources or processes also feed the table? I hit a
+   case where a client shows ineligible in EM_DTL while their 1012 in CPC is
+   open, so I want to make sure I'm not missing an input.
+
+2. The spec says EM channel eligibility must be used together with EM Contact
+   Eligibility (%emcontacteligible). What does that check contain, and where
+   does it live? I want to know what I'd miss by reading EM_DTL alone.
+
+3. Encoding check: the spec's "Consent to E-mail" rule outputs 'N' for
+   opted-out clients (5002, or blank with a real EMP_ID), but in the table
+   itself clients with a standing 1012 opt-out carry CPC1012_IND = 'Y'. Are
+   those two different attributes, or is the flag inverted somewhere in the
+   load?
+
+Thanks!
+Andre
+
+============================================================================ */
