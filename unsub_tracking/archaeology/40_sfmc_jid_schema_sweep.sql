@@ -61,7 +61,8 @@ ORDER BY t.LastAlterTimeStamp DESC;
 ============================================================================ */
 SELECT * FROM DTZV01.VENDOR_FEEDBACK_EVENT SAMPLE 5;                    -- <- EDIT table
 
-SELECT MAX(disposition_dt_tm) AS latest_data, COUNT(*) AS n_rows        -- <- EDIT column
+SELECT MAX(disposition_dt_tm) AS latest_data,                           -- <- EDIT column
+       CAST(COUNT(*) AS BIGINT) AS n_rows          -- BIGINT: table has >2.1B rows
 FROM DTZV01.VENDOR_FEEDBACK_EVENT;                                      -- <- EDIT table
 
 SELECT StatsName, LastCollectTimeStamp
