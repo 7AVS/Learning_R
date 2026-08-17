@@ -93,6 +93,7 @@ deck = pd.DataFrame([
     ["− Client attrition", f"{MONTH_A} → {MONTH_B}", -n_attr, round(-n_attr/1e6, 2)],
     ["Emailable base", MONTH_B, end, round(end/1e6, 2)],
 ], columns=["element", "period", "clients", "clients_MM"])
+display(deck)
 
 # %% [5] The waterfall chart - mock style: ONE Subscribes bar and ONE Unsubscribes bar,
 # each stacked by component, segment labels on the stacks
