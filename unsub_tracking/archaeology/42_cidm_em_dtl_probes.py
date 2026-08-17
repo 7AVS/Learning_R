@@ -221,7 +221,7 @@ display(m10)
 
 print("--- [11a] which month-ends exist, and rows per month for 1012 (grain + depth) ---")
 display(edw_pd("""
-SELECT MONTH_END_DT,
+SELECT MTH_END_DT,
        CAST(COUNT(*) AS BIGINT)     AS n_1012_rows,
        COUNT(DISTINCT CLNT_NO)      AS n_clients
 FROM DDWV01.CPC_RB_PREF_MTHLY
@@ -229,11 +229,11 @@ WHERE PREF_ID = 1012
 GROUP BY 1
 ORDER BY 1 DESC
 """))
-# NOTE: if the month column errors, take its real name from a SAMPLE 5 first.
+# Column name MTH_END_DT confirmed by Andre 2026-08-17.
 
 print("--- [11b] the consent-eligible SERIES: 1012 standing per month-end ---")
 display(edw_pd("""
-SELECT MONTH_END_DT,
+SELECT MTH_END_DT,
        SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS n_explicit_no,
        SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS n_blank,
        SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5002, 5003)
@@ -256,7 +256,7 @@ FROM (
                 ELSE                              'Yes / other' END AS cpc_standing
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012
-      AND MONTH_END_DT = (SELECT MAX(MONTH_END_DT) FROM DDWV01.CPC_RB_PREF_MTHLY)
+      AND MTH_END_DT = (SELECT MAX(MTH_END_DT) FROM DDWV01.CPC_RB_PREF_MTHLY)
 ) c
 FULL OUTER JOIN (
     SELECT CLNT_NO, CPC1012_IND
