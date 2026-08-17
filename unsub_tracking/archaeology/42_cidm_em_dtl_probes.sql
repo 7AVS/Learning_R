@@ -152,3 +152,49 @@ FULL OUTER JOIN (
 ) e ON e.CLNT_NO = c.CLNT_NO
 GROUP BY 1, 2
 ORDER BY 3 DESC;
+
+
+/* ============================================================================
+[10b] Grain probe before [10c]: does any client carry MORE than one 1012 row in
+      CPC_RB_PREF? dup_rows = 1 only -> table is one-row-per-client on 1012.
+============================================================================ */
+SELECT dup_rows, COUNT(*) AS n_clients
+FROM (
+    SELECT CLNT_NO, COUNT(*) AS dup_rows
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+    GROUP BY 1
+) t
+GROUP BY 1 ORDER BY 1;
+
+
+/* ============================================================================
+[10c] The discrepancy cross-tab, dedup-hardened: EM_DTL 1012 flag vs the client's
+      MOST RECENT 1012 row in CPC_RB_PREF (QUALIFY keeps newest by CHG_TMSTMP).
+      Discrepancy cells to watch:
+        explicit No x N            -> CIDM would email an opted-out client
+        Yes x Y                    -> wrongly suppressed
+        explicit No x not in EM_DTL-> opted-out clients the gate table doesn't carry
+      Tie caveat: identical CHG_TMSTMP rows tie arbitrarily; if [10b] shows dupes,
+      add a deterministic tie-breaker (prefer 5002) before quoting numbers.
+============================================================================ */
+SELECT COALESCE(c.cpc_1012_latest, 'no 1012 row in CPC_RB_PREF')  AS cpc_rb_pref_latest_position,
+       COALESCE(e.CPC1012_IND, 'not in EM_DTL')                   AS em_dtl_1012_flag,
+       CAST(COUNT(*) AS BIGINT)                                   AS n_clients
+FROM (
+    SELECT CLNT_NO,
+           CASE WHEN CLNT_CONSENT_TYP = 5001 THEN 'Yes (5001)'
+                WHEN CLNT_CONSENT_TYP = 5002 THEN 'explicit No (5002)'
+                WHEN CLNT_CONSENT_TYP = 5003 THEN 'blank (5003)'
+                ELSE 'other consent value' END AS cpc_1012_latest
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+) c
+FULL OUTER JOIN (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+) e ON e.CLNT_NO = c.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 3 DESC;
