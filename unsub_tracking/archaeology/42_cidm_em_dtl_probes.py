@@ -182,3 +182,34 @@ pv9["TOTAL"] = pv9.sum(axis=1)
 pv9.loc["TOTAL"] = pv9.sum(axis=0)
 print("Monthly switch-offs per product preference, 18-month frame:")
 display(pv9)
+
+# %% [10] Client-level match: EM_DTL's 1012 flag vs the CPC table's most recent position
+# If CPC1012_IND is exactly derivable from CPC standing, the consent side of past
+# snapshots can be RECONSTRUCTED from CPC (standing today minus flips since date X) -
+# only address/kill/spam components stay unrewindable. This also explains the aggregate
+# gap seen in [6] (2.24M flagged vs 3.26M standing No).
+m10 = edw_pd("""
+SELECT COALESCE(c.cpc_standing, 'no 1012 row in CPC')            AS cpc_most_recent_position,
+       COALESCE(e.CPC1012_IND, 'not in EM_DTL')                  AS em_dtl_1012_flag,
+       CAST(COUNT(*) AS BIGINT)                                  AS n_clients
+FROM (
+    SELECT CLNT_NO,
+           CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 'explicit No (5002)'
+                WHEN CLNT_CONSENT_TYP = 5003 THEN 'blank (5003)'
+                ELSE                              'Yes / other' END AS cpc_standing
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+) c
+FULL OUTER JOIN (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+) e ON e.CLNT_NO = c.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 3 DESC
+""")
+m10["pct"] = (100 * m10["n_clients"] / m10["n_clients"].sum()).round(2)
+print("Every client, cross-classified: their most recent CPC position on 1012 vs the flag")
+print("EM_DTL carries today. Clean derivation = explicit-No rows all flagged Y, everything")
+print("else N; off-diagonal cells = population scoping or timing to explain:")
+display(m10)

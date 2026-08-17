@@ -127,3 +127,28 @@ WHERE PREF_ID IN (1004,1006,1010,1020,1021,1023,1024,1025,1026,1027,1028,1030,10
   AND CHG_TMSTMP >= DATE '2025-02-01'
 GROUP BY 1, 2
 ORDER BY 1, 2;
+
+
+/* ============================================================================
+[10] Client-level match: EM_DTL's 1012 flag vs the CPC table's most recent position.
+     Clean derivation = explicit-No rows all flagged Y, everything else N;
+     off-diagonal cells = population scoping or timing to explain.
+============================================================================ */
+SELECT COALESCE(c.cpc_standing, 'no 1012 row in CPC')            AS cpc_most_recent_position,
+       COALESCE(e.CPC1012_IND, 'not in EM_DTL')                  AS em_dtl_1012_flag,
+       CAST(COUNT(*) AS BIGINT)                                  AS n_clients
+FROM (
+    SELECT CLNT_NO,
+           CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 'explicit No (5002)'
+                WHEN CLNT_CONSENT_TYP = 5003 THEN 'blank (5003)'
+                ELSE                              'Yes / other' END AS cpc_standing
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+) c
+FULL OUTER JOIN (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+) e ON e.CLNT_NO = c.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 3 DESC;
