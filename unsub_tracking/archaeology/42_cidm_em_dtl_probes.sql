@@ -152,3 +152,21 @@ FULL OUTER JOIN (
 ) e ON e.CLNT_NO = c.CLNT_NO
 GROUP BY 1, 2
 ORDER BY 3 DESC;
+
+
+/* ============================================================================
+[11] Volumes side by side: 1012 opted-out in CPC_RB_PREF vs EM_DTL flag N.
+     (EM_DTL note: opted-out = CPC1012_IND 'Y'; 'N' = contactable side.)
+============================================================================ */
+SELECT CAST('CPC_RB_PREF: 1012 = 5002' AS VARCHAR(40)) AS source_table,
+       CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+
+UNION ALL
+
+SELECT 'EM_DTL: CPC1012_IND = N',
+       CAST(COUNT(*) AS BIGINT)
+FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+  AND CPC1012_IND = 'N';
