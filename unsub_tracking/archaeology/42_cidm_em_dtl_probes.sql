@@ -295,3 +295,26 @@ WHERE lower(column_name) LIKE '%unsub%';
 
 -- first look at the sf_unsubscribe lead
 SELECT * FROM edl0_im.prod_uq20_digital.sf_unsubscribe LIMIT 10;
+
+
+/* ============================================================================
+[16] sf_unsubscribe = SFMC tracking-extract unsub EVENT log (Starburst/Trino).
+     Fields decoded 2026-08-17: accountid = SFMC business unit (MID);
+     oybaccountid = on-your-behalf parent/child BU; jobid = send job;
+     listid = audience list (77 ~ All Subscribers); batchid = batch in job;
+     subscriberid = SFMC internal id; subscriberkey = subscriber key -
+     9-digit, CLNT_NO-shaped [PROBE 2 tests this]; eventdate = unsub moment;
+     isunique = first unsub per subscriber per job; domain = email domain.
+     [1] freshness/size; [2] subscriberkey = CLNT_NO?; [3] monthly volume vs
+     VENDOR_FEEDBACK ~35K/mo - same feed or dead archive?
+============================================================================ */
+SELECT MIN(eventdate) AS earliest, MAX(eventdate) AS latest, COUNT(*) AS n_rows
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe;
+
+SELECT * FROM edl0_im.prod_uq20_digital.sf_unsubscribe
+WHERE subscriberkey = '427966379';
+
+SELECT date_trunc('month', eventdate) AS month, COUNT(*) AS n_unsubs
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe
+WHERE eventdate >= DATE '2025-07-01'
+GROUP BY 1 ORDER BY 1;
