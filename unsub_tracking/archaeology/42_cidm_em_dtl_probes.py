@@ -213,3 +213,56 @@ print("Every client, cross-classified: their most recent CPC position on 1012 vs
 print("EM_DTL carries today. Clean derivation = explicit-No rows all flagged Y, everything")
 print("else N; off-diagonal cells = population scoping or timing to explain:")
 display(m10)
+
+# %% [11] THE HISTORY SOURCE - CPC_RB_PREF_MTHLY: structure, 1012 series, bridge to EM_DTL
+# [10] proved today's EM_DTL consent flag derives exactly from CPC standing. If the
+# monthly snapshot table holds the same content per month-end, the consent side of the
+# waterfall gets an EXACT history. Three probes.
+
+print("--- [11a] which month-ends exist, and rows per month for 1012 (grain + depth) ---")
+display(edw_pd("""
+SELECT MONTH_END_DT,
+       CAST(COUNT(*) AS BIGINT)     AS n_1012_rows,
+       COUNT(DISTINCT CLNT_NO)      AS n_clients
+FROM DDWV01.CPC_RB_PREF_MTHLY
+WHERE PREF_ID = 1012
+GROUP BY 1
+ORDER BY 1 DESC
+"""))
+# NOTE: if the month column errors, take its real name from a SAMPLE 5 first.
+
+print("--- [11b] the consent-eligible SERIES: 1012 standing per month-end ---")
+display(edw_pd("""
+SELECT MONTH_END_DT,
+       SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS n_explicit_no,
+       SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS n_blank,
+       SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5002, 5003)
+                 OR CLNT_CONSENT_TYP IS NULL THEN 1 ELSE 0 END) AS n_yes_other
+FROM DDWV01.CPC_RB_PREF_MTHLY
+WHERE PREF_ID = 1012
+GROUP BY 1
+ORDER BY 1
+"""))
+
+print("--- [11c] bridge proof: LATEST month-end vs EM_DTL (same shape as [10]) ---")
+display(edw_pd("""
+SELECT COALESCE(c.cpc_standing, 'no 1012 row in MTHLY')          AS mthly_position,
+       COALESCE(e.CPC1012_IND, 'not in EM_DTL')                  AS em_dtl_1012_flag,
+       CAST(COUNT(*) AS BIGINT)                                  AS n_clients
+FROM (
+    SELECT CLNT_NO,
+           CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 'explicit No (5002)'
+                WHEN CLNT_CONSENT_TYP = 5003 THEN 'blank (5003)'
+                ELSE                              'Yes / other' END AS cpc_standing
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012
+      AND MONTH_END_DT = (SELECT MAX(MONTH_END_DT) FROM DDWV01.CPC_RB_PREF_MTHLY)
+) c
+FULL OUTER JOIN (
+    SELECT CLNT_NO, CPC1012_IND
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+) e ON e.CLNT_NO = c.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 3 DESC
+"""))
