@@ -196,6 +196,8 @@ for m0, m1 in zip(MONTHS_CHAIN[:-1], MONTHS_CHAIN[1:]):
 fdf = pd.concat(flows, ignore_index=True)
 print("Gross monthly flows (each month vs the previous one):")
 print(fdf.to_string(index=False))
+print("\nCopy-paste block for PowerPoint (tab-separated):")
+print(fdf.to_csv(sep="\t", index=False))
 print("\nSums over the chain vs the A-to-B waterfall (difference = within-period churn):")
 print(fdf[["opted_in", "lost_consent", "attrition", "new_to_bank", "re_entered"]].sum().to_string())
 
