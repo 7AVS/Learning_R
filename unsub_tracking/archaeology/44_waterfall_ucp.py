@@ -75,3 +75,75 @@ summary = pd.DataFrame([
 print(summary.to_string(index=False))
 direct_end = int(b.filter(col("elig_b") == 1).count())
 print(f"\nEND measured directly in {MONTH_B}: {direct_end:,} - identity {'HOLDS' if direct_end == end else 'BROKEN - investigate before using'}")
+
+# %% [4] Deck-ready table - tab-separated, paste straight into Excel/PowerPoint
+n_new   = get_n("+ new to bank")
+n_reent = get_n("+ re-entered") + get_n("+ new arrival") - get_n("+ new to bank") \
+          if not has_dt else get_n("+ re-entered")
+n_open  = get_n("+ opened consent")
+n_lost  = get_n("- lost consent")
+n_attr  = get_n("- attrition")
+
+deck = pd.DataFrame([
+    ["Emailable clients", MONTH_A, start, round(start/1e6, 2)],
+    ["+ New to bank", f"{MONTH_A} → {MONTH_B}", n_new, round(n_new/1e6, 2)],
+    ["+ Re-entered client base", f"{MONTH_A} → {MONTH_B}", n_reent, round(n_reent/1e6, 2)],
+    ["+ Existing clients opting in", f"{MONTH_A} → {MONTH_B}", n_open, round(n_open/1e6, 2)],
+    ["− Lost consent (unsubscribed)", f"{MONTH_A} → {MONTH_B}", -n_lost, round(-n_lost/1e6, 2)],
+    ["− Client attrition", f"{MONTH_A} → {MONTH_B}", -n_attr, round(-n_attr/1e6, 2)],
+    ["Emailable base", MONTH_B, end, round(end/1e6, 2)],
+], columns=["element", "period", "clients", "clients_MM"])
+print("Copy-paste block (tab-separated):")
+print(deck.to_csv(sep="\t", index=False))
+
+# %% [5] The waterfall chart - deck style (broken axis, MM labels, dotted connectors)
+import matplotlib.pyplot as plt
+
+navy, blue, lightblue, amber, grey = "#16436e", "#2a78d6", "#7fb2e6", "#e08214", "#8a8f98"
+
+adds_total  = n_new + n_reent + n_open
+bars = [
+    ("Emailable\nclients\n" + MONTH_A[:7], start,       None,   "endpoint"),
+    ("Subscribes",                          adds_total,  start,  "add"),
+    ("Lost\nconsent",                      -n_lost,      start + adds_total, "drop"),
+    ("Client\nattrition",                  -n_attr,      start + adds_total - n_lost, "drop"),
+    ("Emailable\nbase\n" + MONTH_B[:7],     end,         None,   "endpoint"),
+]
+
+lo = min(start, end) * 0.955 / 1e6      # broken-axis floor just under the smallest bar
+fig, ax = plt.subplots(figsize=(11, 5.5))
+xpos = range(len(bars))
+running_tops = []
+for i, (label, val, base_abs, kind) in enumerate(bars):
+    v = val / 1e6
+    if kind == "endpoint":
+        ax.bar(i, v - lo, bottom=lo, width=0.62, color=navy, zorder=3)
+        ax.text(i, v + 0.03, f"{v:,.2f}", ha="center", va="bottom",
+                fontsize=11, fontweight="bold", color="#222222")
+        running_tops.append(v)
+    else:
+        base = base_abs / 1e6
+        top = base + v
+        colr = blue if kind == "add" else amber
+        ax.bar(i, v, bottom=base, width=0.62, color=colr, zorder=3)
+        ax.text(i, max(base, top) + 0.03, f"{v:+.2f}", ha="center", va="bottom",
+                fontsize=11, fontweight="bold", color="#222222")
+        running_tops.append(top)
+# dotted connectors between consecutive bar tops
+for i in range(len(bars) - 1):
+    y = running_tops[i] if bars[i][3] != "drop" else (bars[i][1] + bars[i][2]) / 1e6
+    y_next_base = y
+    ax.plot([i + 0.31, i + 1 - 0.31], [y, y], ls=":", lw=1.2, color=grey, zorder=2)
+
+ax.set_xticks(list(xpos))
+ax.set_xticklabels([b[0] for b in bars], fontsize=10)
+ax.set_ylabel("# clients in MM")
+ax.set_ylim(lo, max(running_tops) * 1.012)
+ax.spines[["top", "right"]].set_visible(False)
+# axis-break glyph
+ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
+ax.set_title(f"Emailable base waterfall — {MONTH_A} to {MONTH_B}  (flag: {FLAG})",
+             fontweight="bold", fontsize=12, loc="left")
+ax.text(0.99, -0.16, "Subscribes = new to bank + re-entered + existing opt-ins. Source: UCP monthly snapshots.",
+        transform=ax.transAxes, ha="right", fontsize=8.5, color="#555555")
+plt.tight_layout(); plt.show()
