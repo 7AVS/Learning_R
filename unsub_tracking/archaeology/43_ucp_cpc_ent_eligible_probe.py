@@ -52,9 +52,9 @@ rows = []
 for m in MONTHS:
     try:
         d = spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m}/")
-        n = d.filter(trim(col("cpc_ent_eligible")) == "Y").count()
+        n = d.filter(trim(col("CPC_ENT_ELIGIBLE").cast("string")) == "1").count()   # flags are 1/0, not Y/N
         rows.append((m, n))
-        print(f"{m}: cpc_ent_eligible=Y -> {n:,}")
+        print(f"{m}: CPC_ENT_ELIGIBLE=1 -> {n:,}")
     except Exception as e:
         rows.append((m, None))
         print(f"{m}: partition unreadable ({str(e)[:80]})")
