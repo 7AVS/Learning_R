@@ -155,6 +155,30 @@ ORDER BY 3 DESC;
 
 
 /* ============================================================================
+[10d] The one-number discrepancy: clients whose LATEST 1012 position in
+      CPC_RB_PREF is explicit No (5002) AND who sit in EM_DTL flagged N
+      (not suppressed - CIDM would email them). One row, three counts.
+============================================================================ */
+SELECT CAST(SUM(CASE WHEN c.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)  AS n_cpc_latest_5002,
+       CAST(SUM(CASE WHEN e.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)  AS n_em_dtl_flag_N,
+       CAST(SUM(CASE WHEN c.CLNT_NO IS NOT NULL
+                      AND e.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS BIGINT)  AS n_discrepancy_5002_and_N
+FROM (
+    SELECT CLNT_NO
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+        AND CLNT_CONSENT_TYP = 5002
+) c
+FULL OUTER JOIN (
+    SELECT CLNT_NO
+    FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL
+    WHERE LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+      AND CPC1012_IND = 'N'
+) e ON e.CLNT_NO = c.CLNT_NO;
+
+
+/* ============================================================================
 [10b] Grain probe before [10c]: does any client carry MORE than one 1012 row in
       CPC_RB_PREF? dup_rows = 1 only -> table is one-row-per-client on 1012.
 ============================================================================ */
