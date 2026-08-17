@@ -254,18 +254,21 @@ except ImportError:
     import teradatasql
 import getpass, pandas as pd
 
-td_user = input("Teradata username: ")
-td_pass = getpass.getpass("Teradata password: ")
-with teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=td_user,
-                         password=td_pass, logmech="LDAP") as con:
-    cur = con.cursor()
-    cur.execute(f"""
-        SELECT CLNT_NO
-        FROM DDWV01.CPC_RB_PREF_MTHLY
-        WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
-          AND MTH_END_DT = DATE '{MONTH_B}'
-    """)
-    no_list = pd.DataFrame(cur.fetchall(), columns=["CLNT_NO"])
+# one Teradata connection per kernel - prompts ONCE, later cells reuse EDW
+if "EDW" not in globals():
+    EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                              user=input("Teradata username: "),
+                              password=getpass.getpass("Teradata password: "),
+                              logmech="LDAP")
+
+cur = EDW.cursor()
+cur.execute(f"""
+    SELECT CLNT_NO
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
+      AND MTH_END_DT = DATE '{MONTH_B}'
+""")
+no_list = pd.DataFrame(cur.fetchall(), columns=["CLNT_NO"])
 print(f"standing-No clients at {MONTH_B} pulled from Teradata: {len(no_list):,}")
 
 spark.createDataFrame(no_list).createOrReplaceTempView("cpc_no_1012")
@@ -364,10 +367,12 @@ import getpass, pandas as pd
 
 EM_DTL_BASE = "/user/427966379/unsub_cpc/em_dtl_snapshots/"
 
-td_user = input("Teradata username: ")
-td_pass = getpass.getpass("Teradata password: ")
-EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com", user=td_user,
-                          password=td_pass, logmech="LDAP")
+# reuses the session connection from [9]; prompts only if [9] was skipped this kernel
+if "EDW" not in globals():
+    EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                              user=input("Teradata username: "),
+                              password=getpass.getpass("Teradata password: "),
+                              logmech="LDAP")
 
 cur = EDW.cursor()
 cur.execute("SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL")
