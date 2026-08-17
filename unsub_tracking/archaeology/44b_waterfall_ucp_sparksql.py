@@ -18,11 +18,16 @@ print("views registered: ucp_a, ucp_b")
 
 # %% [1] The waterfall buckets - one SQL
 wf = spark.sql(f"""
-WITH a AS (SELECT CLNT_NO, CAST(TRIM(CAST({FLAG} AS STRING)) = '1' AS INT) AS elig_a
+-- step 1: read each snapshot; the flag is stored as 1/0, this just reads it as a number
+WITH a AS (SELECT CLNT_NO,
+                  CAST(TRIM(CAST({FLAG} AS STRING)) = '1' AS INT) AS elig_a   -- 1 = emailable
            FROM ucp_a),
-     b AS (SELECT CLNT_NO, CAST(TRIM(CAST({FLAG} AS STRING)) = '1' AS INT) AS elig_b,
-                  DT_OPENED
+     b AS (SELECT CLNT_NO,
+                  CAST(TRIM(CAST({FLAG} AS STRING)) = '1' AS INT) AS elig_b,
+                  DT_OPENED                                                    -- when the client joined the bank
            FROM ucp_b)
+-- step 2: line up every client across the two months (FULL OUTER = keep people who
+-- exist in only one of them) and name what happened to each
 SELECT CASE
          WHEN a.elig_a = 1 AND b.elig_b = 1 THEN 'stayed eligible (no bar)'
          WHEN a.elig_a = 1 AND b.elig_b = 0 THEN '- lost consent (flag 1->0)'
@@ -63,11 +68,14 @@ MONTHS_CHAIN = ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30",
                 "2026-05-31", "2026-06-30", "2026-07-31"]
 
 PAIR_SQL = """
+-- same two-step shape as [1], one month against the next:
+-- e0/e1 = was the client emailable last month / this month (flag stored as 1/0)
 WITH m0 AS (SELECT CLNT_NO, CAST(TRIM(CAST({flag} AS STRING)) = '1' AS INT) AS e0
             FROM ucp_m0),
      m1 AS (SELECT CLNT_NO, CAST(TRIM(CAST({flag} AS STRING)) = '1' AS INT) AS e1,
                    DT_OPENED
             FROM ucp_m1)
+-- each SUM counts one kind of movement between the two months
 SELECT SUM(CASE WHEN m0.e0 = 0 AND m1.e1 = 1 THEN 1 ELSE 0 END)              AS opted_in,
        SUM(CASE WHEN m0.e0 = 1 AND m1.e1 = 0 THEN 1 ELSE 0 END)              AS lost_consent,
        SUM(CASE WHEN m0.e0 = 1 AND m1.CLNT_NO IS NULL THEN 1 ELSE 0 END)     AS attrition,
