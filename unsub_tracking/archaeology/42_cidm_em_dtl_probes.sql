@@ -196,3 +196,38 @@ Thanks!
 Andre
 
 ============================================================================ */
+
+
+/* ============================================================================
+[13] Mismatch examples, 10 each. A: CPC latest 1012 = 5002 but EM_DTL flag = N
+     (CIDM would email an opted-out client). B: CPC latest = 5001 but flag = Y
+     (wrongly suppressed). Empty result = clean mirror (expected from [10]);
+     rows returned -> CHG_TMSTMP/APP_SYS_CD show timing drift vs structural.
+============================================================================ */
+SELECT c.CLNT_NO, c.CLNT_CONSENT_TYP, c.CHG_TMSTMP, c.APP_SYS_CD, e.CPC1012_IND
+FROM (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+) c
+JOIN DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL e
+  ON e.CLNT_NO = c.CLNT_NO
+ AND e.LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+WHERE c.CLNT_CONSENT_TYP = 5002
+  AND e.CPC1012_IND = 'N'
+SAMPLE 10;
+
+SELECT c.CLNT_NO, c.CLNT_CONSENT_TYP, c.CHG_TMSTMP, c.APP_SYS_CD, e.CPC1012_IND
+FROM (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY CHG_TMSTMP DESC) = 1
+) c
+JOIN DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL e
+  ON e.CLNT_NO = c.CLNT_NO
+ AND e.LOAD_DT = (SELECT MAX(LOAD_DT) FROM DTZTAU.CIDM_CHANNEL_ELIG_EM_DTL)
+WHERE c.CLNT_CONSENT_TYP = 5001
+  AND e.CPC1012_IND = 'Y'
+SAMPLE 10;
