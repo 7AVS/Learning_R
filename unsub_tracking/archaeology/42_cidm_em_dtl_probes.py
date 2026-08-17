@@ -124,3 +124,61 @@ SELECT 'DDWV01.CPC_RB_PREF',
 FROM DDWV01.CPC_RB_PREF
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002
 """))
+
+# %% [8] The Borealis PRODUCTS rule (cpc_products_cd.sql), cloned - standing view
+# Production builds a per-client product-consent string off CPC_CLNT_PREF_CHC with the
+# same rule as the channels one: FALSE (do not contact for this product) when 5002, or
+# 5003 + real EMP_ID; else TRUE. This cell decomposes their view: per product switch,
+# who is FALSE and why, who is TRUE. Their "product attribution" as standing counts.
+PROD_DESC = {
+    1004: "Accounts and Packages", 1006: "Credit Cards", 1010: "Creditor Insurance",
+    1020: "Call for Registered GIC maturity", 1021: "Call for Non-Registered GIC maturity",
+    1023: "Investments - Registered", 1024: "Investments - Non-Registered",
+    1025: "Loans and Lines of Credit", 1026: "Mortgages", 1027: "Business Deposit Accounts",
+    1028: "Creditor Insurance BLIP", 1030: "Cash Management Services", 1031: "Leasing",
+    1034: "Client Card", 1044: "Travel Health Insurance",
+}
+pr = edw_pd("""
+SELECT PREF_ID,
+       CASE WHEN CLNT_CONSENT_TYP = 5002                            THEN 'FALSE - explicit No (5002)'
+            WHEN CLNT_CONSENT_TYP = 5003
+                 AND EMP_ID IS NOT NULL
+                 AND EMP_ID NOT IN (999999999999999, 999999999)     THEN 'FALSE - blank + real EMP_ID'
+            WHEN CLNT_CONSENT_TYP = 5003                            THEN 'TRUE - blank (contactable default)'
+            ELSE                                                         'TRUE - other consent value' END AS borealis_reading,
+       COUNT(DISTINCT CLNT_NO) AS n_clients
+FROM DG6V01.CPC_CLNT_PREF_CHC
+WHERE PREF_ID IN (1004,1006,1010,1020,1021,1023,1024,1025,1026,1027,1028,1030,1031,1034,1044)
+GROUP BY 1, 2
+""")
+pr.insert(1, "product_switch", [PROD_DESC.get(p, "??") for p in pr["PREF_ID"]])
+pv8 = pr.pivot_table(index=["PREF_ID", "product_switch"], columns="borealis_reading",
+                     values="n_clients", aggfunc="sum", fill_value=0)
+pv8["TOTAL rows"] = pv8.sum(axis=1)
+print("Per product switch: how production's rule reads the standing book (clients per bucket).")
+print("Rule: FALSE = do-not-contact for that product; blank = contactable unless employee:")
+display(pv8)
+
+# %% [9] Product switches - FLOW: monthly writes to No (who actually opts out per product)
+# Flow from the mirror table (CPC_RB_PREF - proven equivalent in [7], has the write
+# timestamp). Direct product opt-outs are mostly branch bundles (pack 39), so read
+# these volumes as consent erosion per product, NOT product-specific client choices.
+fl = edw_pd("""
+SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       PREF_ID,
+       COUNT(*) AS n_writes_to_no
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID IN (1004,1006,1010,1020,1021,1023,1024,1025,1026,1027,1028,1030,1031,1034,1044)
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1, 2
+""")
+fl["product_switch"] = [f"{p} {PROD_DESC.get(p, '??')}" for p in fl["PREF_ID"]]
+pv9 = fl.pivot_table(index="chg_month", columns="product_switch",
+                     values="n_writes_to_no", aggfunc="sum", fill_value=0)
+pv9["TOTAL"] = pv9.sum(axis=1)
+pv9.loc["TOTAL"] = pv9.sum(axis=0)
+print("Monthly switch-offs per product preference, 18-month frame:")
+display(pv9)

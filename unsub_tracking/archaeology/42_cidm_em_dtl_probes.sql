@@ -90,3 +90,40 @@ SELECT 'DDWV01.CPC_RB_PREF',
        CAST(COUNT(*) AS BIGINT)
 FROM DDWV01.CPC_RB_PREF
 WHERE PREF_ID = 1012 AND CLNT_CONSENT_TYP = 5002;
+
+
+/* ============================================================================
+[8] The Borealis PRODUCTS rule (cpc_products_cd.sql), cloned - standing view.
+    Per product switch: how production's rule reads the standing book.
+    FALSE = do-not-contact for that product; blank = contactable unless employee.
+============================================================================ */
+SELECT PREF_ID,
+       CASE WHEN CLNT_CONSENT_TYP = 5002                            THEN 'FALSE - explicit No (5002)'
+            WHEN CLNT_CONSENT_TYP = 5003
+                 AND EMP_ID IS NOT NULL
+                 AND EMP_ID NOT IN (999999999999999, 999999999)     THEN 'FALSE - blank + real EMP_ID'
+            WHEN CLNT_CONSENT_TYP = 5003                            THEN 'TRUE - blank (contactable default)'
+            ELSE                                                         'TRUE - other consent value' END AS borealis_reading,
+       COUNT(DISTINCT CLNT_NO) AS n_clients
+FROM DG6V01.CPC_CLNT_PREF_CHC
+WHERE PREF_ID IN (1004,1006,1010,1020,1021,1023,1024,1025,1026,1027,1028,1030,1031,1034,1044)
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
+/* ============================================================================
+[9] Product switches - FLOW: monthly writes to No, 18-month frame.
+    (From CPC_RB_PREF - the proven mirror with the write timestamp. Read as consent
+    erosion per product, NOT product-specific choices - most are branch bundles.)
+============================================================================ */
+SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+         TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10 THEN '0' ELSE '' END) ||
+         TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS chg_month,
+       PREF_ID,
+       COUNT(*) AS n_writes_to_no
+FROM DDWV01.CPC_RB_PREF
+WHERE PREF_ID IN (1004,1006,1010,1020,1021,1023,1024,1025,1026,1027,1028,1030,1031,1034,1044)
+  AND CLNT_CONSENT_TYP = 5002
+  AND CHG_TMSTMP >= DATE '2025-02-01'
+GROUP BY 1, 2
+ORDER BY 1, 2;
