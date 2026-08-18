@@ -542,3 +542,59 @@ deck2 = pd.DataFrame([
     ["Emailable base (CPC 1012 x active)", MONTH_B, end2, round(end2/1e6, 2)],
 ], columns=["element", "period", "clients", "clients_MM"])
 display(deck2)
+
+# %% [18] View-2 waterfall chart - same mock style as [5]; data = the deck2 table above
+import matplotlib.pyplot as plt
+
+navy   = "#16436e"
+blues2 = ["#2a78d6", "#7fb2e6", "#a9c9ee", "#d4e5f7"]
+ambers = ["#e08214", "#f5c26b"]
+grey   = "#8a8f98"
+
+sub2 = [("New to bank", g2("+ new to bank")), ("Re-entered", g2("+ re-entered")),
+        ("Re-activated", g2("+ re-activated")), ("Opted in", g2("+ opened consent"))]
+uns2 = [("Client attrition", g2("- attrition") + g2("- gone")), ("Lost consent", g2("- lost consent"))]
+adds2, drops2 = sum(v for _, v in sub2), sum(v for _, v in uns2)
+
+lo = min(start2, end2) * 0.955 / 1e6
+fig, ax = plt.subplots(figsize=(11, 5.8))
+ax.bar(0, start2/1e6 - lo, bottom=lo, width=0.6, color=navy, zorder=3)
+ax.text(0, start2/1e6 + 0.03, f"{start2/1e6:,.2f}", ha="center", fontsize=11, fontweight="bold")
+ax.bar(3, end2/1e6 - lo, bottom=lo, width=0.6, color=navy, zorder=3)
+ax.text(3, end2/1e6 + 0.03, f"{end2/1e6:,.2f}", ha="center", fontsize=11, fontweight="bold")
+
+base = start2 / 1e6
+for (lbl, v), c in zip(sub2, blues2):
+    h = v / 1e6
+    ax.bar(1, h, bottom=base, width=0.6, color=c, zorder=3,
+           edgecolor="white", linewidth=1.5, label=lbl)
+    if h > 0.015:
+        ax.text(1, base + h/2, f"{h:.2f}", ha="center", va="center", fontsize=9.5)
+    base += h
+ax.text(1, base + 0.03, f"+{adds2/1e6:.2f}", ha="center", fontsize=11, fontweight="bold")
+top2 = base
+
+base = top2
+for (lbl, v), c in zip(uns2, ambers):
+    h = v / 1e6
+    ax.bar(2, -h, bottom=base, width=0.6, color=c, zorder=3,
+           edgecolor="white", linewidth=1.5, label=lbl)
+    if h > 0.015:
+        ax.text(2, base - h/2, f"-{h:.2f}", ha="center", va="center", fontsize=9.5)
+    base -= h
+ax.text(2, top2 + 0.03, f"-{drops2/1e6:.2f}", ha="center", fontsize=11, fontweight="bold")
+
+ax.plot([0.3, 0.7], [start2/1e6]*2, ls=":", lw=1.2, color=grey)
+ax.plot([1.3, 1.7], [top2]*2, ls=":", lw=1.2, color=grey)
+ax.plot([2.3, 2.7], [(top2 - drops2/1e6)]*2, ls=":", lw=1.2, color=grey)
+ax.set_xticks([0, 1, 2, 3])
+ax.set_xticklabels([f"Emailable\nclients\n{MONTH_A[:7]}", "Subscribes",
+                    "Unsubscribes", f"Emailable\nbase\n{MONTH_B[:7]}"], fontsize=10)
+ax.set_ylabel("# clients in MM")
+ax.set_ylim(lo, top2 * 1.012)
+ax.spines[["top", "right"]].set_visible(False)
+ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
+ax.legend(loc="upper left", fontsize=9, frameon=False)
+ax.set_title(f"Emailable base waterfall — {MONTH_A} to {MONTH_B}  (consent: CPC 1012 × active per UCP)",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
