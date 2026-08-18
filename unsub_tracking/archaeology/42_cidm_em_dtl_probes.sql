@@ -342,3 +342,26 @@ FROM edl0_im.information_schema.columns
 WHERE lower(column_name) LIKE '%tct%'
    OR lower(column_name) LIKE '%tactic%'
    OR lower(column_name) LIKE '%treatment%';
+
+
+/* ============================================================================
+[18] sf_unsubscribe runs ~90-100K rows/mo (RAN 2026-08-17: 2025-10 96,951 /
+     2025-11 102,848 / 2025-12 91,795 / 2026-01 93,457 / 2026-02 90,245 /
+     2026-03 96,269 / 2026-04 91,147 / 2026-05 64,981 / 2026-06 73,672 /
+     2026-07 62,103 / 2026-08p 29,740) = ~3x the vendor feed (~27-35K/mo).
+     Also a level DROP from 2026-05. Split the gap: repeat events per client?
+     other business units? Then compare n_clients vs vendor monthly.
+============================================================================ */
+SELECT substr(eventdate, 1, 7) AS month,
+       COUNT(*) AS n_rows,
+       COUNT(DISTINCT subscriberkey) AS n_clients,
+       SUM(CASE WHEN lower(isunique) = 'true' THEN 1 ELSE 0 END) AS n_isunique
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe
+WHERE substr(eventdate, 1, 10) >= '2025-07-01'
+GROUP BY 1 ORDER BY 1;
+
+SELECT accountid, oybaccountid, COUNT(*) AS n_rows,
+       COUNT(DISTINCT subscriberkey) AS n_clients
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe
+WHERE substr(eventdate, 1, 10) >= '2025-07-01'
+GROUP BY 1, 2 ORDER BY 3 DESC;
