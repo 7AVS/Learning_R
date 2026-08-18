@@ -54,7 +54,7 @@ Measurement and analytics infrastructure for the Cards pod (NBA). Contains schem
 
 ## Key Tables
 - **Teradata (EDW):** dw00_jm.dl_mr_prod.cards_pcd_ongoing_decis_resp, dw00_im.dl_mr_prod.cards_pli_decision_resp, dw00_im.dl_mr_prod.cards_tpa_pcq_decision_resp
-- **Teradata (Tactic history):** DTZV01.TACTIC_EVNT_IP_AR_H60M
+- **Teradata (Tactic history):** DG6V01.TACTIC_EVNT_IP_AR_HIST (CANONICAL — Andre 2026-08-18). DTZV01.TACTIC_EVNT_IP_AR_H60M = 60-month rolling alt, use only when asked
 - **Teradata (Events):** DDWV01.EXT_CDP_CHNL_EVNT
 - **Teradata (Email):** DTZV01.VENDOR_FEEDBACK_MASTER, DTZV01.VENDOR_FEEDBACK_EVENT
 - **Trino (GA4):** edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce, edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_narrow
