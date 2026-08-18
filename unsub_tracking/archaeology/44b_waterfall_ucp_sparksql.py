@@ -498,6 +498,14 @@ SELECT CASE
          WHEN a.CLNT_NO IS NULL AND b.em_b = 1
               AND b.DT_OPENED > DATE('{MONTH_A}')             THEN '+ new to bank (opened after A)'
          WHEN a.CLNT_NO IS NULL AND b.em_b = 1                THEN '+ re-entered (record predates A)'
+         -- no-bar decomposition: the CPC book (26M) is wider than the emailable-active
+         -- universe (~14M) - label why each no-bar client is outside it
+         WHEN a.cons_a = 5002 AND b.cons_b = 5002             THEN 'no bar - explicit No both months'
+         WHEN a.em_a = 0 AND b.em_b = 0
+              AND a.CLNT_NO IS NOT NULL
+              AND b.CLNT_NO IS NOT NULL                       THEN 'no bar - inactive / not in UCP both months'
+         WHEN a.CLNT_NO IS NULL                               THEN 'no bar - arrived ineligible'
+         WHEN b.CLNT_NO IS NULL                               THEN 'no bar - left while ineligible'
          ELSE 'no bar (other)'
        END AS bucket,
        COUNT(*) AS n_clients
