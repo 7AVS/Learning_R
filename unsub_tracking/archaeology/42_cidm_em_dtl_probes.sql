@@ -417,3 +417,38 @@ WHERE table_schema = 'prod_uq20_digital' AND table_name = 'sf_rbc_sendlog'
 ORDER BY ordinal_position;
 
 SELECT * FROM edl0_im.prod_uq20_digital.sf_rbc_sendlog LIMIT 10;
+
+
+/* ============================================================================
+[22] Unsub -> tactic via the sendlog, using the HEFMOMENTS team's PRODUCTION
+     join spec (found 2026-08-17, PR #658 rbc-to/a5w0-hef_mortgage_moments):
+     events join sendlog ON jobid+listid+batchid+subscriberid=subid; clients
+     join ON CLNT_NO = SUBSCRIBERKEY (their code - confirms our key proof).
+     [22a] sample: unsubs with sending tactic. [22b] match rate - does the
+     sendlog cover the recent window (dated slices exist, coverage unproven)?
+============================================================================ */
+SELECT u.subscriberkey                AS clnt_no,
+       u.eventdate                    AS unsub_time,
+       u.jobid,
+       s.pmv1_tactic_id,
+       s.pmv1_treatment_mnemonic,
+       s.send_date,
+       s.send_classification
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe u
+LEFT JOIN edl0_im.prod_uq20_digital.sf_rbc_sendlog s
+       ON  u.jobid        = s.jobid
+       AND u.listid       = s.listid
+       AND u.batchid      = s.batchid
+       AND u.subscriberid = s.subid
+WHERE substr(u.eventdate, 1, 10) >= '2026-07-01'
+LIMIT 100;
+
+SELECT COUNT(*)                                              AS n_unsubs,
+       SUM(CASE WHEN s.jobid IS NOT NULL THEN 1 ELSE 0 END)  AS n_matched_to_sendlog
+FROM edl0_im.prod_uq20_digital.sf_unsubscribe u
+LEFT JOIN edl0_im.prod_uq20_digital.sf_rbc_sendlog s
+       ON  u.jobid        = s.jobid
+       AND u.listid       = s.listid
+       AND u.batchid      = s.batchid
+       AND u.subscriberid = s.subid
+WHERE substr(u.eventdate, 1, 10) >= '2026-07-01';
