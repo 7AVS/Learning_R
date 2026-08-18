@@ -400,3 +400,20 @@ FROM edl0_im.information_schema.columns
 WHERE table_schema = 'prod_uq20_digital'
   AND table_name IN ('sf_rbc_sendlog', 'sf_sent', 'sf_subscribers')
 ORDER BY table_name, ordinal_position;
+
+
+/* ============================================================================
+[21] ATTRIBUTION ROUTE CONFIRMED (tactic-column search RAN 2026-08-17, 45 rows):
+     sf_rbc_sendlog has pmv1_tactic_id + pmv1_treatment_mnemonic ("Pmv" = the
+     PmvTctID URL param) -> sf_unsubscribe x sendlog on jobid = unsub-to-tactic,
+     client-keyed, SFMC-side. sf_emailmarketingcampaigndata = tactic dimension
+     (tactic_id, cell code, event type, mnemonic, start/end dates).
+     CAUTION: dated slice (sf_rbc_sendlog_march_21_31) + _test variants exist -
+     prove the main sendlog's coverage window before relying on it.
+============================================================================ */
+SELECT column_name, ordinal_position
+FROM edl0_im.information_schema.columns
+WHERE table_schema = 'prod_uq20_digital' AND table_name = 'sf_rbc_sendlog'
+ORDER BY ordinal_position;
+
+SELECT * FROM edl0_im.prod_uq20_digital.sf_rbc_sendlog LIMIT 10;
