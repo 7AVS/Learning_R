@@ -318,3 +318,23 @@ SELECT date_trunc('month', eventdate) AS month, COUNT(*) AS n_unsubs
 FROM edl0_im.prod_uq20_digital.sf_unsubscribe
 WHERE eventdate >= DATE '2025-07-01'
 GROUP BY 1 ORDER BY 1;
+
+
+/* ============================================================================
+[17] TACTIC ATTRIBUTION HUNT (Starburst). Andre's unsub URL carries
+     PmvTctID=2026201VRE + jid; sf_unsubscribe carries jobid. Route 1: a
+     sf_sent/sf_job sibling with jobid + email/tactic name -> jobid joins every
+     unsub to its sending tactic. Route 2: any table capturing PmvTctID.
+     (Note: VENDOR_FEEDBACK_EVENT disp-4 already carries TREATMENT_ID - this
+     adds an independent, client-keyed SFMC-side route.)
+============================================================================ */
+SELECT table_name
+FROM edl0_im.information_schema.tables
+WHERE table_schema = 'prod_uq20_digital'
+ORDER BY 1;
+
+SELECT table_schema, table_name, column_name
+FROM edl0_im.information_schema.columns
+WHERE lower(column_name) LIKE '%tct%'
+   OR lower(column_name) LIKE '%tactic%'
+   OR lower(column_name) LIKE '%treatment%';
