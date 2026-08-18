@@ -365,3 +365,38 @@ SELECT accountid, oybaccountid, COUNT(*) AS n_rows,
 FROM edl0_im.prod_uq20_digital.sf_unsubscribe
 WHERE substr(eventdate, 1, 10) >= '2025-07-01'
 GROUP BY 1, 2 ORDER BY 3 DESC;
+
+
+/* ============================================================================
+[19] THE BLIND-SPOT NUMBER (federated Starburst - one statement, two catalogs).
+     Of distinct clients who unsubscribed in SFMC in the last 12mo, how many
+     does CIDM's gate table count emailable TODAY? Headline = the eligible-Y row:
+     the selection gate would pick them again. (CPC = golden source; unsubs
+     never reach it - this states the gap in the gate's own terms.)
+============================================================================ */
+WITH unsubs AS (
+    SELECT DISTINCT subscriberkey AS clnt_no
+    FROM edl0_im.prod_uq20_digital.sf_unsubscribe
+    WHERE substr(eventdate, 1, 10) >= '2025-08-01'
+)
+SELECT COALESCE(e.em_eligible_ind, 'not in EM_DTL') AS em_dtl_eligibility_today,
+       COUNT(*) AS n_unsubscribed_clients
+FROM unsubs u
+LEFT JOIN (
+    SELECT clnt_no, em_eligible_ind
+    FROM dw00_im.dtztau.cidm_channel_elig_em_dtl
+    WHERE load_dt = (SELECT MAX(load_dt) FROM dw00_im.dtztau.cidm_channel_elig_em_dtl)
+) e ON CAST(e.clnt_no AS VARCHAR) = u.clnt_no
+GROUP BY 1;
+
+
+/* ============================================================================
+[20] Attribution decider - column lists of the three extracts that matter.
+     sf_rbc_sendlog with a tactic/treatment/campaign column next to jobid =
+     unsub-to-tactic attribution exists client-keyed end to end; else parked.
+============================================================================ */
+SELECT table_name, column_name, ordinal_position
+FROM edl0_im.information_schema.columns
+WHERE table_schema = 'prod_uq20_digital'
+  AND table_name IN ('sf_rbc_sendlog', 'sf_sent', 'sf_subscribers')
+ORDER BY table_name, ordinal_position;
