@@ -314,10 +314,14 @@ FROM edl0_im.prod_uq20_digital.sf_unsubscribe;
 SELECT * FROM edl0_im.prod_uq20_digital.sf_unsubscribe
 WHERE subscriberkey = '427966379';
 
-SELECT date_trunc('month', eventdate) AS month, COUNT(*) AS n_unsubs
+-- eventdate is VARCHAR (mixed ISO formats) - slice it as text, never cast/compare to DATE
+SELECT substr(eventdate, 1, 7) AS month, COUNT(*) AS n_unsubs
 FROM edl0_im.prod_uq20_digital.sf_unsubscribe
-WHERE eventdate >= DATE '2025-07-01'
+WHERE substr(eventdate, 1, 10) >= '2025-07-01'
 GROUP BY 1 ORDER BY 1;
+-- [16-1] RAN 2026-08-17: earliest 2018-10-11, latest 2026-08-16 (LIVE, daily),
+-- n_rows 2,485,941 (~26K/mo avg ~ vendor feed order). [16-2] RAN: Andre's own
+-- 2026-08-05 unsub returned; subscriberkey = CLNT_NO confirmed.
 
 
 /* ============================================================================
