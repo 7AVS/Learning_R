@@ -427,3 +427,110 @@ ORDER BY 3 DESC
 xm["pct"] = (100 * xm["n_clients"] / xm["n_clients"].sum()).round(2)
 print(f"UCP ACTIVE_EMAIL_IND ({MONTH_B}) x EM_DTL address flags (load {load_dt}):")
 display(xm)
+
+# %% [15] LAND CPC_RB_PREF_MTHLY 1012 slices (view-2 waterfall source) - one parquet per
+# month-end, idempotent. ~26M rows per month, chunked with progress (~15-25 min each).
+try:
+    import teradatasql
+except ImportError:
+    get_ipython().system("pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+    import teradatasql
+import getpass, pandas as pd
+
+MTHLY_BASE = "/user/427966379/unsub_cpc/cpc_mthly_1012/"
+
+if "EDW" not in globals():
+    EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
+                              user=input("Teradata username: "),
+                              password=getpass.getpass("Teradata password: "),
+                              logmech="LDAP")
+
+jvm = spark._jvm
+fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+for m in [MONTH_A, MONTH_B]:
+    target = f"{MTHLY_BASE}mth={m}/"
+    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
+        print(f"{m} already landed - skipping")
+        continue
+    chunks, total = [], 0
+    for c in pd.read_sql(f"""
+        SELECT CLNT_NO, CLNT_CONSENT_TYP
+        FROM DDWV01.CPC_RB_PREF_MTHLY
+        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{m}'
+    """, EDW, chunksize=1_000_000):
+        chunks.append(c); total += len(c)
+        print(f"  {m}: pulled {total:,} rows...")
+    pdf = pd.concat(chunks, ignore_index=True)
+    spark.createDataFrame(pdf).write.mode("overwrite").parquet(target)
+    landed = spark.read.parquet(target).count()
+    print(f"{m}: landed {landed:,} rows | {'MATCH' if landed == total else 'MISMATCH - investigate'}")
+
+# %% [16] VIEW-2 WATERFALL - consent from CPC MTHLY, activity from UCP.
+# State = 1012-eligible (consent <> 5002; blank = Yes on 1012 per dictionary) AND
+# active client (in UCP that month with OPN_PROD_CNT >= 1). DT_OPENED (UCP-only field)
+# splits new-to-bank vs re-entered. Attrition = was emailable-active, now inactive -
+# the CPC book never drops clients, so UCP activity is the attrition signal (Andre's
+# rule); 'gone from CPC book' kept as its own bucket (expect ~0; if not, investigate).
+spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_A}/").createOrReplaceTempView("cpc_a")
+spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_B}/").createOrReplaceTempView("cpc_b")
+
+wf2 = spark.sql(f"""
+WITH ua AS (SELECT CLNT_NO, CASE WHEN OPN_PROD_CNT >= 1 THEN 1 ELSE 0 END AS act FROM ucp_a),
+     ub AS (SELECT CLNT_NO, CASE WHEN OPN_PROD_CNT >= 1 THEN 1 ELSE 0 END AS act,
+                   DT_OPENED FROM ucp_b),
+     -- emailable-active at A: 1012 not explicit-No AND active per UCP
+     a AS (SELECT c.CLNT_NO, c.CLNT_CONSENT_TYP AS cons_a,
+                  CASE WHEN c.CLNT_CONSENT_TYP <> 5002
+                        AND COALESCE(u.act, 0) = 1 THEN 1 ELSE 0 END AS em_a
+           FROM cpc_a c LEFT JOIN ua u ON c.CLNT_NO = u.CLNT_NO),
+     b AS (SELECT c.CLNT_NO, c.CLNT_CONSENT_TYP AS cons_b, u.DT_OPENED,
+                  COALESCE(u.act, 0) AS act_b,
+                  CASE WHEN c.CLNT_CONSENT_TYP <> 5002
+                        AND COALESCE(u.act, 0) = 1 THEN 1 ELSE 0 END AS em_b
+           FROM cpc_b c LEFT JOIN ub u ON c.CLNT_NO = u.CLNT_NO)
+SELECT CASE
+         WHEN a.em_a = 1 AND b.em_b = 1                       THEN 'stayed emailable (no bar)'
+         WHEN a.em_a = 1 AND b.CLNT_NO IS NULL                THEN '- gone from CPC book (expect ~0)'
+         WHEN a.em_a = 1 AND b.act_b = 0                      THEN '- attrition (inactive at B per UCP)'
+         WHEN a.em_a = 1 AND b.cons_b = 5002                  THEN '- lost consent (1012 -> explicit No)'
+         WHEN a.em_a = 0 AND b.em_b = 1 AND a.cons_a = 5002   THEN '+ opened consent (explicit No -> eligible)'
+         WHEN a.em_a = 0 AND b.em_b = 1                       THEN '+ re-activated (was inactive at A)'
+         WHEN a.CLNT_NO IS NULL AND b.em_b = 1
+              AND b.DT_OPENED > DATE('{MONTH_A}')             THEN '+ new to bank (opened after A)'
+         WHEN a.CLNT_NO IS NULL AND b.em_b = 1                THEN '+ re-entered (record predates A)'
+         ELSE 'no bar (other)'
+       END AS bucket,
+       COUNT(*) AS n_clients
+FROM a FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+GROUP BY 1
+ORDER BY n_clients DESC
+""").toPandas()
+print(f"View-2 waterfall {MONTH_A} -> {MONTH_B} (consent = CPC MTHLY 1012, activity = UCP):")
+display(wf2)
+
+# %% [17] View-2 identity check + deck table (same shape as [2]/[4])
+end2_direct = spark.sql(f"""
+SELECT COUNT(*) AS n
+FROM cpc_b c
+JOIN ucp_b u ON c.CLNT_NO = u.CLNT_NO
+WHERE c.CLNT_CONSENT_TYP <> 5002 AND u.OPN_PROD_CNT >= 1
+""").collect()[0]["n"]
+g2 = lambda pat: int(wf2.loc[wf2["bucket"].str.contains(pat, regex=False), "n_clients"].sum())
+start2 = g2("stayed emailable") + g2("- gone") + g2("- attrition") + g2("- lost consent")
+end2 = start2 \
+     + g2("+ opened consent") + g2("+ re-activated") + g2("+ new to bank") + g2("+ re-entered") \
+     - g2("- gone") - g2("- attrition") - g2("- lost consent")
+print(f"START {start2:,} -> computed END {end2:,} | measured END {end2_direct:,} "
+      f"| identity {'HOLDS' if end2 == end2_direct else 'BROKEN'}")
+
+deck2 = pd.DataFrame([
+    ["Emailable clients (CPC 1012 x active)", MONTH_A, start2, round(start2/1e6, 2)],
+    ["+ New to bank", f"{MONTH_A} → {MONTH_B}", g2("+ new to bank"), round(g2("+ new to bank")/1e6, 2)],
+    ["+ Re-entered client base", f"{MONTH_A} → {MONTH_B}", g2("+ re-entered"), round(g2("+ re-entered")/1e6, 2)],
+    ["+ Re-activated (was inactive)", f"{MONTH_A} → {MONTH_B}", g2("+ re-activated"), round(g2("+ re-activated")/1e6, 2)],
+    ["+ Existing clients opting in", f"{MONTH_A} → {MONTH_B}", g2("+ opened consent"), round(g2("+ opened consent")/1e6, 2)],
+    ["− Lost consent (1012 explicit No)", f"{MONTH_A} → {MONTH_B}", -g2("- lost consent"), round(-g2("- lost consent")/1e6, 2)],
+    ["− Client attrition (inactive per UCP)", f"{MONTH_A} → {MONTH_B}", -g2("- attrition") - g2("- gone"), round((-g2("- attrition") - g2("- gone"))/1e6, 2)],
+    ["Emailable base (CPC 1012 x active)", MONTH_B, end2, round(end2/1e6, 2)],
+], columns=["element", "period", "clients", "clients_MM"])
+display(deck2)
