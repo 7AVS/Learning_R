@@ -447,7 +447,8 @@ if "EDW" not in globals():
 
 jvm = spark._jvm
 fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
-for m in [MONTH_A, MONTH_B]:
+MONTH_2024 = "2024-01-31"          # long-frame anchor (waterfall first bar at Jan-2024)
+for m in [MONTH_2024, MONTH_A, MONTH_B]:
     target = f"{MTHLY_BASE}mth={m}/"
     if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
         print(f"{m} already landed - skipping")
@@ -596,5 +597,132 @@ ax.spines[["top", "right"]].set_visible(False)
 ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
 ax.legend(loc="upper left", fontsize=9, frameon=False)
 ax.set_title(f"Emailable base waterfall — {MONTH_A} to {MONTH_B}  (consent: CPC 1012 × active per UCP)",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
+
+# %% [19] SKETCH WATERFALL (pics/Screenshot 2026-08-19 142040) - pure CPC frame, Jan-24 -> Jul-26.
+# START = all clients 1012 = 5001 @ 2024-01-31 (CPC_RB_PREF_MTHLY). + new 5001 by 2026-07-31.
+# Unsub bar SPLIT: CPC-closed (5001 -> 5002) / vendor-feedback unsubs / their overlap.
+# END = 5001 @ 2026-07-31 official, and TRUE = official minus vendor unsubs CPC never recorded.
+# Vendor unsub set = sf_unsubscribe (client-keyed SFMC log), main BU only, 2024-01 -> 2026-07.
+from trino.dbapi import connect as trino_connect
+from trino.auth import BasicAuthentication
+import getpass, pandas as pd
+
+if "EDL" not in globals():
+    _tu = input("Trino username: ")
+    _tp = getpass.getpass("Trino password: ")
+    EDL = trino_connect(host="strplvaexh0001.fg.rbc.com", port=8443, catalog="edl0_im",
+                        user=_tu, auth=BasicAuthentication(_tu, _tp),
+                        http_scheme="https", verify=False)
+
+tcur = EDL.cursor()
+tcur.execute("""
+    SELECT DISTINCT subscriberkey
+    FROM prod_uq20_digital.sf_unsubscribe
+    WHERE oybaccountid = '1068860'
+      AND substr(eventdate, 1, 10) >= '2024-01-01'
+      AND substr(eventdate, 1, 10) <  '2026-08-01'
+""")
+vk = pd.DataFrame(tcur.fetchall(), columns=["clnt_no"])
+vk["clnt_no"] = pd.to_numeric(vk["clnt_no"], errors="coerce")
+vk = vk.dropna().astype({"clnt_no": "int64"})
+print(f"vendor (SFMC) distinct unsub clients 2024-01 -> 2026-07: {len(vk):,}")
+spark.createDataFrame(vk).createOrReplaceTempView("vendor_unsubs")
+
+spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_2024}/").createOrReplaceTempView("cpc_2024")
+spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_B}/").createOrReplaceTempView("cpc_b2")
+
+sk = spark.sql("""
+WITH a AS (SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a FROM cpc_2024),
+     b AS (SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b FROM cpc_b2),
+     j AS (SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b,
+                  CASE WHEN v.clnt_no IS NOT NULL THEN 1 ELSE 0 END AS vendor_unsub
+           FROM a FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+           LEFT JOIN vendor_unsubs v ON COALESCE(a.CLNT_NO, b.CLNT_NO) = v.clnt_no)
+SELECT SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END)                                        AS start_5001_jan24,
+       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5001 THEN 1 ELSE 0 END)                      AS stayed_5001,
+       SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001) AND cons_b = 5001 THEN 1 ELSE 0 END) AS new_5001,
+       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 THEN 1 ELSE 0 END)                      AS cpc_closed,
+       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS overlap_both,
+       SUM(CASE WHEN cons_a = 5001 AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                THEN 1 ELSE 0 END)                                                           AS left_other,
+       SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END)                                        AS end_5001_jul26,
+       SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END)                   AS vendor_unsub_still_open
+FROM j
+""").toPandas()
+
+r = sk.iloc[0]
+identity_ok = (r.start_5001_jan24 + r.new_5001 - r.cpc_closed - r.left_other) == r.end_5001_jul26
+wf3 = pd.DataFrame([
+    ["START: subscribers (1012 = 5001)", "2024-01-31", int(r.start_5001_jan24)],
+    ["+ new subscribers (5001 by Jul-26)", "2024-02 → 2026-07", int(r.new_5001)],
+    ["− unsub, CPC-closed only (5001→5002, no vendor record)", "2024-02 → 2026-07", -int(r.cpc_closed - r.overlap_both)],
+    ["− unsub, BOTH systems (5001→5002 AND vendor record)", "2024-02 → 2026-07", -int(r.overlap_both)],
+    ["− left 5001 other (blank / no row at B)", "2024-02 → 2026-07", -int(r.left_other)],
+    ["END official: subscribers (1012 = 5001)", "2026-07-31", int(r.end_5001_jul26)],
+    ["  of which vendor-unsubscribed, CPC never closed (blind spot)", "2024-01 → 2026-07", int(r.vendor_unsub_still_open)],
+    ["END true: official minus the blind spot", "2026-07-31", int(r.end_5001_jul26 - r.vendor_unsub_still_open)],
+], columns=["element", "period", "n_clients"])
+print(f"Sketch waterfall (pure CPC 1012, Jan-24 -> Jul-26) | identity "
+      f"{'HOLDS' if identity_ok else 'BROKEN'}:")
+display(wf3)
+
+# %% [20] Sketch waterfall chart - 4 bars per the sketch (blue / green / stacked unsub / gold)
+import matplotlib.pyplot as plt
+
+blue, green, gold = "#4472c4", "#70ad47", "#c49102"
+greys = ["#a6a6a6", "#d0d0d0", "#fbe5d6"]   # cpc-only / overlap / vendor-still-open (sketch colors)
+grey_line = "#8a8f98"
+
+start_v   = r.start_5001_jan24 / 1e6
+new_v     = r.new_5001 / 1e6
+cpc_only  = (r.cpc_closed - r.overlap_both) / 1e6
+overlap_v = r.overlap_both / 1e6
+vend_open = r.vendor_unsub_still_open / 1e6
+other_v   = r.left_other / 1e6
+end_off   = r.end_5001_jul26 / 1e6
+end_true  = (r.end_5001_jul26 - r.vendor_unsub_still_open) / 1e6
+
+lo = min(start_v, end_true) * 0.93
+fig, ax = plt.subplots(figsize=(11.5, 6))
+ax.bar(0, start_v - lo, bottom=lo, width=0.6, color=blue, zorder=3)
+ax.text(0, start_v + 0.06, f"{start_v:,.2f}", ha="center", fontsize=11, fontweight="bold")
+
+ax.bar(1, new_v, bottom=start_v, width=0.6, color=green, zorder=3)
+ax.text(1, start_v + new_v + 0.06, f"+{new_v:.2f}", ha="center", fontsize=11, fontweight="bold")
+top = start_v + new_v
+
+base = top
+for lbl, v, c in [("Unsub - CPC closed only", cpc_only, greys[0]),
+                  ("Unsub - both systems (overlap)", overlap_v, greys[1]),
+                  ("Vendor unsub, CPC still open", vend_open, greys[2]),
+                  ("Left 5001 other (blank/no row)", other_v, "#e8e8e8")]:
+    ax.bar(2, -v, bottom=base, width=0.6, color=c, zorder=3,
+           edgecolor="white", linewidth=1.2, label=lbl)
+    if v > 0.03:
+        ax.text(2, base - v/2, f"-{v:.2f}", ha="center", va="center", fontsize=9)
+    base -= v
+ax.text(2, top + 0.06, f"-{(top - base):.2f}", ha="center", fontsize=11, fontweight="bold")
+
+ax.bar(3, end_true - lo, bottom=lo, width=0.6, color=gold, zorder=3)
+ax.bar(3, vend_open, bottom=end_true, width=0.6, color="#e7d091", zorder=3,
+       label="Blind spot (vendor unsub, still 5001)")
+ax.text(3, end_off + 0.06, f"{end_off:,.2f} official", ha="center", fontsize=10, fontweight="bold")
+ax.text(3, end_true - 0.10, f"{end_true:,.2f} true", ha="center", fontsize=10,
+        fontweight="bold", color="white")
+
+ax.plot([0.3, 0.7], [start_v]*2, ls=":", lw=1.2, color=grey_line)
+ax.plot([1.3, 1.7], [top]*2, ls=":", lw=1.2, color=grey_line)
+ax.set_xticks([0, 1, 2, 3])
+ax.set_xticklabels(["Subscribers\n1012 = 5001\n2024-01", "New\nsubscribers",
+                    "Unsubscribes\n(split by system)", "Subscribers\n2026-07\nofficial vs true"],
+                   fontsize=10)
+ax.set_ylabel("# clients in MM")
+ax.set_ylim(lo, top * 1.015)
+ax.spines[["top", "right"]].set_visible(False)
+ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
+ax.legend(loc="upper left", fontsize=8.5, frameon=False)
+ax.set_title("Subscribers waterfall — CPC 1012 vs vendor feedback, Jan-2024 to Jul-2026",
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
