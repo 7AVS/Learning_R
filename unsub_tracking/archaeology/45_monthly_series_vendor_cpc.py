@@ -105,6 +105,8 @@ for m0 in VFB_MONTHS:
             WHERE e.disposition_cd = 4
               AND e.disposition_dt_tm >= DATE '{m0}'
               AND e.disposition_dt_tm <  DATE '{m1}'
+              AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+              AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
         )
         SELECT CLNT_NO, mne
         FROM (SELECT CLNT_NO, mne,
@@ -133,6 +135,8 @@ for m0 in VFB_MONTHS:
             WHERE e.disposition_cd = 1
               AND e.disposition_dt_tm >= DATE '{m0}'
               AND e.disposition_dt_tm <  DATE '{m1}'
+              AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+              AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
         )
         SELECT COALESCE(mne, 'ALL_TOTAL') AS mne,
                CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS n_clients
