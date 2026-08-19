@@ -70,11 +70,17 @@ VFB_MONTHS = pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%
 # THE LOCKED JOIN (verbatim from unsub_unified [12], the validated pattern):
 # EVENT joins MASTER on BOTH keys - consumer_id_hashed AND TREATMENT_ID - against
 # SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO ... CLNT_NO IS NOT NULL.
-# MASTER floor asymmetry (deliberate): an UNSUB points to the MASTER row of the SEND
-# that carried the link, which can be much older than the unsub month -> unsub bites
-# use the DEEP floor 2023-10-01 (= 2024-01 minus the unified 3mo margin), no ceiling.
-# A SEND's master row loads with the send itself -> send bites use a local window.
-MASTER_DEEP_FLOOR = "2023-10-01"
+# MASTER scan anchored by TREATMENT_ID itself (Andre 2026-08-19): positions 1-7 =
+# deployment date as YYYYDDD julian - the same column the join uses, so the bound can
+# never drop a matching row. Unsubs: deployments 2023-10-01 .. unsub month end (an
+# unsub can't reference a treatment deployed after it). Sends: m0-3mo .. month end.
+# NOTE: non-standard ids (DEFAULT/COI) fall outside the numeric range and are excluded
+# from this attribution - campaign-taxonomy mail only [flagged to Andre].
+def _julian(iso):
+    d = pd.Timestamp(iso)
+    return f"{d.year}{d.dayofyear:03d}"
+
+J_DEEP = _julian("2023-10-01")
 
 for m0 in VFB_MONTHS:
     m1 = (pd.Timestamp(m0) + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
@@ -92,7 +98,7 @@ for m0 in VFB_MONTHS:
             FROM DTZV01.VENDOR_FEEDBACK_EVENT e
             INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                         FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                        WHERE load_tm >= DATE '{MASTER_DEEP_FLOOR}'
+                        WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '{J_DEEP}' AND '{_julian(m1)}'
                           AND CLNT_NO IS NOT NULL) m
               ON  m.consumer_id_hashed = e.consumer_id_hashed
               AND m.TREATMENT_ID      = e.TREATMENT_ID
@@ -111,15 +117,16 @@ for m0 in VFB_MONTHS:
     spark.createDataFrame(ul).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_clients/month={tag}/")
 
     # (b) sends: distinct clnt_no per MNE + ALL_TOTAL row (true monthly reach).
-    # Send master rows load with the send - local window m0-3mo .. m1+3mo.
+    # Treatments anchored m0-3mo .. month end (multi-wave sends deploy a bit earlier).
     sd = pd.read_sql(f"""
         WITH j AS (
             SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
             FROM DTZV01.VENDOR_FEEDBACK_EVENT e
             INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                         FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                        WHERE load_tm >= ADD_MONTHS(DATE '{m0}', -3)
-                          AND load_tm <  ADD_MONTHS(DATE '{m0}', 4)
+                        WHERE SUBSTR(TREATMENT_ID, 1, 7)
+                                BETWEEN '{_julian(pd.Timestamp(m0) - pd.offsets.MonthBegin(3))}'
+                                AND     '{_julian(m1)}'
                           AND CLNT_NO IS NOT NULL) m
               ON  m.consumer_id_hashed = e.consumer_id_hashed
               AND m.TREATMENT_ID      = e.TREATMENT_ID
