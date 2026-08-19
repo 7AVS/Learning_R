@@ -108,9 +108,10 @@ for m0 in VFB_MONTHS:
               AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
               AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
         )
-        SELECT CLNT_NO, mne
-        FROM (SELECT CLNT_NO, mne,
-                     ROW_NUMBER() OVER (PARTITION BY CLNT_NO
+        SELECT CLNT_NO, mne,
+               SUBSTR(treatment_id, 1, 7) AS deploy_julian   -- campaign deployment date
+        FROM (SELECT CLNT_NO, mne, treatment_id,             -- (YYYYDDD) - keeps the
+                     ROW_NUMBER() OVER (PARTITION BY CLNT_NO -- cohort axis derivable
                                         ORDER BY dt ASC, mne ASC, treatment_id ASC) AS rn
               FROM j) t
         WHERE rn = 1
