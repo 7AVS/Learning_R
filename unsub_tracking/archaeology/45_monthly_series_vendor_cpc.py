@@ -34,7 +34,10 @@ if "EDW" not in globals():
                               user=input("Teradata username: "),
                               password=getpass.getpass("Teradata password: "),
                               logmech="LDAP")
-print("EDW ready")
+
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.getOrCreate()
+print("EDW + spark ready")
 
 # %% [1] MONTHLY UNSUBS x MNE since 2024-01 — one SQL, clnt_no grain.
 # Dedup: first unsub of the month per client (multi-MNE clients count once, under the
@@ -183,7 +186,32 @@ ucp_flow = pd.concat(flow_parts, ignore_index=True)
 print(f"UCP monthly flows ({FLAG}):")
 display(ucp_flow)
 
-# %% [5] THE SUBSCRIBERS WATERFALL Jan-24 -> Jul-26 — ONE SQL, eight numbers, all joins
+# %% [5] CPC MONTHLY UNSUBS (1012 writes to 5002) split by WRITER: 7020 (the SFMC email
+# backfeed) vs all other application systems. Source = DDWV01.CPC_RB_PREF (the proven
+# mirror with the write timestamp) - monthly flow by CHG_TMSTMP month.
+# SURVIVOR CAVEAT (state once, small): the standing table keeps only each client's
+# LATEST 1012 row, so a 5002 later overwritten (re-consent) drops out of this flow -
+# re-consent measured at ~4.7K over 2.5 years, so the shave is negligible.
+cpc_writes = pd.read_sql("""
+    SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
+             TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10
+                       THEN '0' ELSE '' END) ||
+             TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))   AS chg_month,
+           CASE WHEN APP_SYS_CD = 7020 THEN '7020 email backfeed'
+                ELSE 'other writers' END                          AS writer,
+           CAST(COUNT(*) AS BIGINT)                               AS n_writes_to_no
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2024-01-01'
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+""", EDW)
+cpc_writes.columns = [c.lower() for c in cpc_writes.columns]
+print("CPC 1012 -> explicit No, monthly writes by writer (7020 = SFMC backfeed vs others):")
+display(cpc_writes)
+
+# %% [6] THE SUBSCRIBERS WATERFALL Jan-24 -> Jul-26 — ONE SQL, eight numbers, all joins
 # server-side (two 26M-row CPC month slices + the vendor unsub set never leave Teradata).
 # Sketch: pics/Screenshot 2026-08-19 142040. START = 1012 = 5001 @ 2024-01-31; unsub bar
 # split CPC-closed / vendor / overlap; END official vs TRUE (minus vendor unsubs CPC
@@ -252,11 +280,13 @@ print(f"Subscribers waterfall (CPC 1012 vs vendor), Jan-24 -> Jul-26 | identity 
       f"{'HOLDS' if identity_ok else 'BROKEN'}:")
 display(wf)
 
-# %% [6] PLOTS - at the end, each with its underlying data table displayed adjacent
-# (PowerPoint rebuild uses these numbers, not the image).
+# %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
+# (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
+# 7a waterfall | 7b vendor monthly unsub bars | 7c CPC monthly 5002-writes split
+# 7020-vs-others | 7d vendor-vs-UCP comparison.
 import matplotlib.pyplot as plt
 
-# --- 6a. waterfall chart (data = the wf table above, re-displayed here) ---
+# --- 7a. waterfall chart (data = the wf table above, re-displayed here) ---
 display(wf)
 blue, green, gold = "#4472c4", "#70ad47", "#c49102"
 greys = ["#a6a6a6", "#d0d0d0", "#fbe5d6"]
@@ -310,7 +340,41 @@ ax.set_title("Subscribers waterfall — CPC 1012 vs vendor feedback, Jan-2024 to
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# --- 6b. monthly unsub comparison (data table displayed first) ---
+# --- 7b. vendor monthly unsubs, bar chart (data = vfb_un_tot, displayed here) ---
+print("Vendor monthly unsub clients (plot data):")
+display(vfb_un_tot)
+fig, ax = plt.subplots(figsize=(11.5, 4.6))
+xb = range(len(vfb_un_tot))
+ax.bar(xb, vfb_un_tot["clients_unsub"] / 1e3, width=0.65, color="#16436e", zorder=3)
+ax.set_xticks(list(xb))
+ax.set_xticklabels(vfb_un_tot["month"], fontsize=8.5, rotation=45)
+ax.set_ylabel("clients (thousands)")
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_title("Monthly unsubscribes — vendor feedback (distinct clients), since 2024-01",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
+
+# --- 7c. CPC monthly 1012 -> 5002 writes, split 7020 vs other writers (data displayed) ---
+cpcw_piv = (cpc_writes.pivot_table(index="chg_month", columns="writer",
+                                   values="n_writes_to_no", aggfunc="sum")
+                      .fillna(0).reset_index())
+print("CPC 1012 -> explicit No per month, by writer (plot data):")
+display(cpcw_piv)
+fig, ax = plt.subplots(figsize=(11.5, 4.6))
+xc = range(len(cpcw_piv))
+for col, color in [("7020 email backfeed", "#e08214"), ("other writers", "#16436e")]:
+    if col in cpcw_piv.columns:
+        ax.plot(xc, cpcw_piv[col] / 1e3, lw=2.2, marker="o", ms=4, color=color, label=col)
+ax.set_xticks(list(xc))
+ax.set_xticklabels(cpcw_piv["chg_month"], fontsize=8.5, rotation=45)
+ax.set_ylabel("writes to No (thousands)")
+ax.legend(loc="upper right", fontsize=9, frameon=False)
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_title("CPC 1012 opt-outs per month — SFMC backfeed (7020) vs all other writers",
+             fontweight="bold", fontsize=12, loc="left")
+plt.tight_layout(); plt.show()
+
+# --- 7d. monthly unsub comparison, vendor vs UCP (data table displayed first) ---
 cmp = (vfb_un_tot
        .merge(ucp_flow[["month", "lost_consent"]], on="month", how="outer")
        .rename(columns={"clients_unsub": "vendor_unsub_clients",
