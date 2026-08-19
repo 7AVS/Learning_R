@@ -448,6 +448,17 @@ if "EDW" not in globals():
 jvm = spark._jvm
 fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
 MONTH_2024 = "2024-01-31"          # long-frame anchor (waterfall first bar at Jan-2024)
+
+# personal/active slicing at Jan-2024 needs a UCP partition for that month - probe it now
+if not fs.exists(jvm.org.apache.hadoop.fs.Path(f"{UCP_BASE}MONTH_END_DATE={MONTH_2024}/")):
+    _parts = sorted(p.getPath().getName() for p in
+                    fs.listStatus(jvm.org.apache.hadoop.fs.Path(UCP_BASE)))
+    print(f"WARNING: no UCP partition at {MONTH_2024} - earliest available: "
+          f"{_parts[0] if _parts else 'NONE'} (personal/active filter for the Jan-24 bar "
+          f"needs a different source or anchor)")
+
+# full 1012 book per month (5001/5002/blank - no consent filter) + write metadata
+# (CHG_TMSTMP + APP_SYS_CD) so organic-vs-bulk/administrative slicing needs no re-pull
 for m in [MONTH_2024, MONTH_A, MONTH_B]:
     target = f"{MTHLY_BASE}mth={m}/"
     if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
@@ -455,7 +466,7 @@ for m in [MONTH_2024, MONTH_A, MONTH_B]:
         continue
     chunks, total = [], 0
     for c in pd.read_sql(f"""
-        SELECT CLNT_NO, CLNT_CONSENT_TYP
+        SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
         FROM DDWV01.CPC_RB_PREF_MTHLY
         WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{m}'
     """, EDW, chunksize=1_000_000):
