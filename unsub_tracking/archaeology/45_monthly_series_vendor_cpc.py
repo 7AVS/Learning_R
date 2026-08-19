@@ -56,56 +56,106 @@ for m in [MONTH_2024, MONTH_END]:
     landed = spark.read.parquet(target).count()
     print(f"{m}: landed {landed:,} rows | {'MATCH' if landed == total else 'MISMATCH - investigate'}")
 
-# %% [2] VENDOR MONTHLY since 2024-01 - month x MNE x disposition (1 = send, 4 = unsub).
-# One bounded Teradata aggregate per month (bite discipline - a single 31-month scan of
-# EVENT is a TDWM kill risk), each bite landed idempotently. MNE = raw
-# SUBSTR(TREATMENT_ID, 8, 3), no recoding - LOB rollup happens at slice time.
+# %% [2] VENDOR MONTHLY since 2024-01 - EVENT + MASTER together, clnt_no ALWAYS.
+# Unsub attribution = FIRST unsub of the month per clnt_no (multi-MNE clients count
+# ONCE, under the first event's MNE - per-MNE counts therefore SUM to distinct clients).
+# Sends = distinct clnt_no per MNE + an ALL_TOTAL row (grouping sets - a client mailed
+# by 3 MNEs is 1 in the total). One bounded bite per month, three lands each,
+# idempotent. MNE = raw SUBSTR(TREATMENT_ID, 8, 3) - LOB rollup happens at slice time.
+# MASTER bounded +-3mo around the month (load_tm lags disposition; same margin logic
+# as unsub_unified). MASTER is not 1:1 - GROUP BY collapses to distinct id->clnt pairs.
 VFB_BASE = "/user/427966379/unsub_cpc/vendor_monthly_mne/"
 VFB_MONTHS = pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%m-%d").tolist()
 
+_MAST = """
+    mast AS (
+        SELECT consumer_id_hashed, CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+        WHERE load_tm >= ADD_MONTHS(DATE '{m0}', -3)
+          AND load_tm <  ADD_MONTHS(DATE '{m0}', 4)
+          AND CLNT_NO IS NOT NULL
+        GROUP BY 1, 2
+    )"""
+
 for m0 in VFB_MONTHS:
     m1 = (pd.Timestamp(m0) + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
-    target = f"{VFB_BASE}month={m0[:7]}/"
-    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
-        print(f"{m0[:7]} already landed - skipping")
+    tag = m0[:7]
+    if fs.exists(jvm.org.apache.hadoop.fs.Path(f"{VFB_BASE}unsub_clients/month={tag}/_SUCCESS")):
+        print(f"{tag} already landed - skipping")
         continue
-    bite = pd.read_sql(f"""
-        SELECT SUBSTR(TREATMENT_ID, 8, 3)            AS mne,
-               disposition_cd                        AS dispo,
-               COUNT(*)                              AS n_events,
-               COUNT(DISTINCT consumer_id_hashed)    AS n_ids
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT
-        WHERE disposition_cd IN (1, 4)
-          AND disposition_dt_tm >= DATE '{m0}'
-          AND disposition_dt_tm <  DATE '{m1}'
-        GROUP BY 1, 2
-    """, EDW)
-    bite.insert(0, "month", m0[:7])
-    spark.createDataFrame(bite).write.mode("overwrite").parquet(target)
-    # true distinct clients per month (a client unsubbing from 3 MNEs counts ONCE here;
-    # summing the per-MNE n_ids would overstate the monthly headline ~3x)
-    tot = pd.read_sql(f"""
-        SELECT disposition_cd                        AS dispo,
-               COUNT(*)                              AS n_events,
-               COUNT(DISTINCT consumer_id_hashed)    AS n_ids_distinct
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT
-        WHERE disposition_cd IN (1, 4)
-          AND disposition_dt_tm >= DATE '{m0}'
-          AND disposition_dt_tm <  DATE '{m1}'
+
+    # (a) unsubs: first unsub of the month per clnt_no -> that event's MNE
+    un = pd.read_sql(f"""
+        WITH {_MAST.format(m0=m0)},
+        j AS (
+            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne, e.disposition_dt_tm AS dt
+            FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+            JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
+            WHERE e.disposition_cd = 4
+              AND e.disposition_dt_tm >= DATE '{m0}'
+              AND e.disposition_dt_tm <  DATE '{m1}'
+        ),
+        first_unsub AS (
+            SELECT CLNT_NO, mne
+            FROM (SELECT CLNT_NO, mne,
+                         ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY dt ASC) AS rn
+                  FROM j) t
+            WHERE rn = 1
+        )
+        SELECT mne, CAST(COUNT(*) AS BIGINT) AS n_clients
+        FROM first_unsub
         GROUP BY 1
     """, EDW)
-    tot.insert(0, "month", m0[:7])
-    spark.createDataFrame(tot).write.mode("overwrite").parquet(f"{VFB_BASE}totals/month={m0[:7]}/")
-    print(f"{m0[:7]}: landed {len(bite)} mne x dispo rows + monthly totals")
+    un.insert(0, "month", tag)
+    spark.createDataFrame(un).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_mne/month={tag}/")
 
-vfb = spark.read.parquet(f"{VFB_BASE}month=*").toPandas().sort_values(["month", "dispo", "mne"])
-print("Vendor feedback monthly x MNE x disposition (1 = send, 4 = unsub), 2024-01 -> 2026-07:")
-display(vfb)
+    # (b) sends: distinct clnt_no per MNE + ALL_TOTAL row (true monthly reach)
+    sd = pd.read_sql(f"""
+        WITH {_MAST.format(m0=m0)},
+        j AS (
+            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
+            FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+            JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
+            WHERE e.disposition_cd = 1
+              AND e.disposition_dt_tm >= DATE '{m0}'
+              AND e.disposition_dt_tm <  DATE '{m1}'
+        )
+        SELECT COALESCE(mne, 'ALL_TOTAL') AS mne,
+               CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS n_clients
+        FROM j
+        GROUP BY GROUPING SETS ((mne), ())
+    """, EDW)
+    sd.insert(0, "month", tag)
+    spark.createDataFrame(sd).write.mode("overwrite").parquet(f"{VFB_BASE}send_mne/month={tag}/")
 
-vfb_tot = (spark.read.parquet(f"{VFB_BASE}totals/").toPandas()
-                .pivot_table(index="month", columns="dispo", values="n_ids_distinct", aggfunc="sum")
-                .rename(columns={1: "clients_sent", 4: "clients_unsub"}).reset_index())
-print("Monthly totals (TRUE distinct clients per disposition):")
+    # (c) the unsub CLIENT LIST for the month (feeds the waterfall's vendor set - ~30K rows)
+    ul = pd.read_sql(f"""
+        WITH {_MAST.format(m0=m0)}
+        SELECT DISTINCT m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+        JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
+        WHERE e.disposition_cd = 4
+          AND e.disposition_dt_tm >= DATE '{m0}'
+          AND e.disposition_dt_tm <  DATE '{m1}'
+    """, EDW)
+    ul.insert(0, "month", tag)
+    spark.createDataFrame(ul).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_clients/month={tag}/")
+    print(f"{tag}: unsub mne rows {len(un)} | send mne rows {len(sd)} | unsub clients {len(ul):,}")
+
+vfb_un = spark.read.parquet(f"{VFB_BASE}unsub_mne/").toPandas().sort_values(["month", "mne"])
+print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup - rows sum to distinct clients):")
+display(vfb_un)
+
+vfb_sd = spark.read.parquet(f"{VFB_BASE}send_mne/").toPandas().sort_values(["month", "mne"])
+print("Vendor SENDS monthly x MNE (distinct clnt_no per MNE; ALL_TOTAL = true monthly reach):")
+display(vfb_sd)
+
+vfb_tot = (vfb_un.groupby("month", as_index=False)["n_clients"].sum()
+                 .rename(columns={"n_clients": "clients_unsub"})
+                 .merge(vfb_sd.loc[vfb_sd.mne == "ALL_TOTAL", ["month", "n_clients"]]
+                              .rename(columns={"n_clients": "clients_sent"}),
+                        on="month", how="left"))
+print("Monthly totals (distinct clnt_no):")
 display(vfb_tot)
 
 # %% [3] CPC MONTHLY since 2024-01 - standing 1012 counts per month-end by consent value
@@ -168,35 +218,13 @@ display(ucp_flow)
 # Jan-24 -> Jul-26. START = 1012 = 5001 @ 2024-01-31. + new 5001 by 2026-07-31.
 # Unsub bar SPLIT: CPC-closed (5001 -> 5002) / vendor-feedback unsubs / overlap.
 # END = 5001 @ 2026-07-31 official, and TRUE = official minus vendor unsubs CPC never
-# recorded. Vendor set = sf_unsubscribe (client-keyed SFMC log), main BU, 2024-01 -> 2026-07.
-from trino.dbapi import connect as trino_connect
-from trino.auth import BasicAuthentication
-
-if "EDL" not in globals():
-    _tu = input("Trino username: ")
-    _tp = getpass.getpass("Trino password: ")
-    EDL = trino_connect(host="strplvaexh0001.fg.rbc.com", port=8443, catalog="edl0_im",
-                        user=_tu, auth=BasicAuthentication(_tu, _tp),
-                        http_scheme="https", verify=False)
-
-SFUNSUB_PATH = "/user/427966379/unsub_cpc/sf_unsub_clients_2024_2026/"
-if fs.exists(jvm.org.apache.hadoop.fs.Path(SFUNSUB_PATH + "_SUCCESS")):
-    print("sf unsub client list already landed - reading from HDFS")
-else:
-    tcur = EDL.cursor()
-    tcur.execute("""
-        SELECT DISTINCT subscriberkey
-        FROM prod_uq20_digital.sf_unsubscribe
-        WHERE oybaccountid = '1068860'
-          AND substr(eventdate, 1, 10) >= '2024-01-01'
-          AND substr(eventdate, 1, 10) <  '2026-08-01'
-    """)
-    vk = pd.DataFrame(tcur.fetchall(), columns=["clnt_no"])
-    vk["clnt_no"] = pd.to_numeric(vk["clnt_no"], errors="coerce")
-    vk = vk.dropna().astype({"clnt_no": "int64"})
-    spark.createDataFrame(vk).write.mode("overwrite").parquet(SFUNSUB_PATH)
-spark.read.parquet(SFUNSUB_PATH).createOrReplaceTempView("vendor_unsubs")
-print(f"vendor (SFMC) distinct unsub clients 2024-01 -> 2026-07: "
+# recorded. Vendor set = union of [2]'s monthly unsub CLIENT LISTS (EVENT+MASTER,
+# clnt_no grain) - [2] must have run first.
+spark.sql(f"""
+    SELECT DISTINCT CLNT_NO AS clnt_no
+    FROM parquet.`{VFB_BASE}unsub_clients/`
+""").createOrReplaceTempView("vendor_unsubs")
+print(f"vendor (EVENT+MASTER) distinct unsub clients 2024-01 -> 2026-07: "
       f"{spark.table('vendor_unsubs').count():,}")
 
 spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_2024}/").createOrReplaceTempView("cpc_2024")
