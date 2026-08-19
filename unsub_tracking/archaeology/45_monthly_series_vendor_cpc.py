@@ -67,15 +67,14 @@ for m in [MONTH_2024, MONTH_END]:
 VFB_BASE = "/user/427966379/unsub_cpc/vendor_monthly_mne/"
 VFB_MONTHS = pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%m-%d").tolist()
 
-_MAST = """
-    mast AS (
-        SELECT consumer_id_hashed, CLNT_NO
-        FROM DTZV01.VENDOR_FEEDBACK_MASTER
-        WHERE load_tm >= ADD_MONTHS(DATE '{m0}', -3)
-          AND load_tm <  ADD_MONTHS(DATE '{m0}', 4)
-          AND CLNT_NO IS NOT NULL
-        GROUP BY 1, 2
-    )"""
+# THE LOCKED JOIN (verbatim from unsub_unified [12], the validated pattern):
+# EVENT joins MASTER on BOTH keys - consumer_id_hashed AND TREATMENT_ID - against
+# SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO ... CLNT_NO IS NOT NULL.
+# MASTER floor asymmetry (deliberate): an UNSUB points to the MASTER row of the SEND
+# that carried the link, which can be much older than the unsub month -> unsub bites
+# use the DEEP floor 2023-10-01 (= 2024-01 minus the unified 3mo margin), no ceiling.
+# A SEND's master row loads with the send itself -> send bites use a local window.
+MASTER_DEEP_FLOOR = "2023-10-01"
 
 for m0 in VFB_MONTHS:
     m1 = (pd.Timestamp(m0) + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
@@ -84,38 +83,46 @@ for m0 in VFB_MONTHS:
         print(f"{tag} already landed - skipping")
         continue
 
-    # (a) unsubs: first unsub of the month per clnt_no -> that event's MNE
-    un = pd.read_sql(f"""
-        WITH {_MAST.format(m0=m0)},
-        j AS (
-            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne, e.disposition_dt_tm AS dt
+    # (a) unsub CLIENT LIST: first unsub of the month per clnt_no -> that event's MNE.
+    # Deterministic tie-break (dt, mne, treatment_id) - same as unsub_unified [12].
+    ul = pd.read_sql(f"""
+        WITH j AS (
+            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
+                   e.disposition_dt_tm AS dt, e.TREATMENT_ID AS treatment_id
             FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-            JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
+            INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                        WHERE load_tm >= DATE '{MASTER_DEEP_FLOOR}'
+                          AND CLNT_NO IS NOT NULL) m
+              ON  m.consumer_id_hashed = e.consumer_id_hashed
+              AND m.TREATMENT_ID      = e.TREATMENT_ID
             WHERE e.disposition_cd = 4
               AND e.disposition_dt_tm >= DATE '{m0}'
               AND e.disposition_dt_tm <  DATE '{m1}'
-        ),
-        first_unsub AS (
-            SELECT CLNT_NO, mne
-            FROM (SELECT CLNT_NO, mne,
-                         ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY dt ASC) AS rn
-                  FROM j) t
-            WHERE rn = 1
         )
-        SELECT mne, CAST(COUNT(*) AS BIGINT) AS n_clients
-        FROM first_unsub
-        GROUP BY 1
+        SELECT CLNT_NO, mne
+        FROM (SELECT CLNT_NO, mne,
+                     ROW_NUMBER() OVER (PARTITION BY CLNT_NO
+                                        ORDER BY dt ASC, mne ASC, treatment_id ASC) AS rn
+              FROM j) t
+        WHERE rn = 1
     """, EDW)
-    un.insert(0, "month", tag)
-    spark.createDataFrame(un).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_mne/month={tag}/")
+    ul.insert(0, "month", tag)
+    spark.createDataFrame(ul).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_clients/month={tag}/")
 
-    # (b) sends: distinct clnt_no per MNE + ALL_TOTAL row (true monthly reach)
+    # (b) sends: distinct clnt_no per MNE + ALL_TOTAL row (true monthly reach).
+    # Send master rows load with the send - local window m0-3mo .. m1+3mo.
     sd = pd.read_sql(f"""
-        WITH {_MAST.format(m0=m0)},
-        j AS (
+        WITH j AS (
             SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
             FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-            JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
+            INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                        FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                        WHERE load_tm >= ADD_MONTHS(DATE '{m0}', -3)
+                          AND load_tm <  ADD_MONTHS(DATE '{m0}', 4)
+                          AND CLNT_NO IS NOT NULL) m
+              ON  m.consumer_id_hashed = e.consumer_id_hashed
+              AND m.TREATMENT_ID      = e.TREATMENT_ID
             WHERE e.disposition_cd = 1
               AND e.disposition_dt_tm >= DATE '{m0}'
               AND e.disposition_dt_tm <  DATE '{m1}'
@@ -127,22 +134,13 @@ for m0 in VFB_MONTHS:
     """, EDW)
     sd.insert(0, "month", tag)
     spark.createDataFrame(sd).write.mode("overwrite").parquet(f"{VFB_BASE}send_mne/month={tag}/")
+    print(f"{tag}: unsub clients {len(ul):,} | send mne rows {len(sd)}")
 
-    # (c) the unsub CLIENT LIST for the month (feeds the waterfall's vendor set - ~30K rows)
-    ul = pd.read_sql(f"""
-        WITH {_MAST.format(m0=m0)}
-        SELECT DISTINCT m.CLNT_NO
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-        JOIN mast m ON e.consumer_id_hashed = m.consumer_id_hashed
-        WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= DATE '{m0}'
-          AND e.disposition_dt_tm <  DATE '{m1}'
-    """, EDW)
-    ul.insert(0, "month", tag)
-    spark.createDataFrame(ul).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_clients/month={tag}/")
-    print(f"{tag}: unsub mne rows {len(un)} | send mne rows {len(sd)} | unsub clients {len(ul):,}")
-
-vfb_un = spark.read.parquet(f"{VFB_BASE}unsub_mne/").toPandas().sort_values(["month", "mne"])
+# unsub counts derive from the landed client lists - no separate count query needed
+vfb_un = (spark.read.parquet(f"{VFB_BASE}unsub_clients/")
+               .groupBy("month", "mne").count()
+               .withColumnRenamed("count", "n_clients")
+               .toPandas().sort_values(["month", "mne"]))
 print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup - rows sum to distinct clients):")
 display(vfb_un)
 
