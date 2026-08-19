@@ -179,19 +179,25 @@ if "EDL" not in globals():
                         user=_tu, auth=BasicAuthentication(_tu, _tp),
                         http_scheme="https", verify=False)
 
-tcur = EDL.cursor()
-tcur.execute("""
-    SELECT DISTINCT subscriberkey
-    FROM prod_uq20_digital.sf_unsubscribe
-    WHERE oybaccountid = '1068860'
-      AND substr(eventdate, 1, 10) >= '2024-01-01'
-      AND substr(eventdate, 1, 10) <  '2026-08-01'
-""")
-vk = pd.DataFrame(tcur.fetchall(), columns=["clnt_no"])
-vk["clnt_no"] = pd.to_numeric(vk["clnt_no"], errors="coerce")
-vk = vk.dropna().astype({"clnt_no": "int64"})
-print(f"vendor (SFMC) distinct unsub clients 2024-01 -> 2026-07: {len(vk):,}")
-spark.createDataFrame(vk).createOrReplaceTempView("vendor_unsubs")
+SFUNSUB_PATH = "/user/427966379/unsub_cpc/sf_unsub_clients_2024_2026/"
+if fs.exists(jvm.org.apache.hadoop.fs.Path(SFUNSUB_PATH + "_SUCCESS")):
+    print("sf unsub client list already landed - reading from HDFS")
+else:
+    tcur = EDL.cursor()
+    tcur.execute("""
+        SELECT DISTINCT subscriberkey
+        FROM prod_uq20_digital.sf_unsubscribe
+        WHERE oybaccountid = '1068860'
+          AND substr(eventdate, 1, 10) >= '2024-01-01'
+          AND substr(eventdate, 1, 10) <  '2026-08-01'
+    """)
+    vk = pd.DataFrame(tcur.fetchall(), columns=["clnt_no"])
+    vk["clnt_no"] = pd.to_numeric(vk["clnt_no"], errors="coerce")
+    vk = vk.dropna().astype({"clnt_no": "int64"})
+    spark.createDataFrame(vk).write.mode("overwrite").parquet(SFUNSUB_PATH)
+spark.read.parquet(SFUNSUB_PATH).createOrReplaceTempView("vendor_unsubs")
+print(f"vendor (SFMC) distinct unsub clients 2024-01 -> 2026-07: "
+      f"{spark.table('vendor_unsubs').count():,}")
 
 spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_2024}/").createOrReplaceTempView("cpc_2024")
 spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_END}/").createOrReplaceTempView("cpc_end")
