@@ -1,17 +1,26 @@
 # %% [markdown]
-# # 45 — the Jan-2024 deck build: subscribers waterfall + monthly unsub series
+# # 45 — deck build, SQL-first / audit-session edition
 #
-# Everything the sketch deck needs, one file (assumes a live `spark` session):
-#   [1] land CPC_RB_PREF_MTHLY 1012 slices (2024-01-31, 2026-07-31) - full book + write metadata
-#   [2] vendor feedback monthly, dispo 1/4 x MNE, since 2024-01 (bites, idempotent)
-#   [3] CPC 1012 standing per month-end since 2024-01 (5001/5002/5003)
-#   [4] UCP monthly unsub flow (flag 1 -> 0) since 2024-01 (as far back as ucp4 goes)
-#   [5] sketch waterfall data (pics/Screenshot 2026-08-19 142040): CPC vs vendor vs overlap
-#   [6] sketch waterfall chart
-#   [7] monthly-unsub comparison chart (vendor vs UCP), data table adjacent
-# All lands are skip-if-landed - a killed session resumes where it stopped.
+# Built to walk OTHER TEAMS through live: every dataset is ONE visible SQL against the
+# warehouse (no saved subsets, no screen-hopping); heavy joins run server-side so the
+# 16GB pod only ever receives small result tables. Plots live at the END, each with its
+# underlying data table displayed right above it (PowerPoint rebuilds use the numbers).
+#
+#   [1] monthly UNSUBS x MNE since 2024-01 — one SQL (clnt_no grain, first-unsub-of-month)
+#   [2] monthly SENDS x MNE since 2024-01 — one SQL template, month loop (the heavy scan)
+#   [3] CPC 1012 standing per month-end — one SQL
+#   [4] UCP monthly flows — Spark SQL (ucp4 exists only on HDFS)
+#   [5] the subscribers waterfall Jan-24 -> Jul-26 — ONE SQL, eight numbers
+#   [6] plots: waterfall + monthly comparison (data tables adjacent)
+#
+# THE LOCKED EVENT+MASTER MERGE (canon: spotlight/unsub_analysis_notebook.py ~528-563):
+# join on BOTH keys (consumer_id_hashed AND TREATMENT_ID); MASTER as DISTINCT
+# (hash, TREATMENT_ID, CLNT_NO) triples, CLNT_NO IS NOT NULL; EVENT side shape-guarded
+# to 10-char dated treatment ids (excludes DEFAULT etc., documented rule); MASTER scan
+# anchored by SUBSTR(TREATMENT_ID,1,7) julian deployment range — for unsubs it reaches
+# back 3 months before the frame (an unsub references the SEND's master row).
 
-# %% [0] connections + helpers - prompts ONCE per kernel, later cells reuse EDW / EDL
+# %% [0] connection - prompts ONCE per kernel
 try:
     import teradatasql
 except ImportError:
@@ -25,152 +34,104 @@ if "EDW" not in globals():
                               user=input("Teradata username: "),
                               password=getpass.getpass("Teradata password: "),
                               logmech="LDAP")
+print("EDW ready")
 
-UCP_BASE   = "/prod/sz/tsz/00172/data/ucp4/"
-MTHLY_BASE = "/user/427966379/unsub_cpc/cpc_mthly_1012/"
-MONTH_2024 = "2024-01-31"     # waterfall first-bar anchor
-MONTH_END  = "2026-07-31"     # waterfall end anchor
+# %% [1] MONTHLY UNSUBS x MNE since 2024-01 — one SQL, clnt_no grain.
+# Dedup: first unsub of the month per client (multi-MNE clients count once, under the
+# first event's MNE) -> per-MNE rows SUM to distinct clients per month.
+# Julian anchors: '2023274' = 2023-10-01 (frame floor minus 3mo), '2026212' = 2026-07-31.
+UNSUB_SQL = """
+WITH ev AS (
+    SELECT m.CLNT_NO,
+           e.disposition_dt_tm AS dt,
+           e.TREATMENT_ID,
+           TRIM(EXTRACT(YEAR FROM e.disposition_dt_tm)) || '-' ||
+             TRIM(CASE WHEN EXTRACT(MONTH FROM e.disposition_dt_tm) < 10
+                       THEN '0' ELSE '' END) ||
+             TRIM(EXTRACT(MONTH FROM e.disposition_dt_tm))       AS unsub_month
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+ranked AS (
+    SELECT unsub_month, CLNT_NO,
+           SUBSTR(TREATMENT_ID, 8, 3) AS mne,
+           ROW_NUMBER() OVER (PARTITION BY CLNT_NO, unsub_month
+                              ORDER BY dt ASC, SUBSTR(TREATMENT_ID, 8, 3) ASC,
+                                       TREATMENT_ID ASC) AS rn
+    FROM ev
+)
+SELECT unsub_month, mne, CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM ranked
+WHERE rn = 1
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+vfb_un = pd.read_sql(UNSUB_SQL, EDW)
+vfb_un.columns = [c.lower() for c in vfb_un.columns]
+print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup):")
+display(vfb_un)
 
-jvm = spark._jvm
-fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
-print("EDW connection + HDFS helpers ready")
+vfb_un_tot = (vfb_un.groupby("unsub_month", as_index=False)["n_clients"].sum()
+                    .rename(columns={"unsub_month": "month", "n_clients": "clients_unsub"}))
+print("Monthly unsub totals (distinct clients - per-MNE rows sum exactly):")
+display(vfb_un_tot)
 
-# %% [1] LAND CPC_RB_PREF_MTHLY 1012 slices - full book (5001/5002/blank, no consent
-# filter) + CHG_TMSTMP + APP_SYS_CD so organic-vs-bulk/administrative slicing needs no
-# re-pull. ~26M rows per month, chunked with progress (~20 min each, once ever).
-for m in [MONTH_2024, MONTH_END]:
-    target = f"{MTHLY_BASE}mth={m}/"
-    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
-        print(f"{m} already landed - skipping")
-        continue
-    chunks, total = [], 0
-    for c in pd.read_sql(f"""
-        SELECT CLNT_NO, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD
-        FROM DDWV01.CPC_RB_PREF_MTHLY
-        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{m}'
-    """, EDW, chunksize=1_000_000):
-        chunks.append(c); total += len(c)
-        print(f"  {m}: pulled {total:,} rows...")
-    pdf = pd.concat(chunks, ignore_index=True)
-    spark.createDataFrame(pdf).write.mode("overwrite").parquet(target)
-    landed = spark.read.parquet(target).count()
-    print(f"{m}: landed {landed:,} rows | {'MATCH' if landed == total else 'MISMATCH - investigate'}")
+# %% [2] MONTHLY SENDS x MNE since 2024-01 — same join, disposition 1. A single 31-month
+# send scan is a TDWM kill risk, so this loops one month at a time (one SQL template,
+# month injected); results accumulate in memory - rerun re-queries, nothing saved.
+SEND_SQL = """
+WITH j AS (
+    SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '{j_lo}' AND '{j_hi}'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '{m0}'
+      AND e.disposition_dt_tm <  DATE '{m1}'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+)
+SELECT COALESCE(mne, 'ALL_TOTAL') AS mne,
+       CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS n_clients
+FROM j
+GROUP BY GROUPING SETS ((mne), ())
+"""
 
-# %% [2] VENDOR MONTHLY since 2024-01 - EVENT + MASTER together, clnt_no ALWAYS.
-# Unsub attribution = FIRST unsub of the month per clnt_no (multi-MNE clients count
-# ONCE, under the first event's MNE - per-MNE counts therefore SUM to distinct clients).
-# Sends = distinct clnt_no per MNE + an ALL_TOTAL row (grouping sets - a client mailed
-# by 3 MNEs is 1 in the total). One bounded bite per month, three lands each,
-# idempotent. MNE = raw SUBSTR(TREATMENT_ID, 8, 3) - LOB rollup happens at slice time.
-# MASTER bounded +-3mo around the month (load_tm lags disposition; same margin logic
-# as unsub_unified). MASTER is not 1:1 - GROUP BY collapses to distinct id->clnt pairs.
-VFB_BASE = "/user/427966379/unsub_cpc/vendor_monthly_mne/"
-VFB_MONTHS = pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%m-%d").tolist()
-
-# THE LOCKED JOIN (verbatim from unsub_unified [12], the validated pattern):
-# EVENT joins MASTER on BOTH keys - consumer_id_hashed AND TREATMENT_ID - against
-# SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO ... CLNT_NO IS NOT NULL.
-# MASTER scan anchored by TREATMENT_ID itself (Andre 2026-08-19): positions 1-7 =
-# deployment date as YYYYDDD julian - the same column the join uses, so the bound can
-# never drop a matching row. Unsubs: deployments 2023-10-01 .. unsub month end (an
-# unsub can't reference a treatment deployed after it). Sends: m0-3mo .. month end.
-# NOTE: non-standard ids (DEFAULT/COI) fall outside the numeric range and are excluded
-# from this attribution - campaign-taxonomy mail only [flagged to Andre].
 def _julian(iso):
     d = pd.Timestamp(iso)
     return f"{d.year}{d.dayofyear:03d}"
 
-J_DEEP = _julian("2023-10-01")
-
-for m0 in VFB_MONTHS:
+send_parts = []
+for m0 in pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%m-%d"):
     m1 = (pd.Timestamp(m0) + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
-    tag = m0[:7]
-    if fs.exists(jvm.org.apache.hadoop.fs.Path(f"{VFB_BASE}unsub_clients/month={tag}/_SUCCESS")):
-        print(f"{tag} already landed - skipping")
-        continue
-
-    # (a) unsub CLIENT LIST: first unsub of the month per clnt_no -> that event's MNE.
-    # Deterministic tie-break (dt, mne, treatment_id) - same as unsub_unified [12].
-    ul = pd.read_sql(f"""
-        WITH j AS (
-            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
-                   e.disposition_dt_tm AS dt, e.TREATMENT_ID AS treatment_id
-            FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-            INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-                        FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                        WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '{J_DEEP}' AND '{_julian(m1)}'
-                          AND CLNT_NO IS NOT NULL) m
-              ON  m.consumer_id_hashed = e.consumer_id_hashed
-              AND m.TREATMENT_ID      = e.TREATMENT_ID
-            WHERE e.disposition_cd = 4
-              AND e.disposition_dt_tm >= DATE '{m0}'
-              AND e.disposition_dt_tm <  DATE '{m1}'
-              AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
-              AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-        )
-        SELECT CLNT_NO, mne,
-               SUBSTR(treatment_id, 1, 7) AS deploy_julian   -- campaign deployment date
-        FROM (SELECT CLNT_NO, mne, treatment_id,             -- (YYYYDDD) - keeps the
-                     ROW_NUMBER() OVER (PARTITION BY CLNT_NO -- cohort axis derivable
-                                        ORDER BY dt ASC, mne ASC, treatment_id ASC) AS rn
-              FROM j) t
-        WHERE rn = 1
-    """, EDW)
-    ul.insert(0, "month", tag)
-    spark.createDataFrame(ul).write.mode("overwrite").parquet(f"{VFB_BASE}unsub_clients/month={tag}/")
-
-    # (b) sends: distinct clnt_no per MNE + ALL_TOTAL row (true monthly reach).
-    # Treatments anchored m0-3mo .. month end (multi-wave sends deploy a bit earlier).
-    sd = pd.read_sql(f"""
-        WITH j AS (
-            SELECT m.CLNT_NO, SUBSTR(e.TREATMENT_ID, 8, 3) AS mne
-            FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-            INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-                        FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                        WHERE SUBSTR(TREATMENT_ID, 1, 7)
-                                BETWEEN '{_julian(pd.Timestamp(m0) - pd.offsets.MonthBegin(3))}'
-                                AND     '{_julian(m1)}'
-                          AND CLNT_NO IS NOT NULL) m
-              ON  m.consumer_id_hashed = e.consumer_id_hashed
-              AND m.TREATMENT_ID      = e.TREATMENT_ID
-            WHERE e.disposition_cd = 1
-              AND e.disposition_dt_tm >= DATE '{m0}'
-              AND e.disposition_dt_tm <  DATE '{m1}'
-              AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
-              AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-        )
-        SELECT COALESCE(mne, 'ALL_TOTAL') AS mne,
-               CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS n_clients
-        FROM j
-        GROUP BY GROUPING SETS ((mne), ())
-    """, EDW)
-    sd.insert(0, "month", tag)
-    spark.createDataFrame(sd).write.mode("overwrite").parquet(f"{VFB_BASE}send_mne/month={tag}/")
-    print(f"{tag}: unsub clients {len(ul):,} | send mne rows {len(sd)}")
-
-# unsub counts derive from the landed client lists - no separate count query needed
-vfb_un = (spark.read.parquet(f"{VFB_BASE}unsub_clients/")
-               .groupBy("month", "mne").count()
-               .withColumnRenamed("count", "n_clients")
-               .toPandas().sort_values(["month", "mne"]))
-print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup - rows sum to distinct clients):")
-display(vfb_un)
-
-vfb_sd = spark.read.parquet(f"{VFB_BASE}send_mne/").toPandas().sort_values(["month", "mne"])
-print("Vendor SENDS monthly x MNE (distinct clnt_no per MNE; ALL_TOTAL = true monthly reach):")
+    part = pd.read_sql(SEND_SQL.format(
+        m0=m0, m1=m1,
+        j_lo=_julian(pd.Timestamp(m0) - pd.offsets.MonthBegin(3)),   # multi-wave margin
+        j_hi=_julian(pd.Timestamp(m1) - pd.offsets.Day(1))), EDW)
+    part.columns = [c.lower() for c in part.columns]
+    part.insert(0, "month", m0[:7])
+    send_parts.append(part)
+    print(f"{m0[:7]}: {len(part)} mne rows")
+vfb_sd = pd.concat(send_parts, ignore_index=True)
+print("Vendor SENDS monthly x MNE (distinct clnt_no; ALL_TOTAL = true monthly reach):")
 display(vfb_sd)
 
-vfb_tot = (vfb_un.groupby("month", as_index=False)["n_clients"].sum()
-                 .rename(columns={"n_clients": "clients_unsub"})
-                 .merge(vfb_sd.loc[vfb_sd.mne == "ALL_TOTAL", ["month", "n_clients"]]
-                              .rename(columns={"n_clients": "clients_sent"}),
-                        on="month", how="left"))
-print("Monthly totals (distinct clnt_no):")
-display(vfb_tot)
-
-# %% [3] CPC MONTHLY since 2024-01 - standing 1012 counts per month-end by consent value
-# (5002 explicit No + 5003 blank; 5001 lands free). One server-side aggregate, no
-# attribution - CPC carries no MNE.
+# %% [3] CPC 1012 STANDING per month-end since 2024-01 — one SQL, no attribution
+# (CPC carries no MNE). 5002 = explicit No, 5003 = blank, 5001 = Yes.
 cpc_m = pd.read_sql("""
     SELECT MTH_END_DT, CLNT_CONSENT_TYP,
            CAST(COUNT(*) AS BIGINT) AS n_clients
@@ -187,24 +148,23 @@ cpc_piv = (cpc_m.pivot_table(index="MTH_END_DT", columns="CLNT_CONSENT_TYP",
 print("CPC 1012 standing per month-end (2024-01 -> latest), by consent value:")
 display(cpc_piv)
 
-# %% [4] UCP MONTHLY UNSUB FLOW since 2024-01 - clients whose CPC_EM_ELIGIBLE flag went
-# 1 -> 0 month over month (the UCP view of 'lost consent'). Runs as far back as ucp4
-# partitions exist - missing months are reported, not fatal. Each pair's counts landed.
+# %% [4] UCP MONTHLY FLOWS since 2024-01 — Spark SQL (ucp4 exists only on HDFS; this is
+# the one source the warehouse can't serve). Flag flips month over month; missing
+# partitions reported, not fatal. Assumes live `spark`.
+UCP_BASE = "/prod/sz/tsz/00172/data/ucp4/"
 FLAG = "CPC_EM_ELIGIBLE"
-UCPFLOW_BASE = "/user/427966379/unsub_cpc/ucp_monthly_flows/"
-UCP_MONTH_ENDS = pd.date_range("2024-01-31", "2026-07-31", freq="M").strftime("%Y-%m-%d").tolist()
 
-_avail = [m for m in UCP_MONTH_ENDS
+jvm = spark._jvm
+fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+_month_ends = pd.date_range("2024-01-31", "2026-07-31", freq="M").strftime("%Y-%m-%d").tolist()
+_avail = [m for m in _month_ends
           if fs.exists(jvm.org.apache.hadoop.fs.Path(f"{UCP_BASE}MONTH_END_DATE={m}/"))]
-_missing = [m for m in UCP_MONTH_ENDS if m not in _avail]
+_missing = [m for m in _month_ends if m not in _avail]
 if _missing:
-    print(f"ucp4 partitions MISSING for: {_missing} - flow starts at {_avail[0] if _avail else 'NONE'}")
+    print(f"ucp4 partitions MISSING: {_missing} - flow starts at {_avail[0] if _avail else 'NONE'}")
 
+flow_parts = []
 for m0, m1 in zip(_avail[:-1], _avail[1:]):
-    target = f"{UCPFLOW_BASE}month={m1[:7]}/"
-    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
-        print(f"{m1[:7]} already landed - skipping")
-        continue
     spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m0}/").createOrReplaceTempView("u_m0")
     spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m1}/").createOrReplaceTempView("u_m1")
     row = spark.sql(f"""
@@ -216,70 +176,90 @@ for m0, m1 in zip(_avail[:-1], _avail[1:]):
         FROM m0 FULL OUTER JOIN m1 ON m0.CLNT_NO = m1.CLNT_NO
     """).toPandas()
     row.insert(0, "month", m1[:7])
-    spark.createDataFrame(row).write.mode("overwrite").parquet(target)
-    print(f"{m1[:7]}: lost_consent {int(row.lost_consent[0]):,} | "
-          f"opted_in {int(row.opted_in[0]):,} | attrition {int(row.attrition[0]):,}")
-
-ucp_flow = spark.read.parquet(UCPFLOW_BASE).toPandas().sort_values("month")
-print(f"UCP monthly flows ({FLAG}), earliest available -> 2026-07:")
+    flow_parts.append(row)
+    print(f"{m1[:7]}: lost {int(row.lost_consent[0]):,} | opted {int(row.opted_in[0]):,} "
+          f"| attrition {int(row.attrition[0]):,}")
+ucp_flow = pd.concat(flow_parts, ignore_index=True)
+print(f"UCP monthly flows ({FLAG}):")
 display(ucp_flow)
 
-# %% [5] SKETCH WATERFALL data (pics/Screenshot 2026-08-19 142040) - pure CPC frame,
-# Jan-24 -> Jul-26. START = 1012 = 5001 @ 2024-01-31. + new 5001 by 2026-07-31.
-# Unsub bar SPLIT: CPC-closed (5001 -> 5002) / vendor-feedback unsubs / overlap.
-# END = 5001 @ 2026-07-31 official, and TRUE = official minus vendor unsubs CPC never
-# recorded. Vendor set = union of [2]'s monthly unsub CLIENT LISTS (EVENT+MASTER,
-# clnt_no grain) - [2] must have run first.
-spark.sql(f"""
-    SELECT DISTINCT CLNT_NO AS clnt_no
-    FROM parquet.`{VFB_BASE}unsub_clients/`
-""").createOrReplaceTempView("vendor_unsubs")
-print(f"vendor (EVENT+MASTER) distinct unsub clients 2024-01 -> 2026-07: "
-      f"{spark.table('vendor_unsubs').count():,}")
-
-spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_2024}/").createOrReplaceTempView("cpc_2024")
-spark.read.parquet(f"{MTHLY_BASE}mth={MONTH_END}/").createOrReplaceTempView("cpc_end")
-
-sk = spark.sql("""
-WITH a AS (SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a FROM cpc_2024),
-     b AS (SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b FROM cpc_end),
-     j AS (SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b,
-                  CASE WHEN v.clnt_no IS NOT NULL THEN 1 ELSE 0 END AS vendor_unsub
-           FROM a FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
-           LEFT JOIN vendor_unsubs v ON COALESCE(a.CLNT_NO, b.CLNT_NO) = v.clnt_no)
-SELECT SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END)                                        AS start_5001_jan24,
-       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5001 THEN 1 ELSE 0 END)                      AS stayed_5001,
-       SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001) AND cons_b = 5001 THEN 1 ELSE 0 END) AS new_5001,
-       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 THEN 1 ELSE 0 END)                      AS cpc_closed,
-       SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS overlap_both,
-       SUM(CASE WHEN cons_a = 5001 AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
-                THEN 1 ELSE 0 END)                                                           AS left_other,
-       SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END)                                        AS end_5001_jul26,
-       SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END)                   AS vendor_unsub_still_open
+# %% [5] THE SUBSCRIBERS WATERFALL Jan-24 -> Jul-26 — ONE SQL, eight numbers, all joins
+# server-side (two 26M-row CPC month slices + the vendor unsub set never leave Teradata).
+# Sketch: pics/Screenshot 2026-08-19 142040. START = 1012 = 5001 @ 2024-01-31; unsub bar
+# split CPC-closed / vendor / overlap; END official vs TRUE (minus vendor unsubs CPC
+# never recorded).
+WATERFALL_SQL = """
+WITH a AS (      -- CPC book at the start anchor
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-01-31'
+),
+b AS (           -- CPC book at the end anchor
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+),
+v AS (           -- vendor unsub clients in the frame (locked EVENT+MASTER merge)
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (           -- every client either anchor, with the vendor flag
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b,
+           CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS vendor_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+)
+SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS start_5001_jan24,
+       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)     AS stayed_5001,
+       CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001) AND cons_b = 5001
+                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS new_5001,
+       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 THEN 1 ELSE 0 END) AS BIGINT)     AS cpc_closed,
+       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND vendor_unsub = 1
+                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS overlap_both,
+       CAST(SUM(CASE WHEN cons_a = 5001 AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS left_other,
+       CAST(SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS end_5001_jul26,
+       CAST(SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS BIGINT)  AS vendor_unsub_still_open
 FROM j
-""").toPandas()
-
+"""
+sk = pd.read_sql(WATERFALL_SQL, EDW)
+sk.columns = [c.lower() for c in sk.columns]
 r = sk.iloc[0]
 identity_ok = (r.start_5001_jan24 + r.new_5001 - r.cpc_closed - r.left_other) == r.end_5001_jul26
-wf3 = pd.DataFrame([
+wf = pd.DataFrame([
     ["START: subscribers (1012 = 5001)", "2024-01-31", int(r.start_5001_jan24)],
     ["+ new subscribers (5001 by Jul-26)", "2024-02 → 2026-07", int(r.new_5001)],
     ["− unsub, CPC-closed only (5001→5002, no vendor record)", "2024-02 → 2026-07", -int(r.cpc_closed - r.overlap_both)],
     ["− unsub, BOTH systems (5001→5002 AND vendor record)", "2024-02 → 2026-07", -int(r.overlap_both)],
-    ["− left 5001 other (blank / no row at B)", "2024-02 → 2026-07", -int(r.left_other)],
+    ["− left 5001 other (blank / no row at end)", "2024-02 → 2026-07", -int(r.left_other)],
     ["END official: subscribers (1012 = 5001)", "2026-07-31", int(r.end_5001_jul26)],
     ["  of which vendor-unsubscribed, CPC never closed (blind spot)", "2024-01 → 2026-07", int(r.vendor_unsub_still_open)],
     ["END true: official minus the blind spot", "2026-07-31", int(r.end_5001_jul26 - r.vendor_unsub_still_open)],
 ], columns=["element", "period", "n_clients"])
-print(f"Sketch waterfall (pure CPC 1012, Jan-24 -> Jul-26) | identity "
+print(f"Subscribers waterfall (CPC 1012 vs vendor), Jan-24 -> Jul-26 | identity "
       f"{'HOLDS' if identity_ok else 'BROKEN'}:")
-display(wf3)
+display(wf)
 
-# %% [6] SKETCH WATERFALL chart - 4 bars per the sketch (blue / green / stacked unsub / gold)
+# %% [6] PLOTS - at the end, each with its underlying data table displayed adjacent
+# (PowerPoint rebuild uses these numbers, not the image).
 import matplotlib.pyplot as plt
 
+# --- 6a. waterfall chart (data = the wf table above, re-displayed here) ---
+display(wf)
 blue, green, gold = "#4472c4", "#70ad47", "#c49102"
-greys = ["#a6a6a6", "#d0d0d0", "#fbe5d6"]   # cpc-only / overlap / vendor-still-open (sketch colors)
+greys = ["#a6a6a6", "#d0d0d0", "#fbe5d6"]
 grey_line = "#8a8f98"
 
 start_v   = r.start_5001_jan24 / 1e6
@@ -295,11 +275,9 @@ lo = min(start_v, end_true) * 0.93
 fig, ax = plt.subplots(figsize=(11.5, 6))
 ax.bar(0, start_v - lo, bottom=lo, width=0.6, color=blue, zorder=3)
 ax.text(0, start_v + 0.06, f"{start_v:,.2f}", ha="center", fontsize=11, fontweight="bold")
-
 ax.bar(1, new_v, bottom=start_v, width=0.6, color=green, zorder=3)
 ax.text(1, start_v + new_v + 0.06, f"+{new_v:.2f}", ha="center", fontsize=11, fontweight="bold")
 top = start_v + new_v
-
 base = top
 for lbl, v, c in [("Unsub - CPC closed only", cpc_only, greys[0]),
                   ("Unsub - both systems (overlap)", overlap_v, greys[1]),
@@ -311,14 +289,12 @@ for lbl, v, c in [("Unsub - CPC closed only", cpc_only, greys[0]),
         ax.text(2, base - v/2, f"-{v:.2f}", ha="center", va="center", fontsize=9)
     base -= v
 ax.text(2, top + 0.06, f"-{(top - base):.2f}", ha="center", fontsize=11, fontweight="bold")
-
 ax.bar(3, end_true - lo, bottom=lo, width=0.6, color=gold, zorder=3)
 ax.bar(3, vend_open, bottom=end_true, width=0.6, color="#e7d091", zorder=3,
        label="Blind spot (vendor unsub, still 5001)")
 ax.text(3, end_off + 0.06, f"{end_off:,.2f} official", ha="center", fontsize=10, fontweight="bold")
 ax.text(3, end_true - 0.10, f"{end_true:,.2f} true", ha="center", fontsize=10,
         fontweight="bold", color="white")
-
 ax.plot([0.3, 0.7], [start_v]*2, ls=":", lw=1.2, color=grey_line)
 ax.plot([1.3, 1.7], [top]*2, ls=":", lw=1.2, color=grey_line)
 ax.set_xticks([0, 1, 2, 3])
@@ -334,14 +310,13 @@ ax.set_title("Subscribers waterfall — CPC 1012 vs vendor feedback, Jan-2024 to
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# %% [7] MONTHLY UNSUB COMPARISON - vendor (true distinct clients) vs UCP lost-consent,
-# one time axis. Data = the display() table below (vendor from [2], UCP from [4]).
-cmp = (vfb_tot[["month", "clients_unsub"]]
+# --- 6b. monthly unsub comparison (data table displayed first) ---
+cmp = (vfb_un_tot
        .merge(ucp_flow[["month", "lost_consent"]], on="month", how="outer")
        .rename(columns={"clients_unsub": "vendor_unsub_clients",
                         "lost_consent": "ucp_lost_consent"})
        .sort_values("month").reset_index(drop=True))
-print("Monthly unsubs - vendor feedback vs UCP flag flow:")
+print("Monthly unsubs - vendor feedback vs UCP flag flow (plot data):")
 display(cmp)
 
 fig, ax = plt.subplots(figsize=(11.5, 4.8))
