@@ -662,24 +662,50 @@ ax.set_title("Monthly unsubscribes — vendor feedback vs UCP consent flag, sinc
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# %% [8] OUTPUT CSVs - grain defines the file. TWO files:
-# 1. monthly_cube.csv  - everything monthly, long slicer format (built here)
-# 2. waterfall_cube.csv - the client-classification cube (built + saved in [6b])
-cube = pd.concat([
-    vfb_un.rename(columns={"unsub_month": "month", "mne": "dim_value"})
-          .assign(source="vendor_feedback", dim="mne", measure="unsub_clients"),
-    vfb_sd.rename(columns={"mne": "dim_value"})
-          .assign(source="vendor_feedback", dim="mne", measure="send_clients"),
-    cpc_m.rename(columns={"CLNT_CONSENT_TYP": "dim_value", "MTH_END_DT": "month"})
-         .assign(month=lambda d: d["month"].astype(str).str[:7],
-                 source="cpc_1012_standing", dim="consent_typ", measure="standing_clients"),
-    cpc_writes.rename(columns={"chg_month": "month", "app_sys_cd": "dim_value",
-                               "n_writes_to_no": "n_clients"})
-              .assign(source="cpc_1012_writes", dim="app_sys_cd", measure="writes_to_no"),
-    ucp_flow.melt(id_vars="month", value_vars=["lost_consent", "opted_in", "attrition"],
-                  var_name="dim_value", value_name="n_clients")
-            .assign(source="ucp_flag", dim="flow", measure="flow_clients"),
-], ignore_index=True)[["month", "source", "dim", "dim_value", "measure", "n_clients"]]
-cube["dim_value"] = cube["dim_value"].astype(str)
-save_csv(cube, "monthly_cube")
-print("output contract: monthly_cube.csv + waterfall_cube.csv (from [6b]) - two files total")
+# %% [8] OUTPUT CSVs - months as ROWS, everything else as COLUMNS (Andre 2026-08-20:
+# measures side by side for cross-referencing, never stacked categories). Four files:
+#   monthly_master.csv            - one row per month, every series a column
+#   vendor_monthly_mne.csv        - month x mne, unsub + send measures adjacent
+#   cpc_writes_monthly_by_writer  - months x one column per APP_SYS_CD
+#   waterfall_cube.csv            - the client-classification cube (saved in [6b])
+
+# vendor mne: two measures as adjacent columns
+vm = (vfb_un.rename(columns={"unsub_month": "month", "n_clients": "unsub_clients"})
+       .merge(vfb_sd.loc[vfb_sd.mne != "ALL_TOTAL"]
+                    .rename(columns={"n_clients": "send_clients"}),
+              on=["month", "mne"], how="outer")
+       .sort_values(["month", "mne"]).reset_index(drop=True))
+save_csv(vm, "vendor_monthly_mne")
+
+# writes: months as rows, one column per writer code
+cw = (cpc_writes.pivot_table(index="chg_month", columns="app_sys_cd",
+                             values="n_writes_to_no", aggfunc="sum")
+                .fillna(0).astype(int).reset_index()
+                .rename(columns={"chg_month": "month"}))
+cw.columns = [str(c) if str(c) == "month" else "writes_" + str(c) for c in cw.columns]
+save_csv(cw, "cpc_writes_monthly_by_writer")
+
+# the cross-reference master: one row per month, every series a column
+mm = (vfb_un_tot.rename(columns={"clients_unsub": "vendor_unsub_clients"})
+      .merge(vfb_sd.loc[vfb_sd.mne == "ALL_TOTAL", ["month", "n_clients"]]
+                   .rename(columns={"n_clients": "vendor_sends_total"}),
+             on="month", how="outer")
+      .merge(cpc_piv.assign(month=cpc_piv["MTH_END_DT"].astype(str).str[:7])
+                     .drop(columns=["MTH_END_DT"])
+                     .rename(columns={"n_5001_yes": "cpc_5001", "n_5002_no": "cpc_5002",
+                                      "n_5003_blank": "cpc_5003"}),
+             on="month", how="outer")
+      .merge(cpc_writes.assign(w=cpc_writes["app_sys_cd"].map(
+                 lambda c: "cpc_writes_7020" if c == 7020 else "cpc_writes_other"))
+                       .pivot_table(index="chg_month", columns="w",
+                                    values="n_writes_to_no", aggfunc="sum")
+                       .reset_index().rename(columns={"chg_month": "month"}),
+             on="month", how="outer")
+      .merge(ucp_flow.rename(columns={"lost_consent": "ucp_lost_consent",
+                                      "opted_in": "ucp_opted_in",
+                                      "attrition": "ucp_attrition"}),
+             on="month", how="outer")
+      .sort_values("month").reset_index(drop=True))
+save_csv(mm, "monthly_master")
+print("output contract: monthly_master + vendor_monthly_mne + cpc_writes_monthly_by_writer "
+      "+ waterfall_cube (from [6b])")
