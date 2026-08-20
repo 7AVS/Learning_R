@@ -29,11 +29,21 @@ except ImportError:
 import getpass
 import pandas as pd
 
-if "EDW" not in globals():
+# liveness-checked connection: a stale EDW (pod restart / idle timeout) fails with
+# "sending StartRequest message" on the next query - probe with SELECT 1, reconnect if dead
+def _edw_alive():
+    try:
+        _c = EDW.cursor(); _c.execute("SELECT 1"); _c.fetchall()
+        return True
+    except Exception:
+        return False
+
+if "EDW" not in globals() or not _edw_alive():
     EDW = teradatasql.connect(host="Teradata-dns-sysa.fg.rbc.com",
                               user=input("Teradata username: "),
                               password=getpass.getpass("Teradata password: "),
                               logmech="LDAP")
+    print("(new Teradata session)")
 
 # KERNEL: run on the Lumina/YARN PySpark kernel (same as packs 44/44b) - `spark` is
 # pre-initialized and Kerberos-authenticated there. Brain_Pyspark_Local_Mode has no
