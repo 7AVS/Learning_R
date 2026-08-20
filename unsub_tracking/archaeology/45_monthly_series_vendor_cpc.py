@@ -35,8 +35,15 @@ if "EDW" not in globals():
                               password=getpass.getpass("Teradata password: "),
                               logmech="LDAP")
 
-from pyspark.sql import SparkSession
-spark = SparkSession.builder.getOrCreate()
+# KERNEL: run on the Lumina/YARN PySpark kernel (same as packs 44/44b) - `spark` is
+# pre-initialized and Kerberos-authenticated there. Brain_Pyspark_Local_Mode has no
+# Kerberos ticket: getOrCreate() builds a second, unauthenticated context and every
+# HDFS call fails with "Client cannot authenticate via:[TOKEN, KERBEROS]".
+try:
+    spark                                   # pre-initialized session? use it, never rebuild
+except NameError:
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.getOrCreate()
 
 # every output table also drops as a CSV (some are too big for a notebook cell).
 # Same writable-dir probe as unsub_unified: /home/jovyan first (Jupyter home), then
