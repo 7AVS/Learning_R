@@ -662,14 +662,12 @@ ax.set_title("Monthly unsubscribes — vendor feedback vs UCP consent flag, sinc
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# %% [8] OUTPUT CSVs - months as ROWS, everything else as COLUMNS (Andre 2026-08-20:
-# measures side by side for cross-referencing, never stacked categories). Four files:
-#   monthly_master.csv            - one row per month, every series a column
-#   vendor_monthly_mne.csv        - month x mne, unsub + send measures adjacent
-#   cpc_writes_monthly_by_writer  - months x one column per APP_SYS_CD
-#   waterfall_cube.csv            - the client-classification cube (saved in [6b])
+# %% [8] OUTPUT CSVs - tidy GROUP BY summaries (Andre 2026-08-20): every column means
+# ONE thing - a dimension holding values or a single measure. No pre-pivoted wides
+# (no writes_7020 column headers), no label rows. Decode columns welcome (code + what
+# it means). Andre builds every pivot himself from these. Five files:
 
-# vendor mne: two measures as adjacent columns
+# 1. vendor by month x mne - two measures adjacent, same grain
 vm = (vfb_un.rename(columns={"unsub_month": "month", "n_clients": "unsub_clients"})
        .merge(vfb_sd.loc[vfb_sd.mne != "ALL_TOTAL"]
                     .rename(columns={"n_clients": "send_clients"}),
@@ -677,35 +675,35 @@ vm = (vfb_un.rename(columns={"unsub_month": "month", "n_clients": "unsub_clients
        .sort_values(["month", "mne"]).reset_index(drop=True))
 save_csv(vm, "vendor_monthly_mne")
 
-# writes: months as rows, one column per writer code
-cw = (cpc_writes.pivot_table(index="chg_month", columns="app_sys_cd",
-                             values="n_writes_to_no", aggfunc="sum")
-                .fillna(0).astype(int).reset_index()
-                .rename(columns={"chg_month": "month"}))
-cw.columns = [str(c) if str(c) == "month" else "writes_" + str(c) for c in cw.columns]
-save_csv(cw, "cpc_writes_monthly_by_writer")
+# 2. CPC standing by month x consent code, with the decode column
+_consent_decode = {5001: "yes", 5002: "no", 5003: "blank"}
+cs = (cpc_m.rename(columns={"MTH_END_DT": "month_end", "CLNT_CONSENT_TYP": "consent_cd"})
+       .assign(consent_meaning=lambda d: d["consent_cd"].map(_consent_decode).fillna("other"))
+       [["month_end", "consent_cd", "consent_meaning", "n_clients"]])
+save_csv(cs, "cpc_standing_monthly")
 
-# the cross-reference master: one row per month, every series a column
-mm = (vfb_un_tot.rename(columns={"clients_unsub": "vendor_unsub_clients"})
+# 3. CPC writes by month x writer code, with the decode column (known codes only;
+#    unknown codes stay blank rather than guessed)
+_writer_decode = {7020: "SFMC email backfeed", 7001: "branch sales platform",
+                  7003: "call centre", 7006: "internal batch", 7999: "default batch system"}
+cwr = (cpc_writes[["chg_month", "app_sys_cd", "n_writes_to_no"]]
+       .rename(columns={"chg_month": "month"})
+       .assign(writer_desc=lambda d: d["app_sys_cd"].map(_writer_decode).fillna(""))
+       [["month", "app_sys_cd", "writer_desc", "n_writes_to_no"]])
+save_csv(cwr, "cpc_writes_monthly")
+
+# 4. month-grain totals - each column a single measure of the month, no crossed dims
+mt = (vfb_un_tot.rename(columns={"clients_unsub": "vendor_unsub_clients"})
       .merge(vfb_sd.loc[vfb_sd.mne == "ALL_TOTAL", ["month", "n_clients"]]
                    .rename(columns={"n_clients": "vendor_sends_total"}),
-             on="month", how="outer")
-      .merge(cpc_piv.assign(month=cpc_piv["MTH_END_DT"].astype(str).str[:7])
-                     .drop(columns=["MTH_END_DT"])
-                     .rename(columns={"n_5001_yes": "cpc_5001", "n_5002_no": "cpc_5002",
-                                      "n_5003_blank": "cpc_5003"}),
-             on="month", how="outer")
-      .merge(cpc_writes.assign(w=cpc_writes["app_sys_cd"].map(
-                 lambda c: "cpc_writes_7020" if c == 7020 else "cpc_writes_other"))
-                       .pivot_table(index="chg_month", columns="w",
-                                    values="n_writes_to_no", aggfunc="sum")
-                       .reset_index().rename(columns={"chg_month": "month"}),
              on="month", how="outer")
       .merge(ucp_flow.rename(columns={"lost_consent": "ucp_lost_consent",
                                       "opted_in": "ucp_opted_in",
                                       "attrition": "ucp_attrition"}),
              on="month", how="outer")
       .sort_values("month").reset_index(drop=True))
-save_csv(mm, "monthly_master")
-print("output contract: monthly_master + vendor_monthly_mne + cpc_writes_monthly_by_writer "
-      "+ waterfall_cube (from [6b])")
+save_csv(mt, "monthly_totals")
+
+# 5. waterfall_cube.csv - saved in [6b]; already tidy (dimension columns + n_clients)
+print("output contract: vendor_monthly_mne, cpc_standing_monthly, cpc_writes_monthly, "
+      "monthly_totals, waterfall_cube ([6b]) - all tidy summaries, you pivot")
