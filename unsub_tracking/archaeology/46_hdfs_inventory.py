@@ -61,3 +61,28 @@ inv["verdict"]    = inv["path"].map(lambda p: next((v[1] for k, v in KNOWN.items
 top = inv[~inv.path.str.contains("/")].copy()
 print("Top-level verdict table (drill into any REVIEW row before touching it):")
 display(inv.sort_values(["verdict", "size_gb"], ascending=[True, False]))
+
+# %% [3] CLEANUP: purge dead .sparkStaging application dirs (~22.7 GB of leftover job
+# staging, some from Sep-2025). GUARD: only dirs NOT modified in the last 2 days -
+# the live session's staging is untouched. Lists everything first, then deletes.
+STAGING = ROOT + ".sparkStaging/"
+cutoff_ms = (pd.Timestamp.now() - pd.Timedelta(days=2)).value // 10**6
+
+doomed, kept, freed = [], [], 0
+for st in fs.listStatus(jvm.org.apache.hadoop.fs.Path(STAGING)):
+    if st.getModificationTime() < cutoff_ms:
+        cs = fs.getContentSummary(st.getPath())
+        doomed.append((st.getPath().getName(),
+                       round(cs.getLength() / 1e9, 3),
+                       pd.Timestamp(st.getModificationTime(), unit="ms").strftime("%Y-%m-%d")))
+        freed += cs.getLength()
+    else:
+        kept.append(st.getPath().getName())
+
+print(f"to delete: {len(doomed)} dirs, {freed/1e9:.1f} GB | keeping (recent): {kept}")
+display(pd.DataFrame(doomed, columns=["staging_dir", "size_gb", "modified"]).head(20))
+
+for name, _, _ in doomed:
+    fs.delete(jvm.org.apache.hadoop.fs.Path(STAGING + name), True)
+print(f"DELETED {len(doomed)} stale staging dirs - {freed/1e9:.1f} GB freed. "
+      f"Rerun [1] to confirm the new footprint.")
