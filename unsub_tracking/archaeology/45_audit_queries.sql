@@ -150,13 +150,21 @@ ORDER BY 1, 2;
 
 
 /* ============================================================================
-[Q3] THE SUBSCRIBERS WATERFALL, Aug-24 -> Jul-26 - eight numbers, one statement.
-     Start = pure CPC (1012 = 5001 at the anchor, no filters). The unsub bar's
-     four segments = closing writer x Salesforce record. END official = the CPC
-     book at Jul-26; END contactable = official minus the E-mail-Salesforce
-     segment (clients with a Salesforce unsub the consent book never recorded).
-     Identity: start + new - (seg_email_cpc + seg_overlap + seg_ac_branch)
-               - left_other = end_official.
+[Q3] THE WATERFALL TRANSITION MATRIX - Aug-2024 vs Jul-2026, ONE ROW PER PATH
+     (replaces the one-row eight-column version - Andre 2026-08-20: the matrix
+     is the auditable artifact; every bar is a filter+sum on it).
+     Reads as: n_clients went FROM state_aug24 TO state_jul26, closed by
+     closed_by, with/without a Salesforce unsub record in the window.
+     Every Aug-24 client is in exactly one row (where they went); every Jul-26
+     client is in exactly one row (where they came from).
+     Bar recipes:
+       start bar         = rows state_aug24 = '5001'
+       E-mail CPC        = 5001 -> 5002, closed_by 7020, salesforce_unsub no
+       Overlap           = 5001 -> 5002, salesforce_unsub yes
+       E-mail Salesforce = 5001 -> 5001, salesforce_unsub yes
+       AC/Branch         = 5001 -> 5002, closed_by other, salesforce_unsub no
+       new subscribes    = state_aug24 <> '5001' AND state_jul26 = '5001'
+       end bar           = rows state_jul26 = '5001'
 ============================================================================ */
 WITH a AS (
     SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
@@ -164,7 +172,7 @@ WITH a AS (
     WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
 ),
 b AS (
-    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD AS writer_b
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
 ),
@@ -182,28 +190,19 @@ v AS (
       AND e.disposition_dt_tm <  DATE '2026-08-01'
       AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
       AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-),
-j AS (
-    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b, b.writer_b,
-           CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS vendor_unsub
-    FROM a
-    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
-    LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
 )
-SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS start_5001_aug24,
-       CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001) AND cons_b = 5001
-                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS new_5001,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND writer_b = 7020
-                      AND vendor_unsub = 0 THEN 1 ELSE 0 END) AS BIGINT)                    AS seg_email_cpc,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND vendor_unsub = 1
-                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS seg_overlap,
-       CAST(SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS BIGINT)  AS seg_email_sf_open,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND writer_b <> 7020
-                      AND vendor_unsub = 0 THEN 1 ELSE 0 END) AS BIGINT)                    AS seg_ac_branch,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
-                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS left_other,
-       CAST(SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS end_5001_jul26
-FROM j;
+SELECT COALESCE(CAST(a.cons_a AS VARCHAR(10)), 'not in book')   AS state_aug24,
+       COALESCE(CAST(b.cons_b AS VARCHAR(10)), 'not in book')   AS state_jul26,
+       CASE WHEN b.cons_b = 5002 AND b.APP_SYS_CD = 7020 THEN '7020 email backfeed'
+            WHEN b.cons_b = 5002                          THEN 'other writer'
+            ELSE 'n/a - not closed' END                          AS closed_by,
+       CASE WHEN v.CLNT_NO IS NOT NULL THEN 'yes' ELSE 'no' END  AS salesforce_unsub,
+       CAST(COUNT(*) AS BIGINT)                                  AS n_clients
+FROM a
+FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 5 DESC;
 
 
 -- ============================================================================
