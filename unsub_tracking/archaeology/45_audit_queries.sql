@@ -87,13 +87,18 @@ ORDER BY 1, 2;
 
 
 /* ============================================================================
-[Q3] CPC 1012 STANDING per month-end since 2024-01, by consent value.
-     CPC_RB_PREF_MTHLY is a monthly snapshot: one row per client per month-end
-     carrying the client's MOST RECENT position (grain proven pack 42 [11a]) -
-     no dedup needed.
+[Q3] CPC 1012 STANDING per month-end since 2024-01 - consent as COLUMNS,
+     decomposed by APP_SYS_CD = the system that LAST WROTE each client's row
+     (Andre 2026-08-20). One row per month-end x writer; the three consent
+     states side by side. Derivable: 5002-by-7020 over time = the backfeed's
+     cumulative footprint; 5001-by-7999 = the bulk-write population; row sums
+     per month-end = the whole book.
 ============================================================================ */
-SELECT MTH_END_DT, CLNT_CONSENT_TYP,
-       CAST(COUNT(*) AS BIGINT) AS n_clients
+SELECT MTH_END_DT,
+       APP_SYS_CD,
+       CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5001 THEN 1 ELSE 0 END) AS BIGINT) AS n_5001_yes,
+       CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS BIGINT) AS n_5002_no,
+       CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_5003_blank
 FROM DDWV01.CPC_RB_PREF_MTHLY
 WHERE PREF_ID = 1012
   AND MTH_END_DT >= DATE '2024-01-31'
