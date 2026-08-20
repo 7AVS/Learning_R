@@ -103,7 +103,10 @@ WITH standing AS (
            APP_SYS_CD,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5001 THEN 1 ELSE 0 END) AS BIGINT) AS n_5001_yes,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS BIGINT) AS n_5002_no,
-           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_5003_blank
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_5003_blank,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5004 THEN 1 ELSE 0 END) AS BIGINT) AS n_5004_yes_credit_bureau,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5001, 5002, 5003, 5004)
+                         THEN 1 ELSE 0 END) AS BIGINT)                              AS n_other_value
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012
       AND MTH_END_DT >= DATE '2024-01-31'
@@ -119,7 +122,10 @@ writes AS (
            APP_SYS_CD,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5001 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_yes,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_no,
-           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_blank
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_blank,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5004 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_5004,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5001, 5002, 5003, 5004)
+                         THEN 1 ELSE 0 END) AS BIGINT)                              AS n_writes_to_other
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
       AND CHG_TMSTMP >= DATE '2024-01-01'
@@ -130,9 +136,13 @@ SELECT COALESCE(s.mth, w.mth)                 AS mth,
        COALESCE(s.n_5001_yes, 0)              AS n_5001_yes,
        COALESCE(s.n_5002_no, 0)               AS n_5002_no,
        COALESCE(s.n_5003_blank, 0)            AS n_5003_blank,
+       COALESCE(s.n_5004_yes_credit_bureau, 0) AS n_5004_yes_credit_bureau,
+       COALESCE(s.n_other_value, 0)           AS n_other_value,
        COALESCE(w.n_writes_to_yes, 0)         AS n_writes_to_yes,
        COALESCE(w.n_writes_to_no, 0)          AS n_writes_to_no,
-       COALESCE(w.n_writes_to_blank, 0)       AS n_writes_to_blank
+       COALESCE(w.n_writes_to_blank, 0)       AS n_writes_to_blank,
+       COALESCE(w.n_writes_to_5004, 0)        AS n_writes_to_5004,
+       COALESCE(w.n_writes_to_other, 0)       AS n_writes_to_other
 FROM standing s
 FULL OUTER JOIN writes w
   ON w.mth = s.mth AND w.APP_SYS_CD = s.APP_SYS_CD
