@@ -296,8 +296,7 @@ CPC_WRITES_SQL = """
              TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10
                        THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))   AS chg_month,
-           CASE WHEN APP_SYS_CD = 7020 THEN '7020 email backfeed'
-                ELSE 'other writers' END                          AS writer,
+           APP_SYS_CD                                             AS app_sys_cd,
            CAST(COUNT(*) AS BIGINT)                               AS n_writes_to_no
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
@@ -538,7 +537,10 @@ ax.set_title("Monthly unsubscribes by LOB — vendor feedback (distinct clients)
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# --- 7c. CPC monthly 1012 -> 5002 writes, split 7020 vs other writers (data displayed) ---
+# --- 7c. CPC monthly 1012 -> 5002 writes, split 7020 vs other writers (data displayed;
+# derived from the raw app_sys_cd table - full writer detail lives in the [5] CSV) ---
+cpc_writes["writer"] = cpc_writes["app_sys_cd"].map(
+    lambda c: "7020 email backfeed" if c == 7020 else "other writers")
 cpcw_piv = (cpc_writes.pivot_table(index="chg_month", columns="writer",
                                    values="n_writes_to_no", aggfunc="sum")
                       .fillna(0).reset_index())
