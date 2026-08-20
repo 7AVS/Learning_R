@@ -87,12 +87,12 @@ ORDER BY 1, 2;
 
 
 /* ============================================================================
-[Q3] CPC 1012 MONTHLY x WRITER - one table, stock AND flow side by side
+[Q2] CPC 1012 MONTHLY x WRITER - one table, stock AND flow side by side
      (Q4 merged in, Andre 2026-08-20: same grain = same query).
      Grain: month x APP_SYS_CD. Columns:
        n_5001_yes / n_5002_no / n_5003_blank = STANDING at that month-end,
          decomposed by the system that last wrote each client's row
-       n_new_writes_to_no = NEW writes to explicit No DURING that month by that
+       write columns = NEW writes to explicit No DURING that month by that
          system (flow; from the write timestamp on the standing mirror -
          survivor caveat: a No later overwritten by re-consent drops out, ~0.1%)
 ============================================================================ */
@@ -110,15 +110,18 @@ WITH standing AS (
     GROUP BY 1, 2
 ),
 writes AS (
+    -- ALL writes that month by target value (not just 5002 - Andre 2026-08-20:
+    -- yes-writes expose bulk subscribe events, blank-writes expose resolutions)
     SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10
                        THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)))  AS mth,
            APP_SYS_CD,
-           CAST(COUNT(*) AS BIGINT)                              AS n_new_writes_to_no
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5001 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_yes,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5002 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_no,
+           CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5003 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_blank
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
-      AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2024-01-01'
     GROUP BY 1, 2
 )
@@ -127,7 +130,9 @@ SELECT COALESCE(s.mth, w.mth)                 AS mth,
        COALESCE(s.n_5001_yes, 0)              AS n_5001_yes,
        COALESCE(s.n_5002_no, 0)               AS n_5002_no,
        COALESCE(s.n_5003_blank, 0)            AS n_5003_blank,
-       COALESCE(w.n_new_writes_to_no, 0)      AS n_new_writes_to_no
+       COALESCE(w.n_writes_to_yes, 0)         AS n_writes_to_yes,
+       COALESCE(w.n_writes_to_no, 0)          AS n_writes_to_no,
+       COALESCE(w.n_writes_to_blank, 0)       AS n_writes_to_blank
 FROM standing s
 FULL OUTER JOIN writes w
   ON w.mth = s.mth AND w.APP_SYS_CD = s.APP_SYS_CD
@@ -135,7 +140,7 @@ ORDER BY 1, 2;
 
 
 /* ============================================================================
-[Q5] THE SUBSCRIBERS WATERFALL, Aug-24 -> Jul-26 - eight numbers, one statement.
+[Q3] THE SUBSCRIBERS WATERFALL, Aug-24 -> Jul-26 - eight numbers, one statement.
      Start = pure CPC (1012 = 5001 at the anchor, no filters). The unsub bar's
      four segments = closing writer x Salesforce record. END official = the CPC
      book at Jul-26; END contactable = official minus the E-mail-Salesforce
