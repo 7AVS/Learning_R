@@ -26,18 +26,24 @@
 
 
 /* ============================================================================
-[Q1] MONTHLY UNSUBS x MNE since 2024-01 - clnt_no grain.
-     Dedup = FIRST unsub of the month per client (multi-MNE clients count once,
-     under the first event's MNE) -> per-MNE rows SUM to distinct clients/month.
+[Q1] MONTHLY VENDOR ACTIVITY x MNE since 2024-01 - ONE table, sends and unsubs
+     side by side (Andre 2026-08-20). clnt_no grain both measures:
+       sent_clients  = distinct clients mailed by that MNE that month
+       unsub_clients = distinct clients whose FIRST unsub of the month was that
+                       MNE (multi-MNE clients count once -> unsub_clients sums
+                       to distinct unsubscribers per month)
+     One scan of EVENT (disp 1 and 4), one MASTER join (locked merge).
 ============================================================================ */
-WITH ev AS (
+WITH base AS (
     SELECT m.CLNT_NO,
+           e.disposition_cd,
            e.disposition_dt_tm AS dt,
            e.TREATMENT_ID,
+           SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
            TRIM(EXTRACT(YEAR FROM e.disposition_dt_tm)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM e.disposition_dt_tm) < 10
                        THEN '0' ELSE '' END) ||
-             TRIM(EXTRACT(MONTH FROM e.disposition_dt_tm))       AS unsub_month
+             TRIM(EXTRACT(MONTH FROM e.disposition_dt_tm))       AS evt_month
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                 FROM DTZV01.VENDOR_FEEDBACK_MASTER
@@ -45,59 +51,38 @@ WITH ev AS (
                   AND CLNT_NO IS NOT NULL) m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
       AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 4
+    WHERE e.disposition_cd IN (1, 4)
       AND e.disposition_dt_tm >= DATE '2024-01-01'
       AND e.disposition_dt_tm <  DATE '2026-08-01'
       AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
       AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
 ),
-ranked AS (
-    SELECT unsub_month, CLNT_NO,
-           SUBSTR(TREATMENT_ID, 8, 3) AS mne,
-           ROW_NUMBER() OVER (PARTITION BY CLNT_NO, unsub_month
-                              ORDER BY dt ASC, SUBSTR(TREATMENT_ID, 8, 3) ASC,
-                                       TREATMENT_ID ASC) AS rn
-    FROM ev
+sends AS (
+    SELECT evt_month, mne, CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS sent_clients
+    FROM base
+    WHERE disposition_cd = 1
+    GROUP BY 1, 2
+),
+unsub_ranked AS (
+    SELECT evt_month, CLNT_NO, mne,
+           ROW_NUMBER() OVER (PARTITION BY CLNT_NO, evt_month
+                              ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn
+    FROM base
+    WHERE disposition_cd = 4
+),
+unsubs AS (
+    SELECT evt_month, mne, CAST(COUNT(*) AS BIGINT) AS unsub_clients
+    FROM unsub_ranked
+    WHERE rn = 1
+    GROUP BY 1, 2
 )
-SELECT unsub_month, mne, CAST(COUNT(*) AS BIGINT) AS n_clients
-FROM ranked
-WHERE rn = 1
-GROUP BY 1, 2
-ORDER BY 1, 2;
-
-
-/* ============================================================================
-[Q2] MONTHLY SENDS x MNE since 2024-01 - distinct clnt_no per MNE + ALL_TOTAL
-     row per month (a client mailed by 3 MNEs is 1 in the total).
-     SINGLE STATEMENT over the full window - the audit form of the notebook's
-     month loop. Heavy scan: run off-peak; if TDWM kills it, run per month by
-     narrowing the two disposition_dt_tm literals.
-============================================================================ */
-WITH j AS (
-    SELECT m.CLNT_NO,
-           SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
-           TRIM(EXTRACT(YEAR FROM e.disposition_dt_tm)) || '-' ||
-             TRIM(CASE WHEN EXTRACT(MONTH FROM e.disposition_dt_tm) < 10
-                       THEN '0' ELSE '' END) ||
-             TRIM(EXTRACT(MONTH FROM e.disposition_dt_tm))       AS send_month
-    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-                FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
-                  AND CLNT_NO IS NOT NULL) m
-      ON  m.consumer_id_hashed = e.consumer_id_hashed
-      AND m.TREATMENT_ID       = e.TREATMENT_ID
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
-      AND e.disposition_dt_tm <  DATE '2026-08-01'
-      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
-      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-)
-SELECT send_month,
-       COALESCE(mne, 'ALL_TOTAL') AS mne,
-       CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS n_clients
-FROM j
-GROUP BY GROUPING SETS ((send_month, mne), (send_month))
+SELECT COALESCE(s.evt_month, u.evt_month)  AS evt_month,
+       COALESCE(s.mne, u.mne)              AS mne,
+       COALESCE(s.sent_clients, 0)         AS sent_clients,
+       COALESCE(u.unsub_clients, 0)        AS unsub_clients
+FROM sends s
+FULL OUTER JOIN unsubs u
+  ON u.evt_month = s.evt_month AND u.mne = s.mne
 ORDER BY 1, 2;
 
 
