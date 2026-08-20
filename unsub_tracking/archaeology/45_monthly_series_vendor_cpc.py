@@ -421,48 +421,100 @@ print(f"Subscribers waterfall (target-slide segments), Aug-24 -> Jul-26 | CPC id
       f"the CPC identity - it reduces contactable, not the CPC book):")
 display(wf)
 
-# %% [6b] ANCHOR PROFILE (Andre's ask) - the Aug-24 start-bar population (CPC 1012 =
-# 5001 @ 2024-08-31) profiled via UCP at the SAME month: client type x open products
-# (0 vs 1+ vs null, plus not-in-UCP). One pivot-ready cross-tab = both distributions
-# and their joint - this decides whether the waterfall universe gets filtered.
+# %% [6b] THE WATERFALL CUBE - the analyst's intermediary table. One row per
+# combination of every dimension the deck needs; the waterfall (any view, any
+# universe filter) is BUILT from this CSV by pivoting, never asserted by code.
+# Grain: consent_aug24 x consent_jul26 x closing_writer x salesforce_unsub x
+#        client_type x open_products -> n_clients.
+# Requires the client-level join (UCP attributes), so the pieces land once:
 ANCHOR = "2024-08-31"
-if not fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc5001_anchor/_SUCCESS")):
+
+# (a) full CPC 1012 book at both anchors (ALL consent values + the last writer)
+for _m, _name in [(ANCHOR, "cpc_full_aug24"), ("2026-07-31", "cpc_full_jul26")]:
+    if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + _name + "/_SUCCESS")):
+        print(f"{_name}: already landed - skipping")
+        continue
     chunks, total = [], 0
     for c in pd.read_sql(f"""
-        SELECT CLNT_NO
+        SELECT CLNT_NO, CLNT_CONSENT_TYP, APP_SYS_CD
         FROM DDWV01.CPC_RB_PREF_MTHLY
-        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{ANCHOR}'
-          AND CLNT_CONSENT_TYP = 5001
+        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{_m}'
     """, EDW, chunksize=1_000_000):
         chunks.append(c); total += len(c)
-        print(f"  pulled {total:,} 5001 clients @ {ANCHOR}...")
+        print(f"  {_name}: pulled {total:,} rows...")
     spark.createDataFrame(pd.concat(chunks, ignore_index=True)) \
-         .write.mode("overwrite").parquet(CACHE + "cpc5001_anchor/")
-spark.read.parquet(CACHE + "cpc5001_anchor/").createOrReplaceTempView("cpc5001_a")
+         .write.mode("overwrite").parquet(CACHE + _name + "/")
+spark.read.parquet(CACHE + "cpc_full_aug24/").createOrReplaceTempView("cpc_a")
+spark.read.parquet(CACHE + "cpc_full_jul26/").createOrReplaceTempView("cpc_b")
 
+# (b) vendor unsub client list, frame Sep-24 -> Jul-26 (locked EVENT+MASTER merge)
+if not fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "vendor_unsub_clients/_SUCCESS")):
+    chunks, total = [], 0
+    for c in pd.read_sql("""
+        SELECT DISTINCT m.CLNT_NO
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                      AND CLNT_NO IS NOT NULL) m
+          ON  m.consumer_id_hashed = e.consumer_id_hashed
+          AND m.TREATMENT_ID       = e.TREATMENT_ID
+        WHERE e.disposition_cd = 4
+          AND e.disposition_dt_tm >= DATE '2024-09-01'
+          AND e.disposition_dt_tm <  DATE '2026-08-01'
+          AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+          AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+    """, EDW, chunksize=500_000):
+        chunks.append(c); total += len(c)
+        print(f"  vendor unsub clients: pulled {total:,}...")
+    spark.createDataFrame(pd.concat(chunks, ignore_index=True)) \
+         .write.mode("overwrite").parquet(CACHE + "vendor_unsub_clients/")
+spark.read.parquet(CACHE + "vendor_unsub_clients/").createOrReplaceTempView("vendor_u")
+
+# (c) UCP attributes at the anchor (client type + open products)
 if not fs.exists(jvm.org.apache.hadoop.fs.Path(f"{UCP_BASE}MONTH_END_DATE={ANCHOR}/")):
     _parts = sorted(p.getPath().getName() for p in
                     fs.listStatus(jvm.org.apache.hadoop.fs.Path(UCP_BASE)))
     print(f"WARNING: no UCP partition at {ANCHOR}; earliest available: "
-          f"{_parts[0] if _parts else 'NONE'} - rerun with ANCHOR set to a month UCP has")
+          f"{_parts[0] if _parts else 'NONE'}")
 spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={ANCHOR}/").createOrReplaceTempView("u_a")
-
 _tcol = next((c for c in spark.table("u_a").columns
               if c.upper() in ("CLNT_TYP", "CLNT_TYP_CD", "CLNT_TYPE", "CLIENT_TYPE")), None)
-_tsel = f"u.{_tcol}" if _tcol else "'no type column in UCP'"
-anchor_cube = spark.sql(f"""
-    SELECT CASE WHEN u.CLNT_NO IS NULL THEN 'not in UCP' ELSE CAST({_tsel} AS STRING) END AS client_type,
-           CASE WHEN u.CLNT_NO IS NULL              THEN 'not in UCP'
-                WHEN u.OPN_PROD_CNT IS NULL         THEN 'null products'
-                WHEN u.OPN_PROD_CNT = 0             THEN '0 products'
-                ELSE                                     '1+ products' END AS open_products,
-           COUNT(*) AS n_clients
-    FROM cpc5001_a c
-    LEFT JOIN u_a u ON c.CLNT_NO = u.CLNT_NO
-    GROUP BY 1, 2 ORDER BY 3 DESC
-""").toPandas()
-print(f"ANCHOR profile: CPC 1012 = 5001 @ {ANCHOR}, client type x open products (pivot-ready):")
-display(anchor_cube)
+_tsel = f"CAST(u.{_tcol} AS STRING)" if _tcol else "'no type column'"
+
+# (d) the cube itself - every deck dimension on one aggregated table
+waterfall_cube = spark.sql(f"""
+    SELECT CASE WHEN a.CLNT_NO IS NULL      THEN 'no row'
+                WHEN a.CLNT_CONSENT_TYP = 5001 THEN '5001 yes'
+                WHEN a.CLNT_CONSENT_TYP = 5002 THEN '5002 no'
+                WHEN a.CLNT_CONSENT_TYP = 5003 THEN '5003 blank'
+                ELSE CAST(a.CLNT_CONSENT_TYP AS STRING) END        AS consent_aug24,
+           CASE WHEN b.CLNT_NO IS NULL      THEN 'no row'
+                WHEN b.CLNT_CONSENT_TYP = 5001 THEN '5001 yes'
+                WHEN b.CLNT_CONSENT_TYP = 5002 THEN '5002 no'
+                WHEN b.CLNT_CONSENT_TYP = 5003 THEN '5003 blank'
+                ELSE CAST(b.CLNT_CONSENT_TYP AS STRING) END        AS consent_jul26,
+           CASE WHEN b.APP_SYS_CD = 7020 THEN '7020 email backfeed'
+                WHEN b.APP_SYS_CD IS NULL THEN 'n/a'
+                ELSE 'other writers' END                           AS closing_writer,
+           CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END       AS salesforce_unsub,
+           CASE WHEN u.CLNT_NO IS NULL THEN 'not in UCP'
+                ELSE {_tsel} END                                   AS client_type,
+           CASE WHEN u.CLNT_NO IS NULL      THEN 'not in UCP'
+                WHEN u.OPN_PROD_CNT IS NULL THEN 'null products'
+                WHEN u.OPN_PROD_CNT = 0     THEN '0 products'
+                ELSE                             '1+ products' END AS open_products,
+           COUNT(*)                                                AS n_clients
+    FROM cpc_a a
+    FULL OUTER JOIN cpc_b b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN vendor_u v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_a u      ON u.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    GROUP BY 1, 2, 3, 4, 5, 6
+""").toPandas().sort_values("n_clients", ascending=False).reset_index(drop=True)
+print(f"WATERFALL CUBE - {len(waterfall_cube)} rows; every deck view is a pivot of this "
+      f"(start bar = consent_aug24 = '5001 yes' under whatever universe filter you choose):")
+display(waterfall_cube)
+save_csv(waterfall_cube, "waterfall_cube")
 
 # %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
 # (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
@@ -610,10 +662,9 @@ ax.set_title("Monthly unsubscribes — vendor feedback vs UCP consent flag, sinc
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# %% [8] OUTPUT CSVs - least-files principle, final form: THREE files.
-# 1. monthly_cube.csv - ONE long cube for everything monthly (slicer_dim pattern):
-#    month x source x dim x dim_value x measure -> n_clients. Every wide table
-#    (totals, master, pivots) is a pivot of this file.
+# %% [8] OUTPUT CSVs - grain defines the file. TWO files:
+# 1. monthly_cube.csv  - everything monthly, long slicer format (built here)
+# 2. waterfall_cube.csv - the client-classification cube (built + saved in [6b])
 cube = pd.concat([
     vfb_un.rename(columns={"unsub_month": "month", "mne": "dim_value"})
           .assign(source="vendor_feedback", dim="mne", measure="unsub_clients"),
@@ -631,13 +682,4 @@ cube = pd.concat([
 ], ignore_index=True)[["month", "source", "dim", "dim_value", "measure", "n_clients"]]
 cube["dim_value"] = cube["dim_value"].astype(str)
 save_csv(cube, "monthly_cube")
-
-# 2. the waterfall summary (element grain - not monthly, its own file)
-save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
-
-# 3. population profiles: anchor 5001 population + whole-UCP reference, one schema
-profiles = pd.concat([
-    anchor_cube.assign(population="cpc_5001_" + ANCHOR),
-    ucp_joint.assign(population="ucp_all_2026-07-31"),
-], ignore_index=True)[["population", "client_type", "open_products", "n_clients"]]
-save_csv(profiles, "population_profiles")
+print("output contract: monthly_cube.csv + waterfall_cube.csv (from [6b]) - two files total")
