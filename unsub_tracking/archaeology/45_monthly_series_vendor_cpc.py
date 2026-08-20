@@ -129,13 +129,11 @@ else:
 vfb_un = vfb_un.sort_values(["unsub_month", "mne"]).reset_index(drop=True)
 print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup):")
 display(vfb_un)
-save_csv(vfb_un, "vendor_unsubs_monthly_mne")
 
 vfb_un_tot = (vfb_un.groupby("unsub_month", as_index=False)["n_clients"].sum()
                     .rename(columns={"unsub_month": "month", "n_clients": "clients_unsub"}))
 print("Monthly unsub totals (distinct clients - per-MNE rows sum exactly):")
 display(vfb_un_tot)
-save_csv(vfb_un_tot, "vendor_unsubs_monthly_totals")
 
 # %% [2] MONTHLY SENDS x MNE since 2024-01 — same join, disposition 1. A single 31-month
 # send scan is a TDWM kill risk, so this loops one month at a time (one SQL template,
@@ -184,7 +182,6 @@ vfb_sd = (spark.read.parquet(f"{CACHE}send_mne/").toPandas()
                .sort_values(["month", "mne"]).reset_index(drop=True))
 print("Vendor SENDS monthly x MNE (distinct clnt_no; ALL_TOTAL = true monthly reach):")
 display(vfb_sd)
-save_csv(vfb_sd, "vendor_sends_monthly_mne")
 
 # %% [3] CPC 1012 STANDING per month-end since 2024-01 — one SQL, no attribution
 # (CPC carries no MNE). 5002 = explicit No, 5003 = blank, 5001 = Yes.
@@ -210,7 +207,6 @@ cpc_piv = (cpc_m.pivot_table(index="MTH_END_DT", columns="CLNT_CONSENT_TYP",
                 .reset_index())
 print("CPC 1012 standing per month-end (2024-01 -> latest), by consent value:")
 display(cpc_piv)
-save_csv(cpc_piv, "cpc_1012_standing_monthly")
 
 # %% [4] UCP MONTHLY FLOWS since 2024-01 — Spark SQL (ucp4 exists only on HDFS; this is
 # the one source the warehouse can't serve). Flag flips month over month; missing
@@ -252,7 +248,6 @@ for m0, m1 in zip(_avail[:-1], _avail[1:]):
 ucp_flow = pd.concat(flow_parts, ignore_index=True)
 print(f"UCP monthly flows ({FLAG}):")
 display(ucp_flow)
-save_csv(ucp_flow, "ucp_monthly_flows")
 
 # %% [4b] UCP SAFETY CHECKS @ 2026-07-31 - (a) client-type mix: any NON-personal clients
 # in the universe? (b) open-product distribution: clients with zero/null open products.
@@ -272,7 +267,6 @@ else:
     """).toPandas()
     print(f"UCP client-type mix @ 2026-07-31 (column: {_type_col}):")
     display(typ)
-save_csv(typ, "ucp_client_type_mix")
 
 prod = spark.sql("""
     SELECT CASE WHEN OPN_PROD_CNT IS NULL THEN 'null'
@@ -283,7 +277,18 @@ prod = spark.sql("""
 """).toPandas()
 print("UCP open-product distribution @ 2026-07-31 (zero/null = in universe but no open products):")
 display(prod)
-save_csv(prod, "ucp_open_product_distribution")
+
+# joint cross-tab (type x products) - feeds population_profiles in [8]; the two
+# marginals above are pivots of this
+_tsel_chk = f"CAST({_type_col} AS STRING)" if _type_col else "'no type column'"
+ucp_joint = spark.sql(f"""
+    SELECT {_tsel_chk} AS client_type,
+           CASE WHEN OPN_PROD_CNT IS NULL THEN 'null products'
+                WHEN OPN_PROD_CNT = 0     THEN '0 products'
+                ELSE                           '1+ products' END AS open_products,
+           COUNT(*) AS n_clients
+    FROM u_chk GROUP BY 1, 2 ORDER BY 3 DESC
+""").toPandas()
 
 # %% [5] CPC MONTHLY UNSUBS (1012 writes to 5002) split by WRITER: 7020 (the SFMC email
 # backfeed) vs all other application systems. Source = DDWV01.CPC_RB_PREF (the proven
@@ -319,7 +324,6 @@ if cpc_writes is None:
     spark.createDataFrame(cpc_writes).write.mode("overwrite").parquet(CACHE + "cpc_writes/")
 print("CPC 1012 -> explicit No, monthly writes by writer (7020 = SFMC backfeed vs others):")
 display(cpc_writes)
-save_csv(cpc_writes, "cpc_1012_writes_by_writer")
 
 # %% [6] THE SUBSCRIBERS WATERFALL Jan-24 -> Jul-26 — ONE SQL, eight numbers, all joins
 # server-side (two 26M-row CPC month slices + the vendor unsub set never leave Teradata).
@@ -406,7 +410,6 @@ print(f"Subscribers waterfall (target-slide segments), Aug-24 -> Jul-26 | CPC id
       f"{'HOLDS' if identity_ok else 'BROKEN'} (E-mail Salesforce segment sits outside "
       f"the CPC identity - it reduces contactable, not the CPC book):")
 display(wf)
-save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
 
 # %% [6b] ANCHOR PROFILE (Andre's ask) - the Aug-24 start-bar population (CPC 1012 =
 # 5001 @ 2024-08-31) profiled via UCP at the SAME month: client type x open products
@@ -450,7 +453,6 @@ anchor_cube = spark.sql(f"""
 """).toPandas()
 print(f"ANCHOR profile: CPC 1012 = 5001 @ {ANCHOR}, client type x open products (pivot-ready):")
 display(anchor_cube)
-save_csv(anchor_cube, "anchor_profile_type_x_products")
 
 # %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
 # (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
@@ -533,7 +535,6 @@ vfb_lob = (vfb_un.assign(lob=vfb_un["mne"].map(_lob))
                               aggfunc="sum").fillna(0).reset_index())
 print("Vendor monthly unsubs by LOB (plot data):")
 display(vfb_lob)
-save_csv(vfb_lob, "vendor_unsubs_monthly_by_lob")
 
 fig, ax = plt.subplots(figsize=(11.5, 4.6))
 xb = range(len(vfb_lob))
@@ -561,7 +562,6 @@ cpcw_piv = (cpc_writes.pivot_table(index="chg_month", columns="writer",
                       .fillna(0).reset_index())
 print("CPC 1012 -> explicit No per month, by writer (plot data):")
 display(cpcw_piv)
-save_csv(cpcw_piv, "cpc_1012_writes_pivot")
 fig, ax = plt.subplots(figsize=(11.5, 4.6))
 xc = range(len(cpcw_piv))
 for col, color in [("7020 email backfeed", "#e08214"), ("other writers", "#16436e")]:
@@ -584,7 +584,6 @@ cmp = (vfb_un_tot
        .sort_values("month").reset_index(drop=True))
 print("Monthly unsubs - vendor feedback vs UCP flag flow (plot data):")
 display(cmp)
-save_csv(cmp, "monthly_unsub_vendor_vs_ucp")
 
 fig, ax = plt.subplots(figsize=(11.5, 4.8))
 x = range(len(cmp))
@@ -600,3 +599,35 @@ ax.spines[["top", "right"]].set_visible(False)
 ax.set_title("Monthly unsubscribes — vendor feedback vs UCP consent flag, since 2024-01",
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
+
+# %% [8] OUTPUT CSVs - least-files principle, final form: THREE files.
+# 1. monthly_cube.csv - ONE long cube for everything monthly (slicer_dim pattern):
+#    month x source x dim x dim_value x measure -> n_clients. Every wide table
+#    (totals, master, pivots) is a pivot of this file.
+cube = pd.concat([
+    vfb_un.rename(columns={"unsub_month": "month", "mne": "dim_value"})
+          .assign(source="vendor_feedback", dim="mne", measure="unsub_clients"),
+    vfb_sd.rename(columns={"mne": "dim_value"})
+          .assign(source="vendor_feedback", dim="mne", measure="send_clients"),
+    cpc_m.rename(columns={"CLNT_CONSENT_TYP": "dim_value", "MTH_END_DT": "month"})
+         .assign(month=lambda d: d["month"].astype(str).str[:7],
+                 source="cpc_1012_standing", dim="consent_typ", measure="standing_clients"),
+    cpc_writes.rename(columns={"chg_month": "month", "app_sys_cd": "dim_value",
+                               "n_writes_to_no": "n_clients"})
+              .assign(source="cpc_1012_writes", dim="app_sys_cd", measure="writes_to_no"),
+    ucp_flow.melt(id_vars="month", value_vars=["lost_consent", "opted_in", "attrition"],
+                  var_name="dim_value", value_name="n_clients")
+            .assign(source="ucp_flag", dim="flow", measure="flow_clients"),
+], ignore_index=True)[["month", "source", "dim", "dim_value", "measure", "n_clients"]]
+cube["dim_value"] = cube["dim_value"].astype(str)
+save_csv(cube, "monthly_cube")
+
+# 2. the waterfall summary (element grain - not monthly, its own file)
+save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
+
+# 3. population profiles: anchor 5001 population + whole-UCP reference, one schema
+profiles = pd.concat([
+    anchor_cube.assign(population="cpc_5001_" + ANCHOR),
+    ucp_joint.assign(population="ucp_all_2026-07-31"),
+], ignore_index=True)[["population", "client_type", "open_products", "n_clients"]]
+save_csv(profiles, "population_profiles")
