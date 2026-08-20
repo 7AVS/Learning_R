@@ -398,44 +398,49 @@ print(f"Subscribers waterfall (target-slide segments), Aug-24 -> Jul-26 | CPC id
 display(wf)
 save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
 
-# %% [6b] THE 22MM-vs-14MM BRIDGE - why CPC standing 5001 (~22.7M) exceeds the slide's
-# contactable base (~14M). Hypothesis (Andre): closed accounts + commercial clients.
-# Splits the Jul-26 5001 population via UCP: not in UCP / non-personal type / zero-null
-# open products / personal-active. Lands the 5001 client list once (cached).
-if not fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc5001_jul26/_SUCCESS")):
+# %% [6b] ANCHOR PROFILE (Andre's ask) - the Aug-24 start-bar population (CPC 1012 =
+# 5001 @ 2024-08-31) profiled via UCP at the SAME month: client type x open products
+# (0 vs 1+ vs null, plus not-in-UCP). One pivot-ready cross-tab = both distributions
+# and their joint - this decides whether the waterfall universe gets filtered.
+ANCHOR = "2024-08-31"
+if not fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc5001_anchor/_SUCCESS")):
     chunks, total = [], 0
-    for c in pd.read_sql("""
+    for c in pd.read_sql(f"""
         SELECT CLNT_NO
         FROM DDWV01.CPC_RB_PREF_MTHLY
-        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '{ANCHOR}'
           AND CLNT_CONSENT_TYP = 5001
     """, EDW, chunksize=1_000_000):
         chunks.append(c); total += len(c)
-        print(f"  pulled {total:,} 5001 clients...")
+        print(f"  pulled {total:,} 5001 clients @ {ANCHOR}...")
     spark.createDataFrame(pd.concat(chunks, ignore_index=True)) \
-         .write.mode("overwrite").parquet(CACHE + "cpc5001_jul26/")
-spark.read.parquet(CACHE + "cpc5001_jul26/").createOrReplaceTempView("cpc5001")
-spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE=2026-07-31/").createOrReplaceTempView("u_b")
+         .write.mode("overwrite").parquet(CACHE + "cpc5001_anchor/")
+spark.read.parquet(CACHE + "cpc5001_anchor/").createOrReplaceTempView("cpc5001_a")
 
-_tcol = next((c for c in spark.table("u_b").columns
+if not fs.exists(jvm.org.apache.hadoop.fs.Path(f"{UCP_BASE}MONTH_END_DATE={ANCHOR}/")):
+    _parts = sorted(p.getPath().getName() for p in
+                    fs.listStatus(jvm.org.apache.hadoop.fs.Path(UCP_BASE)))
+    print(f"WARNING: no UCP partition at {ANCHOR}; earliest available: "
+          f"{_parts[0] if _parts else 'NONE'} - rerun with ANCHOR set to a month UCP has")
+spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={ANCHOR}/").createOrReplaceTempView("u_a")
+
+_tcol = next((c for c in spark.table("u_a").columns
               if c.upper() in ("CLNT_TYP", "CLNT_TYP_CD", "CLNT_TYPE", "CLIENT_TYPE")), None)
-_type_case = (f"WHEN u.{_tcol} <> 'P' THEN '2. in UCP, non-personal type ({_tcol})'"
-              if _tcol else "WHEN 1 = 0 THEN 'x'")   # no type column found -> bucket skipped
-bridge = spark.sql(f"""
-    SELECT CASE WHEN u.CLNT_NO IS NULL THEN '1. not in UCP universe (closed / out of scope)'
-                {_type_case}
-                WHEN u.OPN_PROD_CNT IS NULL OR u.OPN_PROD_CNT = 0
-                     THEN '3. in UCP, zero/null open products'
-                ELSE      '4. personal-active (the contactable base)' END AS bucket,
+_tsel = f"u.{_tcol}" if _tcol else "'no type column in UCP'"
+anchor_cube = spark.sql(f"""
+    SELECT CASE WHEN u.CLNT_NO IS NULL THEN 'not in UCP' ELSE CAST({_tsel} AS STRING) END AS client_type,
+           CASE WHEN u.CLNT_NO IS NULL              THEN 'not in UCP'
+                WHEN u.OPN_PROD_CNT IS NULL         THEN 'null products'
+                WHEN u.OPN_PROD_CNT = 0             THEN '0 products'
+                ELSE                                     '1+ products' END AS open_products,
            COUNT(*) AS n_clients
-    FROM cpc5001 c
-    LEFT JOIN u_b u ON c.CLNT_NO = u.CLNT_NO
-    GROUP BY 1 ORDER BY 1
+    FROM cpc5001_a c
+    LEFT JOIN u_a u ON c.CLNT_NO = u.CLNT_NO
+    GROUP BY 1, 2 ORDER BY 3 DESC
 """).toPandas()
-print("Bridge: CPC standing 5001 @ Jul-26 -> the personal-contactable base "
-      "(explains 22.7MM vs ~14MM):")
-display(bridge)
-save_csv(bridge, "bridge_cpc5001_to_contactable")
+print(f"ANCHOR profile: CPC 1012 = 5001 @ {ANCHOR}, client type x open products (pivot-ready):")
+display(anchor_cube)
+save_csv(anchor_cube, "anchor_profile_type_x_products")
 
 # %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
 # (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
