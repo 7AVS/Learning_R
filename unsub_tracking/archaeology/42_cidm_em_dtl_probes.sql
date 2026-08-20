@@ -420,6 +420,52 @@ SELECT * FROM edl0_im.prod_uq20_digital.sf_rbc_sendlog LIMIT 10;
 
 
 /* ============================================================================
+[23] THE INVERSE LINKAGE (Teradata-direct) - 34b asked "of CPC flips, how many had
+     a prior SF unsub"; this asks the reverse: of every SF/vendor unsubscriber
+     (disp 4, 2024-01 ->), did the 7020 backfeed EVER close their CPC 1012 - and
+     with what lag? Expect row 1 (~95%+ NO write) = the missing link, rows 3-4 =
+     the working trickle (next-day write-through). Caveats: CPC side = standing
+     table (overwritten 7020 writes drop out - measured negligible); multi-unsub
+     clients anchored to their FIRST unsub in frame.
+============================================================================ */
+WITH u AS (
+    SELECT m.CLNT_NO, MIN(CAST(e.disposition_dt_tm AS DATE)) AS unsub_dt
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-01-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+    GROUP BY 1
+),
+w AS (
+    SELECT CLNT_NO, CAST(CHG_TMSTMP AS DATE) AS write_dt
+    FROM DDWV01.CPC_RB_PREF
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND APP_SYS_CD = 7020
+)
+SELECT CASE WHEN w.CLNT_NO IS NULL              THEN '1. NO 7020 CPC write - the missing link'
+            WHEN w.write_dt <  u.unsub_dt       THEN '2. 7020 write BEFORE this unsub (older opt-out)'
+            WHEN w.write_dt -  u.unsub_dt <= 1  THEN '3. written within 0-1 days (backfeed worked)'
+            WHEN w.write_dt -  u.unsub_dt <= 7  THEN '4. written within 2-7 days'
+            ELSE                                     '5. written 8+ days later'
+       END                                          AS outcome,
+       CAST(COUNT(*) AS BIGINT)                     AS n_clients,
+       CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,1)) AS pct
+FROM u
+LEFT JOIN w ON w.CLNT_NO = u.CLNT_NO
+GROUP BY 1
+ORDER BY 1;
+
+
+/* ============================================================================
 [22] Unsub -> tactic via the sendlog, using the HEFMOMENTS team's PRODUCTION
      join spec (found 2026-08-17, PR #658 rbc-to/a5w0-hef_mortgage_moments):
      events join sendlog ON jobid+listid+batchid+subscriberid=subid; clients
