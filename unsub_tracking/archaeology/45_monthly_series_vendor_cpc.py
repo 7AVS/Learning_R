@@ -305,10 +305,15 @@ CPC_WRITES_SQL = """
     GROUP BY 1, 2
     ORDER BY 1, 2
 """
+cpc_writes = None
 if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc_writes/_SUCCESS")):
     cpc_writes = spark.read.parquet(CACHE + "cpc_writes/").toPandas()
-    print("(read from cache)")
-else:
+    if "app_sys_cd" not in cpc_writes.columns:
+        print("(cache has the old schema - re-pulling)")
+        cpc_writes = None
+    else:
+        print("(read from cache)")
+if cpc_writes is None:
     cpc_writes = pd.read_sql(CPC_WRITES_SQL, EDW)
     cpc_writes.columns = [c.lower() for c in cpc_writes.columns]
     spark.createDataFrame(cpc_writes).write.mode("overwrite").parquet(CACHE + "cpc_writes/")
@@ -371,10 +376,15 @@ SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)           
        CAST(SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS end_5001_jul26
 FROM j
 """
+sk = None
 if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "waterfall/_SUCCESS")):
     sk = spark.read.parquet(CACHE + "waterfall/").toPandas()
-    print("(read from cache - delete the dir to force a re-pull)")
-else:
+    if "start_5001_aug24" not in sk.columns:
+        print("(cache has the old schema - re-pulling)")
+        sk = None
+    else:
+        print("(read from cache - delete the dir to force a re-pull)")
+if sk is None:
     sk = pd.read_sql(WATERFALL_SQL, EDW)
     sk.columns = [c.lower() for c in sk.columns]
     spark.createDataFrame(sk).write.mode("overwrite").parquet(CACHE + "waterfall/")
