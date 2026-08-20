@@ -43,6 +43,10 @@ print("EDW + spark ready")
 # Dedup: first unsub of the month per client (multi-MNE clients count once, under the
 # first event's MNE) -> per-MNE rows SUM to distinct clients per month.
 # Julian anchors: '2023274' = 2023-10-01 (frame floor minus 3mo), '2026212' = 2026-07-31.
+# CACHE: first run lands the result to HDFS; reruns read it back in seconds. The SQL
+# below is still the single audit artifact - the cache never changes the logic.
+CACHE = "/user/427966379/unsub_cpc/pack45_cache/"
+
 UNSUB_SQL = """
 WITH ev AS (
     SELECT m.CLNT_NO,
@@ -79,8 +83,19 @@ WHERE rn = 1
 GROUP BY 1, 2
 ORDER BY 1, 2
 """
-vfb_un = pd.read_sql(UNSUB_SQL, EDW)
-vfb_un.columns = [c.lower() for c in vfb_un.columns]
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.getOrCreate()
+jvm = spark._jvm
+fs = jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+
+if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "unsub_mne/_SUCCESS")):
+    vfb_un = spark.read.parquet(CACHE + "unsub_mne/").toPandas()
+    print("(read from cache - delete the dir to force a re-pull)")
+else:
+    vfb_un = pd.read_sql(UNSUB_SQL, EDW)
+    vfb_un.columns = [c.lower() for c in vfb_un.columns]
+    spark.createDataFrame(vfb_un).write.mode("overwrite").parquet(CACHE + "unsub_mne/")
+vfb_un = vfb_un.sort_values(["unsub_month", "mne"]).reset_index(drop=True)
 print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup):")
 display(vfb_un)
 
@@ -118,18 +133,22 @@ def _julian(iso):
     d = pd.Timestamp(iso)
     return f"{d.year}{d.dayofyear:03d}"
 
-send_parts = []
 for m0 in pd.date_range("2024-01-01", "2026-07-01", freq="MS").strftime("%Y-%m-%d"):
     m1 = (pd.Timestamp(m0) + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
+    target = f"{CACHE}send_mne/month={m0[:7]}/"
+    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
+        print(f"{m0[:7]}: cached - skipping")
+        continue
     part = pd.read_sql(SEND_SQL.format(
         m0=m0, m1=m1,
         j_lo=_julian(pd.Timestamp(m0) - pd.offsets.MonthBegin(3)),   # multi-wave margin
         j_hi=_julian(pd.Timestamp(m1) - pd.offsets.Day(1))), EDW)
     part.columns = [c.lower() for c in part.columns]
     part.insert(0, "month", m0[:7])
-    send_parts.append(part)
-    print(f"{m0[:7]}: {len(part)} mne rows")
-vfb_sd = pd.concat(send_parts, ignore_index=True)
+    spark.createDataFrame(part).write.mode("overwrite").parquet(target)
+    print(f"{m0[:7]}: {len(part)} mne rows landed")
+vfb_sd = (spark.read.parquet(f"{CACHE}send_mne/").toPandas()
+               .sort_values(["month", "mne"]).reset_index(drop=True))
 print("Vendor SENDS monthly x MNE (distinct clnt_no; ALL_TOTAL = true monthly reach):")
 display(vfb_sd)
 
@@ -168,6 +187,11 @@ if _missing:
 
 flow_parts = []
 for m0, m1 in zip(_avail[:-1], _avail[1:]):
+    target = f"{CACHE}ucp_flows/month={m1[:7]}/"
+    if fs.exists(jvm.org.apache.hadoop.fs.Path(target + "_SUCCESS")):
+        flow_parts.append(spark.read.parquet(target).toPandas())
+        print(f"{m1[:7]}: cached - skipping")
+        continue
     spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m0}/").createOrReplaceTempView("u_m0")
     spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE={m1}/").createOrReplaceTempView("u_m1")
     row = spark.sql(f"""
@@ -179,6 +203,7 @@ for m0, m1 in zip(_avail[:-1], _avail[1:]):
         FROM m0 FULL OUTER JOIN m1 ON m0.CLNT_NO = m1.CLNT_NO
     """).toPandas()
     row.insert(0, "month", m1[:7])
+    spark.createDataFrame(row).write.mode("overwrite").parquet(target)
     flow_parts.append(row)
     print(f"{m1[:7]}: lost {int(row.lost_consent[0]):,} | opted {int(row.opted_in[0]):,} "
           f"| attrition {int(row.attrition[0]):,}")
@@ -262,8 +287,13 @@ SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)           
        CAST(SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS BIGINT)  AS vendor_unsub_still_open
 FROM j
 """
-sk = pd.read_sql(WATERFALL_SQL, EDW)
-sk.columns = [c.lower() for c in sk.columns]
+if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "waterfall/_SUCCESS")):
+    sk = spark.read.parquet(CACHE + "waterfall/").toPandas()
+    print("(read from cache - delete the dir to force a re-pull)")
+else:
+    sk = pd.read_sql(WATERFALL_SQL, EDW)
+    sk.columns = [c.lower() for c in sk.columns]
+    spark.createDataFrame(sk).write.mode("overwrite").parquet(CACHE + "waterfall/")
 r = sk.iloc[0]
 identity_ok = (r.start_5001_jan24 + r.new_5001 - r.cpc_closed - r.left_other) == r.end_5001_jul26
 wf = pd.DataFrame([
