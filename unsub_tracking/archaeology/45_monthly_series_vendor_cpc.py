@@ -37,7 +37,31 @@ if "EDW" not in globals():
 
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
-print("EDW + spark ready")
+
+# every output table also drops as a CSV (some are too big for a notebook cell).
+# Same writable-dir probe as unsub_unified: /home/jovyan first (Jupyter home), then
+# fallbacks - so the files show up in the notebook file browser.
+import os
+OUT = None
+for _cand in ("/home/jovyan", os.path.expanduser("~"), os.getcwd(), "/tmp"):
+    try:
+        _try = os.path.join(_cand, "pack45_outputs")
+        os.makedirs(_try, exist_ok=True)
+        _t = os.path.join(_try, ".writetest")
+        open(_t, "w").write("x"); os.remove(_t)
+        OUT = _try + os.sep
+        break
+    except Exception:
+        continue
+
+def save_csv(df, name):
+    if OUT is None:
+        print(f"({name}: no writable local dir - CSV skipped)")
+        return
+    df.to_csv(OUT + name + ".csv", index=False)
+    print(f"saved {OUT}{name}.csv ({len(df):,} rows)")
+
+print("EDW + spark ready | CSVs ->", OUT)
 
 # %% [1] MONTHLY UNSUBS x MNE since 2024-01 — one SQL, clnt_no grain.
 # Dedup: first unsub of the month per client (multi-MNE clients count once, under the
@@ -98,11 +122,13 @@ else:
 vfb_un = vfb_un.sort_values(["unsub_month", "mne"]).reset_index(drop=True)
 print("Vendor UNSUBS monthly x MNE (clnt_no grain, first-unsub-of-month dedup):")
 display(vfb_un)
+save_csv(vfb_un, "vendor_unsubs_monthly_mne")
 
 vfb_un_tot = (vfb_un.groupby("unsub_month", as_index=False)["n_clients"].sum()
                     .rename(columns={"unsub_month": "month", "n_clients": "clients_unsub"}))
 print("Monthly unsub totals (distinct clients - per-MNE rows sum exactly):")
 display(vfb_un_tot)
+save_csv(vfb_un_tot, "vendor_unsubs_monthly_totals")
 
 # %% [2] MONTHLY SENDS x MNE since 2024-01 — same join, disposition 1. A single 31-month
 # send scan is a TDWM kill risk, so this loops one month at a time (one SQL template,
@@ -151,10 +177,11 @@ vfb_sd = (spark.read.parquet(f"{CACHE}send_mne/").toPandas()
                .sort_values(["month", "mne"]).reset_index(drop=True))
 print("Vendor SENDS monthly x MNE (distinct clnt_no; ALL_TOTAL = true monthly reach):")
 display(vfb_sd)
+save_csv(vfb_sd, "vendor_sends_monthly_mne")
 
 # %% [3] CPC 1012 STANDING per month-end since 2024-01 — one SQL, no attribution
 # (CPC carries no MNE). 5002 = explicit No, 5003 = blank, 5001 = Yes.
-cpc_m = pd.read_sql("""
+CPC_STANDING_SQL = """
     SELECT MTH_END_DT, CLNT_CONSENT_TYP,
            CAST(COUNT(*) AS BIGINT) AS n_clients
     FROM DDWV01.CPC_RB_PREF_MTHLY
@@ -162,13 +189,21 @@ cpc_m = pd.read_sql("""
       AND MTH_END_DT >= DATE '2024-01-31'
     GROUP BY 1, 2
     ORDER BY 1, 2
-""", EDW)
+"""
+if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc_standing/_SUCCESS")):
+    cpc_m = spark.read.parquet(CACHE + "cpc_standing/").toPandas()
+    print("(read from cache)")
+else:
+    cpc_m = pd.read_sql(CPC_STANDING_SQL, EDW)
+    cpc_m["MTH_END_DT"] = cpc_m["MTH_END_DT"].astype(str)
+    spark.createDataFrame(cpc_m).write.mode("overwrite").parquet(CACHE + "cpc_standing/")
 cpc_piv = (cpc_m.pivot_table(index="MTH_END_DT", columns="CLNT_CONSENT_TYP",
                              values="n_clients", aggfunc="sum")
                 .rename(columns={5001: "n_5001_yes", 5002: "n_5002_no", 5003: "n_5003_blank"})
                 .reset_index())
 print("CPC 1012 standing per month-end (2024-01 -> latest), by consent value:")
 display(cpc_piv)
+save_csv(cpc_piv, "cpc_1012_standing_monthly")
 
 # %% [4] UCP MONTHLY FLOWS since 2024-01 — Spark SQL (ucp4 exists only on HDFS; this is
 # the one source the warehouse can't serve). Flag flips month over month; missing
@@ -210,6 +245,38 @@ for m0, m1 in zip(_avail[:-1], _avail[1:]):
 ucp_flow = pd.concat(flow_parts, ignore_index=True)
 print(f"UCP monthly flows ({FLAG}):")
 display(ucp_flow)
+save_csv(ucp_flow, "ucp_monthly_flows")
+
+# %% [4b] UCP SAFETY CHECKS @ 2026-07-31 - (a) client-type mix: any NON-personal clients
+# in the universe? (b) open-product distribution: clients with zero/null open products.
+# Column-guarded: if the type column isn't found, prints the real column list - no guessing.
+u_chk = spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE=2026-07-31/")
+u_chk.createOrReplaceTempView("u_chk")
+
+_type_col = next((c for c in u_chk.columns
+                  if c.upper() in ("CLNT_TYP", "CLNT_TYP_CD", "CLNT_TYPE", "CLIENT_TYPE")), None)
+if _type_col is None:
+    print("No client-type column found under the expected names. UCP columns are:")
+    print(sorted(u_chk.columns))
+else:
+    typ = spark.sql(f"""
+        SELECT {_type_col} AS client_type, COUNT(*) AS n_clients
+        FROM u_chk GROUP BY 1 ORDER BY 2 DESC
+    """).toPandas()
+    print(f"UCP client-type mix @ 2026-07-31 (column: {_type_col}):")
+    display(typ)
+save_csv(typ, "ucp_client_type_mix")
+
+prod = spark.sql("""
+    SELECT CASE WHEN OPN_PROD_CNT IS NULL THEN 'null'
+                WHEN OPN_PROD_CNT = 0     THEN '0 products'
+                ELSE                           '1+ products' END AS open_products,
+           COUNT(*) AS n_clients
+    FROM u_chk GROUP BY 1 ORDER BY 1
+""").toPandas()
+print("UCP open-product distribution @ 2026-07-31 (zero/null = in universe but no open products):")
+display(prod)
+save_csv(prod, "ucp_open_product_distribution")
 
 # %% [5] CPC MONTHLY UNSUBS (1012 writes to 5002) split by WRITER: 7020 (the SFMC email
 # backfeed) vs all other application systems. Source = DDWV01.CPC_RB_PREF (the proven
@@ -217,7 +284,7 @@ display(ucp_flow)
 # SURVIVOR CAVEAT (state once, small): the standing table keeps only each client's
 # LATEST 1012 row, so a 5002 later overwritten (re-consent) drops out of this flow -
 # re-consent measured at ~4.7K over 2.5 years, so the shave is negligible.
-cpc_writes = pd.read_sql("""
+CPC_WRITES_SQL = """
     SELECT TRIM(EXTRACT(YEAR FROM CAST(CHG_TMSTMP AS DATE))) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM CAST(CHG_TMSTMP AS DATE)) < 10
                        THEN '0' ELSE '' END) ||
@@ -231,10 +298,17 @@ cpc_writes = pd.read_sql("""
       AND CHG_TMSTMP >= DATE '2024-01-01'
     GROUP BY 1, 2
     ORDER BY 1, 2
-""", EDW)
-cpc_writes.columns = [c.lower() for c in cpc_writes.columns]
+"""
+if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc_writes/_SUCCESS")):
+    cpc_writes = spark.read.parquet(CACHE + "cpc_writes/").toPandas()
+    print("(read from cache)")
+else:
+    cpc_writes = pd.read_sql(CPC_WRITES_SQL, EDW)
+    cpc_writes.columns = [c.lower() for c in cpc_writes.columns]
+    spark.createDataFrame(cpc_writes).write.mode("overwrite").parquet(CACHE + "cpc_writes/")
 print("CPC 1012 -> explicit No, monthly writes by writer (7020 = SFMC backfeed vs others):")
 display(cpc_writes)
+save_csv(cpc_writes, "cpc_1012_writes_by_writer")
 
 # %% [6] THE SUBSCRIBERS WATERFALL Jan-24 -> Jul-26 — ONE SQL, eight numbers, all joins
 # server-side (two 26M-row CPC month slices + the vendor unsub set never leave Teradata).
@@ -309,6 +383,7 @@ wf = pd.DataFrame([
 print(f"Subscribers waterfall (CPC 1012 vs vendor), Jan-24 -> Jul-26 | identity "
       f"{'HOLDS' if identity_ok else 'BROKEN'}:")
 display(wf)
+save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
 
 # %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
 # (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
@@ -390,6 +465,7 @@ cpcw_piv = (cpc_writes.pivot_table(index="chg_month", columns="writer",
                       .fillna(0).reset_index())
 print("CPC 1012 -> explicit No per month, by writer (plot data):")
 display(cpcw_piv)
+save_csv(cpcw_piv, "cpc_1012_writes_pivot")
 fig, ax = plt.subplots(figsize=(11.5, 4.6))
 xc = range(len(cpcw_piv))
 for col, color in [("7020 email backfeed", "#e08214"), ("other writers", "#16436e")]:
@@ -412,6 +488,7 @@ cmp = (vfb_un_tot
        .sort_values("month").reset_index(drop=True))
 print("Monthly unsubs - vendor feedback vs UCP flag flow (plot data):")
 display(cmp)
+save_csv(cmp, "monthly_unsub_vendor_vs_ucp")
 
 fig, ax = plt.subplots(figsize=(11.5, 4.8))
 x = range(len(cmp))
