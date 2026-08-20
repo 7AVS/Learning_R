@@ -316,13 +316,14 @@ save_csv(cpc_writes, "cpc_1012_writes_by_writer")
 # split CPC-closed / vendor / overlap; END official vs TRUE (minus vendor unsubs CPC
 # never recorded).
 WATERFALL_SQL = """
-WITH a AS (      -- CPC book at the start anchor
+WITH a AS (      -- CPC book at the start anchor (Aug-24, per the target slide)
     SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
     FROM DDWV01.CPC_RB_PREF_MTHLY
-    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-01-31'
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
 ),
-b AS (           -- CPC book at the end anchor
-    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b
+b AS (           -- CPC book at the end anchor; APP_SYS_CD = the LAST write's system,
+                 -- i.e. for a closed client, WHO closed the gate
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD AS writer_b
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
 ),
@@ -331,34 +332,37 @@ v AS (           -- vendor unsub clients in the frame (locked EVENT+MASTER merge
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                 FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
                   AND CLNT_NO IS NOT NULL) m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
       AND m.TREATMENT_ID       = e.TREATMENT_ID
     WHERE e.disposition_cd = 4
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
+      AND e.disposition_dt_tm >= DATE '2024-09-01'
       AND e.disposition_dt_tm <  DATE '2026-08-01'
       AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
       AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
 ),
-j AS (           -- every client either anchor, with the vendor flag
-    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b,
+j AS (           -- every client either anchor, with the vendor flag + closing writer
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO) AS clnt_no, a.cons_a, b.cons_b, b.writer_b,
            CASE WHEN v.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END AS vendor_unsub
     FROM a
     FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
     LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
 )
-SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS start_5001_jan24,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)     AS stayed_5001,
+SELECT CAST(SUM(CASE WHEN cons_a = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS start_5001_aug24,
        CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001) AND cons_b = 5001
                      THEN 1 ELSE 0 END) AS BIGINT)                                          AS new_5001,
-       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 THEN 1 ELSE 0 END) AS BIGINT)     AS cpc_closed,
+       -- the four unsub segments of the target slide:
+       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND writer_b = 7020
+                      AND vendor_unsub = 0 THEN 1 ELSE 0 END) AS BIGINT)                    AS seg_email_cpc,
        CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND vendor_unsub = 1
-                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS overlap_both,
+                     THEN 1 ELSE 0 END) AS BIGINT)                                          AS seg_overlap,
+       CAST(SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS BIGINT)  AS seg_email_sf_open,
+       CAST(SUM(CASE WHEN cons_a = 5001 AND cons_b = 5002 AND writer_b <> 7020
+                      AND vendor_unsub = 0 THEN 1 ELSE 0 END) AS BIGINT)                    AS seg_ac_branch,
        CAST(SUM(CASE WHEN cons_a = 5001 AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
                      THEN 1 ELSE 0 END) AS BIGINT)                                          AS left_other,
-       CAST(SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS end_5001_jul26,
-       CAST(SUM(CASE WHEN cons_b = 5001 AND vendor_unsub = 1 THEN 1 ELSE 0 END) AS BIGINT)  AS vendor_unsub_still_open
+       CAST(SUM(CASE WHEN cons_b = 5001 THEN 1 ELSE 0 END) AS BIGINT)                       AS end_5001_jul26
 FROM j
 """
 if fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "waterfall/_SUCCESS")):
@@ -369,21 +373,63 @@ else:
     sk.columns = [c.lower() for c in sk.columns]
     spark.createDataFrame(sk).write.mode("overwrite").parquet(CACHE + "waterfall/")
 r = sk.iloc[0]
-identity_ok = (r.start_5001_jan24 + r.new_5001 - r.cpc_closed - r.left_other) == r.end_5001_jul26
+cpc_closed = int(r.seg_email_cpc + r.seg_overlap + r.seg_ac_branch)
+identity_ok = (r.start_5001_aug24 + r.new_5001 - cpc_closed - r.left_other) == r.end_5001_jul26
 wf = pd.DataFrame([
-    ["START: subscribers (1012 = 5001)", "2024-01-31", int(r.start_5001_jan24)],
-    ["+ new subscribers (5001 by Jul-26)", "2024-02 → 2026-07", int(r.new_5001)],
-    ["− unsub, CPC-closed only (5001→5002, no vendor record)", "2024-02 → 2026-07", -int(r.cpc_closed - r.overlap_both)],
-    ["− unsub, BOTH systems (5001→5002 AND vendor record)", "2024-02 → 2026-07", -int(r.overlap_both)],
-    ["− left 5001 other (blank / no row at end)", "2024-02 → 2026-07", -int(r.left_other)],
+    ["START: subscribers (1012 = 5001)", "2024-08-31", int(r.start_5001_aug24)],
+    ["+ new subscribers (5001 by Jul-26)", "2024-09 → 2026-07", int(r.new_5001)],
+    ["− E-mail CPC (closed by 7020, no Salesforce record)", "2024-09 → 2026-07", -int(r.seg_email_cpc)],
+    ["− Overlap Salesforce & CPC (closed AND Salesforce record)", "2024-09 → 2026-07", -int(r.seg_overlap)],
+    ["− E-mail Salesforce (Salesforce record, CPC still open)", "2024-09 → 2026-07", -int(r.seg_email_sf_open)],
+    ["− AC/Branch & other writers (closed by non-7020 systems)", "2024-09 → 2026-07", -int(r.seg_ac_branch)],
+    ["− left 5001 other (blank / no row at end)", "2024-09 → 2026-07", -int(r.left_other)],
     ["END official: subscribers (1012 = 5001)", "2026-07-31", int(r.end_5001_jul26)],
-    ["  of which vendor-unsubscribed, CPC never closed (blind spot)", "2024-01 → 2026-07", int(r.vendor_unsub_still_open)],
-    ["END true: official minus the blind spot", "2026-07-31", int(r.end_5001_jul26 - r.vendor_unsub_still_open)],
+    ["END contactable: official minus E-mail Salesforce segment", "2026-07-31", int(r.end_5001_jul26 - r.seg_email_sf_open)],
 ], columns=["element", "period", "n_clients"])
-print(f"Subscribers waterfall (CPC 1012 vs vendor), Jan-24 -> Jul-26 | identity "
-      f"{'HOLDS' if identity_ok else 'BROKEN'}:")
+print(f"Subscribers waterfall (target-slide segments), Aug-24 -> Jul-26 | CPC identity "
+      f"{'HOLDS' if identity_ok else 'BROKEN'} (E-mail Salesforce segment sits outside "
+      f"the CPC identity - it reduces contactable, not the CPC book):")
 display(wf)
 save_csv(wf, "waterfall_subscribers_cpc_vs_vendor")
+
+# %% [6b] THE 22MM-vs-14MM BRIDGE - why CPC standing 5001 (~22.7M) exceeds the slide's
+# contactable base (~14M). Hypothesis (Andre): closed accounts + commercial clients.
+# Splits the Jul-26 5001 population via UCP: not in UCP / non-personal type / zero-null
+# open products / personal-active. Lands the 5001 client list once (cached).
+if not fs.exists(jvm.org.apache.hadoop.fs.Path(CACHE + "cpc5001_jul26/_SUCCESS")):
+    chunks, total = [], 0
+    for c in pd.read_sql("""
+        SELECT CLNT_NO
+        FROM DDWV01.CPC_RB_PREF_MTHLY
+        WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+          AND CLNT_CONSENT_TYP = 5001
+    """, EDW, chunksize=1_000_000):
+        chunks.append(c); total += len(c)
+        print(f"  pulled {total:,} 5001 clients...")
+    spark.createDataFrame(pd.concat(chunks, ignore_index=True)) \
+         .write.mode("overwrite").parquet(CACHE + "cpc5001_jul26/")
+spark.read.parquet(CACHE + "cpc5001_jul26/").createOrReplaceTempView("cpc5001")
+spark.read.parquet(f"{UCP_BASE}MONTH_END_DATE=2026-07-31/").createOrReplaceTempView("u_b")
+
+_tcol = next((c for c in spark.table("u_b").columns
+              if c.upper() in ("CLNT_TYP", "CLNT_TYP_CD", "CLNT_TYPE", "CLIENT_TYPE")), None)
+_type_case = (f"WHEN u.{_tcol} <> 'P' THEN '2. in UCP, non-personal type ({_tcol})'"
+              if _tcol else "WHEN 1 = 0 THEN 'x'")   # no type column found -> bucket skipped
+bridge = spark.sql(f"""
+    SELECT CASE WHEN u.CLNT_NO IS NULL THEN '1. not in UCP universe (closed / out of scope)'
+                {_type_case}
+                WHEN u.OPN_PROD_CNT IS NULL OR u.OPN_PROD_CNT = 0
+                     THEN '3. in UCP, zero/null open products'
+                ELSE      '4. personal-active (the contactable base)' END AS bucket,
+           COUNT(*) AS n_clients
+    FROM cpc5001 c
+    LEFT JOIN u_b u ON c.CLNT_NO = u.CLNT_NO
+    GROUP BY 1 ORDER BY 1
+""").toPandas()
+print("Bridge: CPC standing 5001 @ Jul-26 -> the personal-contactable base "
+      "(explains 22.7MM vs ~14MM):")
+display(bridge)
+save_csv(bridge, "bridge_cpc5001_to_contactable")
 
 # %% [7] PLOTS - at the end, each with its underlying data table displayed adjacent
 # (PowerPoint rebuild uses these numbers, not the image). The four deck outputs:
@@ -397,14 +443,15 @@ blue, green, gold = "#4472c4", "#70ad47", "#c49102"
 greys = ["#a6a6a6", "#d0d0d0", "#fbe5d6"]
 grey_line = "#8a8f98"
 
-start_v   = r.start_5001_jan24 / 1e6
+start_v   = r.start_5001_aug24 / 1e6
 new_v     = r.new_5001 / 1e6
-cpc_only  = (r.cpc_closed - r.overlap_both) / 1e6
-overlap_v = r.overlap_both / 1e6
-vend_open = r.vendor_unsub_still_open / 1e6
+seg_cpc   = r.seg_email_cpc / 1e6
+seg_ovl   = r.seg_overlap / 1e6
+seg_sf    = r.seg_email_sf_open / 1e6
+seg_acb   = r.seg_ac_branch / 1e6
 other_v   = r.left_other / 1e6
 end_off   = r.end_5001_jul26 / 1e6
-end_true  = (r.end_5001_jul26 - r.vendor_unsub_still_open) / 1e6
+end_true  = (r.end_5001_jul26 - r.seg_email_sf_open) / 1e6
 
 lo = min(start_v, end_true) * 0.93
 fig, ax = plt.subplots(figsize=(11.5, 6))
@@ -414,9 +461,10 @@ ax.bar(1, new_v, bottom=start_v, width=0.6, color=green, zorder=3)
 ax.text(1, start_v + new_v + 0.06, f"+{new_v:.2f}", ha="center", fontsize=11, fontweight="bold")
 top = start_v + new_v
 base = top
-for lbl, v, c in [("Unsub - CPC closed only", cpc_only, greys[0]),
-                  ("Unsub - both systems (overlap)", overlap_v, greys[1]),
-                  ("Vendor unsub, CPC still open", vend_open, greys[2]),
+for lbl, v, c in [("E-mail CPC (7020)", seg_cpc, "#6fa8dc"),
+                  ("Overlap Salesforce & CPC", seg_ovl, "#7f7f7f"),
+                  ("E-mail Salesforce (CPC open)", seg_sf, "#cfcfcf"),
+                  ("AC/Branch & other writers", seg_acb, "#a4c2f4"),
                   ("Left 5001 other (blank/no row)", other_v, "#e8e8e8")]:
     ax.bar(2, -v, bottom=base, width=0.6, color=c, zorder=3,
            edgecolor="white", linewidth=1.2, label=lbl)
@@ -425,37 +473,61 @@ for lbl, v, c in [("Unsub - CPC closed only", cpc_only, greys[0]),
     base -= v
 ax.text(2, top + 0.06, f"-{(top - base):.2f}", ha="center", fontsize=11, fontweight="bold")
 ax.bar(3, end_true - lo, bottom=lo, width=0.6, color=gold, zorder=3)
-ax.bar(3, vend_open, bottom=end_true, width=0.6, color="#e7d091", zorder=3,
-       label="Blind spot (vendor unsub, still 5001)")
+ax.bar(3, seg_sf, bottom=end_true, width=0.6, color="#e7d091", zorder=3,
+       label="E-mail Salesforce (in official, not contactable)")
 ax.text(3, end_off + 0.06, f"{end_off:,.2f} official", ha="center", fontsize=10, fontweight="bold")
-ax.text(3, end_true - 0.10, f"{end_true:,.2f} true", ha="center", fontsize=10,
+ax.text(3, end_true - 0.10, f"{end_true:,.2f} contactable", ha="center", fontsize=10,
         fontweight="bold", color="white")
 ax.plot([0.3, 0.7], [start_v]*2, ls=":", lw=1.2, color=grey_line)
 ax.plot([1.3, 1.7], [top]*2, ls=":", lw=1.2, color=grey_line)
 ax.set_xticks([0, 1, 2, 3])
-ax.set_xticklabels(["Subscribers\n1012 = 5001\n2024-01", "New\nsubscribers",
-                    "Unsubscribes\n(split by system)", "Subscribers\n2026-07\nofficial vs true"],
+ax.set_xticklabels(["Contactable\n1012 = 5001\n2024-08", "Subscribes",
+                    "Unsubscribes\n(split by system)", "Contactable\n2026-07"],
                    fontsize=10)
-ax.set_ylabel("# clients in MM")
+ax.set_ylabel("# Clients in MM")
 ax.set_ylim(lo, top * 1.015)
 ax.spines[["top", "right"]].set_visible(False)
 ax.text(-0.68, lo, "≈", fontsize=14, color="#444444", va="center")
 ax.legend(loc="upper left", fontsize=8.5, frameon=False)
-ax.set_title("Subscribers waterfall — CPC 1012 vs vendor feedback, Jan-2024 to Jul-2026",
+ax.set_title("Landscape of the Personal Client contactable base — Aug-2024 to Jul-2026",
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
-# --- 7b. vendor monthly unsubs, bar chart (data = vfb_un_tot, displayed here) ---
-print("Vendor monthly unsub clients (plot data):")
-display(vfb_un_tot)
+# --- 7b. vendor monthly unsubs, STACKED by LOB (data displayed first) ---
+# LOB map: Cards = the verified 32-MNE catalog (unsub_unified MNE_CATALOG);
+# Loyalty = VRE + VME (Avion Rewards email programs - EVIDENCE-BASED, not from an
+# official LOB doc [flagged to Andre]); everything else = Others (incl. DI until
+# its MNE codes are named).
+CARDS_MNES_32 = {"FWC","VIF","PCQ","PCL","PCD","COB","CRV","VBA","WJR","MWA","VBU","CEC",
+                 "AUH","CLL","MVP","BCO","VLI","WJF","WJA","POT","MET","WNH","OTC","RPF",
+                 "HCD","VCL","BAF","CRO","AML","MEF","PON","CLI"}
+LOYALTY_MNES = {"VRE", "VME"}
+def _lob(mne):
+    if mne in LOYALTY_MNES: return "Loyalty"
+    if mne in CARDS_MNES_32: return "Cards"
+    return "Others"
+vfb_lob = (vfb_un.assign(lob=vfb_un["mne"].map(_lob))
+                 .groupby(["unsub_month", "lob"], as_index=False)["n_clients"].sum()
+                 .pivot_table(index="unsub_month", columns="lob", values="n_clients",
+                              aggfunc="sum").fillna(0).reset_index())
+print("Vendor monthly unsubs by LOB (plot data):")
+display(vfb_lob)
+save_csv(vfb_lob, "vendor_unsubs_monthly_by_lob")
+
 fig, ax = plt.subplots(figsize=(11.5, 4.6))
-xb = range(len(vfb_un_tot))
-ax.bar(xb, vfb_un_tot["clients_unsub"] / 1e3, width=0.65, color="#16436e", zorder=3)
+xb = range(len(vfb_lob))
+bottom = [0.0] * len(vfb_lob)
+for lob, color in [("Loyalty", "#16436e"), ("Cards", "#6fa8dc"), ("Others", "#f1c232")]:
+    if lob in vfb_lob.columns:
+        vals = (vfb_lob[lob] / 1e3).tolist()
+        ax.bar(xb, vals, bottom=bottom, width=0.65, color=color, label=lob, zorder=3)
+        bottom = [a + b for a, b in zip(bottom, vals)]
 ax.set_xticks(list(xb))
-ax.set_xticklabels(vfb_un_tot["month"], fontsize=8.5, rotation=45)
+ax.set_xticklabels(vfb_lob["unsub_month"], fontsize=8.5, rotation=45)
 ax.set_ylabel("clients (thousands)")
+ax.legend(loc="upper right", fontsize=9, frameon=False, ncol=3)
 ax.spines[["top", "right"]].set_visible(False)
-ax.set_title("Monthly unsubscribes — vendor feedback (distinct clients), since 2024-01",
+ax.set_title("Monthly unsubscribes by LOB — vendor feedback (distinct clients), since 2024-01",
              fontweight="bold", fontsize=12, loc="left")
 plt.tight_layout(); plt.show()
 
