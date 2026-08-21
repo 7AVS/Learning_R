@@ -385,6 +385,83 @@ SELECT
 FROM j;
 
 
+/* ============================================================================
+[Q4] SF-OPEN BLIND-SPOT SPLIT BY MNE - what did those 420,561 actually unsub from?
+     (Andre 2026-08-21. Q3's seg_email_sf_open counts a Salesforce disposition-4
+     from ANY list against the 1012 book. A Loyalty-newsletter-only unsub
+     legitimately keeps 1012 open - it is NOT a capture failure. This query
+     splits the blind-spot clients by the MNE (positions 8-10 of TREATMENT_ID)
+     of their FIRST unsub in the window - same first-unsub rule as Q1. Andre
+     maps MNE -> LOB in Excel (LOB MANUAL): Loyalty-side MNEs ~ the Rewards
+     e-newsletter (1046 list) = legit other-list unsubs; banking-side MNEs =
+     the true 1012 capture failure.
+     MNE is the campaign family of the SEND the unsub referenced - a proxy for
+     the list unsubbed from, not an exact preference id.
+     CHECK: SUM(n_clients) must equal Q3's seg_email_sf_open (420,561 on the
+     2026-08-21 run) - same population, one row per client.
+============================================================================ */
+WITH u_a AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31'
+      AND CLNT_STS = 'A'
+),
+u_b AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31'
+      AND CLNT_STS = 'A'
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
+      AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+      AND CLNT_TYP_CD = 1
+),
+vm AS (
+    -- one row per client: MNE of the FIRST disposition-4 in the window
+    -- (locked EVENT+MASTER merge, identical filters to Q3's v)
+    SELECT CLNT_NO, mne
+    FROM (
+        SELECT m.CLNT_NO,
+               SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
+               ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO
+                                  ORDER BY e.disposition_dt_tm ASC,
+                                           e.TREATMENT_ID ASC) AS rn
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                      AND CLNT_NO IS NOT NULL) m
+          ON  m.consumer_id_hashed = e.consumer_id_hashed
+          AND m.TREATMENT_ID       = e.TREATMENT_ID
+        WHERE e.disposition_cd = 4
+          AND e.disposition_dt_tm >= DATE '2024-09-01'
+          AND e.disposition_dt_tm <  DATE '2026-08-01'
+          AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+          AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+    ) t
+    WHERE rn = 1
+)
+SELECT vm.mne,
+       CAST(COUNT(*) AS BIGINT) AS n_clients
+FROM a
+INNER JOIN b   ON b.CLNT_NO   = a.CLNT_NO
+INNER JOIN u_a ON u_a.CLNT_NO = a.CLNT_NO
+INNER JOIN u_b ON u_b.CLNT_NO = a.CLNT_NO
+INNER JOIN vm  ON vm.CLNT_NO  = a.CLNT_NO
+WHERE a.cons_a = 5001
+  AND b.cons_b = 5001
+GROUP BY vm.mne
+ORDER BY n_clients DESC;
+
+
 -- ============================================================================
 -- APPENDIX: UCP QUERIES (Spark SQL over ucp4 parquet - UCP's only home;
 -- not runnable in Teradata/Starburst. View registration, the single Python line:
