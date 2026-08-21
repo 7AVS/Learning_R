@@ -4,6 +4,10 @@
 -- These are THE queries behind the deck outputs - no caching, no Python; runtime
 -- may be long, correctness over speed.
 --
+-- UNIVERSE RULE (Andre 2026-08-21): all queries scope to active personal
+-- clients - CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY + open/personal per
+-- CLNT_AR_RELTN_DLY latest snapshot.
+--
 -- THE LOCKED EVENT+MASTER MERGE (used identically wherever vendor data appears):
 --   * join on BOTH keys: consumer_id_hashed AND TREATMENT_ID
 --   * MASTER reduced to DISTINCT (consumer_id_hashed, TREATMENT_ID, CLNT_NO),
@@ -25,6 +29,19 @@
 -- ============================================================================
 
 
+-- [Q0] UNIVERSE CODES PROBE - run FIRST, paste output back, then set the two
+--      SET ME codes in every u CTE below. If row_count <> distinct_clnt_count
+--      the table is not client-grain and the DISTINCT in the u CTE is doing
+--      real work.
+SELECT CLNT_TYP, CLNT_STS,
+       COUNT(*) AS row_count,
+       COUNT(DISTINCT CLNT_NO) AS distinct_clnt_count
+FROM DDWV01.CLNT_AR_RELTN_DLY
+WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
+GROUP BY CLNT_TYP, CLNT_STS
+ORDER BY CLNT_TYP, CLNT_STS;
+
+
 /* ============================================================================
 [Q1] MONTHLY VENDOR ACTIVITY x MNE since 2024-01 - ONE table, sends and unsubs
      side by side (Andre 2026-08-20). clnt_no grain both measures:
@@ -34,7 +51,17 @@
                        to distinct unsubscribers per month)
      One scan of EVENT (disp 1 and 4), one MASTER join (locked merge).
 ============================================================================ */
-WITH base AS (
+WITH u AS (
+    -- Universe: clients open + personal as of the LATEST snapshot (current status,
+    -- applied across the whole window). Codes below are placeholders - Andre must
+    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.CLNT_AR_RELTN_DLY
+    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
+      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+      AND CLNT_STS = /* SET ME: open/active code from Q0 */
+),
+base AS (
     SELECT m.CLNT_NO,
            e.disposition_cd,
            e.disposition_dt_tm AS dt,
@@ -51,6 +78,7 @@ WITH base AS (
                   AND CLNT_NO IS NOT NULL) m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
       AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u ON u.CLNT_NO = m.CLNT_NO
     WHERE e.disposition_cd IN (1, 4)
       AND e.disposition_dt_tm >= DATE '2024-01-01'
       AND e.disposition_dt_tm <  DATE '2026-08-01'
@@ -76,13 +104,13 @@ unsubs AS (
     WHERE rn = 1
     GROUP BY 1, 2
 )
-SELECT COALESCE(s.evt_month, u.evt_month)  AS evt_month,
-       COALESCE(s.mne, u.mne)              AS mne,
+SELECT COALESCE(s.evt_month, un.evt_month) AS evt_month,
+       COALESCE(s.mne, un.mne)             AS mne,
        COALESCE(s.sent_clients, 0)         AS sent_clients,
-       COALESCE(u.unsub_clients, 0)        AS unsub_clients
+       COALESCE(un.unsub_clients, 0)       AS unsub_clients
 FROM sends s
-FULL OUTER JOIN unsubs u
-  ON u.evt_month = s.evt_month AND u.mne = s.mne
+FULL OUTER JOIN unsubs un
+  ON un.evt_month = s.evt_month AND un.mne = s.mne
 ORDER BY 1, 2;
 
 
@@ -96,7 +124,17 @@ ORDER BY 1, 2;
          system (flow; from the write timestamp on the standing mirror -
          survivor caveat: a No later overwritten by re-consent drops out, ~0.1%)
 ============================================================================ */
-WITH standing AS (
+WITH u AS (
+    -- Universe: clients open + personal as of the LATEST snapshot (current status,
+    -- applied across the whole window). Codes below are placeholders - Andre must
+    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.CLNT_AR_RELTN_DLY
+    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
+      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+      AND CLNT_STS = /* SET ME: open/active code from Q0 */
+),
+standing AS (
     SELECT TRIM(EXTRACT(YEAR FROM MTH_END_DT)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM MTH_END_DT) < 10 THEN '0' ELSE '' END) ||
              TRIM(EXTRACT(MONTH FROM MTH_END_DT))                AS mth,
@@ -110,6 +148,8 @@ WITH standing AS (
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012
       AND MTH_END_DT >= DATE '2024-01-31'
+      AND CLNT_TYP_CD = 1
+      AND CLNT_NO IN (SELECT CLNT_NO FROM u)
     GROUP BY 1, 2
 ),
 writes AS (
@@ -129,6 +169,7 @@ writes AS (
     FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
       AND CHG_TMSTMP >= DATE '2024-01-01'
+      AND CLNT_NO IN (SELECT CLNT_NO FROM u)
     GROUP BY 1, 2
 )
 SELECT COALESCE(s.mth, w.mth)                 AS mth,
@@ -166,15 +207,27 @@ ORDER BY 1, 2;
        new subscribes    = state_aug24 <> '5001' AND state_jul26 = '5001'
        end bar           = rows state_jul26 = '5001'
 ============================================================================ */
-WITH a AS (
+WITH u AS (
+    -- Universe: clients open + personal as of the LATEST snapshot (current status,
+    -- applied across the whole window). Codes below are placeholders - Andre must
+    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.CLNT_AR_RELTN_DLY
+    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
+      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+      AND CLNT_STS = /* SET ME: open/active code from Q0 */
+),
+a AS (
     SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
+      AND CLNT_TYP_CD = 1
 ),
 b AS (
     SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
     FROM DDWV01.CPC_RB_PREF_MTHLY
     WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+      AND CLNT_TYP_CD = 1
 ),
 v AS (
     SELECT DISTINCT m.CLNT_NO
@@ -201,6 +254,7 @@ SELECT COALESCE(CAST(a.cons_a AS VARCHAR(10)), 'not in book')   AS state_aug24,
 FROM a
 FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
 LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+INNER JOIN u ON u.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
 GROUP BY 1, 2, 3, 4
 ORDER BY 1, 2, 5 DESC;
 
