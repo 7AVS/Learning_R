@@ -5,8 +5,11 @@
 -- may be long, correctness over speed.
 --
 -- UNIVERSE RULE (Andre 2026-08-21): all queries scope to active personal
--- clients - CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY + open per RB_CLNT_DLY
--- CLNT_STS (latest snapshot).
+-- clients - CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY, AND every CPC/event read is
+-- merged to RB_CLNT_DLY CLNT_STS='A' at the EQUIVALENT DATE (month-end grain):
+-- a month-end standing count uses that month-end's status snapshot, an event
+-- uses its own month's month-end, the waterfall checks BOTH anchors. Never one
+-- fixed snapshot across a time series.
 --
 -- THE LOCKED EVENT+MASTER MERGE (used identically wherever vendor data appears):
 --   * join on BOTH keys: consumer_id_hashed AND TREATMENT_ID
@@ -29,17 +32,19 @@
 -- ============================================================================
 
 
--- coverage check: SELECT MIN(SNAP_DT), MAX(SNAP_DT) FROM DDWV01.RB_CLNT_DLY;
---   (run once if a pinned SNAP_DT below returns zero rows - RB_CLNT_DLY
---   coverage at 2024/2026 historical dates is unverified)
+-- coverage check (RUN ONCE BEFORE Q1/Q2/Q3 - now load-bearing): the date-matched
+-- joins need EVERY month-end 2024-01-31 .. 2026-07-31 present in RB_CLNT_DLY.
+-- If the daily table keeps only a rolling window, history joins silently empty out.
+-- SELECT SNAP_DT, COUNT(*) AS n
+-- FROM DDWV01.RB_CLNT_DLY
+-- WHERE SNAP_DT >= DATE '2024-01-31' AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
+-- GROUP BY 1 ORDER BY 1;   -- expect ~31 month-end rows, each in the tens of millions
 
--- [Q0] UNIVERSE CODES PROBE - run FIRST, paste output back, then set the
---      CLNT_STS SET ME code in every u CTE below. Grouped by both CLNT_TYP
---      and CLNT_STS for information only - only the CLNT_STS open/active
---      code feeds the u CTEs; CLNT_TYP plays no role there (personal-vs-non
---      comes from CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY instead). If
---      row_count <> distinct_clnt_count the table is not client-grain and
---      the DISTINCT in the u CTE is doing real work.
+-- [Q0] UNIVERSE CODES PROBE - informational. Only the CLNT_STS open/active
+--      code ('A') feeds the status CTEs below (act in Q1/Q2, u_a/u_b in Q3);
+--      CLNT_TYP plays no role there (personal-vs-non comes from CLNT_TYP_CD=1
+--      on CPC_RB_PREF_MTHLY instead). If row_count <> distinct_clnt_count the
+--      table is not client-grain at a snapshot.
 --      Q0 run 2026-08-21: table is client-grain (row_count = distinct everywhere).
 SELECT CLNT_TYP, CLNT_STS,
        COUNT(*) AS row_count,
@@ -59,16 +64,18 @@ ORDER BY CLNT_TYP, CLNT_STS;
                        to distinct unsubscribers per month)
      One scan of EVENT (disp 1 and 4), one MASTER join (locked merge).
 ============================================================================ */
-WITH u AS (
-    -- Universe: from RB_CLNT_DLY we filter ONLY on CLNT_STS (open vs closed);
-    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
-    -- Snapshot pinned to 2026-07-31 - this query's window end (disposition_dt_tm
-    -- < 2026-08-01), mirroring the header's MASTER scan cutoff ('2026212') and
-    -- Q3's end-state CPC anchor.
-    SELECT DISTINCT CLNT_NO
+WITH act AS (
+    -- ACTIVE spine, date-matched (Andre 2026-08-21): one row per month-end x
+    -- active client. Each event below joins to the status snapshot of ITS OWN
+    -- month - never one fixed snapshot across the series. Month-end-only rows
+    -- kept via EXTRACT (SNAP_DT+1 = day 1 <=> SNAP_DT is a month-end); if this
+    -- predicate defeats partition pruning and the scan crawls, swap it for an
+    -- explicit SNAP_DT IN (...) list of month-ends.
+    SELECT SNAP_DT, CLNT_NO
     FROM DDWV01.RB_CLNT_DLY
-    WHERE SNAP_DT = DATE '2026-07-31'
-      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+    WHERE CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted - CHAR column
+      AND SNAP_DT >= DATE '2024-01-31'
+      AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
 ),
 base AS (
     SELECT m.CLNT_NO,
@@ -87,7 +94,11 @@ base AS (
                   AND CLNT_NO IS NOT NULL) m
       ON  m.consumer_id_hashed = e.consumer_id_hashed
       AND m.TREATMENT_ID       = e.TREATMENT_ID
-    INNER JOIN u ON u.CLNT_NO = m.CLNT_NO
+    -- active check at the event's own month-end: the client must be 'A' in the
+    -- month the send/unsub happened, not merely today
+    INNER JOIN act ON act.CLNT_NO = m.CLNT_NO
+                  AND act.SNAP_DT = ADD_MONTHS(CAST(e.disposition_dt_tm AS DATE)
+                                               - EXTRACT(DAY FROM e.disposition_dt_tm) + 1, 1) - 1
     WHERE e.disposition_cd IN (1, 4)
       AND e.disposition_dt_tm >= DATE '2024-01-01'
       AND e.disposition_dt_tm <  DATE '2026-08-01'
@@ -133,17 +144,17 @@ ORDER BY 1, 2;
          system (flow; from the write timestamp on the standing mirror -
          survivor caveat: a No later overwritten by re-consent drops out, ~0.1%)
 ============================================================================ */
-WITH u AS (
-    -- Universe: from RB_CLNT_DLY we filter ONLY on CLNT_STS (open vs closed);
-    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
-    -- Snapshot pinned to 2026-07-31 - CPC_RB_PREF_MTHLY's implicit current
-    -- month-end (standing/writes below have no upper date bound; 2026-07-31 is
-    -- the file's running cutoff, mirroring the header's MASTER scan end and
-    -- Q3's end-state CPC anchor).
-    SELECT DISTINCT CLNT_NO
+WITH act AS (
+    -- ACTIVE spine, date-matched (Andre 2026-08-21): one row per month-end x
+    -- active client. Standing joins at its OWN MTH_END_DT; writes join at the
+    -- month-end of the write's month - never one fixed snapshot across the
+    -- series. Swap the EXTRACT month-end predicate for an explicit
+    -- SNAP_DT IN (...) list if partition pruning suffers.
+    SELECT SNAP_DT, CLNT_NO
     FROM DDWV01.RB_CLNT_DLY
-    WHERE SNAP_DT = DATE '2026-07-31'
-      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+    WHERE CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted - CHAR column
+      AND SNAP_DT >= DATE '2024-01-31'
+      AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
 ),
 standing AS (
     SELECT TRIM(EXTRACT(YEAR FROM MTH_END_DT)) || '-' ||
@@ -156,11 +167,13 @@ standing AS (
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5004 THEN 1 ELSE 0 END) AS BIGINT) AS n_5004_yes_credit_bureau,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5001, 5002, 5003, 5004)
                          THEN 1 ELSE 0 END) AS BIGINT)                              AS n_other_value
-    FROM DDWV01.CPC_RB_PREF_MTHLY
-    WHERE PREF_ID = 1012
-      AND MTH_END_DT >= DATE '2024-01-31'
-      AND CLNT_TYP_CD = 1
-      AND CLNT_NO IN (SELECT CLNT_NO FROM u)
+    FROM DDWV01.CPC_RB_PREF_MTHLY p
+    -- active check at the SAME month-end the standing is measured at
+    INNER JOIN act ON act.CLNT_NO = p.CLNT_NO
+                  AND act.SNAP_DT = p.MTH_END_DT
+    WHERE p.PREF_ID = 1012
+      AND p.MTH_END_DT >= DATE '2024-01-31'
+      AND p.CLNT_TYP_CD = 1
     GROUP BY 1, 2
 ),
 writes AS (
@@ -177,10 +190,17 @@ writes AS (
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP = 5004 THEN 1 ELSE 0 END) AS BIGINT) AS n_writes_to_5004,
            CAST(SUM(CASE WHEN CLNT_CONSENT_TYP NOT IN (5001, 5002, 5003, 5004)
                          THEN 1 ELSE 0 END) AS BIGINT)                              AS n_writes_to_other
-    FROM DDWV01.CPC_RB_PREF
-    WHERE PREF_ID = 1012
-      AND CHG_TMSTMP >= DATE '2024-01-01'
-      AND CLNT_NO IN (SELECT CLNT_NO FROM u)
+    FROM DDWV01.CPC_RB_PREF w
+    -- active check at the month-end of the WRITE's month (RB_CLNT_DLY is the
+    -- status source; write-day precision would need daily snapshots verified)
+    INNER JOIN act ON act.CLNT_NO = w.CLNT_NO
+                  AND act.SNAP_DT = ADD_MONTHS(CAST(w.CHG_TMSTMP AS DATE)
+                                               - EXTRACT(DAY FROM w.CHG_TMSTMP) + 1, 1) - 1
+    WHERE w.PREF_ID = 1012
+      AND w.CHG_TMSTMP >= DATE '2024-01-01'
+      AND w.CHG_TMSTMP <  DATE '2026-08-01'  -- file cutoff; also keeps the partial
+                                             -- current month from silently dropping
+                                             -- on a not-yet-existing month-end snapshot
     GROUP BY 1, 2
 )
 SELECT COALESCE(s.mth, w.mth)                 AS mth,
@@ -202,28 +222,54 @@ ORDER BY 1, 2;
 
 
 /* ============================================================================
-[Q3] THE WATERFALL TRANSITION MATRIX - Aug-2024 vs Jul-2026, ONE ROW PER PATH
-     (replaces the one-row eight-column version - Andre 2026-08-20: the matrix
-     is the auditable artifact; every bar is a filter+sum on it).
-     Reads as: n_clients went FROM state_aug24 TO state_jul26, closed by
-     closed_by, with/without a Salesforce unsub record in the window.
-     Every Aug-24 client is in exactly one row (where they went); every Jul-26
-     client is in exactly one row (where they came from).
-     Bar recipes:
-       start bar         = rows state_aug24 = '5001'
-       E-mail CPC        = 5001 -> 5002, closed_by 7020, salesforce_unsub no
-       Overlap           = 5001 -> 5002, salesforce_unsub yes
-       E-mail Salesforce = 5001 -> 5001, salesforce_unsub yes
-       AC/Branch         = 5001 -> 5002, closed_by other, salesforce_unsub no
-       new subscribes    = state_aug24 <> '5001' AND state_jul26 = '5001'
-       end bar           = rows state_jul26 = '5001'
+[Q3] THE WATERFALL - Aug-2024 -> Jul-2026, status checked at BOTH anchors
+     (Andre 2026-08-21: the 2026-08-20 version pinned universe to ONE snapshot
+     at the END anchor only - a client closed in Aug-24 but reopened by Jul-26
+     was silently counted as always-active, and vice versa. u_a/u_b below
+     check CLNT_STS at EACH side's own date, matching that side's CPC anchor.)
+
+     Identity:
+       start_5001_aug24 + new_5001
+         - (seg_inactive + seg_email_cpc + seg_overlap + seg_ac_branch + left_other)
+         = end_5001_jul26                                  (the "official" end bar)
+       end_contactable = end_5001_jul26 - seg_email_sf_open
+         (a Salesforce-unsub client still reads as cons=5001/active in CPC -
+          "in the book" but not truly contactable; subtracted as an
+          adjustment INSIDE the end bar, not counted as a departure)
+
+     Departure segments (all require start = 5001 AND active_a = 1);
+     precedence order below, mutually exclusive by construction so summing
+     them independently (rather than a CASE chain) is safe - see comments
+     on seg_ac_branch for the one place that needed an explicit NULL rule:
+       1. seg_inactive   - left the active book; takes precedence over any
+                            consent movement - a consent row that closes
+                            mechanically when a client goes inactive must not
+                            inflate the unsubscribe segments
+       2. seg_email_cpc  - closed to 5002 by the CPC/email backfeed (7020),
+                            no Salesforce record
+       3. seg_overlap    - closed to 5002 AND has a Salesforce unsub record
+                            (any writer)
+       4. seg_ac_branch  - closed to 5002 by a writer other than 7020, no
+                            Salesforce record
+       5. left_other     - still active in Jul-26 but landed on a consent
+                            value that is neither 5001 nor 5002 (incl. NULL)
+
+     COVERAGE WARNING: RB_CLNT_DLY coverage at DATE '2024-08-31' is
+     UNVERIFIED - run the MIN/MAX probe at the top of this file first. If the
+     table doesn't reach back that far, u_a returns zero rows and
+     start_5001_aug24 collapses to 0 - that's the loud-failure signal.
 ============================================================================ */
-WITH u AS (
-    -- Universe: from RB_CLNT_DLY we filter ONLY on CLNT_STS (open vs closed);
-    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
-    -- Snapshot pinned to 2026-07-31, CPC's END anchor (MTH_END_DT in `b` below).
-    -- status evaluated at the END anchor, matching CPC MTH_END_DT; if per-anchor
-    -- status is wanted, split into u_a/u_b.
+WITH u_a AS (
+    -- Universe at the START anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Aug-24 side (`a` below).
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31'
+      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+),
+u_b AS (
+    -- Universe at the END anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Jul-26 side (`b` below).
     SELECT DISTINCT CLNT_NO
     FROM DDWV01.RB_CLNT_DLY
     WHERE SNAP_DT = DATE '2026-07-31'
@@ -255,20 +301,88 @@ v AS (
       AND e.disposition_dt_tm <  DATE '2026-08-01'
       AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
       AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (
+    -- One row per client appearing in `a` and/or `b`. active_a/active_b are
+    -- looked up per-anchor against u_a/u_b (no single inner-joined universe
+    -- anymore - a client's book status can differ across the two dates).
+    -- writer_b is APP_SYS_CD from `b` - the system that wrote the Jul-26 row.
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO)                        AS CLNT_NO,
+           a.cons_a,
+           b.cons_b,
+           b.APP_SYS_CD                                          AS writer_b,
+           CASE WHEN ua.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_a,
+           CASE WHEN ub.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_b,
+           CASE WHEN v.CLNT_NO  IS NOT NULL THEN 1 ELSE 0 END    AS vendor_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN u_a ua ON ua.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_b ub ON ub.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN v       ON v.CLNT_NO  = COALESCE(a.CLNT_NO, b.CLNT_NO)
 )
-SELECT COALESCE(CAST(a.cons_a AS VARCHAR(10)), 'not in book')   AS state_aug24,
-       COALESCE(CAST(b.cons_b AS VARCHAR(10)), 'not in book')   AS state_jul26,
-       CASE WHEN b.cons_b = 5002 AND b.APP_SYS_CD = 7020 THEN '7020 email backfeed'
-            WHEN b.cons_b = 5002                          THEN 'other writer'
-            ELSE 'n/a - not closed' END                          AS closed_by,
-       CASE WHEN v.CLNT_NO IS NOT NULL THEN 'yes' ELSE 'no' END  AS salesforce_unsub,
-       CAST(COUNT(*) AS BIGINT)                                  AS n_clients
-FROM a
-FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
-LEFT JOIN v ON v.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
-INNER JOIN u ON u.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 5 DESC;
+SELECT
+    -- start bar: cons=5001 AND active, at the Aug-24 anchor
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS start_5001_aug24,
+
+    -- additions: wasn't (5001 AND active) at the start, but is at the end -
+    -- covers both newly-consented clients and previously-inactive clients
+    -- who came back active while already sitting on 5001. Written as an
+    -- explicit disjunction (not NOT(...)) so a NULL cons_a (client absent
+    -- from `a` entirely) reads as "not in book", not as unknown/excluded.
+    CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+                   AND cons_b = 5001 AND active_b = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS new_5001,
+
+    -- 1. left the active book - checked first, takes precedence over consent
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_inactive,
+
+    -- 2. closed by CPC/email backfeed (7020), no Salesforce record
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002
+                   AND writer_b = 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_cpc,
+
+    -- 3. closed AND has a Salesforce unsub record, any writer
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_overlap,
+
+    -- 4. closed by a writer other than 7020, no Salesforce record.
+    -- COALESCE(writer_b, -1) so a NULL writer_b lands here (not silently
+    -- dropped) - this keeps segs 2/3/4 a full partition of the
+    -- active_b=1, cons_b=5002 space regardless of writer nullability.
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002
+                   AND COALESCE(writer_b, -1) <> 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_ac_branch,
+
+    -- 5. still active, but landed on a consent value that's neither
+    -- 5001 nor 5002 (blank/other/NULL) - no consent value silently vanishes
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1
+                   AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS left_other,
+
+    -- inside end_5001_jul26 (still 5001 AND active on both sides) but carries
+    -- a Salesforce unsub record - a contactable adjustment, NOT a departure
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_sf_open,
+
+    -- end bar (official): cons=5001 AND active, at the Jul-26 anchor
+    CAST(SUM(CASE WHEN cons_b = 5001 AND active_b = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS end_5001_jul26,
+
+    -- end bar (contactable): official end minus the still-5001/active
+    -- clients that carry a Salesforce unsub record
+    CAST((SUM(CASE WHEN cons_b = 5001 AND active_b = 1 THEN 1 ELSE 0 END)
+        - SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                     AND cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                    THEN 1 ELSE 0 END)) AS BIGINT)                           AS end_contactable
+FROM j;
 
 
 -- ============================================================================
