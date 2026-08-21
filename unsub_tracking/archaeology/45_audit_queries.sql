@@ -5,8 +5,8 @@
 -- may be long, correctness over speed.
 --
 -- UNIVERSE RULE (Andre 2026-08-21): all queries scope to active personal
--- clients - CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY + open/personal per
--- CLNT_AR_RELTN_DLY latest snapshot.
+-- clients - CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY + open per CLNT_AR_RELTN_DLY
+-- CLNT_STS (latest snapshot).
 --
 -- THE LOCKED EVENT+MASTER MERGE (used identically wherever vendor data appears):
 --   * join on BOTH keys: consumer_id_hashed AND TREATMENT_ID
@@ -29,10 +29,17 @@
 -- ============================================================================
 
 
--- [Q0] UNIVERSE CODES PROBE - run FIRST, paste output back, then set the two
---      SET ME codes in every u CTE below. If row_count <> distinct_clnt_count
---      the table is not client-grain and the DISTINCT in the u CTE is doing
---      real work.
+-- coverage check: SELECT MIN(SNAP_DT), MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY;
+--   (run once if a pinned SNAP_DT below returns zero rows - CLNT_AR_RELTN_DLY
+--   coverage at 2024/2026 historical dates is unverified)
+
+-- [Q0] UNIVERSE CODES PROBE - run FIRST, paste output back, then set the
+--      CLNT_STS SET ME code in every u CTE below. Grouped by both CLNT_TYP
+--      and CLNT_STS for information only - only the CLNT_STS open/active
+--      code feeds the u CTEs; CLNT_TYP plays no role there (personal-vs-non
+--      comes from CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY instead). If
+--      row_count <> distinct_clnt_count the table is not client-grain and
+--      the DISTINCT in the u CTE is doing real work.
 SELECT CLNT_TYP, CLNT_STS,
        COUNT(*) AS row_count,
        COUNT(DISTINCT CLNT_NO) AS distinct_clnt_count
@@ -52,13 +59,14 @@ ORDER BY CLNT_TYP, CLNT_STS;
      One scan of EVENT (disp 1 and 4), one MASTER join (locked merge).
 ============================================================================ */
 WITH u AS (
-    -- Universe: clients open + personal as of the LATEST snapshot (current status,
-    -- applied across the whole window). Codes below are placeholders - Andre must
-    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    -- Universe: from CLNT_AR_RELTN_DLY we filter ONLY on CLNT_STS (open vs closed);
+    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
+    -- Snapshot pinned to 2026-07-31 - this query's window end (disposition_dt_tm
+    -- < 2026-08-01), mirroring the header's MASTER scan cutoff ('2026212') and
+    -- Q3's end-state CPC anchor.
     SELECT DISTINCT CLNT_NO
     FROM DDWV01.CLNT_AR_RELTN_DLY
-    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
-      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+    WHERE SNAP_DT = DATE '2026-07-31'
       AND CLNT_STS = /* SET ME: open/active code from Q0 */
 ),
 base AS (
@@ -125,13 +133,15 @@ ORDER BY 1, 2;
          survivor caveat: a No later overwritten by re-consent drops out, ~0.1%)
 ============================================================================ */
 WITH u AS (
-    -- Universe: clients open + personal as of the LATEST snapshot (current status,
-    -- applied across the whole window). Codes below are placeholders - Andre must
-    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    -- Universe: from CLNT_AR_RELTN_DLY we filter ONLY on CLNT_STS (open vs closed);
+    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
+    -- Snapshot pinned to 2026-07-31 - CPC_RB_PREF_MTHLY's implicit current
+    -- month-end (standing/writes below have no upper date bound; 2026-07-31 is
+    -- the file's running cutoff, mirroring the header's MASTER scan end and
+    -- Q3's end-state CPC anchor).
     SELECT DISTINCT CLNT_NO
     FROM DDWV01.CLNT_AR_RELTN_DLY
-    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
-      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+    WHERE SNAP_DT = DATE '2026-07-31'
       AND CLNT_STS = /* SET ME: open/active code from Q0 */
 ),
 standing AS (
@@ -208,13 +218,14 @@ ORDER BY 1, 2;
        end bar           = rows state_jul26 = '5001'
 ============================================================================ */
 WITH u AS (
-    -- Universe: clients open + personal as of the LATEST snapshot (current status,
-    -- applied across the whole window). Codes below are placeholders - Andre must
-    -- paste the CLNT_TYP x CLNT_STS probe output (Q0) before first run.
+    -- Universe: from CLNT_AR_RELTN_DLY we filter ONLY on CLNT_STS (open vs closed);
+    -- personal-vs-non-personal comes solely from CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY.
+    -- Snapshot pinned to 2026-07-31, CPC's END anchor (MTH_END_DT in `b` below).
+    -- status evaluated at the END anchor, matching CPC MTH_END_DT; if per-anchor
+    -- status is wanted, split into u_a/u_b.
     SELECT DISTINCT CLNT_NO
     FROM DDWV01.CLNT_AR_RELTN_DLY
-    WHERE SNAP_DT = (SELECT MAX(SNAP_DT) FROM DDWV01.CLNT_AR_RELTN_DLY WHERE SNAP_DT >= DATE - 7)
-      AND CLNT_TYP = /* SET ME: personal code from Q0 */
+    WHERE SNAP_DT = DATE '2026-07-31'
       AND CLNT_STS = /* SET ME: open/active code from Q0 */
 ),
 a AS (
