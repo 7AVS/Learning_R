@@ -462,6 +462,112 @@ GROUP BY vm.mne
 ORDER BY n_clients DESC;
 
 
+/* ============================================================================
+[Q5] DID THE BLIND-SPOT CLIENTS EVER SEE THE PREFERENCE PAGE? (Andre 2026-08-21)
+     Population: the same 420,561 as Q4 (5001+active at both anchors, SF unsub
+     on record, 1012 never moved). For each client, look for ANY CPC opt-out
+     write (CLNT_CONSENT_TYP = 5002, ANY PREF_ID, ANY writer) in the window
+     [first unsub date - 1 day, + 14 days].
+     Reading:
+       * wrote another gate (e.g. 1046) and not 1012 -> they DID reach the page
+         and CHOSE a different gate - correctly still 1012-emailable (case 1)
+       * no write on any gate -> they never saw the page (one-click/native list
+         unsub) - intent unknowable from CPC (the black box)
+       * wrote 1012 in-window -> write exists but standing reverted/late - edge
+     Split by sending family (Loyalty sends vs all other MNEs) to cross the
+     Q4 attribution with actual page behavior. LOYALTY MNE IN-LIST IS EDITABLE -
+     extend from mapping Mne.csv when it lands; 'VRE' confirmed Loyalty by
+     Andre 2026-08-21, VME/VRG presumed same family.
+     CHECK: n_clients sums to Q3's seg_email_sf_open (420,561 on 2026-08-21 run).
+============================================================================ */
+WITH u_a AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31'
+      AND CLNT_STS = 'A'
+),
+u_b AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31'
+      AND CLNT_STS = 'A'
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
+      AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+      AND CLNT_TYP_CD = 1
+),
+vm AS (
+    -- first SF unsub per client: its date AND its sending campaign MNE
+    SELECT CLNT_NO, unsub_dt, mne
+    FROM (
+        SELECT m.CLNT_NO,
+               CAST(e.disposition_dt_tm AS DATE)  AS unsub_dt,
+               SUBSTR(e.TREATMENT_ID, 8, 3)       AS mne,
+               ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO
+                                  ORDER BY e.disposition_dt_tm ASC,
+                                           e.TREATMENT_ID ASC) AS rn
+        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                      AND CLNT_NO IS NOT NULL) m
+          ON  m.consumer_id_hashed = e.consumer_id_hashed
+          AND m.TREATMENT_ID       = e.TREATMENT_ID
+        WHERE e.disposition_cd = 4
+          AND e.disposition_dt_tm >= DATE '2024-09-01'
+          AND e.disposition_dt_tm <  DATE '2026-08-01'
+          AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+          AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+    ) t
+    WHERE rn = 1
+),
+cohort AS (
+    SELECT vm.CLNT_NO, vm.unsub_dt, vm.mne
+    FROM a
+    INNER JOIN b   ON b.CLNT_NO   = a.CLNT_NO
+    INNER JOIN u_a ON u_a.CLNT_NO = a.CLNT_NO
+    INNER JOIN u_b ON u_b.CLNT_NO = a.CLNT_NO
+    INNER JOIN vm  ON vm.CLNT_NO  = a.CLNT_NO
+    WHERE a.cons_a = 5001
+      AND b.cons_b = 5001
+),
+wr AS (
+    -- one row per cohort client who has at least one opt-out write (any gate)
+    -- within [-1, +14] days of their first unsub; did any of them hit 1012?
+    SELECT c.CLNT_NO,
+           MAX(CASE WHEN w.PREF_ID = 1012 THEN 1 ELSE 0 END) AS wrote_1012,
+           MAX(CASE WHEN w.PREF_ID <> 1012 THEN 1 ELSE 0 END) AS wrote_other
+    FROM cohort c
+    INNER JOIN DDWV01.CPC_RB_PREF w
+      ON  w.CLNT_NO = c.CLNT_NO
+      AND w.CLNT_CONSENT_TYP = 5002
+      AND CAST(w.CHG_TMSTMP AS DATE) >= c.unsub_dt - 1
+      AND CAST(w.CHG_TMSTMP AS DATE) <= c.unsub_dt + 14
+    WHERE w.CHG_TMSTMP >= DATE '2024-08-01'   -- scan floor; window starts 2024-09
+    GROUP BY c.CLNT_NO
+)
+SELECT CASE WHEN c.mne IN ('VRE', 'VME', 'VRG')   -- EDIT ME: extend from mapping Mne.csv
+            THEN 'Loyalty send' ELSE 'Other send' END          AS send_family,
+       CASE WHEN wr.CLNT_NO IS NULL               THEN '1. no write on ANY gate - never saw the page'
+            WHEN wr.wrote_1012 = 1                THEN '2. wrote 1012 in-window - late/reverted edge'
+            ELSE                                       '3. wrote OTHER gate only - chose a different gate on the page'
+       END                                                     AS page_outcome,
+       CAST(COUNT(*) AS BIGINT)                                AS n_clients,
+       CAST(100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS DECIMAL(5,1)) AS pct
+FROM cohort c
+LEFT JOIN wr ON wr.CLNT_NO = c.CLNT_NO
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
 -- ============================================================================
 -- APPENDIX: UCP QUERIES (Spark SQL over ucp4 parquet - UCP's only home;
 -- not runnable in Teradata/Starburst. View registration, the single Python line:
