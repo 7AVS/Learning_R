@@ -76,6 +76,10 @@ WITH act AS (
     WHERE CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted - CHAR column
       AND SNAP_DT >= DATE '2024-01-31'
       AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
+      AND CLNT_TYP = 1   -- PERSONAL only (Andre 2026-08-21: every query, every number).
+                         -- Source: RB_CLNT_DLY type code; Q0 shows type 1 = 29.4M
+                         -- (personal-scale) vs type 2 = 3.9M. CPC-side queries use
+                         -- CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY for the same cut.
 ),
 base AS (
     SELECT m.CLNT_NO,
@@ -155,6 +159,10 @@ WITH act AS (
     WHERE CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted - CHAR column
       AND SNAP_DT >= DATE '2024-01-31'
       AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
+      AND CLNT_TYP = 1   -- PERSONAL only (Andre 2026-08-21: every query, every number).
+                         -- Source: RB_CLNT_DLY type code; Q0 shows type 1 = 29.4M
+                         -- (personal-scale) vs type 2 = 3.9M. CPC-side queries use
+                         -- CLNT_TYP_CD = 1 on CPC_RB_PREF_MTHLY for the same cut.
 ),
 standing AS (
     SELECT TRIM(EXTRACT(YEAR FROM MTH_END_DT)) || '-' ||
