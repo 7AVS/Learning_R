@@ -116,8 +116,12 @@ sends AS (
     GROUP BY 1, 2
 ),
 unsub_ranked AS (
+    -- ONE row per client for the ENTIRE window (Andre 2026-08-24): rank across
+    -- all months, keep only the FIRST unsub ever - a client unsubbing Jan and
+    -- again Oct counts ONCE, in Jan, under the first unsub's MNE. Window total
+    -- now = unique unsubscribing clients (was client-months before).
     SELECT evt_month, CLNT_NO, mne,
-           ROW_NUMBER() OVER (PARTITION BY CLNT_NO, evt_month
+           ROW_NUMBER() OVER (PARTITION BY CLNT_NO
                               ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn
     FROM base
     WHERE disposition_cd = 4
