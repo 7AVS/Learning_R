@@ -116,26 +116,32 @@ sends AS (
     GROUP BY 1, 2
 ),
 unsub_ranked AS (
-    -- ONE row per client for the ENTIRE window (Andre 2026-08-24): rank across
-    -- all months, keep only the FIRST unsub ever - a client unsubbing Jan and
-    -- again Oct counts ONCE, in Jan, under the first unsub's MNE. Window total
-    -- now = unique unsubscribing clients (was client-months before).
+    -- TWO ranks per unsub row (Andre 2026-08-24):
+    --   rn_month  - first per client per MONTH  -> monthly view (a client counts
+    --               once each month they unsub; repeats across months reappear)
+    --   rn_window - first per client EVER       -> unique view (client counts
+    --               once in the whole window, in the month + MNE of their first
+    --               unsub; window sum = unique unsubscribing clients)
     SELECT evt_month, CLNT_NO, mne,
+           ROW_NUMBER() OVER (PARTITION BY CLNT_NO, evt_month
+                              ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn_month,
            ROW_NUMBER() OVER (PARTITION BY CLNT_NO
-                              ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn
+                              ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn_window
     FROM base
     WHERE disposition_cd = 4
 ),
 unsubs AS (
-    SELECT evt_month, mne, CAST(COUNT(*) AS BIGINT) AS unsub_clients
+    SELECT evt_month, mne,
+           CAST(SUM(CASE WHEN rn_month  = 1 THEN 1 ELSE 0 END) AS BIGINT) AS unsub_clients,
+           CAST(SUM(CASE WHEN rn_window = 1 THEN 1 ELSE 0 END) AS BIGINT) AS first_unsub_clients
     FROM unsub_ranked
-    WHERE rn = 1
     GROUP BY 1, 2
 )
 SELECT COALESCE(s.evt_month, un.evt_month) AS evt_month,
        COALESCE(s.mne, un.mne)             AS mne,
        COALESCE(s.sent_clients, 0)         AS sent_clients,
-       COALESCE(un.unsub_clients, 0)       AS unsub_clients
+       COALESCE(un.unsub_clients, 0)       AS unsub_clients,
+       COALESCE(un.first_unsub_clients, 0) AS first_unsub_clients
 FROM sends s
 FULL OUTER JOIN unsubs un
   ON un.evt_month = s.evt_month AND un.mne = s.mne
