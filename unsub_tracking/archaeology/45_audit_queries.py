@@ -62,6 +62,23 @@ def style_ax(ax):
 print("Setup complete.")
 
 
+# %% [0b] EDW connect - standard teradatasql/LDAP; skipped when the kernel
+# already carries a live EDW session (the usual case in the work env).
+try:
+    EDW  # noqa: B018 - existence probe
+    print("EDW already connected - skipping.")
+except NameError:
+    import getpass
+    import teradatasql
+    EDW = teradatasql.connect(
+        host="edw",                      # PROD Teradata (LDAP profile)
+        user=input("EDW user id: "),
+        password=getpass.getpass("EDW password: "),
+        logmech="LDAP",
+    )
+    print("EDW connected.")
+
+
 # %% [1] Q0 - universe codes probe (informational). Only CLNT_STS='A' feeds the
 # status CTEs used in Q1/Q2/Q3 (act, u_a, u_b); CLNT_TYP plays no role there -
 # personal-vs-non comes from CLNT_TYP_CD=1 on CPC_RB_PREF_MTHLY instead. If
