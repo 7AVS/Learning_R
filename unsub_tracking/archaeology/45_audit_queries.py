@@ -62,21 +62,24 @@ def style_ax(ax):
 print("Setup complete.")
 
 
-# %% [0b] EDW connect - standard teradatasql/LDAP; skipped when the kernel
-# already carries a live EDW session (the usual case in the work env).
+# %% [0b] connect + proof round-trip (standard cell - same as packs 32/33/unsub_unified)
 try:
-    EDW  # noqa: B018 - existence probe
-    print("EDW already connected - skipping.")
-except NameError:
-    import getpass
     import teradatasql
-    EDW = teradatasql.connect(
-        host="edw",                      # PROD Teradata (LDAP profile)
-        user=input("EDW user id: "),
-        password=getpass.getpass("EDW password: "),
-        logmech="LDAP",
-    )
-    print("EDW connected.")
+except ImportError:
+    get_ipython().system("pip install teradatasql -i https://artifactory.fg.rbc.com/artifactory/api/pypi/pypi-remote/simple --trusted-host artifactory.fg.rbc.com")
+    import teradatasql
+import getpass
+
+username = input("Enter your username: ")
+password = getpass.getpass("Enter your password: ")
+
+TD_HOST = "Teradata-dns-sysa.fg.rbc.com"
+EDW = teradatasql.connect(host=TD_HOST, user=username, password=password, logmech="LDAP")
+
+_cur = EDW.cursor()
+_cur.execute("SELECT 1")
+print("EDW round-trip returned:", _cur.fetchall())
+_cur.close()
 
 
 # %% [1] Q0 - universe codes probe (informational). Only CLNT_STS='A' feeds the
