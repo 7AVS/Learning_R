@@ -1153,7 +1153,13 @@ SELECT sf.CLNT_NO,
        p.CLNT_CONSENT_TYP,
        p.APP_SYS_CD,
        p.CHG_TMSTMP,
-       CASE WHEN p.CLNT_NO IS NULL THEN 'NOT_IN_CPC' ELSE 'IN_CPC' END AS cpc_presence
+       CASE WHEN p.CLNT_NO IS NULL THEN 'NOT_IN_CPC' ELSE 'IN_CPC' END AS cpc_presence,
+       -- client-level flag across ALL gates: 1 = at least one CPC write after the unsub click
+       MAX(CASE WHEN p.CHG_TMSTMP > sf.disposition_dt_tm THEN 1 ELSE 0 END)
+           OVER (PARTITION BY sf.CLNT_NO, sf.disposition_dt_tm)              AS cpc_write_after_unsub
 FROM sf
 LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = sf.CLNT_NO
+-- TOGGLE: 0 = clients with NO CPC write after the click (incl. NOT_IN_CPC)
+--         1 = clients where CPC DID move after the click
+QUALIFY cpc_write_after_unsub = 0
 ORDER BY sf.CLNT_NO, sf.disposition_dt_tm, p.PREF_ID;
