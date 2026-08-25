@@ -586,6 +586,302 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 
 
+/* ============================================================================
+[Q3b] WATERFALL v3 - gray bar without the Aug-24 precondition (2026-08-25)
+     Q3 v2's seg_email_sf_open required the client to be 5001 AND active at
+     BOTH the Aug-24 AND Jul-26 anchors before a Salesforce unsub counted
+     against it. That start-book precondition means a client who ENTERED the
+     5001-active book in-window (new joiner, or 5002/5003/NULL -> 5001, or
+     inactive -> active) and then unsubbed in Salesforce was counted in
+     new_5001 and never subtracted - end_contactable overstated, gray bar
+     understated. v3 makes seg_email_sf_open an END-state-only property
+     (5001 AND active at Jul-26 AND a Salesforce unsub on record, no
+     precondition on the Aug-24 side) and splits it into its two components:
+       seg_email_sf_open_startbook - the v2 definition (must reproduce v2's
+                                      420,561 on the 2026-08-21 run)
+       seg_email_sf_open_entered   - the clients v2 missed (subset of new_5001)
+     Q3 v2 stays as shipped, unchanged above; v3 is additive, run separately.
+     Same CTEs as Q3 (u_a, u_b, a, b, v, j), verbatim - only the SELECT
+     differs (seg_email_sf_open, seg_email_sf_open_startbook,
+     seg_email_sf_open_entered, and end_contactable).
+============================================================================ */
+WITH u_a AS (
+    -- Universe at the START anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Aug-24 side (`a` below).
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31'
+      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+),
+u_b AS (
+    -- Universe at the END anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Jul-26 side (`b` below).
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31'
+      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
+      AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+      AND CLNT_TYP_CD = 1
+),
+v AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-09-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (
+    -- One row per client appearing in `a` and/or `b`. active_a/active_b are
+    -- looked up per-anchor against u_a/u_b (no single inner-joined universe
+    -- anymore - a client's book status can differ across the two dates).
+    -- writer_b is APP_SYS_CD from `b` - the system that wrote the Jul-26 row.
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO)                        AS CLNT_NO,
+           a.cons_a,
+           b.cons_b,
+           b.APP_SYS_CD                                          AS writer_b,
+           CASE WHEN ua.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_a,
+           CASE WHEN ub.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_b,
+           CASE WHEN v.CLNT_NO  IS NOT NULL THEN 1 ELSE 0 END    AS vendor_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN u_a ua ON ua.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_b ub ON ub.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN v       ON v.CLNT_NO  = COALESCE(a.CLNT_NO, b.CLNT_NO)
+)
+SELECT
+    -- start bar: cons=5001 AND active, at the Aug-24 anchor
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS start_5001_aug24,
+
+    -- additions: wasn't (5001 AND active) at the start, but is at the end -
+    -- covers both newly-consented clients and previously-inactive clients
+    -- who came back active while already sitting on 5001. Written as an
+    -- explicit disjunction (not NOT(...)) so a NULL cons_a (client absent
+    -- from `a` entirely) reads as "not in book", not as unknown/excluded.
+    CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+                   AND cons_b = 5001 AND active_b = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS new_5001,
+
+    -- 1. left the active book - checked first, takes precedence over consent
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_inactive,
+
+    -- 2. closed by CPC/email backfeed (7020), no Salesforce record
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002
+                   AND writer_b = 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_cpc,
+
+    -- 3. closed AND has a Salesforce unsub record, any writer
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_overlap,
+
+    -- 4. closed by a writer other than 7020, no Salesforce record.
+    -- COALESCE(writer_b, -1) so a NULL writer_b lands here (not silently
+    -- dropped) - this keeps segs 2/3/4 a full partition of the
+    -- active_b=1, cons_b=5002 space regardless of writer nullability.
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1 AND cons_b = 5002
+                   AND COALESCE(writer_b, -1) <> 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_ac_branch,
+
+    -- 5. still active, but landed on a consent value that's neither
+    -- 5001 nor 5002 (blank/other/NULL) - no consent value silently vanishes
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND active_b = 1
+                   AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS left_other,
+
+    -- inside end_5001_jul26 (5001 AND active at the Jul-26 anchor) but carries
+    -- a Salesforce unsub record - a contactable adjustment, NOT a departure.
+    -- v3 (2026-08-25): the start-book precondition (cons_a = 5001 AND
+    -- active_a = 1) is GONE. v2 required it, so a client who ENTERED the
+    -- 5001-active book in-window (new joiner, or 5002/5003/NULL -> 5001, or
+    -- inactive -> active) and then unsubbed in Salesforce was counted in
+    -- new_5001 and never subtracted: end_contactable overstated, gray bar
+    -- understated. The gray bar is a property of the END state only.
+    CAST(SUM(CASE WHEN cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_sf_open,
+
+    -- decomposition (a): the v2 definition - start-book clients still 5001
+    -- AND active at Jul-26 with a Salesforce unsub. Must reproduce the v2
+    -- number (420,561 on the 2026-08-21 run).
+    CAST(SUM(CASE WHEN cons_a = 5001 AND active_a = 1
+                   AND cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_sf_open_startbook,
+
+    -- decomposition (b): the clients v2 missed - not (5001 AND active) at
+    -- Aug-24 (same explicit disjunction as new_5001, NULL-safe), 5001 AND
+    -- active at Jul-26, Salesforce unsub. A subset of new_5001.
+    -- ASSERT: seg_email_sf_open_startbook + seg_email_sf_open_entered
+    --         = seg_email_sf_open (the two conditions partition cons_a/active_a).
+    CAST(SUM(CASE WHEN (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+                   AND cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS seg_email_sf_open_entered,
+
+    -- end bar (official): cons=5001 AND active, at the Jul-26 anchor
+    CAST(SUM(CASE WHEN cons_b = 5001 AND active_b = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                              AS end_5001_jul26,
+
+    -- end bar (contactable): official end minus ALL 5001/active-at-Jul-26
+    -- clients that carry a Salesforce unsub record (= the v3 seg_email_sf_open,
+    -- no start-book precondition - same expression, re-derived inline)
+    CAST((SUM(CASE WHEN cons_b = 5001 AND active_b = 1 THEN 1 ELSE 0 END)
+        - SUM(CASE WHEN cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                    THEN 1 ELSE 0 END)) AS BIGINT)                           AS end_contactable
+FROM j;
+
+
+/* ============================================================================
+[Q3c] Q1 <-> Q3 BRIDGE - where do the Salesforce unsubbers sit in the waterfall?
+     (2026-08-25.) Q1 first_unsub_clients (live rerun, Aug-24..Jul-26) came in
+     at ~494K unique clients; Q3 v2 showed gray bar 420,561 + seg_overlap
+     8,604 = 429,165. This query takes the SAME client-level CTE Q3 uses
+     (cons_a, active_a, cons_b, active_b, vendor_unsub), keeps vendor_unsub = 1
+     only, and buckets every client by its two-anchor state so the partition
+     is complete (G is the catch-all).
+     Reading:
+       SUM(clients) over all buckets = Q1-style unique vendor unsubbers that
+                                       are visible to the Q3 universe
+       A + B                        = Q3b v3 seg_email_sf_open (gray bar)
+       A                            = seg_email_sf_open_startbook (v2 gray bar)
+       B                            = seg_email_sf_open_entered
+       D                            = seg_overlap
+       A + D                        = v2 gray bar + seg_overlap (the 429,165)
+       C, E, F, G                   = the rest of the Q1 - Q3 gap
+     LABEL NOTE (exact, all four map 1:1 to Q3/Q3b columns):
+       A = seg_email_sf_open_startbook, B = seg_email_sf_open_entered,
+       D = seg_overlap, A + B = seg_email_sf_open (v3, from Q3b).
+       C and E are SF-unsub SUBSETS of seg_inactive / left_other (not equal
+       to them - those columns also include non-SF-unsub clients).
+       G MUST BE 0 - the CASE below is a full A-F partition of the space; a
+       non-zero G means a bucket's condition is wrong, investigate before
+       trusting the bridge.
+     WINDOW WARNING: the bridge is NOT expected to close to Q1's 494K, and
+     moving VENDOR_FLOOR alone will not close it. Three structural differences
+     between Q1's first_unsub_clients leg and Q3c's `v`:
+       1. Q1 scans disposition_dt_tm from DATE '2024-01-01' and keeps each
+          client's FIRST-EVER unsub (ROW_NUMBER PARTITION BY CLNT_NO); clients
+          whose first unsub fell Jan-Jul 2024 are excluded from Q1's 494K but
+          Q3c counts ANY disposition-4 in-window (no first-ever rule).
+       2. Q1's MASTER TREATMENT_ID prefix range is '2023274'..'2026212';
+          Q3c's is '2024153'..'2026212' - unsubs against Oct-23..May-24 sends
+          are in Q1, never in Q3c.
+       3. Q1 gates active status at each event's own month-end; Q3c gates at
+          the two fixed anchors (Aug-24, Jul-26).
+     Read the bridge as BUCKET SUMS reconciling to Q3/Q3b columns (A, A+B, A+D
+     are exact), not as a reconciliation to Q1's total. VENDOR_FLOOR in `v` is
+     left as a marked literal (Q3/Q3b use 2024-09-01, post-anchor unsubs only).
+     Output: <= 7 rows, bucket + clients.
+============================================================================ */
+WITH u_a AS (
+    -- Universe at the START anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Aug-24 side (`a` below).
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31'
+      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+),
+u_b AS (
+    -- Universe at the END anchor: CLNT_STS is CHAR, 'A' = active; status
+    -- date matches the CPC anchor MTH_END_DT on the Jul-26 side (`b` below).
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31'
+      AND CLNT_STS = 'A'   -- Q0 2026-08-21: A=14.86M, I=14.07M, null=463K (CLNT_TYP=1); quoted — CHAR column
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31'
+      AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31'
+      AND CLNT_TYP_CD = 1
+),
+v AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-09-01'   -- <<< VENDOR_FLOOR: Q3/Q3b use 2024-09-01; set DATE '2024-08-01' to include Aug-24 (the first month of the Q1 rerun sum); Q1 itself scans from 2024-01-01 with a first-ever rule, so this will still not close to 494K - see WINDOW WARNING.
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (
+    -- One row per client appearing in `a` and/or `b`. active_a/active_b are
+    -- looked up per-anchor against u_a/u_b (no single inner-joined universe
+    -- anymore - a client's book status can differ across the two dates).
+    -- writer_b is APP_SYS_CD from `b` - the system that wrote the Jul-26 row.
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO)                        AS CLNT_NO,
+           a.cons_a,
+           b.cons_b,
+           b.APP_SYS_CD                                          AS writer_b,
+           CASE WHEN ua.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_a,
+           CASE WHEN ub.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_b,
+           CASE WHEN v.CLNT_NO  IS NOT NULL THEN 1 ELSE 0 END    AS vendor_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN u_a ua ON ua.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_b ub ON ub.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN v       ON v.CLNT_NO  = COALESCE(a.CLNT_NO, b.CLNT_NO)
+)
+SELECT
+    CASE
+        WHEN cons_a = 5001 AND active_a = 1 AND cons_b = 5001 AND active_b = 1
+            THEN CAST('A start-book, still 5001 active (gray bar startbook)' AS VARCHAR(80))
+        WHEN (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+             AND cons_b = 5001 AND active_b = 1
+            THEN 'B entered book in-window, 5001 active at Jul-26 (gray bar entered)'
+        WHEN cons_a = 5001 AND active_a = 1 AND active_b = 0
+            THEN 'C start-book, went inactive by Jul-26 (seg_inactive, SF-unsub subset)'
+        WHEN cons_a = 5001 AND active_a = 1 AND active_b = 1 AND cons_b = 5002
+            THEN 'D start-book, closed 5002 by Jul-26 (seg_overlap)'
+        WHEN cons_a = 5001 AND active_a = 1 AND active_b = 1
+             AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+            THEN 'E start-book, other consent at Jul-26 (left_other, SF-unsub subset)'
+        WHEN (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+             AND (cons_b IS NULL OR cons_b <> 5001 OR active_b = 0)
+            THEN 'F never 5001-active at either anchor (invisible to waterfall)'
+        -- G is a guard: A-F partition the space, so G should be 0 rows / 0 clients
+        ELSE 'G unreachable guard - expect 0'
+    END                                                                     AS bucket,
+    CAST(COUNT(*) AS BIGINT)                                                AS clients
+FROM j
+WHERE vendor_unsub = 1
+GROUP BY 1
+ORDER BY 1;
+
+
 -- ============================================================================
 -- APPENDIX: UCP QUERIES (Spark SQL over ucp4 parquet - UCP's only home;
 -- not runnable in Teradata/Starburst. View registration, the single Python line:
