@@ -1163,3 +1163,46 @@ LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = sf.CLNT_NO
 --         1 = clients where CPC DID move after the click
 QUALIFY cpc_write_after_unsub = 0
 ORDER BY sf.CLNT_NO, sf.disposition_dt_tm, p.PREF_ID;
+
+/* ---------------------------------------------------------------------------
+[Q6d] SUMMARY of Q6c - Feb-2026 SF unsubbers (personal-active), one row per
+      client: did ANY CPC gate get written after the unsub click?
+      3 rows max. Same sf CTE as Q6c.
+--------------------------------------------------------------------------- */
+WITH u_feb AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-02-28' AND CLNT_STS = 'A' AND CLNT_TYP = 1
+),
+sf AS (
+    SELECT m.CLNT_NO, e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2025305' AND '2026059'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u_feb ON u_feb.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-02-01'
+      AND e.disposition_dt_tm <  DATE '2026-03-01'
+),
+-- one row per client: first click in Feb, and whether any gate moved after it
+per_client AS (
+    SELECT s.CLNT_NO,
+           MIN(s.disposition_dt_tm)                                          AS first_unsub_dt_tm,
+           MAX(CASE WHEN p.CLNT_NO IS NULL THEN 1 ELSE 0 END)                AS not_in_cpc,
+           MAX(CASE WHEN p.CHG_TMSTMP > s.disposition_dt_tm THEN 1 ELSE 0 END) AS cpc_write_after_unsub
+    FROM sf s
+    LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = s.CLNT_NO
+    GROUP BY s.CLNT_NO
+)
+SELECT CAST('2026-02' AS VARCHAR(20))                                        AS cohort_month,
+       CASE WHEN not_in_cpc = 1               THEN CAST('NOT_IN_CPC' AS VARCHAR(40))
+            WHEN cpc_write_after_unsub = 1    THEN 'CPC_WRITE_AFTER_UNSUB'
+            ELSE                                   'NO_CPC_WRITE_AFTER_UNSUB' END AS cpc_reaction,
+       CAST(COUNT(*) AS BIGINT)                                              AS clients
+FROM per_client
+GROUP BY 2
+ORDER BY 2;
