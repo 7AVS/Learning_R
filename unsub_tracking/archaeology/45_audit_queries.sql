@@ -1107,3 +1107,53 @@ SELECT dc.CLNT_NO,
 FROM disagree_clients dc
 INNER JOIN gate_latest g ON g.CLNT_NO = dc.CLNT_NO
 ORDER BY dc.CLNT_NO, g.PREF_ID;
+
+/* ---------------------------------------------------------------------------
+[Q6c] EVIDENCE FILE, SIMPLE VERSION (2026-08-25, replaces Q6a/Q6b for the share-out)
+      Feb-2026 Salesforce unsubs (disposition_cd = 4), personal-active at
+      2026-02-28, then EVERY CPC_RB_PREF row for those clients - all gates,
+      no 1012 isolation, no disagreement filter. Andre picks the sample.
+      One row per (SF unsub event x CPC pref row). Clients with NO CPC row
+      at all still appear once, with CPC columns NULL.
+      Why lighter than Q6a: MASTER scan narrowed to sends from Nov-2025 on
+      (an unsub in Feb-26 rides a send from the prior ~90 days; widen the
+      prefix floor if the Feb count looks short). No SAMPLE / TOP.
+--------------------------------------------------------------------------- */
+WITH u_feb AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-02-28' AND CLNT_STS = 'A' AND CLNT_TYP = 1
+),
+sf AS (
+    -- Salesforce side: the unsub click, with hash id, email, treatment id
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.email_addr, m.TREATMENT_ID,
+           SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+           e.disposition_cd, e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO, email_addr
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2025305' AND '2026059'   -- Nov-25 .. Feb-26 sends
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u_feb ON u_feb.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-02-01'
+      AND e.disposition_dt_tm <  DATE '2026-03-01'
+)
+SELECT sf.CLNT_NO,
+       sf.consumer_id_hashed,
+       sf.email_addr,
+       sf.TREATMENT_ID,
+       sf.mne,
+       sf.disposition_cd,
+       sf.disposition_dt_tm,
+       -- CPC side: every gate the client has, current position + who wrote it + when
+       p.PREF_ID,
+       p.CLNT_CONSENT_TYP,
+       p.APP_SYS_CD,
+       p.CHG_TMSTMP,
+       CASE WHEN p.CLNT_NO IS NULL THEN 'NOT_IN_CPC' ELSE 'IN_CPC' END AS cpc_presence
+FROM sf
+LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = sf.CLNT_NO
+ORDER BY sf.CLNT_NO, sf.disposition_dt_tm, p.PREF_ID;

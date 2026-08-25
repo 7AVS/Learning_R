@@ -1255,3 +1255,48 @@ print(df_q6a["disagreement_type"].value_counts())
 print(f"Q6b: {len(df_q6b):,} gate rows across {df_q6b['CLNT_NO'].nunique():,} distinct clients "
       f"({len(df_q6b) / max(df_q6b['CLNT_NO'].nunique(), 1):.1f} gates/client avg)")
 print(f"G (unreachable guard): {q3c_g:,.0f} - {'OK, partition holds' if q3c_g == 0 else 'BROKEN - non-zero G, investigate bucket logic'}")
+
+# %% [10] Q6c - evidence file, simple version: Feb-2026 SF unsubs x EVERY CPC_RB_PREF
+# row for those clients (all gates, no 1012 isolation, no filter, no row cap).
+sql_q6c = """
+WITH u_feb AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-02-28' AND CLNT_STS = 'A' AND CLNT_TYP = 1
+),
+sf AS (
+    SELECT m.CLNT_NO, m.consumer_id_hashed, m.email_addr, m.TREATMENT_ID,
+           SUBSTR(m.TREATMENT_ID, 8, 3) AS mne,
+           e.disposition_cd, e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO, email_addr
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2025305' AND '2026059'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u_feb ON u_feb.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-02-01'
+      AND e.disposition_dt_tm <  DATE '2026-03-01'
+)
+SELECT sf.CLNT_NO,
+       sf.consumer_id_hashed,
+       sf.email_addr,
+       sf.TREATMENT_ID,
+       sf.mne,
+       sf.disposition_cd,
+       sf.disposition_dt_tm,
+       p.PREF_ID,
+       p.CLNT_CONSENT_TYP,
+       p.APP_SYS_CD,
+       p.CHG_TMSTMP,
+       CASE WHEN p.CLNT_NO IS NULL THEN 'NOT_IN_CPC' ELSE 'IN_CPC' END AS cpc_presence
+FROM sf
+LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = sf.CLNT_NO
+ORDER BY sf.CLNT_NO, sf.disposition_dt_tm, p.PREF_ID
+"""
+df_q6c = edw_query(sql_q6c)
+print("Q6c rows:", len(df_q6c), "| clients:", df_q6c["CLNT_NO"].nunique(),
+      "| not in CPC:", (df_q6c["cpc_presence"] == "NOT_IN_CPC").sum())
+display(df_q6c)
