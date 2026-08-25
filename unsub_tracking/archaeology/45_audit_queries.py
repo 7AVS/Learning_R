@@ -1351,3 +1351,52 @@ ORDER BY 2
 df_q6d = edw_query(sql_q6d)
 print("Q6d total clients:", int(df_q6d["clients"].sum()))
 display(df_q6d)
+
+# %% [12] Q6e - Q6d expanded to Jan..Jun 2026, per cohort month. 18 rows max.
+sql_q6e = """
+WITH sf AS (
+    SELECT m.CLNT_NO, e.disposition_dt_tm,
+           TRUNC(CAST(e.disposition_dt_tm AS DATE), 'MM')                    AS cohort_month,
+           LAST_DAY(CAST(e.disposition_dt_tm AS DATE))                       AS month_end
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2025274' AND '2026181'   -- Oct-25 .. Jun-26 sends
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-01-01'    -- PARAM window start
+      AND e.disposition_dt_tm <  DATE '2026-07-01'    -- PARAM window end (exclusive)
+),
+-- personal-active at the month-end of the click month
+sf_u AS (
+    SELECT s.*
+    FROM sf s
+    INNER JOIN DDWV01.RB_CLNT_DLY c
+      ON  c.CLNT_NO = s.CLNT_NO
+      AND c.SNAP_DT = s.month_end
+      AND c.CLNT_STS = 'A' AND c.CLNT_TYP = 1
+),
+-- one row per (client, cohort month): any gate written after the click?
+per_client AS (
+    SELECT s.CLNT_NO, s.cohort_month,
+           MAX(CASE WHEN p.CLNT_NO IS NULL THEN 1 ELSE 0 END)                  AS not_in_cpc,
+           MAX(CASE WHEN p.CHG_TMSTMP > s.disposition_dt_tm THEN 1 ELSE 0 END) AS cpc_write_after_unsub
+    FROM sf_u s
+    LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = s.CLNT_NO
+    GROUP BY s.CLNT_NO, s.cohort_month
+)
+SELECT cohort_month,
+       CASE WHEN not_in_cpc = 1               THEN CAST('NOT_IN_CPC' AS VARCHAR(40))
+            WHEN cpc_write_after_unsub = 1    THEN 'CPC_WRITE_AFTER_UNSUB'
+            ELSE                                   'NO_CPC_WRITE_AFTER_UNSUB' END AS cpc_reaction,
+       CAST(COUNT(*) AS BIGINT)                                              AS clients
+FROM per_client
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+df_q6e = edw_query(sql_q6e)
+display(df_q6e)
+display(df_q6e.pivot_table(index="cohort_month", columns="cpc_reaction", values="clients",
+                           aggfunc="sum", fill_value=0, margins=True))
