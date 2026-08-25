@@ -918,3 +918,192 @@ ORDER BY 1;
 -- FROM cpc5001_aug24 c
 -- LEFT JOIN ucp_2024_08_31 u ON c.CLNT_NO = u.CLNT_NO
 -- GROUP BY 1, 2;
+
+
+/* ============================================================================
+[Q6] SF-VS-CPC DISAGREEMENT, FEB-2026 - client-level evidence rows where
+     Salesforce says "unsubscribed" (disposition_cd=4) but CPC 1012 still
+     reads open (5001) or the client has no 1012 row at all (2026-08-25).
+     Personal-active universe, same u_b / CLNT_TYP pattern as Q1's act CTE
+     and Q3's u_a/u_b (Andre 2026-08-21 rule - CLNT_TYP=1 on RB_CLNT_DLY AND
+     CLNT_TYP_CD=1 on the CPC read). MASTER range widened to Q1's
+     '2023274'..'2026212' (not Q3's narrower '2024153' start) - a Feb-2026
+     click can reference an older triggered treatment; narrowing to Q3's
+     range risks silently dropping real disagreement rows from this evidence
+     file. email_addr lives on MASTER only (EVENT has no email column - see
+     schemas/vendor_feedback_tables_schema.md); MASTER grain is NOT verified
+     1:1 (same doc), so the DISTINCT below can still fan out on email_addr if
+     a (consumer_id_hashed, TREATMENT_ID) pair carries >1 email row - check
+     row counts before trusting a 1:1 read.
+
+     Q6a = OUTPUT A: one row per (client, SF unsub event) in Feb-2026, with
+     the client's latest CPC 1012 position attached. cons_1012_latest is the
+     CLNT_CONSENT_TYP at that client's MAX(MTH_END_DT) on
+     DDWV01.CPC_RB_PREF_MTHLY (task-specified source for Output A). No row
+     cap - full population returned, Andre samples/filters downstream.
+     disagreement_type: 'CPC_1012_OPEN' = CPC still shows 5001 despite the SF
+     unsub; 'NOT_IN_CPC' = client has no PREF_ID=1012 row on the monthly
+     table at all (LEFT JOIN miss).
+============================================================================ */
+WITH u_feb AS (
+    -- personal-active universe at Feb-2026 month-end (Q1's act-CTE pattern,
+    -- single month here since the whole population is Feb-2026 dispositions)
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-02-28'
+      AND CLNT_STS = 'A'
+      AND CLNT_TYP = 1
+),
+sf_feb AS (
+    -- Salesforce disposition-4 (unsubscribed) events in Feb-2026, locked
+    -- EVENT+MASTER merge (identical filters to Q1/Q3's v/base), email_addr
+    -- carried through from MASTER
+    SELECT m.CLNT_NO,
+           m.consumer_id_hashed,
+           m.email_addr,
+           e.TREATMENT_ID,
+           SUBSTR(e.TREATMENT_ID, 8, 3) AS mne,
+           e.disposition_cd,
+           e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO, email_addr
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u_feb ON u_feb.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-02-01'
+      AND e.disposition_dt_tm <  DATE '2026-03-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+cpc1012_latest AS (
+    -- latest CPC 1012 position per client (max MTH_END_DT), Q3's a/b filter
+    -- pattern (PREF_ID=1012, CLNT_TYP_CD=1); ROW_NUMBER + outer WHERE rn=1,
+    -- same idiom as Q1/Q4/Q5's rn CTEs (repo convention avoids QUALIFY)
+    SELECT CLNT_NO, cons_1012_latest, writer_1012_latest, mth_end_1012_latest
+    FROM (
+        SELECT CLNT_NO,
+               CLNT_CONSENT_TYP AS cons_1012_latest,
+               APP_SYS_CD       AS writer_1012_latest,
+               MTH_END_DT       AS mth_end_1012_latest,
+               ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY MTH_END_DT DESC) AS rn
+        FROM DDWV01.CPC_RB_PREF_MTHLY
+        WHERE PREF_ID = 1012
+          AND CLNT_TYP_CD = 1
+    ) t
+    WHERE rn = 1
+)
+SELECT sf.CLNT_NO,
+       sf.consumer_id_hashed,
+       sf.email_addr,
+       sf.TREATMENT_ID,
+       sf.mne,
+       sf.disposition_cd,
+       sf.disposition_dt_tm,
+       TRUNC(sf.disposition_dt_tm, 'MM')     AS cohort_month,
+       c.cons_1012_latest,
+       c.writer_1012_latest,
+       c.mth_end_1012_latest,
+       CASE WHEN c.cons_1012_latest = 5001 THEN 'CPC_1012_OPEN'
+            WHEN c.cons_1012_latest IS NULL THEN 'NOT_IN_CPC'
+       END                                   AS disagreement_type
+FROM sf_feb sf
+LEFT JOIN cpc1012_latest c ON c.CLNT_NO = sf.CLNT_NO
+WHERE c.cons_1012_latest = 5001 OR c.cons_1012_latest IS NULL
+ORDER BY sf.disposition_dt_tm;
+
+
+/* ----------------------------------------------------------------------------
+[Q6b] OUTPUT B - long format, ALL PREF_ID gates for the SAME disagreement
+      clients from Q6a (same u_feb/sf_feb/cpc1012_latest CTEs, repeated
+      verbatim - repo convention across Q3/Q3b/Q3c). One row per
+      (CLNT_NO, PREF_ID) at each client's LATEST position. No row cap.
+
+      TABLE CHOICE: uses DDWV01.CPC_RB_PREF, not CPC_RB_PREF_MTHLY - Q5
+      already reads CPC_RB_PREF for write-level detail (CHG_TMSTMP), and
+      the schema doc (schemas/cpc_rb_pref_log_schema.md) names it the
+      CURRENT-STATE snapshot: one row per (CLNT_NO, PREF_ID) already at its
+      latest value, no need to hunt for a max MTH_END_DT, and it is more
+      current than the monthly table between month-ends. Output column is
+      latest_chg_tmstmp (from CHG_TMSTMP), not MTH_END_DT - there is no
+      MTH_END_DT on this table. consumer_id_hashed is not a CPC column (CPC
+      keys on CLNT_NO only per the schema doc) - carried in from the SF
+      event side, one pick per client (latest event) via ROW_NUMBER, and
+      present on every output row.
+---------------------------------------------------------------------------- */
+WITH u_feb AS (
+    SELECT DISTINCT CLNT_NO
+    FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-02-28'
+      AND CLNT_STS = 'A'
+      AND CLNT_TYP = 1
+),
+sf_feb AS (
+    SELECT m.CLNT_NO,
+           m.consumer_id_hashed,
+           e.disposition_dt_tm
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    INNER JOIN u_feb ON u_feb.CLNT_NO = m.CLNT_NO
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2026-02-01'
+      AND e.disposition_dt_tm <  DATE '2026-03-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+cpc1012_latest AS (
+    SELECT CLNT_NO, cons_1012_latest
+    FROM (
+        SELECT CLNT_NO,
+               CLNT_CONSENT_TYP AS cons_1012_latest,
+               ROW_NUMBER() OVER (PARTITION BY CLNT_NO ORDER BY MTH_END_DT DESC) AS rn
+        FROM DDWV01.CPC_RB_PREF_MTHLY
+        WHERE PREF_ID = 1012
+          AND CLNT_TYP_CD = 1
+    ) t
+    WHERE rn = 1
+),
+disagree_clients AS (
+    -- same population as Q6a, deduped to one CLNT_NO row with a
+    -- representative consumer_id_hashed (most recent SF event that month)
+    SELECT CLNT_NO, consumer_id_hashed
+    FROM (
+        SELECT sf.CLNT_NO, sf.consumer_id_hashed,
+               ROW_NUMBER() OVER (PARTITION BY sf.CLNT_NO
+                                  ORDER BY sf.disposition_dt_tm DESC) AS rn
+        FROM sf_feb sf
+        LEFT JOIN cpc1012_latest c ON c.CLNT_NO = sf.CLNT_NO
+        WHERE c.cons_1012_latest = 5001 OR c.cons_1012_latest IS NULL
+    ) t
+    WHERE rn = 1
+),
+gate_latest AS (
+    -- CURRENT-STATE row per (CLNT_NO, PREF_ID) already latest by
+    -- construction; ROW_NUMBER guard kept only in case of duplicate writes
+    -- landing at the identical CHG_TMSTMP
+    SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, APP_SYS_CD, CHG_TMSTMP
+    FROM (
+        SELECT CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, APP_SYS_CD, CHG_TMSTMP,
+               ROW_NUMBER() OVER (PARTITION BY CLNT_NO, PREF_ID
+                                  ORDER BY CHG_TMSTMP DESC) AS rn
+        FROM DDWV01.CPC_RB_PREF
+    ) t
+    WHERE rn = 1
+)
+SELECT dc.CLNT_NO,
+       dc.consumer_id_hashed,
+       g.PREF_ID,
+       g.CLNT_CONSENT_TYP,
+       g.APP_SYS_CD,
+       g.CHG_TMSTMP AS latest_chg_tmstmp
+FROM disagree_clients dc
+INNER JOIN gate_latest g ON g.CLNT_NO = dc.CLNT_NO
+ORDER BY dc.CLNT_NO, g.PREF_ID;
