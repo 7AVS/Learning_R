@@ -1356,8 +1356,7 @@ display(df_q6d)
 sql_q6e = """
 WITH sf AS (
     SELECT m.CLNT_NO, e.disposition_dt_tm,
-           TRUNC(CAST(e.disposition_dt_tm AS DATE), 'MM')                    AS cohort_month,
-           LAST_DAY(CAST(e.disposition_dt_tm AS DATE))                       AS month_end
+           TRUNC(CAST(e.disposition_dt_tm AS DATE), 'MM')                    AS cohort_month
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
     INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                 FROM DTZV01.VENDOR_FEEDBACK_MASTER
@@ -1369,21 +1368,14 @@ WITH sf AS (
       AND e.disposition_dt_tm >= DATE '2026-01-01'    -- PARAM window start
       AND e.disposition_dt_tm <  DATE '2026-07-01'    -- PARAM window end (exclusive)
 ),
--- personal-active at the month-end of the click month
-sf_u AS (
-    SELECT s.*
-    FROM sf s
-    INNER JOIN DDWV01.RB_CLNT_DLY c
-      ON  c.CLNT_NO = s.CLNT_NO
-      AND c.SNAP_DT = s.month_end
-      AND c.CLNT_STS = 'A' AND c.CLNT_TYP = 1
-),
+-- NO universe filter: RB_CLNT_DLY join trips TDWM rule 3149 (Andre 2026-08-25).
+-- Counts are all SF unsubbers with a CLNT_NO, not personal-active only.
 -- one row per (client, cohort month): any gate written after the click?
 per_client AS (
     SELECT s.CLNT_NO, s.cohort_month,
            MAX(CASE WHEN p.CLNT_NO IS NULL THEN 1 ELSE 0 END)                  AS not_in_cpc,
            MAX(CASE WHEN p.CHG_TMSTMP > s.disposition_dt_tm THEN 1 ELSE 0 END) AS cpc_write_after_unsub
-    FROM sf_u s
+    FROM sf s
     LEFT JOIN DDWV01.CPC_RB_PREF p ON p.CLNT_NO = s.CLNT_NO
     GROUP BY s.CLNT_NO, s.cohort_month
 )
