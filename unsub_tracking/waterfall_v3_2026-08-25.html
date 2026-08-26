@@ -19,14 +19,14 @@ pre{background:#f6f6f6;padding:10px;font-size:12px;overflow-x:auto}
 .foot{color:var(--muted);font-size:12px;margin-top:22px}
 </style></head><body>
 <h1>Contactable base — Aug 2024 → Jul 2026 (personal, active)</h1>
-<p class="sub">Every Salesforce unsubscribe in the window is on this chart. Unsubscribe intent is labelled ahead of inactivity when a client did both.</p>
+<p class="sub">Every unsubscribe in the window is on this chart. One stacked bar for consent closes CPC recorded; a hatched bar for the ones it did not. Precedence rule (unsub beats inactivity) applied to the Salesforce side; CPC-side closes among inactive clients pending Q3d rows.</p>
 
 <div class="legend">
 <span><i class="sw" style="background:var(--anchor)"></i>Contactable base</span>
 <span><i class="sw" style="background:var(--add)"></i>Entered the book</span>
 <span><i class="sw" style="background:var(--unsub)"></i>Consent closed / unsubscribed</span>
 <span><i class="sw" style="background:var(--drop)"></i>Inactive / other consent value</span>
-<span><i class="sw" style="background:repeating-linear-gradient(135deg,#7a7a7a 0 3px,#fff 3px 6px)"></i>Unsubscribed in Salesforce, CPC still open</span>
+<span><i class="sw" style="background:repeating-linear-gradient(135deg,#c8102e 0 3px,#fff 3px 6px)"></i>Unsubscribed in Salesforce, CPC still open (not recorded)</span>
 </div>
 <div id="chart"></div>
 <div class="tip" id="tip"></div>
@@ -90,41 +90,50 @@ Truly contactable Jul'26	0	12698600	0	0	0	0	0	0</textarea>
 const steps=[
  {l:"Contactable\nAug'24",v:12545962,t:"anchor"},
  {l:"Entered\nthe book",v:1906665,t:"add"},
- {l:"Consent closed:\nemail backfeed (7020)",v:-72346,t:"unsub",d:"CPC 1012 5001→5002, writer 7020\nno Salesforce record"},
- {l:"Unsubscribed in SF,\nthen closed / inactive",v:-30266,t:"unsub",d:"CPC also closed 8,604\nInactive after unsub 21,662"},
- {l:"Consent closed:\nbranch / call centre",v:-94046,t:"unsub",d:"CPC 1012 5001→5002, writer ≠ 7020\nno Salesforce record"},
- {l:"Inactive,\nno unsubscribe",v:-1083434,t:"drop"},
- {l:"Other\nconsent",v:-72,t:"drop"},
+ {l:"Consent closed /\nunsubscribed",t:"stack",segs:[
+    {n:"CPC email backfeed (7020)",v:72346,c:"#c8102e"},
+    {n:"SF unsub + CPC closed (overlap)",v:8604,c:"#e0475f"},
+    {n:"SF unsub, then inactive",v:21662,c:"#f08a9b"},
+    {n:"Branch / call centre",v:94046,c:"#8c0a20"}]},
+ {l:"Inactive,\nno unsubscribe",v:-1083506,t:"drop"},
  {l:"Contactable\nJul'26 (CPC)",v:13172463,t:"anchor"},
- {l:"Unsubscribed in SF,\nCPC still open",v:-473863,t:"gray",d:"In Aug'24 book 420,561\nEntered in-window 53,302"},
+ {l:"SF unsub,\nCPC still open",v:-473863,t:"gray",d:"In Aug'24 book 420,561\nEntered in-window 53,302\n(pending program-gate correction)"},
  {l:"Truly\ncontactable Jul'26",v:12698600,t:"anchor"}];
-const col={anchor:"#1f3a5f",add:"#5b8db8",unsub:"#c8102e",drop:"#b8b8b8",gray:"url(#hatch)"};
-const W=1300,H=480,m={t:30,r:20,b:70,l:70},y0=11.8e6,y1=14.7e6;
+const col={anchor:"#1f3a5f",add:"#5b8db8",drop:"#b8b8b8",gray:"url(#hatch)"};
+const W=1300,H=520,m={t:70,r:20,b:70,l:70},y0=11.8e6,y1=14.7e6;
 const pw=W-m.l-m.r,ph=H-m.t-m.b,n=steps.length,bw=pw/n*0.62,gap=pw/n;
 const Y=v=>m.t+ph-(v-y0)/(y1-y0)*ph;
-let run=0,svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Waterfall of the contactable base"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="6" height="6" fill="#fff"/><rect width="3" height="6" fill="#7a7a7a"/></pattern></defs>`;
+const fmt=v=>Math.abs(v)>=1e6?(v/1e6).toFixed(2)+"M":v.toLocaleString();
+let run=0,svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Waterfall of the contactable base"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="6" height="6" fill="#fff"/><rect width="3" height="6" fill="#c8102e"/></pattern></defs>`;
 for(let g=12e6;g<=14.5e6;g+=0.5e6){svg+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(g)}" y2="${Y(g)}" stroke="#e6e6e6"/><text x="${m.l-8}" y="${Y(g)+4}" text-anchor="end" font-size="11" fill="#8a8a8a">${(g/1e6).toFixed(1)}M</text>`}
-const tsv=["bar\tvalue\tbar_start\tbar_end\ttype"];
+const tsv=["bar\tsegment\tvalue\tbar_start\tbar_end\ttype"];
+let bracket=[];
 steps.forEach((s,i)=>{
- let a,b;
- if(s.t==="anchor"){a=0;b=s.v;run=s.v}else{a=run;b=run+s.v;run=b}
- const top=Math.max(a,b),bot=Math.min(a,b);
- const y=s.t==="anchor"?Y(b):Y(top),h=s.t==="anchor"?Y(y0)-Y(b):Math.max(2,Y(bot)-Y(top));
  const x=m.l+i*gap+(gap-bw)/2;
- const lab=s.t==="anchor"?(s.v/1e6).toFixed(2)+"M":(s.v>0?"+":"−")+(Math.abs(s.v)>=1e6?(Math.abs(s.v)/1e6).toFixed(2)+"M":Math.abs(s.v).toLocaleString());
- svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${col[s.t]}" stroke="${s.t==='gray'?'#7a7a7a':'none'}" data-i="${i}"/>`;
- svg+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1a1a1a">${lab}</text>`;
+ if(s.t==="stack"){
+   let cur=run; const total=s.segs.reduce((a,b)=>a+b.v,0);
+   s.segs.forEach(seg=>{const a=cur,b=cur-seg.v; svg+=`<rect x="${x}" y="${Y(a)}" width="${bw}" height="${Math.max(2,Y(b)-Y(a))}" fill="${seg.c}" data-tip="${seg.n}\n−${seg.v.toLocaleString()}"/>`; tsv.push(`${s.l.replace(/\n/g," ")}\t${seg.n}\t${-seg.v}\t${a}\t${b}\tconsent closed`); cur=b;});
+   svg+=`<text x="${x+bw/2}" y="${Y(run)-6}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1a1a1a">−${fmt(total)}</text>`;
+   bracket.push(x); run=cur;
+ } else {
+   let a,b; if(s.t==="anchor"){a=0;b=s.v;run=s.v}else{a=run;b=run+s.v;run=b}
+   const top=Math.max(a,b),bot=Math.min(a,b);
+   const y=s.t==="anchor"?Y(b):Y(top),h=s.t==="anchor"?Y(y0)-Y(b):Math.max(2,Y(bot)-Y(top));
+   const lab=s.t==="anchor"?fmt(s.v):(s.v>0?"+":"−")+fmt(Math.abs(s.v));
+   svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${col[s.t]}" stroke="${s.t==='gray'?'#c8102e':'none'}" data-tip="${s.l.replace(/\n/g,' ')}\n${s.v.toLocaleString()}${s.d?'\n\n'+s.d:''}"/>`;
+   svg+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1a1a1a">${lab}</text>`;
+   if(s.t==="gray") bracket.push(x+bw);
+   tsv.push(`${s.l.replace(/\n/g," ")}\t\t${s.v}\t${a}\t${b}\t${s.t}`);
+ }
  s.l.split("\n").forEach((t,k)=>svg+=`<text x="${x+bw/2}" y="${H-m.b+18+k*14}" text-anchor="middle" font-size="11.5" fill="#555">${t}</text>`);
  if(i<n-1){svg+=`<line x1="${x+bw}" x2="${x+gap}" y1="${Y(run)}" y2="${Y(run)}" stroke="#bbb" stroke-dasharray="3 3"/>`}
- tsv.push(`${s.l.replace(/\n/g," ")}\t${s.v}\t${a}\t${b}\t${s.t}`);
 });
+if(bracket.length===2){const y=m.t-40;svg+=`<path d="M${bracket[0]},${y+12} V${y} H${bracket[1]} V${y+12}" fill="none" stroke="#c8102e" stroke-width="1.5"/><text x="${(bracket[0]+bracket[1])/2}" y="${y-6}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#c8102e">All unsubscribes, either system: 670,521</text>`}
 svg+="</svg>";
 document.getElementById("chart").innerHTML=svg;
-document.getElementById("tsv").textContent=tsv.join("\n");
 const tip=document.getElementById("tip");
-document.querySelectorAll("rect[data-i]").forEach(r=>{
- r.addEventListener("mousemove",e=>{const s=steps[+r.dataset.i];tip.style.display="block";tip.style.left=e.clientX+14+"px";tip.style.top=e.clientY+14+"px";
- tip.textContent=s.l.replace(/\n/g," ")+"\n"+s.v.toLocaleString()+(s.d?"\n\n"+s.d:"")});
+document.querySelectorAll("rect[data-tip]").forEach(r=>{
+ r.addEventListener("mousemove",e=>{tip.style.display="block";tip.style.left=e.clientX+14+"px";tip.style.top=e.clientY+14+"px";tip.textContent=r.dataset.tip});
  r.addEventListener("mouseleave",()=>tip.style.display="none")});
 </script>
 </body></html>
