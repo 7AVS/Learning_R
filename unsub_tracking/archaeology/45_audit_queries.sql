@@ -1249,3 +1249,106 @@ SELECT cohort_month,
 FROM per_client
 GROUP BY 1, 2
 ORDER BY 1, 2;
+
+/* ---------------------------------------------------------------------------
+[Q3d] STATE GRID - the auditable source for ANY waterfall (2026-08-25)
+      One row per combination of the tracked variables, clients counted once.
+      Every bar (v2, v3, or whatever the room decides) = SUM of rows here.
+      Label in Excel; do not label in SQL. bar_v3 is a suggested default only.
+      Same CTEs as Q3 / Q3b (anchors Aug-24 and Jul-26, vendor floor Sep-24).
+      Expected <= 60 rows.
+--------------------------------------------------------------------------- */
+WITH u_a AS (
+    SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A'
+),
+u_b AS (
+    SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31' AND CLNT_STS = 'A'
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31' AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31' AND CLNT_TYP_CD = 1
+),
+v AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-09-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO)                        AS CLNT_NO,
+           a.cons_a, b.cons_b, b.APP_SYS_CD                      AS writer_b,
+           CASE WHEN ua.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_a,
+           CASE WHEN ub.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_b,
+           CASE WHEN v.CLNT_NO  IS NOT NULL THEN 1 ELSE 0 END    AS sf_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN u_a ua ON ua.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_b ub ON ub.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN v       ON v.CLNT_NO  = COALESCE(a.CLNT_NO, b.CLNT_NO)
+),
+g AS (
+    SELECT
+        -- BEFORE (Aug-24)
+        CASE WHEN cons_a IS NULL THEN CAST('not_in_cpc' AS VARCHAR(12))
+             WHEN cons_a = 5001  THEN '5001_open'
+             WHEN cons_a = 5002  THEN '5002_closed'
+             ELSE                     'other' END                               AS consent_aug24,
+        active_a                                                                AS active_aug24,
+        -- AFTER (Jul-26)
+        CASE WHEN cons_b IS NULL THEN CAST('not_in_cpc' AS VARCHAR(12))
+             WHEN cons_b = 5001  THEN '5001_open'
+             WHEN cons_b = 5002  THEN '5002_closed'
+             ELSE                     'other' END                               AS consent_jul26,
+        active_b                                                                AS active_jul26,
+        -- who wrote the Jul-26 consent row (raw APP_SYS_CD kept; 7020 = email backfeed)
+        CASE WHEN writer_b IS NULL THEN CAST('none' AS VARCHAR(12))
+             WHEN writer_b = 7020 THEN '7020'
+             ELSE                      'other' END                               AS writer_jul26,
+        sf_unsub                                                                AS sf_unsub_in_window,
+        CLNT_NO
+    FROM j
+)
+SELECT consent_aug24, active_aug24, consent_jul26, active_jul26, writer_jul26, sf_unsub_in_window,
+       -- suggested default label = waterfall v3 bars; override in Excel
+       CASE
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND consent_jul26 = '5001_open' AND active_jul26 = 1 AND sf_unsub_in_window = 1
+              THEN CAST('09 SF unsub, CPC still open (hatched)' AS VARCHAR(60))
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND consent_jul26 = '5001_open' AND active_jul26 = 1
+              THEN '00 stayed contactable'
+         WHEN NOT (consent_aug24 = '5001_open' AND active_aug24 = 1) AND consent_jul26 = '5001_open' AND active_jul26 = 1 AND sf_unsub_in_window = 1
+              THEN '09 SF unsub, CPC still open (hatched, entered)'
+         WHEN NOT (consent_aug24 = '5001_open' AND active_aug24 = 1) AND consent_jul26 = '5001_open' AND active_jul26 = 1
+              THEN '02 entered the book'
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND sf_unsub_in_window = 1
+              THEN '05 SF unsub, then closed / inactive'
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND active_jul26 = 1 AND consent_jul26 = '5002_closed' AND writer_jul26 = '7020'
+              THEN '03 consent closed: 7020 backfeed'
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND active_jul26 = 1 AND consent_jul26 = '5002_closed'
+              THEN '04 consent closed: branch / call centre'
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1 AND active_jul26 = 0
+              THEN '06 inactive, no unsubscribe'
+         WHEN consent_aug24 = '5001_open' AND active_aug24 = 1
+              THEN '07 other consent value'
+         ELSE '99 never contactable at either anchor'
+       END                                                                      AS bar_v3,
+       CAST(COUNT(*) AS BIGINT)                                                 AS clients
+FROM g
+GROUP BY 1,2,3,4,5,6,7
+ORDER BY 7,1,2,3,4,5,6;

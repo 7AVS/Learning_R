@@ -1,0 +1,102 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Contactable Base Waterfall v3</title>
+<style>
+:root{--bg:#fff;--ink:#1a1a1a;--ink2:#555;--muted:#8a8a8a;--grid:#e6e6e6;
+ --anchor:#1f3a5f;--add:#5b8db8;--drop:#b8b8b8;--unsub:#c8102e;--gray:#7a7a7a}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 "Segoe UI",Arial,sans-serif;padding:32px 40px;max-width:1280px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px}
+.sub{color:var(--ink2);margin:0 0 20px}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0 6px;font-size:12.5px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}.sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+svg{width:100%;height:auto;display:block}
+.tip{position:fixed;pointer-events:none;background:#1a1a1a;color:#fff;padding:6px 9px;border-radius:5px;font-size:12px;display:none;white-space:pre}
+.grid2{display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:start}
+table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:5px 8px;border-bottom:1px solid var(--grid);text-align:right}
+td:first-child,th:first-child{text-align:left}th{color:var(--ink2);font-weight:600}
+.tot td{font-weight:700;border-top:2px solid var(--ink)}
+.callout{background:#f6f6f6;border-left:4px solid var(--unsub);padding:12px 14px;margin:14px 0;font-size:13.5px}
+pre{background:#f6f6f6;padding:10px;font-size:12px;overflow-x:auto}
+.foot{color:var(--muted);font-size:12px;margin-top:22px}
+</style></head><body>
+<h1>Contactable base — Aug 2024 → Jul 2026 (personal, active)</h1>
+<p class="sub">Every Salesforce unsubscribe in the window is on this chart. Unsubscribe intent is labelled ahead of inactivity when a client did both.</p>
+
+<div class="legend">
+<span><i class="sw" style="background:var(--anchor)"></i>Contactable base</span>
+<span><i class="sw" style="background:var(--add)"></i>Entered the book</span>
+<span><i class="sw" style="background:var(--unsub)"></i>Consent closed / unsubscribed</span>
+<span><i class="sw" style="background:var(--drop)"></i>Inactive / other consent value</span>
+<span><i class="sw" style="background:repeating-linear-gradient(135deg,#7a7a7a 0 3px,#fff 3px 6px)"></i>Unsubscribed in Salesforce, CPC still open</span>
+</div>
+<div id="chart"></div>
+<div class="tip" id="tip"></div>
+
+<div class="grid2">
+<div>
+<h2>Where every Salesforce unsubscriber sits</h2>
+<table>
+<tr><th>Bucket</th><th>Clients</th><th>Bar on chart</th></tr>
+<tr><td>Still open in CPC — was in the Aug'24 book</td><td>420,561</td><td>Hatched bar</td></tr>
+<tr><td>Still open in CPC — entered the book in-window</td><td>53,302</td><td>Hatched bar</td></tr>
+<tr><td>CPC also closed (both systems agree)</td><td>8,604</td><td>Unsubscribed in SF, then closed / inactive</td></tr>
+<tr><td>Went inactive after unsubscribing</td><td>21,662</td><td>Unsubscribed in SF, then closed / inactive</td></tr>
+<tr class="tot"><td>Salesforce unsubscribers, Aug'24–Jul'26</td><td>504,129</td><td></td></tr>
+<tr><td>Consent closed in CPC by the email backfeed (writer 7020), no Salesforce record</td><td>72,346</td><td>Consent closed: email backfeed</td></tr>
+<tr><td>Consent closed in CPC by branch / call-centre write, no Salesforce record</td><td>94,046</td><td>Consent closed: branch / call centre</td></tr>
+<tr class="tot"><td>Consent closed or unsubscribed, any channel</td><td>670,521</td><td></td></tr>
+</table>
+</div>
+<div>
+<div class="callout"><b>Why the "sum of unsubscribes" and the waterfall now agree.</b><br>
+504,129 clients clicked unsubscribe in Salesforce. 473,863 of them are still marked open in CPC (hatched bar). 8,604 were closed in CPC as well, and 21,662 went inactive afterwards — both sit inside the red "Unsubscribed in SF, then closed / inactive" bar. The 72,346 closed by the 7020 backfeed and the 94,046 closed by branch / call-centre writes have their own bars — consent closes made in CPC without a Salesforce click. Each client is shown once, in the bar that reflects their stated intent.</div>
+<div class="callout" style="border-color:var(--gray)"><b>What changed vs. the earlier chart.</b><br>
+The hatched bar was 420,561; it is now 473,863 because clients who entered the book after Aug'24 are now screened for a Salesforce unsubscribe (+53,302). Truly contactable: 12,698,600 (was 12,751,902).</div>
+</div>
+</div>
+
+<h2>Chart data (copy into PowerPoint)</h2>
+<pre id="tsv"></pre>
+<p class="foot">Source: 45_audit_queries.sql Q3b + Q3c, run 2026-08-25. Universe: CLNT_TYP_CD = 1, active at anchor. Red bars are consent closes: 7020 backfeed 72,346; branch / call centre 94,046; Salesforce unsub then closed or inactive = 8,604 + 21,662. CPC July writes not loaded at run time — Jul-31 anchor is a snapshot without July closes. "Inactive (no unsub)" = 1,105,096 − 21,662. Hatched bar is an adjustment inside the end bar, not a departure.</p>
+
+<script>
+const steps=[
+ {l:"Contactable\nAug'24",v:12545962,t:"anchor"},
+ {l:"Entered\nthe book",v:1906665,t:"add"},
+ {l:"Consent closed:\nemail backfeed (7020)",v:-72346,t:"unsub",d:"CPC 1012 5001→5002, writer 7020\nno Salesforce record"},
+ {l:"Unsubscribed in SF,\nthen closed / inactive",v:-30266,t:"unsub",d:"CPC also closed 8,604\nInactive after unsub 21,662"},
+ {l:"Consent closed:\nbranch / call centre",v:-94046,t:"unsub",d:"CPC 1012 5001→5002, writer ≠ 7020\nno Salesforce record"},
+ {l:"Inactive,\nno unsubscribe",v:-1083434,t:"drop"},
+ {l:"Other\nconsent",v:-72,t:"drop"},
+ {l:"Contactable\nJul'26 (CPC)",v:13172463,t:"anchor"},
+ {l:"Unsubscribed in SF,\nCPC still open",v:-473863,t:"gray",d:"In Aug'24 book 420,561\nEntered in-window 53,302"},
+ {l:"Truly\ncontactable Jul'26",v:12698600,t:"anchor"}];
+const col={anchor:"#1f3a5f",add:"#5b8db8",unsub:"#c8102e",drop:"#b8b8b8",gray:"url(#hatch)"};
+const W=1300,H=480,m={t:30,r:20,b:70,l:70},y0=11.8e6,y1=14.7e6;
+const pw=W-m.l-m.r,ph=H-m.t-m.b,n=steps.length,bw=pw/n*0.62,gap=pw/n;
+const Y=v=>m.t+ph-(v-y0)/(y1-y0)*ph;
+let run=0,svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Waterfall of the contactable base"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="6" height="6" fill="#fff"/><rect width="3" height="6" fill="#7a7a7a"/></pattern></defs>`;
+for(let g=12e6;g<=14.5e6;g+=0.5e6){svg+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(g)}" y2="${Y(g)}" stroke="#e6e6e6"/><text x="${m.l-8}" y="${Y(g)+4}" text-anchor="end" font-size="11" fill="#8a8a8a">${(g/1e6).toFixed(1)}M</text>`}
+const tsv=["bar\tvalue\tbar_start\tbar_end\ttype"];
+steps.forEach((s,i)=>{
+ let a,b;
+ if(s.t==="anchor"){a=0;b=s.v;run=s.v}else{a=run;b=run+s.v;run=b}
+ const top=Math.max(a,b),bot=Math.min(a,b);
+ const y=s.t==="anchor"?Y(b):Y(top),h=s.t==="anchor"?Y(y0)-Y(b):Math.max(2,Y(bot)-Y(top));
+ const x=m.l+i*gap+(gap-bw)/2;
+ const lab=s.t==="anchor"?(s.v/1e6).toFixed(2)+"M":(s.v>0?"+":"−")+(Math.abs(s.v)>=1e6?(Math.abs(s.v)/1e6).toFixed(2)+"M":Math.abs(s.v).toLocaleString());
+ svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${col[s.t]}" stroke="${s.t==='gray'?'#7a7a7a':'none'}" data-i="${i}"/>`;
+ svg+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1a1a1a">${lab}</text>`;
+ s.l.split("\n").forEach((t,k)=>svg+=`<text x="${x+bw/2}" y="${H-m.b+18+k*14}" text-anchor="middle" font-size="11.5" fill="#555">${t}</text>`);
+ if(i<n-1){svg+=`<line x1="${x+bw}" x2="${x+gap}" y1="${Y(run)}" y2="${Y(run)}" stroke="#bbb" stroke-dasharray="3 3"/>`}
+ tsv.push(`${s.l.replace(/\n/g," ")}\t${s.v}\t${a}\t${b}\t${s.t}`);
+});
+svg+="</svg>";
+document.getElementById("chart").innerHTML=svg;
+document.getElementById("tsv").textContent=tsv.join("\n");
+const tip=document.getElementById("tip");
+document.querySelectorAll("rect[data-i]").forEach(r=>{
+ r.addEventListener("mousemove",e=>{const s=steps[+r.dataset.i];tip.style.display="block";tip.style.left=e.clientX+14+"px";tip.style.top=e.clientY+14+"px";
+ tip.textContent=s.l.replace(/\n/g," ")+"\n"+s.v.toLocaleString()+(s.d?"\n\n"+s.d:"")});
+ r.addEventListener("mouseleave",()=>tip.style.display="none")});
+</script>
+</body></html>
