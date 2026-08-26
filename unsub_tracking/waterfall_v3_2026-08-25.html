@@ -54,8 +54,10 @@ The hatched bar was 420,561; it is now 473,863 because clients who entered the b
 </div>
 </div>
 
-<h2>Chart data (copy into PowerPoint)</h2>
-<pre id="tsv"></pre>
+<h2>Chart data (select the table and paste into Excel / PowerPoint)</h2>
+<table id="datatbl"></table>
+<p><button id="copybtn" style="margin-top:8px;padding:6px 12px;font-size:13px;cursor:pointer">Copy as tab-separated</button> <span id="copymsg" style="font-size:12px;color:#555"></span></p>
+<pre id="tsv" style="display:none"></pre>
 <p class="foot">Source: 45_audit_queries.sql Q3b + Q3c, run 2026-08-25. Universe: CLNT_TYP_CD = 1, active at anchor. Red bars are consent closes: 7020 backfeed 72,346; branch / call centre 94,046; Salesforce unsub then closed or inactive = 8,604 + 21,662. CPC July writes not loaded at run time — Jul-31 anchor is a snapshot without July closes. "Inactive (no unsub)" = 1,105,096 − 21,662. Hatched bar is an adjustment inside the end bar, not a departure.</p>
 
 <script>
