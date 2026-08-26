@@ -1,14 +1,14 @@
 /* ===========================================================================
    50_hatched_clients.sql - the 473,863 "unsubscribed in Salesforce, CPC 1012
    still open" clients: client list with hash id, and their other CPC gates.
-   Split out of 45_audit_queries.sql on 2026-08-26 (Q3e/Q3f/Q3g moved here).
+   Split out of 45_audit_queries.sql on 2026-08-26. Numbering: 46-49 are local notes/CSV (gitignored), hence 50.
    Anchors: active + 1012=5001 at Jul-26; SF disposition 4 Sep-24..Jul-26.
    Teradata-direct. No row caps.
    =========================================================================== */
 /* ---------------------------------------------------------------------------
-[Q3e] CLIENT LIST - the 473,863 hatched-bar clients (2026-08-26)
+[Q1] CLIENT LIST - the 473,863 hatched-bar clients (2026-08-26)
       Active + CPC 1012 = 5001 (open) at Jul-26, with a Salesforce unsub
-      (disposition 4) in Sep-24..Jul-26. Same CTEs as Q3b; no row cap.
+      (disposition 4) in Sep-24..Jul-26. Same CTEs as 45_audit_queries.sql Q3b; no row cap.
       One row per client; hash id = the one on the client's LATEST unsub
       event (a client can carry several hashes across sends).
       Expected row count = seg_email_sf_open (v3) = 473,863.
@@ -57,9 +57,9 @@ INNER JOIN v   ON v.CLNT_NO   = b.CLNT_NO
 ORDER BY v.disposition_dt_tm;
 
 /* ---------------------------------------------------------------------------
-[Q3f] PROBE - which gates did writer 7020 (email backfeed) write at Jul-26 for
+[Q2] PROBE - which gates did writer 7020 (email backfeed) write at Jul-26 for
       the 473,863 gray-bar clients? PREF_ID x consent value, counts. <= 20 rows.
-      Run BEFORE Q3g so the pivot columns there are grounded, not guessed.
+      Run BEFORE Q3 so its pivot columns are grounded, not guessed.
 --------------------------------------------------------------------------- */
 WITH u_b AS (
     SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
@@ -101,10 +101,10 @@ GROUP BY 1,2
 ORDER BY 1,2;
 
 /* ---------------------------------------------------------------------------
-[Q3g] Q3e + OTHER GATES at Jul-26, pivoted so rows stay 1 per client (473,863)
+[Q3] Q1 + OTHER GATES at Jul-26, pivoted so rows stay 1 per client (473,863)
       1046 gets its own columns (7020 writes 1012 + 1046 - unsub_tracking/
       sfmc_unsub_blueprint_notes.md). Every other gate is summarised as counts
-      so nothing is missed without hard-coding the gate list. Check Q3f first.
+      so nothing is missed without hard-coding the gate list. Check Q2 first.
 --------------------------------------------------------------------------- */
 WITH u_b AS (
     SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
