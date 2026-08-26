@@ -1352,3 +1352,38 @@ SELECT consent_aug24, active_aug24, consent_jul26, active_jul26, writer_jul26, s
 FROM g
 GROUP BY 1,2,3,4,5,6,7
 ORDER BY 7,1,2,3,4,5,6;
+
+/* ---------------------------------------------------------------------------
+[Q0c] ACTIVE-FILTER COVERAGE PROBE (2026-08-26) - answers Q3d bucket 99
+      5,756,520 clients are 1012 = 5001 at BOTH anchors yet active = 0 at both.
+      Too large to be real inactivity. Where are they in RB_CLNT_DLY at Jul-26:
+      absent, or present with a CLNT_STS other than 'A'? <= 10 rows.
+      If mostly ABSENT  -> RB_CLNT_DLY is not the right active source.
+      If mostly PRESENT -> CLNT_STS = 'A' is too narrow; need the code list.
+--------------------------------------------------------------------------- */
+WITH a AS (
+    SELECT CLNT_NO FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31' AND CLNT_TYP_CD = 1 AND CLNT_CONSENT_TYP = 5001
+),
+b AS (
+    SELECT CLNT_NO FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31' AND CLNT_TYP_CD = 1 AND CLNT_CONSENT_TYP = 5001
+),
+ua AS (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A'),
+ub AS (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY WHERE SNAP_DT = DATE '2026-07-31' AND CLNT_STS = 'A'),
+x AS (
+    SELECT a.CLNT_NO
+    FROM a INNER JOIN b ON b.CLNT_NO = a.CLNT_NO
+    LEFT JOIN ua ON ua.CLNT_NO = a.CLNT_NO
+    LEFT JOIN ub ON ub.CLNT_NO = a.CLNT_NO
+    WHERE ua.CLNT_NO IS NULL AND ub.CLNT_NO IS NULL
+)
+SELECT CASE WHEN c.CLNT_NO IS NULL THEN CAST('absent from RB_CLNT_DLY Jul-26' AS VARCHAR(40))
+            ELSE 'present' END                          AS rb_clnt_dly_jul26,
+       c.CLNT_STS,
+       c.CLNT_TYP,
+       CAST(COUNT(*) AS BIGINT)                         AS clients
+FROM x
+LEFT JOIN DDWV01.RB_CLNT_DLY c ON c.CLNT_NO = x.CLNT_NO AND c.SNAP_DT = DATE '2026-07-31'
+GROUP BY 1, 2, 3
+ORDER BY 4 DESC;
