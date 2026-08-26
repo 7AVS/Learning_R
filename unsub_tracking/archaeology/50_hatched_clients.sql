@@ -2,63 +2,13 @@
    50_hatched_clients.sql - the 473,863 "unsubscribed in Salesforce, CPC 1012
    still open" clients: client list with hash id, and their other CPC gates.
    Split out of 45_audit_queries.sql on 2026-08-26. Numbering: 46-49 are local notes/CSV (gitignored), hence 50.
-   Q1 = client list; Q2 = Q1 + the 11 page-writable gates as 7020 wrote them.
+   ONE query: client list + hash id + the 11 page-writable gates as 7020 wrote them at Jul-26.
    Anchors: active + 1012=5001 at Jul-26; SF disposition 4 Sep-24..Jul-26.
    Teradata-direct. No row caps.
    =========================================================================== */
-/* ---------------------------------------------------------------------------
-[Q1] CLIENT LIST - the 473,863 hatched-bar clients (2026-08-26)
-      Active + CPC 1012 = 5001 (open) at Jul-26, with a Salesforce unsub
-      (disposition 4) in Sep-24..Jul-26. Same CTEs as 45_audit_queries.sql Q3b; no row cap.
-      One row per client; hash id = the one on the client's LATEST unsub
-      event (a client can carry several hashes across sends).
-      Expected row count = seg_email_sf_open (v3) = 473,863.
---------------------------------------------------------------------------- */
-WITH u_b AS (
-    SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
-    WHERE SNAP_DT = DATE '2026-07-31' AND CLNT_STS = 'A'
-),
-b AS (
-    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD AS writer_b
-    FROM DDWV01.CPC_RB_PREF_MTHLY
-    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31' AND CLNT_TYP_CD = 1
-      AND CLNT_CONSENT_TYP = 5001
-),
-v AS (
-    -- latest Salesforce unsub event per client, carrying its hash id / treatment id
-    SELECT CLNT_NO, consumer_id_hashed, TREATMENT_ID, disposition_dt_tm
-    FROM (
-        SELECT m.CLNT_NO, m.consumer_id_hashed, m.TREATMENT_ID, e.disposition_dt_tm,
-               ROW_NUMBER() OVER (PARTITION BY m.CLNT_NO ORDER BY e.disposition_dt_tm DESC) AS rn
-        FROM DTZV01.VENDOR_FEEDBACK_EVENT e
-        INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
-                    FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
-                      AND CLNT_NO IS NOT NULL) m
-          ON  m.consumer_id_hashed = e.consumer_id_hashed
-          AND m.TREATMENT_ID       = e.TREATMENT_ID
-        WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= DATE '2024-09-01'
-          AND e.disposition_dt_tm <  DATE '2026-08-01'
-          AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
-          AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
-    ) x
-    WHERE rn = 1
-)
-SELECT b.CLNT_NO,
-       v.consumer_id_hashed,
-       v.TREATMENT_ID                      AS latest_unsub_treatment_id,
-       SUBSTR(v.TREATMENT_ID, 8, 3)        AS latest_unsub_mne,
-       v.disposition_dt_tm                 AS latest_unsub_dt_tm,
-       b.cons_b                            AS cpc_1012_jul26,
-       b.writer_b                          AS cpc_1012_writer_jul26
-FROM b
-INNER JOIN u_b ON u_b.CLNT_NO = b.CLNT_NO
-INNER JOIN v   ON v.CLNT_NO   = b.CLNT_NO
-ORDER BY v.disposition_dt_tm;
 
 /* ---------------------------------------------------------------------------
-[Q2] Q1 + THE 11 GATES THE UNSUB PAGE CAN WRITE, at Jul-26, 1 row per client (473,863)
+[Q1] CLIENT LIST + THE 11 GATES THE UNSUB PAGE CAN WRITE, at Jul-26, 1 row per client (473,863)
       Gate list = CPC codes the SFMC unsubscribe page accepts (sfmc_unsub_blueprint_notes.md,
       2026-08-26): 1004 1006 1010 1012 1023 1024 1025 1026 1044 1045 1046.
       Writer 7020 only: each column = Jul-26 consent value on that gate IF 7020 wrote it, else NULL.
