@@ -55,9 +55,20 @@ The hatched bar was 420,561; it is now 473,863 because clients who entered the b
 </div>
 
 <h2>Chart data (select the table and paste into Excel / PowerPoint)</h2>
-<table id="datatbl"></table>
-<p><button id="copybtn" style="margin-top:8px;padding:6px 12px;font-size:13px;cursor:pointer">Copy as tab-separated</button> <span id="copymsg" style="font-size:12px;color:#555"></span></p>
-<pre id="tsv" style="display:none"></pre>
+<table id="datatbl"><tr><th>bar</th><th>value</th><th>bar_start</th><th>bar_end</th><th>type</th></tr><tr><td>Contactable Aug'24</td><td>12545962</td><td>0</td><td>12545962</td><td>anchor</td></tr><tr><td>Entered the book</td><td>1906665</td><td>12545962</td><td>14452627</td><td>add</td></tr><tr><td>Consent closed: email backfeed (7020)</td><td>-72346</td><td>14452627</td><td>14380281</td><td>consent closed</td></tr><tr><td>Unsubscribed in SF, then closed / inactive</td><td>-30266</td><td>14380281</td><td>14350015</td><td>consent closed</td></tr><tr><td>Consent closed: branch / call centre</td><td>-94046</td><td>14350015</td><td>14255969</td><td>consent closed</td></tr><tr><td>Inactive, no unsubscribe</td><td>-1083434</td><td>14255969</td><td>13172535</td><td>inactive/other</td></tr><tr><td>Other consent value</td><td>-72</td><td>13172535</td><td>13172463</td><td>inactive/other</td></tr><tr><td>Contactable Jul'26 (CPC)</td><td>13172463</td><td>0</td><td>13172463</td><td>anchor</td></tr><tr><td>Unsubscribed in SF, CPC still open (gray bar)</td><td>-473863</td><td>13172463</td><td>12698600</td><td>gray bar adjustment</td></tr><tr><td>Truly contactable Jul'26</td><td>12698600</td><td>0</td><td>12698600</td><td>anchor</td></tr></table>
+<p style="font-size:12px;color:#555">Same data as tab-separated text (click inside, Ctrl+A, Ctrl+C, paste into Excel):</p>
+<textarea id="tsvbox" rows="12" style="width:100%;font:12px monospace" readonly>bar	value	bar_start	bar_end	type
+Contactable Aug'24	12545962	0	12545962	anchor
+Entered the book	1906665	12545962	14452627	add
+Consent closed: email backfeed (7020)	-72346	14452627	14380281	consent closed
+Unsubscribed in SF, then closed / inactive	-30266	14380281	14350015	consent closed
+Consent closed: branch / call centre	-94046	14350015	14255969	consent closed
+Inactive, no unsubscribe	-1083434	14255969	13172535	inactive/other
+Other consent value	-72	13172535	13172463	inactive/other
+Contactable Jul'26 (CPC)	13172463	0	13172463	anchor
+Unsubscribed in SF, CPC still open (gray bar)	-473863	13172463	12698600	gray bar adjustment
+Truly contactable Jul'26	12698600	0	12698600	anchor</textarea>
+<p style="font-size:12px;color:#555">Excel copy: <b>waterfall_v3_2026-08-25.xlsx</b> next to this file.</p>
 <p class="foot">Source: 45_audit_queries.sql Q3b + Q3c, run 2026-08-25. Universe: CLNT_TYP_CD = 1, active at anchor. Red bars are consent closes: 7020 backfeed 72,346; branch / call centre 94,046; Salesforce unsub then closed or inactive = 8,604 + 21,662. CPC July writes not loaded at run time — Jul-31 anchor is a snapshot without July closes. "Inactive (no unsub)" = 1,105,096 − 21,662. Hatched bar is an adjustment inside the end bar, not a departure.</p>
 
 <script>
