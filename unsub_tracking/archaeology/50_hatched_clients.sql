@@ -58,10 +58,10 @@ INNER JOIN v   ON v.CLNT_NO   = b.CLNT_NO
 ORDER BY v.disposition_dt_tm;
 
 /* ---------------------------------------------------------------------------
-[Q3] Q1 + OTHER GATES at Jul-26, pivoted so rows stay 1 per client (473,863)
-      1046 gets its own columns (7020 writes 1012 + 1046 - unsub_tracking/
-      sfmc_unsub_blueprint_notes.md). Every other gate is summarised as counts
-      
+[Q2] Q1 + THE 11 GATES THE UNSUB PAGE CAN WRITE, at Jul-26, 1 row per client (473,863)
+      Gate list = CPC codes the SFMC unsubscribe page accepts (sfmc_unsub_blueprint_notes.md,
+      2026-08-26): 1004 1006 1010 1012 1023 1024 1025 1026 1044 1045 1046.
+      Writer 7020 only: each column = Jul-26 consent value on that gate IF 7020 wrote it, else NULL.
 --------------------------------------------------------------------------- */
 WITH u_b AS (
     SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
