@@ -1387,3 +1387,106 @@ FROM x
 LEFT JOIN DDWV01.RB_CLNT_DLY c ON c.CLNT_NO = x.CLNT_NO AND c.SNAP_DT = DATE '2026-07-31'
 GROUP BY 1, 2, 3
 ORDER BY 4 DESC;
+
+/* ---------------------------------------------------------------------------
+[Q3e] WATERFALL v4 - UNSUBSCRIBE PRECEDENCE (2026-08-26)
+      Rule (Andre): a consent close or a Salesforce unsubscribe ALWAYS beats
+      inactivity. A client who did both is counted in the consent-closed
+      segment, never in "inactive". Q3/Q3b (inactive-first) stay as run.
+      Departure segments below are mutually exclusive and partition
+      {cons_a = 5001 AND active_a = 1}; identity:
+        start + new - seg_closed_7020 - seg_closed_overlap - seg_sf_then_inactive
+              - seg_closed_branch - seg_inactive_no_event - seg_other = end_5001_jul26
+      One row. Same CTEs as Q3b.
+--------------------------------------------------------------------------- */
+WITH u_a AS (
+    SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A'
+),
+u_b AS (
+    SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+    WHERE SNAP_DT = DATE '2026-07-31' AND CLNT_STS = 'A'
+),
+a AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_a
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2024-08-31' AND CLNT_TYP_CD = 1
+),
+b AS (
+    SELECT CLNT_NO, CLNT_CONSENT_TYP AS cons_b, APP_SYS_CD
+    FROM DDWV01.CPC_RB_PREF_MTHLY
+    WHERE PREF_ID = 1012 AND MTH_END_DT = DATE '2026-07-31' AND CLNT_TYP_CD = 1
+),
+v AS (
+    SELECT DISTINCT m.CLNT_NO
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
+                FROM DTZV01.VENDOR_FEEDBACK_MASTER
+                WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024153' AND '2026212'
+                  AND CLNT_NO IS NOT NULL) m
+      ON  m.consumer_id_hashed = e.consumer_id_hashed
+      AND m.TREATMENT_ID       = e.TREATMENT_ID
+    WHERE e.disposition_cd = 4
+      AND e.disposition_dt_tm >= DATE '2024-09-01'
+      AND e.disposition_dt_tm <  DATE '2026-08-01'
+      AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
+      AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
+),
+j AS (
+    SELECT COALESCE(a.CLNT_NO, b.CLNT_NO)                        AS CLNT_NO,
+           a.cons_a, b.cons_b, b.APP_SYS_CD                      AS writer_b,
+           CASE WHEN ua.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_a,
+           CASE WHEN ub.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END    AS active_b,
+           CASE WHEN v.CLNT_NO  IS NOT NULL THEN 1 ELSE 0 END    AS vendor_unsub
+    FROM a
+    FULL OUTER JOIN b ON a.CLNT_NO = b.CLNT_NO
+    LEFT JOIN u_a ua ON ua.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN u_b ub ON ub.CLNT_NO = COALESCE(a.CLNT_NO, b.CLNT_NO)
+    LEFT JOIN v       ON v.CLNT_NO  = COALESCE(a.CLNT_NO, b.CLNT_NO)
+),
+-- restrict to the start book once; every departure column below reads from here
+sb AS (
+    SELECT * FROM j WHERE cons_a = 5001 AND active_a = 1
+)
+SELECT
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM sb)                                          AS start_5001_aug24,
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM j
+      WHERE (cons_a IS NULL OR cons_a <> 5001 OR active_a = 0)
+        AND cons_b = 5001 AND active_b = 1)                                            AS new_5001,
+
+    -- 1. closed 5002 by the email backfeed, no Salesforce record (active or not)
+    CAST(SUM(CASE WHEN cons_b = 5002 AND writer_b = 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_closed_7020,
+    -- 2. closed 5002 AND Salesforce record - both systems agree (active or not)
+    CAST(SUM(CASE WHEN cons_b = 5002 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_closed_overlap,
+    -- 3. Salesforce unsub, CPC never closed, client inactive by Jul-26
+    CAST(SUM(CASE WHEN vendor_unsub = 1 AND active_b = 0
+                   AND (cons_b IS NULL OR cons_b <> 5002)
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_sf_then_inactive,
+    -- 4. closed 5002 by a writer other than 7020, no Salesforce record (active or not)
+    CAST(SUM(CASE WHEN cons_b = 5002 AND COALESCE(writer_b, -1) <> 7020 AND vendor_unsub = 0
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_closed_branch,
+    -- 5. inactive by Jul-26 with NO consent event of any kind
+    CAST(SUM(CASE WHEN active_b = 0 AND vendor_unsub = 0
+                   AND (cons_b IS NULL OR cons_b <> 5002)
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_inactive_no_event,
+    -- 6. still active, consent on a value that is neither 5001 nor 5002, no Salesforce record
+    CAST(SUM(CASE WHEN active_b = 1 AND vendor_unsub = 0
+                   AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_other,
+    -- 7. still active, other consent value, WITH a Salesforce record (tiny; kept so the partition is complete)
+    CAST(SUM(CASE WHEN active_b = 1 AND vendor_unsub = 1
+                   AND (cons_b IS NULL OR cons_b NOT IN (5001, 5002))
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS seg_other_with_sf,
+
+    -- gray bar (inside the end bar): still 5001 + active, Salesforce unsub - start book only
+    CAST(SUM(CASE WHEN cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1
+                  THEN 1 ELSE 0 END) AS BIGINT)                                        AS gray_startbook,
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM j
+      WHERE cons_b = 5001 AND active_b = 1 AND vendor_unsub = 1)                       AS gray_total_v3,
+
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM j WHERE cons_b = 5001 AND active_b = 1)      AS end_5001_jul26,
+    (SELECT CAST(COUNT(*) AS BIGINT) FROM j
+      WHERE cons_b = 5001 AND active_b = 1 AND vendor_unsub = 0)                       AS end_contactable
+FROM sb;
