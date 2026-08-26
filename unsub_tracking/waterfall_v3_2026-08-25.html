@@ -69,7 +69,21 @@ Other consent value	-72	13172535	13172463	inactive/other
 Contactable Jul'26 (CPC)	13172463	0	13172463	anchor
 SF unsub, CPC still open (gray bar)	-473863	13172463	12698600	gray bar adjustment
 Truly contactable Jul'26	12698600	0	12698600	anchor</textarea>
-<p style="font-size:12px;color:#555">Excel copy: <b>waterfall_v3_2026-08-25.xlsx</b> next to this file.</p>
+
+
+<h2>Stacked-column version (red bar split into three segments) — select, copy, paste into Excel</h2>
+<p style="font-size:12.5px;color:#555">1. Paste A1:I8. 2. Insert → Column → Stacked Column. 3. Series "base" → Fill: No fill, Border: none. 4. Colour the three "closed" series red shades, total navy, entered blue, inactive grey, gray bar pattern. 5. Axis min 11,800,000. The 72 "other consent" is folded into inactive so the chain foots to 13,172,463.</p>
+<table><tr><th>bar</th><th>base (no fill)</th><th>total (navy)</th><th>entered (blue)</th><th>closed: CPC email 7020 (red)</th><th>closed: SF unsub (red 2)</th><th>closed: branch / call centre (red 3)</th><th>inactive (grey)</th><th>gray bar (hatched)</th></tr><tr><td>Contactable Aug'24</td><td>0</td><td>12545962</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td>Entered the book</td><td>12545962</td><td>0</td><td>1906665</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td>Consent closed / unsub</td><td>14255969</td><td>0</td><td>0</td><td>72346</td><td>30266</td><td>94046</td><td>0</td><td>0</td></tr><tr><td>Inactive, no unsubscribe</td><td>13172463</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1083506</td><td>0</td></tr><tr><td>Contactable Jul'26 (CPC)</td><td>0</td><td>13172463</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td>SF unsub, CPC still open</td><td>12698600</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>473863</td></tr><tr><td>Truly contactable Jul'26</td><td>0</td><td>12698600</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr></table>
+<p style="font-size:12px;color:#555">Same data as tab-separated text (click inside, Ctrl+A, Ctrl+C):</p>
+<textarea rows="9" style="width:100%;font:12px monospace" readonly>bar	base (no fill)	total (navy)	entered (blue)	closed: CPC email 7020 (red)	closed: SF unsub (red 2)	closed: branch / call centre (red 3)	inactive (grey)	gray bar (hatched)
+Contactable Aug'24	0	12545962	0	0	0	0	0	0
+Entered the book	12545962	0	1906665	0	0	0	0	0
+Consent closed / unsub	14255969	0	0	72346	30266	94046	0	0
+Inactive, no unsubscribe	13172463	0	0	0	0	0	1083506	0
+Contactable Jul'26 (CPC)	0	13172463	0	0	0	0	0	0
+SF unsub, CPC still open	12698600	0	0	0	0	0	0	473863
+Truly contactable Jul'26	0	12698600	0	0	0	0	0	0</textarea>
+
 <p class="foot">Source: 45_audit_queries.sql Q3b + Q3c, run 2026-08-25. Universe: CLNT_TYP_CD = 1, active at anchor. Red bars are consent closes: 7020 backfeed 72,346; branch / call centre 94,046; Salesforce unsub then closed or inactive = 8,604 + 21,662. CPC July writes not loaded at run time — Jul-31 anchor is a snapshot without July closes. "Inactive (no unsub)" = 1,105,096 − 21,662. Hatched bar is an adjustment inside the end bar, not a departure.</p>
 
 <script>
