@@ -214,7 +214,20 @@ print("write issued ->", f"{EDL_DB}.{T_ANCHOR}")
 df_target.write.mode("overwrite").option("path", PATH_TARGET).saveAsTable(f"{EDL_DB}.{T_TARGET}")
 print("write issued ->", f"{EDL_DB}.{T_TARGET}")
 
+# %% [6b] WHERE DID THE WRITE GO - run this right after [6]; screenshot the output
+import time
+t0 = time.time()
+print("rows in df_anchor (forces the plan):", df_anchor.count(), f"({time.time()-t0:.0f}s)")
+spark.catalog.refreshTable(f"{EDL_DB}.{T_ANCHOR}")
+print("catalog count after refresh:", spark.table(f"{EDL_DB}.{T_ANCHOR}").count())
+display(spark.sql(f"DESCRIBE FORMATTED {EDL_DB}.{T_ANCHOR}").filter("col_name in ('Location','Provider','Type','Table Properties')"))
+print("--- files at the path Spark was given ---")
+get_ipython().system(f"hdfs dfs -ls {PATH_ANCHOR} 2>&1 | tail -5")
+print("--- files at the absolute form of that path ---")
+get_ipython().system(f"hdfs dfs -ls /{PATH_ANCHOR} 2>&1 | tail -5")
+
 # %% [7] proof 3: read BOTH back from the catalog - counts match, keys match 1:1, schema, 5 rows each
+spark.catalog.refreshTable(f"{EDL_DB}.{T_ANCHOR}"); spark.catalog.refreshTable(f"{EDL_DB}.{T_TARGET}")
 ta = spark.table(f"{EDL_DB}.{T_ANCHOR}")
 tt = spark.table(f"{EDL_DB}.{T_TARGET}")
 na, nt = ta.count(), tt.count()
