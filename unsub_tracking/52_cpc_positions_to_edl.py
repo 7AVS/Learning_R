@@ -54,6 +54,8 @@ SQL_POSITIONS = f"""
         (Banking - Email, CASL) with CLNT_CONSENT_TYP = 5001 on the
         {START_ANCHOR} month-end snapshot. 5002 (closed), 5003 (blank),
         any other value, or no 1012 row at all -> out.
+     Personal is required in BOTH systems; the waterfall (Q3b) required it in
+     CPC only, so this table has 417 fewer rows (12,545,545 vs 12,545,962).
      Clients who joined, re-activated or re-consented AFTER {START_ANCHOR}
      are NOT here (this is the stakeholder's "all opted in at Aug-24" base).
 
@@ -176,10 +178,16 @@ n_rows = df_pos.count()
 print(f"rows in Spark: {n_rows:,}  (expected 12,545,962 from Q3b start_5001_aug24)")
 
 # %% [4] proof 1: universe. Every row is opted-in at start; row count matches the waterfall start bar.
-assert n_rows == 12_545_962, f"start book mismatch: {n_rows:,} vs 12,545,962 - anchors or filters differ from Q3b"
+# Q3b start bar = 12,545,962 with personal from CPC only (CLNT_TYP_CD = 1). This table ALSO requires
+# CLNT_TYP = 1 on RB_CLNT_DLY (personal in both systems), which drops the clients typed personal in
+# CPC but not in RB_CLNT_DLY. Measured 2026-08-27: 12,545,545 -> 417 fewer (0.003%). Tolerance 0.01%.
+Q3B_START = 12_545_962
+delta = Q3B_START - n_rows
+print(f"vs Q3b start bar: {n_rows:,} = {Q3B_START:,} - {delta:,}  ({delta / Q3B_START:.4%} - RB_CLNT_DLY CLNT_TYP=1 cut)")
+assert abs(delta) <= Q3B_START * 0.0001, f"start book off by {delta:,} - more than the type-filter drift; anchors or filters differ from Q3b"
 bad = df_pos.filter("cpc_1012_start <> 5001 OR opted_in_start <> 1").count()
 assert bad == 0, f"{bad:,} rows not 5001 at start"
-print("PASS: 12,545,962 rows, all 5001 + active at", START_ANCHOR)
+print(f"PASS: {n_rows:,} rows, all 5001 + active + personal (both systems) at", START_ANCHOR)
 
 # %% [5] proof 2: end-anchor distribution - the stakeholder's stay/leave split, plus the SF overlay.
 from pyspark.sql import functions as F
