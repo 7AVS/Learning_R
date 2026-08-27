@@ -147,7 +147,7 @@ LEFT  JOIN u_b ub ON ub.CLNT_NO = a.CLNT_NO
 LEFT  JOIN v   ON v.CLNT_NO   = a.CLNT_NO
 WHERE a.cons_a = 5001
 """
-print(SQL_POSITIONS)
+# SQL defined; runs in cell [3]
 
 # %% [3] pull into Spark. Preferred: Spark JDBC (Teradata runs it, executors receive it -
 # no driver-memory pass for 12.5M rows). Fallback: chunked teradatasql -> pandas -> Spark.
