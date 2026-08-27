@@ -44,6 +44,55 @@ print(f"target: {EDL_DB}.{EDL_TABLE}\npath:   {EDL_PATH}")
 
 # %% [2] the extract - Teradata-direct. One row per start-book client.
 SQL_POSITIONS = f"""
+/* ==========================================================================
+   DATA DEFINITION - what this table is, and every cut applied to get it
+   ==========================================================================
+   WHO IS IN (one row each) - the START BOOK at {START_ANCHOR}:
+     1. Personal clients only: CLNT_TYP = 1 on DDWV01.RB_CLNT_DLY and
+        CLNT_TYP_CD = 1 on DDWV01.CPC_RB_PREF_MTHLY. Business clients out.
+     2. Active at the start anchor: CLNT_STS = 'A' on RB_CLNT_DLY at
+        SNAP_DT = {START_ANCHOR}. Inactive / closed / null-status out.
+     3. Email consent OPEN at the start anchor: CPC preference 1012
+        (Banking - Email, CASL) with CLNT_CONSENT_TYP = 5001 on the
+        {START_ANCHOR} month-end snapshot. 5002 (closed), 5003 (blank),
+        any other value, or no 1012 row at all -> out.
+     Clients who joined, re-activated or re-consented AFTER {START_ANCHOR}
+     are NOT here (this is the stakeholder's "all opted in at Aug-24" base).
+
+   WHAT WE RECORD FOR EACH - the END POSITION at {END_ANCHOR}:
+     - cpc_1012_end: raw 1012 value on the {END_ANCHOR} snapshot
+       (5001 open / 5002 closed / 5003 blank / NULL = no 1012 row that month)
+     - cpc_1012_writer_end: APP_SYS_CD that last wrote the row
+       (7020 = email backfeed from Salesforce; other codes = branch, call
+       centre, batch)
+     - active_end: 1 if CLNT_STS = 'A' at {END_ANCHOR}, else 0
+     - opted_in_end: 1 only if cpc_1012_end = 5001 AND active_end = 1.
+       This is the stakeholder's stay (1) / leave (0) flag. A client who
+       is still 5001 but inactive counts as 0 (not contactable).
+     No precedence rule is applied here - every client keeps all raw
+     fields, so any rule can be applied downstream.
+
+   OVERLAY - Salesforce side (not used for opted_in_end; provided so the
+   CPC-vs-Salesforce gap is visible on the same rows):
+     - sf_unsub_in_window: 1 if the client has at least one
+       disposition_cd = 4 (unsubscribe click) in DTZV01.VENDOR_FEEDBACK_EVENT
+       between {SF_FLOOR} and {END_ANCHOR} inclusive, joined to
+       VENDOR_FEEDBACK_MASTER on (consumer_id_hashed, TREATMENT_ID) to get
+       CLNT_NO; MASTER scanned for treatment-id prefix {MASTER_LO}..{MASTER_HI}.
+       Any list / any mnemonic - not scoped to banking or cards email.
+     - first_sf_unsub_dt_tm: the earliest such click.
+     opted_in_end = 1 AND sf_unsub_in_window = 1 = CPC still says yes,
+     client said no in Salesforce (the gray-bar population).
+
+   WHAT IS NOT HERE:
+     - Other CPC gates (1046 rewards newsletter, program-specific 1004..1045):
+       only 1012 is read. A client whose unsubscribe landed on a program
+       gate shows as opted_in_end = 1 here.
+     - CPC writes between the two anchors: only the two month-end snapshots
+       are read; a close-then-reopen inside the window is invisible.
+     - July-2026: not loaded in CPC at request time; END_ANCHOR = {END_ANCHOR}.
+     - Business clients, non-active clients at start, clients not 5001 at start.
+   ========================================================================== */
 WITH u_a AS (   -- active at start anchor (personal)
     SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
     WHERE SNAP_DT = DATE '{START_ANCHOR}' AND CLNT_STS = 'A' AND CLNT_TYP = 1
