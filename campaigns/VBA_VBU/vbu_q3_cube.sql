@@ -5,10 +5,11 @@
 -- Campaign owner: CPX/GLX/CLX -> AIB offers unchanged Q3-25 vs Q3-26, EXCEPT Ultimate Banking version eliminated in 2026
 -- and a NEW MC6 -> MCB migration path introduced. Ask: does the MC6->MCB segment explain the lift decline?
 -- Fiscal quarters: Q3 FY2025 = year_mon_start May-Jul 2025; Q3 FY2026 = May-Jul 2026.
--- Arm = `control` (confirmed in VBU vintage build); `test_group` is a label. responder* are CHAR -> CASE.
--- [VERIFY] year_mon_start format: assumed 'YYYY-MM' string; if YYYYMM integer use >= 202505.
--- [VERIFY] responder value: assumed '1'; if 'Y', change the CASE literals.
---   Lift (abs) = responder_targetproduct/clnt_count [action] - same [control], in pp. Also report responder (overall).
+-- VERIFIED 2026-08-27 (vbu_control_arm_check.sql): control IN ('Action','Control'), ~4.6% holdout; year_mon_start = 'YYYY-MM';
+--   `responder` = 3-way label '0.No Change(s) from…' / '1.Change to Target P…' / '2.Change to NON-Targ…' (NOT a 0/1 flag);
+--   responder_targetproduct = '1' works. Control organic target-product conversion ~0.1% (1-2 clients/month) -> lift ≈ action RR.
+-- Q3 only: May-Jul both years. No August.
+--   Lift (abs) = resp_target/clnt_count [Action] - same [Control], in pp. Also report resp_any. Scorecard 1.4% = whichever matches.
 --
 -- QUESTIONS TO ANSWER FROM THE EXPORTED CSV (answer each with a table, then one sentence):
 -- Q1. Q3-25 vs Q3-26, total VBU: leads, action RR, control RR, lift (pp and relative) on responder_targetproduct
@@ -33,11 +34,12 @@ SELECT
   ,control
   ,from_product
   ,target_product
-  ,SUM(CASE WHEN responder               = '1' THEN 1 ELSE 0 END) AS responder
-  ,SUM(CASE WHEN responder_anyproduct    = '1' THEN 1 ELSE 0 END) AS responder_anyproduct
-  ,SUM(CASE WHEN responder_targetproduct = '1' THEN 1 ELSE 0 END) AS responder_targetproduct
+  ,SUM(CASE WHEN responder LIKE '1.%'                         THEN 1 ELSE 0 END) AS resp_target
+  ,SUM(CASE WHEN responder LIKE '2.%'                         THEN 1 ELSE 0 END) AS resp_nontarget
+  ,SUM(CASE WHEN responder LIKE '1.%' OR responder LIKE '2.%' THEN 1 ELSE 0 END) AS resp_any
+  ,SUM(CASE WHEN responder_targetproduct = '1'                THEN 1 ELSE 0 END) AS responder_targetproduct
   ,COUNT(*)                                                       AS clnt_count
 FROM DL_MR_PROD.CARDS_BIZUPS_VBU_DESCRESP_CLNT
-WHERE year_mon_start >= '2025-05'
+WHERE year_mon_start IN ('2025-05','2025-06','2025-07','2026-05','2026-06','2026-07')
 GROUP BY 1,2,3,4,5,6
 ;
