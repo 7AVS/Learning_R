@@ -199,32 +199,24 @@ print("read: opted_in_end=1 & sf_unsub=1 is the gray-bar population (CPC open, S
 display(df_pos.groupBy("cpc_1012_end", "active_end").agg(F.count("*").alias("clients")).orderBy("cpc_1012_end", "active_end"))
 
 # %% [6] write TWO tables to EDL - one per position, same clients in both (join on CLNT_NO).
-# Exact write pattern the stakeholder sent (overwrite, explicit path, saveAsTable).
+# Path: the database's own registered location + table name (absolute). A relative path
+# resolves into the user's HDFS home and the catalog then points somewhere else -> 0 rows on read.
 T_ANCHOR = "unsub_cpc_1012_anchor_aug24"
 T_TARGET = "unsub_cpc_1012_target_jun26"
-PATH_ANCHOR = f"prod/16131/app/ZP10/lab/data/tde/measurement/dev/{EDL_DB}.db/{T_ANCHOR}"
-PATH_TARGET = f"prod/16131/app/ZP10/lab/data/tde/measurement/dev/{EDL_DB}.db/{T_TARGET}"
+DB_LOC = [r for r in spark.sql(f"DESCRIBE DATABASE {EDL_DB}").collect() if r[0].strip().lower().startswith("location")][0][1]
+PATH_ANCHOR = f"{DB_LOC.rstrip('/')}/{T_ANCHOR}"
+PATH_TARGET = f"{DB_LOC.rstrip('/')}/{T_TARGET}"
+print("db location:", DB_LOC)
 
 df_anchor = df_pos.select("CLNT_NO", "anchor_start_dt", "cpc_1012_start", "opted_in_start")
 df_target = df_pos.select("CLNT_NO", "anchor_end_dt", "cpc_1012_end", "cpc_1012_writer_end",
                           "active_end", "opted_in_end", "sf_unsub_in_window", "first_sf_unsub_dt_tm")
 
+spark.sql(f"DROP TABLE IF EXISTS {EDL_DB}.{T_ANCHOR}")
+spark.sql(f"DROP TABLE IF EXISTS {EDL_DB}.{T_TARGET}")
 df_anchor.write.mode("overwrite").option("path", PATH_ANCHOR).saveAsTable(f"{EDL_DB}.{T_ANCHOR}")
-print("write issued ->", f"{EDL_DB}.{T_ANCHOR}")
 df_target.write.mode("overwrite").option("path", PATH_TARGET).saveAsTable(f"{EDL_DB}.{T_TARGET}")
-print("write issued ->", f"{EDL_DB}.{T_TARGET}")
-
-# %% [6b] WHERE DID THE WRITE GO - run this right after [6]; screenshot the output
-import time
-t0 = time.time()
-print("rows in df_anchor (forces the plan):", df_anchor.count(), f"({time.time()-t0:.0f}s)")
-spark.catalog.refreshTable(f"{EDL_DB}.{T_ANCHOR}")
-print("catalog count after refresh:", spark.table(f"{EDL_DB}.{T_ANCHOR}").count())
-display(spark.sql(f"DESCRIBE FORMATTED {EDL_DB}.{T_ANCHOR}").filter("col_name in ('Location','Provider','Type','Table Properties')"))
-print("--- files at the path Spark was given ---")
-get_ipython().system(f"hdfs dfs -ls {PATH_ANCHOR} 2>&1 | tail -5")
-print("--- files at the absolute form of that path ---")
-get_ipython().system(f"hdfs dfs -ls /{PATH_ANCHOR} 2>&1 | tail -5")
+print("written ->", f"{EDL_DB}.{T_ANCHOR}", "and", f"{EDL_DB}.{T_TARGET}")
 
 # %% [7] proof 3: read BOTH back from the catalog - counts match, keys match 1:1, schema, 5 rows each
 spark.catalog.refreshTable(f"{EDL_DB}.{T_ANCHOR}"); spark.catalog.refreshTable(f"{EDL_DB}.{T_TARGET}")
