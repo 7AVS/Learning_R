@@ -1,6 +1,6 @@
 # 52_cpc_positions_to_edl.py
-# Save the Aug-24 opted-in universe with its CPC 1012 position at BOTH anchors
-# (Aug-24 and Jun-26) to an EDL table, so the NBA analytics stakeholder can track
+# Save the Aug-24 opted-in universe as TWO EDL tables - anchor position (Aug-24)
+# and target position (Jun-26), same clients, join on CLNT_NO - so the NBA analytics stakeholder can track
 # profitability of "stayed opted in" vs "did not" (request 2026-08-27).
 # Also carries the Salesforce-unsub flag so the CPC-vs-SF gap is visible on the
 # same rows (Andre: do what was asked, then show the gap).
@@ -192,28 +192,41 @@ display(summary)
 print("read: opted_in_end=1 & sf_unsub=1 is the gray-bar population (CPC open, Salesforce said no)")
 display(df_pos.groupBy("cpc_1012_end", "active_end").agg(F.count("*").alias("clients")).orderBy("cpc_1012_end", "active_end"))
 
-# %% [6] write to EDL - exact pattern the stakeholder sent (overwrite, explicit path, saveAsTable)
-(df_pos.write.mode("overwrite")
-       .option("path", EDL_PATH)
-       .saveAsTable(f"{EDL_DB}.{EDL_TABLE}"))
-print("write issued ->", f"{EDL_DB}.{EDL_TABLE}")
+# %% [6] write TWO tables to EDL - one per position, same clients in both (join on CLNT_NO).
+# Exact write pattern the stakeholder sent (overwrite, explicit path, saveAsTable).
+T_ANCHOR = "unsub_cpc_1012_anchor_aug24"
+T_TARGET = "unsub_cpc_1012_target_jun26"
+PATH_ANCHOR = f"prod/16131/app/ZP10/lab/data/tde/measurement/dev/{EDL_DB}.db/{T_ANCHOR}"
+PATH_TARGET = f"prod/16131/app/ZP10/lab/data/tde/measurement/dev/{EDL_DB}.db/{T_TARGET}"
 
-# %% [7] proof 3: read it back from the catalog (not from the cached df) - count + schema + 5 rows
-t = spark.table(f"{EDL_DB}.{EDL_TABLE}")
-n_back = t.count()
-assert n_back == n_rows, f"read-back {n_back:,} != written {n_rows:,}"
-t.printSchema()
-display(t.limit(5))
-print(f"PASS: {EDL_DB}.{EDL_TABLE} holds {n_back:,} rows; opted_in_end split:")
-display(t.groupBy("opted_in_end").count())
+df_anchor = df_pos.select("CLNT_NO", "anchor_start_dt", "cpc_1012_start", "opted_in_start")
+df_target = df_pos.select("CLNT_NO", "anchor_end_dt", "cpc_1012_end", "cpc_1012_writer_end",
+                          "active_end", "opted_in_end", "sf_unsub_in_window", "first_sf_unsub_dt_tm")
+
+df_anchor.write.mode("overwrite").option("path", PATH_ANCHOR).saveAsTable(f"{EDL_DB}.{T_ANCHOR}")
+print("write issued ->", f"{EDL_DB}.{T_ANCHOR}")
+df_target.write.mode("overwrite").option("path", PATH_TARGET).saveAsTable(f"{EDL_DB}.{T_TARGET}")
+print("write issued ->", f"{EDL_DB}.{T_TARGET}")
+
+# %% [7] proof 3: read BOTH back from the catalog - counts match, keys match 1:1, schema, 5 rows each
+ta = spark.table(f"{EDL_DB}.{T_ANCHOR}")
+tt = spark.table(f"{EDL_DB}.{T_TARGET}")
+na, nt = ta.count(), tt.count()
+assert na == n_rows and nt == n_rows, f"read-back anchor {na:,} / target {nt:,} != written {n_rows:,}"
+nj = ta.join(tt, "CLNT_NO", "inner").count()
+assert nj == n_rows, f"anchor-target join {nj:,} != {n_rows:,} - keys do not line up 1:1"
+ta.printSchema(); display(ta.limit(5))
+tt.printSchema(); display(tt.limit(5))
+print(f"PASS: both tables hold {n_rows:,} rows and join 1:1 on CLNT_NO")
+display(tt.groupBy("opted_in_end", "sf_unsub_in_window").count().orderBy("opted_in_end", "sf_unsub_in_window"))
 
 # %% [8] hand-off note (copy into the reply to the stakeholder)
 print(f"""
-Table: {EDL_DB}.{EDL_TABLE}
-Grain: one row per client opted-in (CPC 1012 = 5001, active, personal) at {START_ANCHOR}. Rows: {n_rows:,}.
-Columns: cpc_1012_start / opted_in_start (=1), cpc_1012_end / cpc_1012_writer_end / active_end / opted_in_end (1 = still 5001 and active at {END_ANCHOR}),
-         sf_unsub_in_window / first_sf_unsub_dt_tm (Salesforce unsubscribe click {SF_FLOOR}..{END_ANCHOR}).
-Caveat: opted_in_end = 1 AND sf_unsub_in_window = 1 are clients CPC still shows as opted in but who unsubscribed in Salesforce
-        (~474K at Jul-26). Profitability tracked on CPC alone treats them as stayers.
+Two tables in {EDL_DB}, same {n_rows:,} clients, join on CLNT_NO:
+  {T_ANCHOR}  - the universe: personal, active, CPC 1012 = 5001 at {START_ANCHOR}. cpc_1012_start, opted_in_start (=1).
+  {T_TARGET}  - their position at {END_ANCHOR}: cpc_1012_end (raw), cpc_1012_writer_end (7020 = email backfeed),
+                active_end, opted_in_end (1 = still 5001 AND active), sf_unsub_in_window / first_sf_unsub_dt_tm (Salesforce click, any list).
+Caveat: opted_in_end = 1 AND sf_unsub_in_window = 1 = CPC still shows opted in, client unsubscribed in Salesforce (~474K at Jul-26).
+Profitability tracked on CPC alone treats them as stayers. Full cut list is in the SQL header of the extract.
 End anchor is {END_ANCHOR}: CPC July-26 was not loaded at request time.
 """)
