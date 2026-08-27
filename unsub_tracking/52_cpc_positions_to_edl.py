@@ -38,9 +38,7 @@ SF_CEIL      = "2026-07-01"     # exclusive; = END_ANCHOR + 1 day
 MASTER_LO, MASTER_HI = "2024153", "2026181"   # VENDOR_FEEDBACK_MASTER treatment-id julian prefix range
 
 EDL_DB     = "prod_zp10_nba_analytics_staging"
-EDL_TABLE  = "unsub_cpc_1012_positions_aug24_jun26"
-EDL_PATH   = f"prod/16131/app/ZP10/lab/data/tde/measurement/dev/{EDL_DB}.db/{EDL_TABLE}"
-print(f"target: {EDL_DB}.{EDL_TABLE}\npath:   {EDL_PATH}")
+print("EDL db:", EDL_DB, "- two tables written in cell [6]: anchor (Aug-24) and target (Jun-26)")
 
 # %% [2] the extract - Teradata-direct. One row per start-book client.
 SQL_POSITIONS = f"""
