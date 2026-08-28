@@ -79,7 +79,7 @@ for tbl, df in dfs.items():
 display(spark.table(f"{EDL_DB}.unsub_cpc_1012_target_jun26").limit(5))
 
 # %% [6] add cpc_optout_month to the ANCHOR table (stakeholder ask 2026-08-28):
-# first month-end after Aug-24 where the client's CPC 1012 is no longer 5001. NULL = never changed
+# first month-end after Aug-24 where the client's CPC 1012 = 5002 (closed). NULL = never closed
 # through Jun-26. Reads the monthly snapshots, so a close-then-reopen shows its first close month.
 # Absent-from-CPC months are not counted as a change (no row != opted out); flagged separately.
 ANCHOR_TBL = "unsub_cpc_1012_anchor_aug24"
@@ -89,8 +89,8 @@ SELECT a.CLNT_NO,
        a.CLNT_CONSENT_TYP                      AS cpc_1012,
        a.APP_SYS_CD                            AS cpc_1012_writer,
        1                                       AS contactable,
-       MIN(CASE WHEN m.CLNT_CONSENT_TYP <> 5001 THEN m.MTH_END_DT END)                 AS cpc_optout_month,
-       MIN(CASE WHEN m.CLNT_CONSENT_TYP <> 5001 THEN m.APP_SYS_CD END)                  AS cpc_optout_writer_first, -- writer on the first non-5001 month (ties: lowest code)
+       MIN(CASE WHEN m.CLNT_CONSENT_TYP = 5002 THEN m.MTH_END_DT END)                  AS cpc_optout_month,        -- first month 1012 = 5002 (closed); 5003/blank NOT counted
+       MIN(CASE WHEN m.CLNT_CONSENT_TYP = 5002 THEN m.APP_SYS_CD END)                   AS cpc_optout_writer_first, -- writer on the first 5002 month (ties: lowest code)
        CASE WHEN COUNT(m.CLNT_NO) < 22 THEN 1 ELSE 0 END                                AS missing_cpc_months     -- 1 = fewer than 22 month-ends Sep-24..Jun-26 present
 FROM DDWV01.CPC_RB_PREF_MTHLY a
 INNER JOIN (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
@@ -115,3 +115,65 @@ spark.catalog.refreshTable(f"{EDL_DB}.{ANCHOR_TBL}")
 n_back = spark.table(f"{EDL_DB}.{ANCHOR_TBL}").count()
 assert n_back == n_a2, f"read-back {n_back:,} != {n_a2:,}"
 print(f"PASS {EDL_DB}.{ANCHOR_TBL} rewritten with cpc_optout_month: {n_back:,} rows")
+
+# %% [7] VALIDATE the anchor table's cpc_optout_month. Four checks, each its own answer.
+from pyspark.sql import functions as F
+ta = spark.table(f"{EDL_DB}.{ANCHOR_TBL}")
+
+# check 1 - grain: no duplicate clients, count unchanged
+n, nd = ta.count(), ta.select("CLNT_NO").distinct().count()
+print(f"check 1 grain: {n:,} rows, {nd:,} distinct clients ->", "PASS" if n == nd else "FAIL - duplicates")
+
+# check 2 - shape: opt-outs by month. Expect a hump around Mar-25..Jun-25 (7020 run-rate) and
+# the total non-null to be >= 174,996 (Q3b closes among still-active: 72,346 + 8,604 + 94,046),
+# because this also counts clients who closed then went inactive or re-opened.
+by_month = ta.groupBy("cpc_optout_month").count().orderBy("cpc_optout_month")
+display(by_month)
+n_opt = ta.filter("cpc_optout_month IS NOT NULL").count()
+print(f"check 2 total with an opt-out month: {n_opt:,}  (floor from Q3b closes = 174,996) ->", "PASS" if n_opt >= 174_996 else "LOOK - fewer than the waterfall's closes")
+
+# check 3 - independent recompute in Teradata with a different method (window, not MIN/CASE):
+# per client, the first month where 1012 = 5002 and the PREVIOUS month was 5001. Compare month totals.
+SQL_RECOMP = """
+SELECT first_close_month, CAST(COUNT(*) AS BIGINT) AS clients
+FROM (
+    SELECT CLNT_NO, MIN(MTH_END_DT) AS first_close_month
+    FROM (
+        SELECT m.CLNT_NO, m.MTH_END_DT, m.CLNT_CONSENT_TYP,
+               LAG(m.CLNT_CONSENT_TYP) OVER (PARTITION BY m.CLNT_NO ORDER BY m.MTH_END_DT) AS prev_cons
+        FROM DDWV01.CPC_RB_PREF_MTHLY m
+        INNER JOIN (SELECT p.CLNT_NO FROM DDWV01.CPC_RB_PREF_MTHLY p
+                    INNER JOIN (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+                                WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A' AND CLNT_TYP = 1) u
+                            ON u.CLNT_NO = p.CLNT_NO
+                    WHERE p.PREF_ID = 1012 AND p.MTH_END_DT = DATE '2024-08-31' AND p.CLNT_TYP_CD = 1
+                      AND p.CLNT_CONSENT_TYP = 5001) sb
+                ON sb.CLNT_NO = m.CLNT_NO
+        WHERE m.PREF_ID = 1012 AND m.CLNT_TYP_CD = 1
+          AND m.MTH_END_DT BETWEEN DATE '2024-08-31' AND DATE '2026-06-30'
+    ) x
+    WHERE CLNT_CONSENT_TYP = 5002 AND prev_cons = 5001
+    GROUP BY CLNT_NO
+) y
+GROUP BY 1 ORDER BY 1
+"""
+recomp = pull(SQL_RECOMP).toPandas()
+mine = by_month.filter("cpc_optout_month IS NOT NULL").toPandas().rename(columns={"cpc_optout_month": "first_close_month", "count": "table_clients"})
+cmp = recomp.merge(mine, on="first_close_month", how="outer").fillna(0)
+cmp["diff"] = cmp["clients"] - cmp["table_clients"]
+display(cmp)
+print("check 3: 'diff' should be 0 or small positive (recompute needs prev month = 5001; table counts a first 5002 even after a missing month)")
+
+# check 4 - eyeball 10 clients: full monthly path vs the month the table chose
+sample_ids = [r.CLNT_NO for r in ta.filter("cpc_optout_month IS NOT NULL").limit(10).collect()]
+SQL_PATH = f"""
+SELECT CLNT_NO, MTH_END_DT, CLNT_CONSENT_TYP, APP_SYS_CD
+FROM DDWV01.CPC_RB_PREF_MTHLY
+WHERE PREF_ID = 1012 AND CLNT_TYP_CD = 1
+  AND CLNT_NO IN ({",".join(str(i) for i in sample_ids)})
+  AND MTH_END_DT BETWEEN DATE '2024-08-31' AND DATE '2026-06-30'
+ORDER BY CLNT_NO, MTH_END_DT
+"""
+display(pull(SQL_PATH))
+display(ta.filter(F.col("CLNT_NO").isin(sample_ids)).select("CLNT_NO", "cpc_optout_month", "cpc_optout_writer_first", "missing_cpc_months"))
+print("check 4: for each client, the first month showing 5002 in the path must equal cpc_optout_month")
