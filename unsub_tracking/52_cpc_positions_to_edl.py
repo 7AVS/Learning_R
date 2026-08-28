@@ -81,7 +81,7 @@ display(spark.table(f"{EDL_DB}.unsub_cpc_1012_target_jun26").limit(5))
 # %% [6] add cpc_optout_month to the ANCHOR table (stakeholder ask 2026-08-28):
 # first month-end after Aug-24 where the client's CPC 1012 = 5002 (closed). NULL = never closed
 # through Jun-26. Reads the monthly snapshots, so a close-then-reopen shows its first close month.
-# Absent-from-CPC months are not counted as a change (no row != opted out); flagged separately.
+# Absent-from-CPC months are not counted as a change (no row != opted out); missing_cpc_months counts them.
 ANCHOR_TBL = "unsub_cpc_1012_anchor_aug24"
 SQL_OPTOUT = """
 SELECT a.CLNT_NO,
@@ -91,7 +91,7 @@ SELECT a.CLNT_NO,
        1                                       AS contactable,
        MIN(CASE WHEN m.CLNT_CONSENT_TYP = 5002 THEN m.MTH_END_DT END)                  AS cpc_optout_month,        -- first month 1012 = 5002 (closed); 5003/blank NOT counted
        MIN(CASE WHEN m.CLNT_CONSENT_TYP = 5002 THEN m.APP_SYS_CD END)                   AS cpc_optout_writer_first, -- writer on the first 5002 month (ties: lowest code)
-       CASE WHEN COUNT(m.CLNT_NO) < 22 THEN 1 ELSE 0 END                                AS missing_cpc_months     -- 1 = fewer than 22 month-ends Sep-24..Jun-26 present
+       22 - COUNT(m.CLNT_NO)                                                            AS missing_cpc_months     -- how many of the 22 month-ends Sep-24..Jun-26 have NO 1012 row (0 = full history, 22 = gone after Aug-24)
 FROM DDWV01.CPC_RB_PREF_MTHLY a
 INNER JOIN (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
             WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A' AND CLNT_TYP = 1) u
