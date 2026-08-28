@@ -77,3 +77,41 @@ for tbl, df in dfs.items():
     assert n_back == n_pulled, f"{tbl}: read-back {n_back:,} != pulled {n_pulled:,}"
     print(f"PASS {EDL_DB}.{tbl}: {n_back:,} rows")
 display(spark.table(f"{EDL_DB}.unsub_cpc_1012_target_jun26").limit(5))
+
+# %% [6] add cpc_optout_month to the ANCHOR table (stakeholder ask 2026-08-28):
+# first month-end after Aug-24 where the client's CPC 1012 is no longer 5001. NULL = never changed
+# through Jun-26. Reads the monthly snapshots, so a close-then-reopen shows its first close month.
+# Absent-from-CPC months are not counted as a change (no row != opted out); flagged separately.
+ANCHOR_TBL = "unsub_cpc_1012_anchor_aug24"
+SQL_OPTOUT = """
+SELECT a.CLNT_NO,
+       DATE '2024-08-31'                       AS anchor_dt,
+       a.CLNT_CONSENT_TYP                      AS cpc_1012,
+       a.APP_SYS_CD                            AS cpc_1012_writer,
+       1                                       AS contactable,
+       MIN(CASE WHEN m.CLNT_CONSENT_TYP <> 5001 THEN m.MTH_END_DT END)                 AS cpc_optout_month,
+       MIN(CASE WHEN m.CLNT_CONSENT_TYP <> 5001 THEN m.APP_SYS_CD END)                  AS cpc_optout_writer_first, -- writer on the first non-5001 month (ties: lowest code)
+       CASE WHEN COUNT(m.CLNT_NO) < 22 THEN 1 ELSE 0 END                                AS missing_cpc_months     -- 1 = fewer than 22 month-ends Sep-24..Jun-26 present
+FROM DDWV01.CPC_RB_PREF_MTHLY a
+INNER JOIN (SELECT DISTINCT CLNT_NO FROM DDWV01.RB_CLNT_DLY
+            WHERE SNAP_DT = DATE '2024-08-31' AND CLNT_STS = 'A' AND CLNT_TYP = 1) u
+        ON u.CLNT_NO = a.CLNT_NO
+LEFT JOIN DDWV01.CPC_RB_PREF_MTHLY m
+       ON m.CLNT_NO = a.CLNT_NO AND m.PREF_ID = 1012 AND m.CLNT_TYP_CD = 1
+      AND m.MTH_END_DT > DATE '2024-08-31' AND m.MTH_END_DT <= DATE '2026-06-30'
+WHERE a.PREF_ID = 1012 AND a.MTH_END_DT = DATE '2024-08-31' AND a.CLNT_TYP_CD = 1
+  AND a.CLNT_CONSENT_TYP = 5001
+GROUP BY a.CLNT_NO, a.CLNT_CONSENT_TYP, a.APP_SYS_CD
+"""
+df_a2 = pull(SQL_OPTOUT).cache()
+n_a2 = df_a2.count()
+print(f"anchor with optout month: {n_a2:,} rows (must equal the anchor table count)")
+display(df_a2.groupBy("cpc_optout_month").count().orderBy("cpc_optout_month"))   # NULL row = never opted out
+
+path = f"{DB_LOC.rstrip('/')}/{ANCHOR_TBL}"
+spark.sql(f"DROP TABLE IF EXISTS {EDL_DB}.{ANCHOR_TBL}")
+df_a2.write.mode("overwrite").option("path", path).saveAsTable(f"{EDL_DB}.{ANCHOR_TBL}")
+spark.catalog.refreshTable(f"{EDL_DB}.{ANCHOR_TBL}")
+n_back = spark.table(f"{EDL_DB}.{ANCHOR_TBL}").count()
+assert n_back == n_a2, f"read-back {n_back:,} != {n_a2:,}"
+print(f"PASS {EDL_DB}.{ANCHOR_TBL} rewritten with cpc_optout_month: {n_back:,} rows")
