@@ -1,35 +1,44 @@
 -- ============================================================================
 -- MEASUREMENT — VINTAGE CURVES (CRV + PCL)                      [FINAL FILE]
--- The permanent vintage builder for the CRV live experiment. Iterate HERE;
--- e6a/e6b are the frozen originals. Two statements:
---   STMT 1 — CRV response vintage: weeks from ASSIGNMENT to first installment
---            take, per cell                                      [runs weekly]
---   STMT 2 — PCL response vintage: weeks from PCL LEAD START to the
---            dt_cl_change limit-change event, per cell           [runs when a
---            post-go-live PCL wave is loaded; first = September 2026]
--- Output = long format, counts per weekly bin + cell denominator; cumulative
--- curve = running sum at read time (Excel/py). Same design, contrasts, and
--- hard rules as measurement_response_summary.sql (see its header).
--- ONE DEFINITION END TO END (fixed 2026-08-31 after Andre caught the split):
--- CRV event date = First_Response_Date ON THE SAME CURATED ROW as `responder`
--- (HELP TABLE 2026-08-31) — same table, same attribution as the summary; the
--- vintage MUST sum to the summary's crv_responders per cell (tie-out check;
--- resp_no_date column must be ~0 or the curve undercounts). Raw P3C path
--- (e6a) demoted to optional cross-check. PCL event date = dt_cl_change on the
--- curated PCL row (proven always-populated for responders, Q17b v1).
--- CAVEAT (PCL): increase_decrease is NOT filtered (Q17 convention) — "PLI
--- take" may include limit decreases; add the guard if a shipped number needs it.
--- Engine: TERADATA-DIRECT syntax.
+-- Rebuilt 2026-08-31 to the HOUSE VINTAGE FORMAT (vintages/OUTPUT_CONTRACT.md,
+-- Power Pack canon) after the first version shipped a timing histogram — wrong
+-- shape, right numbers. Contract:
+--   mne | cohort_month 'YYYY-MM' | segment | grp | vintage_day 0..90
+--   | base | responders (incremental) | responders_cum
+--   * FULL day spine — every cell gets all 91 rows, zeros included
+--   * base fixed down the spine (never summed over vintage_day)
+--   * counts only; rates computed in the pivot
+--   * negative-day responses CLAMPED to day 0 (never dropped) — Data Lab rule;
+--     covers the PMCS pre-assignment gap (1 known account)
+-- EXPERIMENT MAPPING: segment = 'Pass'/'Fail' (@132, pre-treatment split);
+--   grp = 'Test' (TG4 within Pass, TG1 within Fail) / 'Control' (TG8).
+--   Standard read: two lines per segment chart; Pass = the causal banner test.
+-- SUCCESS DEFINITION (one, end to end): curated responder + first_response_date
+--   (CRV) / responder_cli + dt_cl_change (PCL). Vintage day-90 cum MUST tie to
+--   measurement_response_summary.sql per cell.
+-- STMT 1 = CRV response vintage (runs weekly).
+-- STMT 2 = PCL response vintage (first clean wave = September 2026).
+-- Engine: TERADATA-DIRECT. Day spine = WITH RECURSIVE (seed needs a FROM —
+-- err 8842). If TDWM blocks the small cells x spine product join
+-- ("F-uncnstrm PJ"), fall back to VOLATILE TABLE + COLLECT STATS for spine
+-- and cells (canon quirk #1).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- STMT 1 — CRV vintage (curated, account grain, deployment-exact join;
--- clock = weeks since ASSIGNMENT, event = First_Response_Date)
+-- STMT 1 — CRV response vintage (account grain, anchor = assignment date)
 -- ---------------------------------------------------------------------------
-WITH expt AS (
-    SELECT visa_acct_no, tactic_id, tst_grp_cd,
-           substr(tactic_decisn_vrb_info, 132, 1) AS pass_flag,
-           treatmt_strt_dt                        AS assign_dt
+WITH RECURSIVE spine (vintage_day) AS (
+    SELECT 0 FROM (SELECT 1 AS x) seed
+    UNION ALL
+    SELECT vintage_day + 1 FROM spine WHERE vintage_day < 90
+),
+expt AS (
+    SELECT visa_acct_no, tactic_id,
+           CASE WHEN substr(tactic_decisn_vrb_info, 132, 1) = 'Y'
+                THEN 'Pass' ELSE 'Fail' END        AS seg,
+           CASE WHEN tst_grp_cd = 'TG8'
+                THEN 'Control' ELSE 'Test' END     AS grp,
+           treatmt_strt_dt                         AS assign_dt
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
       AND treatmt_strt_dt >= DATE '2026-08-14'
@@ -37,47 +46,69 @@ WITH expt AS (
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 ),
 offers AS (
-    SELECT e.tst_grp_cd, e.pass_flag, e.assign_dt,
-           c.acct_no, c.responder, c.first_response_date
+    SELECT e.seg, e.grp, e.assign_dt,
+           CAST(EXTRACT(YEAR FROM e.assign_dt) AS VARCHAR(4)) || '-' ||
+           SUBSTR('0' || TRIM(EXTRACT(MONTH FROM e.assign_dt)), -2) AS cohort_month,
+           c.responder, c.first_response_date
     FROM expt e
     JOIN dl_mr_prod.cards_crv_install_decis_resp c
       ON c.acct_no   = e.visa_acct_no
      AND c.tactic_id = e.tactic_id                  -- deployment-exact
      AND c.offer_start_date >= DATE '2026-08-01'    -- loose pushdown only
 ),
-denom AS (
-    SELECT tst_grp_cd, pass_flag,
-           COUNT(*)                                          AS cell_accts,
-           SUM(CASE WHEN responder = 1
-                     AND first_response_date IS NULL
-                    THEN 1 ELSE 0 END)                       AS resp_no_date  -- must be ~0
+cells AS (
+    SELECT cohort_month, seg, grp, COUNT(*) AS base
     FROM offers
-    GROUP BY 1, 2
+    GROUP BY 1, 2, 3
+),
+daily AS (
+    SELECT cohort_month, seg, grp,
+           CASE WHEN first_response_date < assign_dt THEN 0
+                ELSE first_response_date - assign_dt END AS vintage_day,  -- clamp, never drop
+           COUNT(*) AS responders
+    FROM offers
+    WHERE responder = 1
+      AND first_response_date IS NOT NULL
+    GROUP BY 1, 2, 3, 4
 )
 SELECT
-    TRUNC(o.assign_dt, 'MON')                          AS cohort_month,
-    o.tst_grp_cd,
-    o.pass_flag,
-    (o.first_response_date - o.assign_dt) / 7          AS week_bin,     -- 0 = days 0-6
-    COUNT(*)                                           AS responders,
-    MAX(d.cell_accts)                                  AS cell_accts,   -- denominator
-    MAX(d.resp_no_date)                                AS resp_no_date  -- undated responders (check)
-FROM offers o
-JOIN denom d
-  ON d.tst_grp_cd = o.tst_grp_cd AND d.pass_flag = o.pass_flag
-WHERE o.responder = 1
-  AND o.first_response_date IS NOT NULL
-GROUP BY 1, 2, 3, 4
-ORDER BY 2, 3, 4;
+    CAST('CRV_EXPT' AS VARCHAR(20))            AS mne,
+    g.cohort_month,
+    g.seg                                      AS segment,
+    g.grp,
+    s.vintage_day,
+    g.base,                                        -- fixed down the spine
+    COALESCE(d.responders, 0)                  AS responders,
+    SUM(COALESCE(d.responders, 0)) OVER (
+        PARTITION BY g.cohort_month, g.seg, g.grp
+        ORDER BY s.vintage_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                          AS responders_cum
+FROM cells g
+CROSS JOIN spine s
+LEFT JOIN daily d
+  ON d.cohort_month = g.cohort_month
+ AND d.seg          = g.seg
+ AND d.grp          = g.grp
+ AND d.vintage_day  = s.vintage_day
+ORDER BY g.cohort_month, g.seg, g.grp, s.vintage_day;
 
 -- ---------------------------------------------------------------------------
--- STMT 2 — PCL vintage (validated e6b; account grain; zero rows until a
--- post-08-14 PCL wave loads)
+-- STMT 2 — PCL response vintage (lead grain, anchor = PCL lead start;
+-- cohort = PCL wave month; zero rows until a post-08-14 wave loads)
 -- ---------------------------------------------------------------------------
-WITH expt AS (
-    SELECT visa_acct_no, tst_grp_cd,
-           substr(tactic_decisn_vrb_info, 132, 1) AS pass_flag,
-           treatmt_strt_dt                        AS assign_dt
+WITH RECURSIVE spine (vintage_day) AS (
+    SELECT 0 FROM (SELECT 1 AS x) seed
+    UNION ALL
+    SELECT vintage_day + 1 FROM spine WHERE vintage_day < 90
+),
+expt AS (
+    SELECT visa_acct_no,
+           CASE WHEN substr(tactic_decisn_vrb_info, 132, 1) = 'Y'
+                THEN 'Pass' ELSE 'Fail' END        AS seg,
+           CASE WHEN tst_grp_cd = 'TG8'
+                THEN 'Control' ELSE 'Test' END     AS grp,
+           treatmt_strt_dt                         AS assign_dt
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'CRV'
       AND treatmt_strt_dt >= DATE '2026-08-14'
@@ -85,33 +116,49 @@ WITH expt AS (
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 ),
 leads AS (
-    SELECT e.tst_grp_cd, e.pass_flag,
-           p.acct_no, p.treatmt_strt_dt, p.responder_cli, p.dt_cl_change
+    SELECT e.seg, e.grp,
+           CAST(EXTRACT(YEAR FROM p.treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
+           SUBSTR('0' || TRIM(EXTRACT(MONTH FROM p.treatmt_strt_dt)), -2) AS cohort_month,
+           p.treatmt_strt_dt, p.responder_cli, p.dt_cl_change
     FROM expt e
     JOIN dl_mr_prod.cards_pli_decision_resp p
       ON p.acct_no = e.visa_acct_no
      AND p.treatmt_strt_dt >= DATE '2026-08-14'
     WHERE p.treatmt_strt_dt >= e.assign_dt
 ),
-denom AS (
-    SELECT tst_grp_cd, pass_flag,
-           TRUNC(treatmt_strt_dt, 'MON') AS pcl_wave_month,
-           COUNT(*) AS cell_leads
+cells AS (
+    SELECT cohort_month, seg, grp, COUNT(*) AS base     -- base = leads
     FROM leads
     GROUP BY 1, 2, 3
+),
+daily AS (
+    SELECT cohort_month, seg, grp,
+           CASE WHEN dt_cl_change < treatmt_strt_dt THEN 0
+                ELSE dt_cl_change - treatmt_strt_dt END AS vintage_day,
+           COUNT(*) AS responders
+    FROM leads
+    WHERE responder_cli = 1
+      AND dt_cl_change IS NOT NULL
+    GROUP BY 1, 2, 3, 4
 )
 SELECT
-    TRUNC(l.treatmt_strt_dt, 'MON')                        AS pcl_wave_month,
-    l.tst_grp_cd,
-    l.pass_flag,
-    (l.dt_cl_change - l.treatmt_strt_dt) / 7               AS week_bin,
-    COUNT(*)                                               AS responders,
-    MAX(d.cell_leads)                                      AS cell_leads
-FROM leads l
-JOIN denom d
-  ON d.tst_grp_cd = l.tst_grp_cd AND d.pass_flag = l.pass_flag
- AND d.pcl_wave_month = TRUNC(l.treatmt_strt_dt, 'MON')
-WHERE l.responder_cli = 1
-  AND l.dt_cl_change >= l.treatmt_strt_dt      -- attribute event to this wave
-GROUP BY 1, 2, 3, 4
-ORDER BY 1, 2, 3, 4;
+    CAST('CRV_EXPT_PCL' AS VARCHAR(20))        AS mne,
+    g.cohort_month,
+    g.seg                                      AS segment,
+    g.grp,
+    s.vintage_day,
+    g.base,
+    COALESCE(d.responders, 0)                  AS responders,
+    SUM(COALESCE(d.responders, 0)) OVER (
+        PARTITION BY g.cohort_month, g.seg, g.grp
+        ORDER BY s.vintage_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    )                                          AS responders_cum
+FROM cells g
+CROSS JOIN spine s
+LEFT JOIN daily d
+  ON d.cohort_month = g.cohort_month
+ AND d.seg          = g.seg
+ AND d.grp          = g.grp
+ AND d.vintage_day  = s.vintage_day
+ORDER BY g.cohort_month, g.seg, g.grp, s.vintage_day;
