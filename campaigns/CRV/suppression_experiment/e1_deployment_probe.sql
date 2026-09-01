@@ -10,7 +10,8 @@
 --   4) Is @132 (pass-2-rules flag) populated — INCLUDING on TG8 control rows?
 --   5) Where do the PCRVRG strategy codes live? (5 indicator columns; codes
 --      were found NOWHERE in prior repo queries — do not assume a location)
--- Engine: Starburst/Trino federation (Trino syntax; DG6V01 addressed bare).
+-- Engine: TERADATA-DIRECT syntax (Andre running direct 2026-08-31; TRUNC not
+-- date_trunc). If rerun via Starburst: date_trunc('month', treatmt_strt_dt).
 -- ============================================================================
 -- ANDRE: DECIDE
 --   * Date floor = DATE '2026-08-14' on TREATMT_STRT_DT (go-live per Andre).
@@ -24,7 +25,7 @@
 -- ============================================================================
 
 SELECT
-    date_trunc('month', treatmt_strt_dt)             AS cohort_month,
+    TRUNC(treatmt_strt_dt, 'MON')                    AS cohort_month,
     tst_grp_cd,                                          -- expect TG8 / TG4 / TG1
     substr(tactic_decisn_vrb_info, 121, 8)           AS channel_at_121,  -- expect EM_IM_DO / IM / blank-XX
     substr(tactic_decisn_vrb_info, 132, 1)           AS flag_at_132,     -- pass-2-rules flag (must exist on TG8 too)
