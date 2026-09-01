@@ -116,8 +116,11 @@ expt AS (
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 ),
 leads AS (
-    -- e10/e10b: scope + day-0 anchor = actual_strt_dt (real in-market date);
-    -- treatmt_strt_dt is only a label (lags up to ~2mo) — used as pushdown only
+    -- SCOPE (2026-09-01, matches summary STMT 2): Q04-style co-presence —
+    -- lead window open on/after assignment. Day-0 anchor = actual_strt_dt
+    -- (real in-market date). CAVEAT: in-flight leads (actual < assign) carry
+    -- a few pre-experiment days at curve start; summary's lead_timing column
+    -- sizes that class.
     SELECT e.seg, e.grp,
            CAST(EXTRACT(YEAR FROM p.actual_strt_dt) AS VARCHAR(4)) || '-' ||
            SUBSTR('0' || TRIM(EXTRACT(MONTH FROM p.actual_strt_dt)), -2) AS cohort_month,
@@ -125,9 +128,8 @@ leads AS (
     FROM expt e
     JOIN dl_mr_prod.cards_pli_decision_resp p
       ON p.acct_no = e.visa_acct_no
-     AND p.treatmt_strt_dt >= DATE '2026-06-01'
-    WHERE p.actual_strt_dt >= DATE '2026-08-14'
-      AND p.actual_strt_dt >= e.assign_dt
+     AND p.treatmt_strt_dt >= DATE '2026-05-01'
+    WHERE p.treatmt_end_dt >= e.assign_dt
 ),
 cells AS (
     SELECT cohort_month, seg, grp, COUNT(*) AS base     -- base = leads

@@ -87,14 +87,19 @@ WITH expt AS (
     QUALIFY ROW_NUMBER() OVER (PARTITION BY visa_acct_no
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 )
--- e10/e10b (2026-08-31): treatmt_strt_dt is a cohort LABEL; actual_strt_dt is
--- the real in-market date (often 1-2 months later; ~140K leads actually
--- started ON Aug 14). Scope and wave month are therefore ACTUAL-date based.
+-- SCOPE (Andre 2026-09-01, Q04-style co-presence): count a PCL lead if its
+-- window is STILL OPEN on/after the account's assignment — overlap, not
+-- born-after. actual_strt_dt (e10: real in-market date) drives the timing
+-- split: 'post_assign' = lead actually started after assignment (clean full
+-- exposure); 'in_flight' = lead already in market at assignment (first days
+-- pre-experiment; kept, labeled, read separately).
 SELECT
     TRUNC(e.assign_dt, 'MON')          AS cohort_month,
     TRUNC(p.actual_strt_dt, 'MON')     AS pcl_wave_month,    -- ACTUAL in-market month
     e.tst_grp_cd,
     e.pass_flag,
+    CASE WHEN p.actual_strt_dt >= e.assign_dt
+         THEN 'post_assign' ELSE 'in_flight' END AS lead_timing,
     p.channel,
     COUNT(*)                           AS pcl_leads,
     COUNT(DISTINCT p.acct_no)          AS pcl_lead_accts,
@@ -108,8 +113,7 @@ SELECT
 FROM expt e
 JOIN dl_mr_prod.cards_pli_decision_resp p
   ON p.acct_no = e.visa_acct_no
- AND p.treatmt_strt_dt >= DATE '2026-06-01'     -- pushdown: labels lag actual by up to ~2mo
-WHERE p.actual_strt_dt >= DATE '2026-08-14'     -- lead ACTUALLY in market post-go-live
-  AND p.actual_strt_dt >= e.assign_dt           -- and after this account's assignment
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 4, 5;
+ AND p.treatmt_strt_dt >= DATE '2026-05-01'     -- pushdown: labels lag actual by up to ~2mo
+WHERE p.treatmt_end_dt >= e.assign_dt           -- lead window open on/after assignment = overlap
+GROUP BY 1, 2, 3, 4, 5, 6
+ORDER BY 1, 2, 3, 4, 5, 6;
