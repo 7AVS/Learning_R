@@ -100,10 +100,19 @@ SELECT
     e.pass_flag,
     CASE WHEN p.actual_strt_dt >= e.assign_dt
          THEN 'post_assign' ELSE 'in_flight' END AS lead_timing,
-    p.channel,
+    p.channel_mb,                          -- native 0/1 flag; raw channel STRING accumulates with
+                                           -- engagement (2026-09-01 run: 93% "conv" cells) = post-
+                                           -- treatment-ish -> never group by the string
     COUNT(*)                           AS pcl_leads,
-    COUNT(DISTINCT p.acct_no)          AS pcl_lead_accts,
-    SUM(p.responder_cli)               AS pcl_responders,
+    -- conversions BEFORE assignment are pre-experiment facts, not outcomes:
+    -- those leads leave the at-risk pool (pre-treatment split, arm-balanced)
+    SUM(CASE WHEN p.responder_cli = 1
+              AND p.dt_cl_change <  e.assign_dt THEN 1 ELSE 0 END) AS conv_pre_assign,
+    COUNT(*) - SUM(CASE WHEN p.responder_cli = 1
+              AND p.dt_cl_change <  e.assign_dt THEN 1 ELSE 0 END) AS at_risk_leads,
+    -- THE outcome: conversion on/after assignment among at-risk leads
+    SUM(CASE WHEN p.responder_cli = 1
+              AND p.dt_cl_change >= e.assign_dt THEN 1 ELSE 0 END) AS resp_post_assign,
     -- maturity context per wave (actual dates)
     CURRENT_DATE                       AS run_dt,
     MAX(CASE WHEN p.responder_cli = 1
