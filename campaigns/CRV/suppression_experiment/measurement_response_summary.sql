@@ -87,42 +87,65 @@ WITH expt AS (
     QUALIFY ROW_NUMBER() OVER (PARTITION BY visa_acct_no
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 )
--- SCOPE (Andre 2026-09-01, Q04-style co-presence): count a PCL lead if its
--- window is STILL OPEN on/after the account's assignment — overlap, not
--- born-after. actual_strt_dt (e10: real in-market date) drives the timing
--- split: 'post_assign' = lead actually started after assignment (clean full
--- exposure); 'in_flight' = lead already in market at assignment (first days
--- pre-experiment; kept, labeled, read separately).
+-- SHAPE (Andre 2026-09-01): SAME FOUR ROWS as the CRV scoreboard (cell = TG x
+-- pass_flag); everything else transposed to COLUMNS. Overlap rule (Q04-style
+-- co-presence): a PCL lead counts if its window is open on/after the
+-- account's assignment. Outcome = conversions ON/AFTER assignment among
+-- at-risk leads (pre-assignment conversions leave the pool — arm-balanced
+-- pre-treatment fact). Timing classes are COLUMNS (in_flight / post_assign),
+-- not rows. Channel dimension dropped for simplicity: MB carries ~97% of
+-- overlap volume; apply an MB cut later only if a read needs it.
+, lead_pool AS (
+    SELECT e.visa_acct_no, e.tst_grp_cd, e.pass_flag,
+           TRUNC(e.assign_dt, 'MON')   AS cohort_month,
+           e.assign_dt,
+           p.actual_strt_dt, p.responder_cli, p.dt_cl_change
+    FROM expt e
+    JOIN dl_mr_prod.cards_pli_decision_resp p
+      ON p.acct_no = e.visa_acct_no
+     AND p.treatmt_strt_dt >= DATE '2026-05-01'   -- pushdown: labels lag actual by up to ~2mo
+    WHERE p.treatmt_end_dt >= e.assign_dt         -- co-presence = overlap
+),
+cells AS (
+    SELECT TRUNC(assign_dt, 'MON') AS cohort_month, tst_grp_cd, pass_flag,
+           COUNT(*) AS crv_accts                  -- full experiment population of the cell
+    FROM expt
+    GROUP BY 1, 2, 3
+),
+ovl AS (
+    SELECT cohort_month, tst_grp_cd, pass_flag,
+           COUNT(*)                                        AS pcl_leads_total,
+           COUNT(DISTINCT visa_acct_no)                    AS pcl_overlap_accts,
+           SUM(CASE WHEN actual_strt_dt <  assign_dt THEN 1 ELSE 0 END) AS pcl_leads_in_flight,
+           SUM(CASE WHEN actual_strt_dt >= assign_dt THEN 1 ELSE 0 END) AS pcl_leads_post_assign,
+           SUM(CASE WHEN responder_cli = 1
+                     AND dt_cl_change <  assign_dt THEN 1 ELSE 0 END)   AS conv_pre_assign,
+           COUNT(*) - SUM(CASE WHEN responder_cli = 1
+                     AND dt_cl_change <  assign_dt THEN 1 ELSE 0 END)   AS at_risk_leads,
+           SUM(CASE WHEN responder_cli = 1
+                     AND dt_cl_change >= assign_dt THEN 1 ELSE 0 END)   AS resp_post_assign,
+           MAX(CASE WHEN responder_cli = 1
+                     AND dt_cl_change >= assign_dt THEN dt_cl_change END) AS last_response_dt
+    FROM lead_pool
+    GROUP BY 1, 2, 3
+)
 SELECT
-    TRUNC(e.assign_dt, 'MON')          AS cohort_month,
-    TRUNC(p.actual_strt_dt, 'MON')     AS pcl_wave_month,    -- ACTUAL in-market month
-    e.tst_grp_cd,
-    e.pass_flag,
-    CASE WHEN p.actual_strt_dt >= e.assign_dt
-         THEN 'post_assign' ELSE 'in_flight' END AS lead_timing,
-    p.channel_mb,                          -- native 0/1 flag; raw channel STRING accumulates with
-                                           -- engagement (2026-09-01 run: 93% "conv" cells) = post-
-                                           -- treatment-ish -> never group by the string
-    COUNT(*)                           AS pcl_leads,
-    -- conversions BEFORE assignment are pre-experiment facts, not outcomes:
-    -- those leads leave the at-risk pool (pre-treatment split, arm-balanced)
-    SUM(CASE WHEN p.responder_cli = 1
-              AND p.dt_cl_change <  e.assign_dt THEN 1 ELSE 0 END) AS conv_pre_assign,
-    COUNT(*) - SUM(CASE WHEN p.responder_cli = 1
-              AND p.dt_cl_change <  e.assign_dt THEN 1 ELSE 0 END) AS at_risk_leads,
-    -- THE outcome: conversion on/after assignment among at-risk leads
-    SUM(CASE WHEN p.responder_cli = 1
-              AND p.dt_cl_change >= e.assign_dt THEN 1 ELSE 0 END) AS resp_post_assign,
-    -- maturity context per wave (actual dates)
-    CURRENT_DATE                       AS run_dt,
-    MAX(CASE WHEN p.responder_cli = 1
-             THEN p.dt_cl_change END)  AS last_response_dt,
-    CURRENT_DATE - MIN(p.actual_strt_dt) AS days_in_mkt_oldest,
-    CURRENT_DATE - MAX(p.actual_strt_dt) AS days_in_mkt_youngest
-FROM expt e
-JOIN dl_mr_prod.cards_pli_decision_resp p
-  ON p.acct_no = e.visa_acct_no
- AND p.treatmt_strt_dt >= DATE '2026-05-01'     -- pushdown: labels lag actual by up to ~2mo
-WHERE p.treatmt_end_dt >= e.assign_dt           -- lead window open on/after assignment = overlap
-GROUP BY 1, 2, 3, 4, 5, 6
-ORDER BY 1, 2, 3, 4, 5, 6;
+    c.cohort_month,
+    c.tst_grp_cd,
+    c.pass_flag,
+    c.crv_accts,
+    COALESCE(o.pcl_overlap_accts, 0)     AS pcl_overlap_accts,
+    COALESCE(o.pcl_leads_total, 0)       AS pcl_leads_total,
+    COALESCE(o.pcl_leads_in_flight, 0)   AS pcl_leads_in_flight,
+    COALESCE(o.pcl_leads_post_assign, 0) AS pcl_leads_post_assign,
+    COALESCE(o.conv_pre_assign, 0)       AS conv_pre_assign,
+    COALESCE(o.at_risk_leads, 0)         AS at_risk_leads,
+    COALESCE(o.resp_post_assign, 0)      AS resp_post_assign,
+    CURRENT_DATE                         AS run_dt,
+    o.last_response_dt
+FROM cells c
+LEFT JOIN ovl o
+  ON o.cohort_month = c.cohort_month
+ AND o.tst_grp_cd   = c.tst_grp_cd
+ AND o.pass_flag    = c.pass_flag
+ORDER BY 1, 2, 3;
