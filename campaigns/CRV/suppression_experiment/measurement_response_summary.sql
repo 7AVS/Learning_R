@@ -56,7 +56,13 @@ SELECT
     COUNT(DISTINCT c.acct_no)          AS accts,               -- must equal offers
     SUM(c.responder)                   AS crv_responders,
     MIN(c.offer_start_date)            AS min_offer_start,
-    MAX(c.offer_end_date)              AS max_offer_end        -- cohort maturity horizon
+    MAX(c.offer_end_date)              AS max_offer_end,       -- cohort maturity horizon
+    -- maturity context: how far along the conversion window this read is
+    CURRENT_DATE                       AS run_dt,
+    MAX(CASE WHEN c.responder = 1
+             THEN c.first_response_date END) AS last_response_dt,
+    CURRENT_DATE - MIN(e.assign_dt)    AS days_in_mkt_oldest,
+    CURRENT_DATE - MAX(e.assign_dt)    AS days_in_mkt_youngest
 FROM expt e
 JOIN dl_mr_prod.cards_crv_install_decis_resp c
   ON c.acct_no   = e.visa_acct_no
@@ -89,7 +95,13 @@ SELECT
     p.channel,
     COUNT(*)                           AS pcl_leads,
     COUNT(DISTINCT p.acct_no)          AS pcl_lead_accts,
-    SUM(p.responder_cli)               AS pcl_responders
+    SUM(p.responder_cli)               AS pcl_responders,
+    -- maturity context per wave
+    CURRENT_DATE                       AS run_dt,
+    MAX(CASE WHEN p.responder_cli = 1
+             THEN p.dt_cl_change END)  AS last_response_dt,
+    CURRENT_DATE - MIN(p.treatmt_strt_dt) AS days_in_mkt_oldest,
+    CURRENT_DATE - MAX(p.treatmt_strt_dt) AS days_in_mkt_youngest
 FROM expt e
 JOIN dl_mr_prod.cards_pli_decision_resp p
   ON p.acct_no = e.visa_acct_no
