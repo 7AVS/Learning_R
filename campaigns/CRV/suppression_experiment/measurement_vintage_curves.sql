@@ -116,15 +116,18 @@ expt AS (
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 ),
 leads AS (
+    -- e10/e10b: scope + day-0 anchor = actual_strt_dt (real in-market date);
+    -- treatmt_strt_dt is only a label (lags up to ~2mo) — used as pushdown only
     SELECT e.seg, e.grp,
-           CAST(EXTRACT(YEAR FROM p.treatmt_strt_dt) AS VARCHAR(4)) || '-' ||
-           SUBSTR('0' || TRIM(EXTRACT(MONTH FROM p.treatmt_strt_dt)), -2) AS cohort_month,
-           p.treatmt_strt_dt, p.responder_cli, p.dt_cl_change
+           CAST(EXTRACT(YEAR FROM p.actual_strt_dt) AS VARCHAR(4)) || '-' ||
+           SUBSTR('0' || TRIM(EXTRACT(MONTH FROM p.actual_strt_dt)), -2) AS cohort_month,
+           p.actual_strt_dt, p.responder_cli, p.dt_cl_change
     FROM expt e
     JOIN dl_mr_prod.cards_pli_decision_resp p
       ON p.acct_no = e.visa_acct_no
-     AND p.treatmt_strt_dt >= DATE '2026-08-14'
-    WHERE p.treatmt_strt_dt >= e.assign_dt
+     AND p.treatmt_strt_dt >= DATE '2026-06-01'
+    WHERE p.actual_strt_dt >= DATE '2026-08-14'
+      AND p.actual_strt_dt >= e.assign_dt
 ),
 cells AS (
     SELECT cohort_month, seg, grp, COUNT(*) AS base     -- base = leads
@@ -133,8 +136,8 @@ cells AS (
 ),
 daily AS (
     SELECT cohort_month, seg, grp,
-           CASE WHEN dt_cl_change < treatmt_strt_dt THEN 0
-                ELSE dt_cl_change - treatmt_strt_dt END AS vintage_day,
+           CASE WHEN dt_cl_change < actual_strt_dt THEN 0
+                ELSE dt_cl_change - actual_strt_dt END AS vintage_day,  -- clamp, never drop
            COUNT(*) AS responders
     FROM leads
     WHERE responder_cli = 1

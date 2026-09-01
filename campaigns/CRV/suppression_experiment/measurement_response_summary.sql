@@ -87,25 +87,29 @@ WITH expt AS (
     QUALIFY ROW_NUMBER() OVER (PARTITION BY visa_acct_no
                                ORDER BY treatmt_strt_dt, tactic_id) = 1
 )
+-- e10/e10b (2026-08-31): treatmt_strt_dt is a cohort LABEL; actual_strt_dt is
+-- the real in-market date (often 1-2 months later; ~140K leads actually
+-- started ON Aug 14). Scope and wave month are therefore ACTUAL-date based.
 SELECT
     TRUNC(e.assign_dt, 'MON')          AS cohort_month,
-    TRUNC(p.treatmt_strt_dt, 'MON')    AS pcl_wave_month,
+    TRUNC(p.actual_strt_dt, 'MON')     AS pcl_wave_month,    -- ACTUAL in-market month
     e.tst_grp_cd,
     e.pass_flag,
     p.channel,
     COUNT(*)                           AS pcl_leads,
     COUNT(DISTINCT p.acct_no)          AS pcl_lead_accts,
     SUM(p.responder_cli)               AS pcl_responders,
-    -- maturity context per wave
+    -- maturity context per wave (actual dates)
     CURRENT_DATE                       AS run_dt,
     MAX(CASE WHEN p.responder_cli = 1
              THEN p.dt_cl_change END)  AS last_response_dt,
-    CURRENT_DATE - MIN(p.treatmt_strt_dt) AS days_in_mkt_oldest,
-    CURRENT_DATE - MAX(p.treatmt_strt_dt) AS days_in_mkt_youngest
+    CURRENT_DATE - MIN(p.actual_strt_dt) AS days_in_mkt_oldest,
+    CURRENT_DATE - MAX(p.actual_strt_dt) AS days_in_mkt_youngest
 FROM expt e
 JOIN dl_mr_prod.cards_pli_decision_resp p
   ON p.acct_no = e.visa_acct_no
- AND p.treatmt_strt_dt >= DATE '2026-08-14'     -- pushdown constant
-WHERE p.treatmt_strt_dt >= e.assign_dt          -- lead born after assignment
+ AND p.treatmt_strt_dt >= DATE '2026-06-01'     -- pushdown: labels lag actual by up to ~2mo
+WHERE p.actual_strt_dt >= DATE '2026-08-14'     -- lead ACTUALLY in market post-go-live
+  AND p.actual_strt_dt >= e.assign_dt           -- and after this account's assignment
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY 1, 2, 3, 4, 5;
