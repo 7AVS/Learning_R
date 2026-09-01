@@ -120,8 +120,10 @@ ovl AS (
            SUM(CASE WHEN actual_strt_dt >= assign_dt THEN 1 ELSE 0 END) AS pcl_leads_post_assign,
            SUM(CASE WHEN responder_cli = 1
                      AND dt_cl_change <  assign_dt THEN 1 ELSE 0 END)   AS conv_pre_assign,
+           -- CLEAN BASE = overlap leads minus already-converted: the population
+           -- the experiment can still influence; denominator of the PCL rate
            COUNT(*) - SUM(CASE WHEN responder_cli = 1
-                     AND dt_cl_change <  assign_dt THEN 1 ELSE 0 END)   AS at_risk_leads,
+                     AND dt_cl_change <  assign_dt THEN 1 ELSE 0 END)   AS pcl_clean_base,
            SUM(CASE WHEN responder_cli = 1
                      AND dt_cl_change >= assign_dt THEN 1 ELSE 0 END)   AS resp_post_assign,
            MAX(CASE WHEN responder_cli = 1
@@ -139,8 +141,8 @@ SELECT
     COALESCE(o.pcl_leads_in_flight, 0)   AS pcl_leads_in_flight,
     COALESCE(o.pcl_leads_post_assign, 0) AS pcl_leads_post_assign,
     COALESCE(o.conv_pre_assign, 0)       AS conv_pre_assign,
-    COALESCE(o.at_risk_leads, 0)         AS at_risk_leads,
-    COALESCE(o.resp_post_assign, 0)      AS resp_post_assign,
+    COALESCE(o.pcl_clean_base, 0)        AS pcl_clean_base,
+    COALESCE(o.resp_post_assign, 0)      AS resp_post_assign,   -- rate = resp_post_assign / pcl_clean_base
     CURRENT_DATE                         AS run_dt,
     o.last_response_dt
 FROM cells c
