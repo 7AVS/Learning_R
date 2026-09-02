@@ -17,7 +17,8 @@ WITH expt AS (
            TRIM(substr(TACTIC_DECISN_VRB_INFO, 34, 15)) AS offer,
            CASE WHEN TREATMT_MN LIKE 'BVBUNM%' THEN 'NOT_COMM'
                 ELSE 'COMM' END                         AS comm_flag,
-           substr(TACTIC_DECISN_VRB_INFO, 50, 1)        AS score_decile,   -- 1=best (t1 evidence)
+           TRIM(substr(TACTIC_DECISN_VRB_INFO, 50, 2))  AS score_decile,   -- 1=best; 2 chars so
+                                                                           -- decile 10 stops folding into 1 (b4 v1 bug)
            TRYCAST(TRIM(substr(TACTIC_DECISN_VRB_INFO, 21, 8))
                    AS DECIMAL(18,6))                    AS model_score
     FROM dg6v01.tactic_evnt_ip_ar_hist
