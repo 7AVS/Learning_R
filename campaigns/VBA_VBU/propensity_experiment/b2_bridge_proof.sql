@@ -19,8 +19,7 @@ WITH expt AS (
                 ELSE 'COMM' END                         AS comm_flag
     FROM dg6v01.tactic_evnt_ip_ar_hist
     WHERE substr(tactic_id, 8, 3) = 'VBU'
-      AND treatmt_strt_dt >= DATE '2026-07-01'
-      AND treatmt_strt_dt <  DATE '2026-08-01'          -- July wave only (Andre)
+      AND treatmt_strt_dt >= DATE '2026-06-01'          -- both waves (Jun-13 + Jul-10 launches)
       AND TRIM(substr(TACTIC_DECISN_VRB_INFO, 34, 15))
           IN ('AIB_25K_R_55', 'AIB_25K_NR')
 )
