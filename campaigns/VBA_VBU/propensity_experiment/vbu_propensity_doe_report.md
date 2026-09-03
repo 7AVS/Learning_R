@@ -32,7 +32,9 @@
   recommended 70/30: ~102–160 forgone upgrades per wave (dial table in §5).
 
 ## 2. Strategic Context
-The model path is live BAU (monthly waves since April 2026, tactics consolidated 5→1). The
+The model path is live BAU — running from before our data window (earliest wave in the probe
+scan: 2026-04-13; true program start TBC with CIDM), monthly cadence, tactics consolidated
+5→1 over Apr–Aug. The
 business runs it without a causal value number. This test converts the model from "deployed"
 to "measured": a defensible dollar/upgrade value for model-targeted communication, plus a
 calibration read that tells CIDM whether the score cutoff is placed correctly. Rebate/offer
