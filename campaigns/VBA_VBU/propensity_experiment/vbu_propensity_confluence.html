@@ -1,0 +1,111 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>VBU - Propensity Model Holdout Test</title></head>
+<body>
+
+<table border="1" cellpadding="4">
+<tr><td><b>MNE</b></td><td>VBU</td></tr>
+<tr><td><b>Description</b></td><td>Propensity Model Holdout Test &mdash; model-based offers (AIB_25K_NR, AIB_25K_R_55)</td></tr>
+<tr><td><b>Treatment Start Date</b></td><td>TBD (next monthly wave, ~13th)</td></tr>
+<tr><td><b>Treatment End Date</b></td><td>TBD (2 waves; final read ~80 days after wave 2)</td></tr>
+<tr><td><b>Channel</b></td><td>BAU VBU channels (unchanged)</td></tr>
+<tr><td><b>TST_GRP_CD</b></td><td>TBD at deployment (new test-group codes for the experiment cells)</td></tr>
+<tr><td><b>Measurement Package Link</b></td><td>TBD</td></tr>
+<tr><td><b>Tableau Dashboard Link</b></td><td>N/A</td></tr>
+<tr><td><b>GitHub Link</b></td><td>campaigns/VBA_VBU/propensity_experiment/ (full design: vbu_propensity_doe_report.md)</td></tr>
+<tr><td><b>Measurement &amp; Analytics Lead</b></td><td>Andre</td></tr>
+</table>
+
+<h1>1 - Executive Summary</h1>
+<p><b>At-a-glance:</b> we hold out a random 30% of the clients the VBU propensity model selects for the AIB upgrade offers and send them nothing, to prove the model-targeted communication causes the upgrades and to measure that value by score band.</p>
+<ul>
+<li><b>Why are we testing?</b> The model path has been live BAU since April 2026 with no causal value number. The existing ~5% not-communicated group is not a verified random control (its share varies by score band), so today's numbers can't certify the model.</li>
+<li><b>What is being tested and measured?</b> Target-product upgrade rate, communicated vs held-out, per offer &mdash; overall and by model score band.</li>
+<li><b>What will success look like?</b> Treatment converts at the historical ~1.79% (NR) / ~2.40% (R_55) with holdout &asymp; 0, and the lift concentrates in the top score bands (band 1: ~3.4&ndash;7.9pp).</li>
+<li><b>How long and how safe?</b> Two monthly waves, each read ~80 days post-deploy; reversible at any wave boundary. Cost: ~100&ndash;160 forgone upgrades per wave at 70/30.</li>
+</ul>
+
+<h1>2 - Hypothesis &amp; Objectives</h1>
+<ul>
+<li><b>Primary Hypothesis:</b> communicating the model's selections causes upgrades.
+&tau; = E[Y(Comm) &minus; Y(No touch)], Y = target-product upgrade within the ~80-day response window.
+H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided). Read separately per offer (NR, R_55).</li>
+<li><b>Secondary Hypothesis:</b> causal lift declines monotonically with model score band (band 1 &asymp; 3.4&ndash;7.9pp fading to ~0 by band 5) &mdash; the calibration read that validates the model's ranking and cutoff placement.</li>
+<li><b>Metrics:</b>
+<ul>
+<li>Primary: target-product upgrade rate</li>
+<li>Secondary: any-product upgrade rate; lift by score band</li>
+<li>Guard Rail: email unsubscribe rate</li>
+</ul></li>
+</ul>
+
+<h1>3 - Experiment Design &amp; Treatment Assignment</h1>
+<ul>
+<li><b>Design Type:</b> RCT; one-sided exact test (Fisher) rather than Z-test, because the control arm is expected at ~0 conversions (0 of 2,956+ historical not-communicated) &mdash; the normal approximation is invalid at zero counts.</li>
+<li><b>Randomization Unit:</b> client. Single client-level random draw across the whole model-based population &mdash; no band logic needed in decisioning; scores and bands are stored for BOTH arms at assignment, so every score band inherits its own ~70/30 split and results are read per band.</li>
+<li><b>Eligibility Rules:</b> clients selected by the propensity model for a model-based offer (AIB_25K_NR or AIB_25K_R_55) in the wave; CIDM waterfall unchanged upstream of the split.</li>
+<li><b>Treatment Arms (split tree, ratio 70/30):</b></li>
+</ul>
+<table border="1" cellpadding="4">
+<tr><th>Arm</th><th>Description</th><th>Allocation</th><th>Expected clients / wave</th></tr>
+<tr><td>Treatment</td><td>Communicated the model-assigned offer, BAU channels</td><td>70%</td><td>NR ~6,000&ndash;9,400; R_55 ~5,400&ndash;8,500</td></tr>
+<tr><td>Holdout</td><td>NO VBU touch &mdash; not communicated, not moved to another offer or path</td><td>30%</td><td>NR ~2,600&ndash;4,000; R_55 ~2,300&ndash;3,600</td></tr>
+</table>
+<p>Split ratio is a dial &mdash; scenarios in section 4. 70/30 recommended; 50/50 adds only marginal reads on the thin bottom bands at ~1.7&times; the cost.</p>
+
+<h1>4 - Sample Size &amp; Power Analysis</h1>
+<ul>
+<li><b>Baseline Conversion Rate:</b> NR 1.79%, R_55 2.40% &mdash; communicated clients, mature June/July 2026 waves, curated conversion table joined to tactic populations (clnt_no + tactic_id), ~80-day response windows; stable across both waves. Assumption for the holdout side: &asymp; 0 (0/2,956 historical not-communicated; ~0 organic any-product movement).</li>
+<li><b>Power Analysis &amp; MDE:</b> with a ~2% vs ~0 contrast this is a detection problem, not a classic MDE: the headline is overpowered at any holdout &ge; 10%. Holdout size is set by score-band depth. Detection rule (exact test, &alpha;=0.05 one-sided, 80% power): conversions needed per band &asymp; 5 at 50% holdout, 9 at 30%, 14 at 20%.</li>
+<li><b>Power Calculation Steps / Scenarios (per wave, per offer; NR is the binding case):</b></li>
+</ul>
+<table border="1" cellpadding="4">
+<tr><th>Holdout</th><th>Headline</th><th>Band read, 1 wave</th><th>Band read, 2 waves</th><th>Forgone upgrades / wave</th></tr>
+<tr><td>10%</td><td>Yes</td><td>Bands 1&ndash;3</td><td>1&ndash;4</td><td>~34&ndash;53</td></tr>
+<tr><td>20%</td><td>Yes</td><td>Bands 1&ndash;4</td><td>1&ndash;4, firmer</td><td>~68&ndash;107</td></tr>
+<tr><td><b>30% (recommended)</b></td><td><b>Yes</b></td><td><b>Bands 1&ndash;4</b></td><td><b>1&ndash;4 clean + replication</b></td><td><b>~102&ndash;160</b></td></tr>
+<tr><td>50%</td><td>Yes</td><td>Bands 1&ndash;4 (+6 marginal)</td><td>1&ndash;4 clean; 5&ndash;7 marginal (~50&ndash;70% power)</td><td>~170&ndash;267</td></tr>
+</table>
+<ul>
+<li><b>Final Sample Size Required:</b> 1 wave answers the primary hypothesis; 2 waves are required for replication and firm band 1&ndash;4 reads. Bands 5&ndash;9 are not individually readable at any split (~0.1% rates, a few hundred clients each) &mdash; reported as one pooled bottom bucket with an upper bound only.</li>
+</ul>
+
+<h1>5 - Analysis Plan and Results</h1>
+<ul>
+<li><b>Randomization &amp; Quality Checks:</b>
+<ul>
+<li>SRM &mdash; chi-square on the day-1 assignment file, overall AND per score band (the per-band check verifies the draw was score-independent; the current BAU holdout fails this pattern, which is why the experiment needs a fresh draw).</li>
+<li>Covariate Balance (SMD method) &mdash; SMD on model score, treatment vs holdout (both arms carry scores; investigate if SMD &gt; 0.1).</li>
+</ul></li>
+<li><b>Primary Test Results:</b> Interim = wave 1 at ~80 days post-deploy; Final = 2 waves pooled. If O'Brien-Fleming spending is required: interim &alpha; = 0.005, final &alpha; = 0.048 &mdash; immaterial here given the overpowered headline.</li>
+</ul>
+<table border="1" cellpadding="4">
+<tr><th></th><th>Leads/Unique Clients</th><th>Treatment Metrics</th><th>Control Metrics</th><th>ATE (Lift)</th><th>P-value</th><th>Confidence Interval</th><th>$ Value (Size &times; lift &times; NIBT)</th></tr>
+<tr><td>Treatment &mdash; NR</td><td>(expected ~6,000&ndash;9,400)</td><td>(expected ~1.79%)</td><td></td><td></td><td></td><td></td><td>NIBT/upgrade: TBD</td></tr>
+<tr><td>Control &mdash; NR</td><td>(expected ~2,600&ndash;4,000)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Treatment &mdash; R_55</td><td>(expected ~5,400&ndash;8,500)</td><td>(expected ~2.40%)</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Control &mdash; R_55</td><td>(expected ~2,300&ndash;3,600)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
+</table>
+<ul>
+<li><b>Subgroup Analysis:</b> score bands 1&ndash;4 individually + bands 5&ndash;9 as one pooled bottom bucket (upper bound only), per offer, same table format.</li>
+<li><b>Multiple Testing Adjustment:</b> the two offers are two independent business decisions and are read separately (no cross-offer correction). Bonferroni applies only if multiple primary metrics are added within one decision.</li>
+</ul>
+
+<h1>6 - Risks &amp; Mitigation Plan</h1>
+<table border="1" cellpadding="4">
+<tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
+<tr><td>Holdout not truly no-touch (reassigned or picked up by another campaign)</td><td>Medium</td><td>Kills the estimand</td><td>Explicit CIDM confirmation; post-launch tactic-history audit of holdout clients</td></tr>
+<tr><td>Split drawn by the existing (score-linked) not-communicated mechanism</td><td>Medium</td><td>Biased control</td><td>Day-1 SRM per score band</td></tr>
+<tr><td>Read taken before maturity</td><td>Medium</td><td>Understated lift (Aug pattern: 0.44% at ~2.5 weeks)</td><td>No read before ~80 days post-deploy</td></tr>
+<tr><td>Forgone conversions escalate if the test is forgotten</td><td>Low</td><td>Cost creep</td><td>Fixed 2-wave commitment with explicit stop/extend decision</td></tr>
+<tr><td>Scores/bands missing on holdout ledger rows</td><td>Low</td><td>Loses the band read</td><td>Ledger spec: score + band written for both arms at assignment (positions verified)</td></tr>
+</table>
+
+<h1>7 - Appendix</h1>
+<ul>
+<li>Full design report: campaigns/VBA_VBU/propensity_experiment/vbu_propensity_doe_report.md</li>
+<li>One-pager: vbu_propensity_one_pager.md &middot; Stakeholder explainer (plain-language 50/50 vs 70/30): vbu_split_explainer.xlsx</li>
+<li>Baselines &amp; volumes: vbu_deployment_results_by_offer.xlsx &middot; wave &times; offer &times; decile &times; arm: workstation_pivot_2026-09-02.md</li>
+<li>Probe lineage (SQL, same folder): b1 census, b2 bridge proof, b3 baselines, b4 discrimination, d1 deployment calendar, t1/s1 score verification</li>
+</ul>
+
+</body></html>
