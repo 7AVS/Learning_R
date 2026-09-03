@@ -18,18 +18,18 @@
 <h1>1 - Executive Summary</h1>
 <p><b>At-a-glance:</b> we hold out a random 30% of clients the VBU propensity model selects for the AIB upgrade offers and send them nothing, to prove the communication causes the upgrades and measure the value by score band.</p>
 <ul>
-<li><b>Why are we testing?</b> The model path is live BAU (running from before our data window; earliest wave in our probes: 2026-04-13) with no causal value number. The existing ~5% not-communicated group is not a verified random control (its share varies by score band), so today's numbers can't certify the model.</li>
+<li><b>Why are we testing?</b> The model path is live BAU (monthly waves since at least January 2026) with no causal value number. The existing ~5% not-communicated group is not a verified random control (its share varies by score band), so today's numbers can't certify the model.</li>
 <li><b>What is being tested and measured?</b> Target-product upgrade rate, communicated vs held-out, per offer, overall and by model score band.</li>
-<li><b>What will success look like?</b> Treatment converts at the historical ~1.79% (NR) / ~2.40% (R_55) with holdout &asymp; 0, and the lift concentrates in the top score bands (band 1: ~3.4&ndash;7.9pp).</li>
-<li><b>How long and how safe?</b> Two monthly waves, each read ~80 days post-deploy; reversible at any wave boundary. Cost: ~100&ndash;160 forgone upgrades per wave at 70/30.</li>
+<li><b>What will success look like?</b> Treatment converts in the historical range (NR 1.3&ndash;2.0%, R_55 2.4&ndash;3.6%; recent waves 1.79% / 2.40%) with holdout &asymp; 0, and the lift concentrates in the top score bands (band 1: ~3.4&ndash;7.9pp).</li>
+<li><b>How long and how safe?</b> Two monthly waves, each read ~80 days post-deploy; reversible at any wave boundary. Cost: ~102&ndash;160 forgone upgrades per wave at 70/30 (scales with wave size; 2026 waves ranged ~11&ndash;24K clients). End-to-end answer: roughly 4.5 months from wave-1 deploy.</li>
 </ul>
 
 <h1>2 - Hypothesis &amp; Objectives</h1>
 <ul>
 <li><b>Primary Hypothesis:</b> communicating the model's selections causes upgrades.
 &tau; = E[Y(Comm) &minus; Y(No touch)], Y = target-product upgrade within the ~80-day response window.
-H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided). Read separately per offer (NR, R_55).</li>
-<li><b>Secondary Hypothesis:</b> causal lift declines monotonically with model score band (band 1 &asymp; 3.4&ndash;7.9pp fading to ~0 by band 5): the calibration read that validates the model's ranking and cutoff.</li>
+H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided; pre-justified because holdout conversion has a structural floor near zero, so a negative &tau; is not plausible for this metric). Read separately per offer (NR, R_55).</li>
+<li><b>Secondary Hypothesis:</b> causal lift declines monotonically with model score band, from band 1 (&asymp; 3.4&ndash;7.9pp) toward ~0 in the pooled bottom bucket (bands 5&ndash;9): the calibration read that validates the model's ranking and cutoff.</li>
 <li><b>Metrics:</b>
 <ul>
 <li>Primary: target-product upgrade rate</li>
@@ -40,21 +40,21 @@ H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided). Read separate
 
 <h1>3 - Experiment Design &amp; Treatment Assignment</h1>
 <ul>
-<li><b>Design Type:</b> RCT; one-sided exact test (Fisher) rather than Z-test, because the control arm is expected at ~0 conversions (0 of 2,956+ historical not-communicated): the normal approximation is invalid at zero counts.</li>
+<li><b>Design Type:</b> RCT; one-sided exact test (Fisher) rather than Z-test, because the control arm is expected near 0 conversions (3 of ~7,550 historical not-communicated, Jan&ndash;Aug): the normal approximation is invalid at near-zero counts.</li>
 <li><b>Randomization Unit:</b> client. Single client-level random draw across the whole model-based population, no band logic needed in decisioning. Scores and bands are stored for BOTH arms at assignment, so every band inherits its own ~70/30 split and is read separately.</li>
 <li><b>Eligibility Rules:</b> clients selected by the propensity model for a model-based offer (AIB_25K_NR or AIB_25K_R_55) in the wave; CIDM waterfall unchanged upstream of the split.</li>
 <li><b>Treatment Arms (split tree, ratio 70/30):</b></li>
 </ul>
 <table border="1" cellpadding="4">
 <tr><th>Arm</th><th>Description</th><th>Allocation</th><th>Expected clients / wave</th></tr>
-<tr><td>Treatment</td><td>Communicated the model-assigned offer, BAU channels</td><td>70%</td><td>NR ~6,000&ndash;9,400; R_55 ~5,400&ndash;8,500</td></tr>
-<tr><td>Holdout</td><td>NO VBU touch: not communicated, not moved to another offer or path</td><td>30%</td><td>NR ~2,600&ndash;4,000; R_55 ~2,300&ndash;3,600</td></tr>
+<tr><td>Treatment</td><td>Communicated the model-assigned offer, BAU channels</td><td>70%</td><td>NR ~6,300&ndash;9,900; R_55 ~5,700&ndash;9,000</td></tr>
+<tr><td>Holdout</td><td>NO VBU touch in any channel: not communicated, not moved to another offer or path</td><td>30%</td><td>NR ~2,700&ndash;4,300; R_55 ~2,400&ndash;3,800</td></tr>
 </table>
-<p>Split ratio is a dial (scenarios in section 4). 70/30 recommended; 50/50 adds only marginal reads on the thin bottom bands at ~1.7&times; the cost.</p>
+<p>Split ratio is a dial (scenarios in section 4). 70/30 recommended; 50/50 adds only marginal reads on the thin bottom bands at ~1.7&times; the cost. Arm assignment persists for the test's duration: a client held out in wave 1 stays held out in wave 2 (prevents contamination; re-entry across waves is rare). CIDM to confirm both mechanics.</p>
 
 <h1>4 - Sample Size &amp; Power Analysis</h1>
 <ul>
-<li><b>Baseline Conversion Rate:</b> NR 1.79%, R_55 2.40%, communicated clients, mature June/July 2026 waves, curated conversion table joined to tactic populations (clnt_no + tactic_id), ~80-day response windows; stable across both waves. Holdout side assumption: &asymp; 0 (0/2,956 historical not-communicated; ~0 organic any-product movement).</li>
+<li><b>Baseline Conversion Rate:</b> recent mature waves (Jun/Jul 2026): NR 1.79%, R_55 2.40%. Full 2026 range across mature waves (Jan&ndash;Jul): NR 1.25&ndash;1.99%, R_55 2.36&ndash;3.56%. Band 1 in June: NR 3.44%, R_55 7.89% (the source of the 3.4&ndash;7.9pp expectation). Source: curated conversion table joined to tactic populations (clnt_no + tactic_id), ~80-day response windows. Holdout side expectation &asymp; 0, resting on the mechanism (no touch means no offer-driven upgrade) and consistent with 3 conversions in ~7,550 historical not-communicated clients (cited as supporting evidence, not proof; that group is not a verified random control).</li>
 <li><b>Power Analysis &amp; MDE:</b> with a ~2% vs ~0 contrast this is a detection problem, not a classic MDE: the headline is overpowered at any holdout &ge; 10%. Holdout size is set by score-band depth. Detection rule (exact test, &alpha;=0.05 one-sided, 80% power): conversions needed per band &asymp; 5 at 50% holdout, 9 at 30%, 14 at 20%.</li>
 <li><b>Power Calculation Steps / Scenarios (per wave, per offer; NR is the binding case):</b></li>
 </ul>
@@ -66,27 +66,28 @@ H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided). Read separate
 <tr><td>50%</td><td>Yes</td><td>Bands 1&ndash;4 (+6 marginal)</td><td>1&ndash;4 clean; 5&ndash;7 marginal (~50&ndash;70% power)</td><td>~170&ndash;267</td></tr>
 </table>
 <ul>
-<li><b>Final Sample Size Required:</b> 1 wave answers the primary hypothesis; 2 waves are required for replication and firm band 1&ndash;4 reads. Bands 5&ndash;9 are not individually readable at any split (~0.1% rates, a few hundred clients each): reported as one pooled bottom bucket, upper bound only.</li>
+<li><b>Final Sample Size Required:</b> 1 wave answers the primary hypothesis; 2 waves are required for replication and firm band 1&ndash;4 reads. Bands 8&ndash;9 are not readable at any split (~0.1% rates, a few hundred clients each); bands 5&ndash;7 reach only marginal power even at 50/50 (table above). All of bands 5&ndash;9 are therefore reported as one pooled bottom bucket, upper bound only. Note the table's band order follows expected conversions (band volume &times; rate), which is why a larger low band can become readable before a smaller higher band.</li>
 </ul>
 
 <h1>5 - Analysis Plan and Results</h1>
 <ul>
 <li><b>Randomization &amp; Quality Checks:</b>
 <ul>
-<li>SRM: chi-square on the day-1 assignment file, overall AND per score band (the per-band check verifies the draw was score-independent; the current BAU holdout fails this pattern, which is why the experiment needs a fresh draw).</li>
-<li>Covariate Balance (SMD method): SMD on model score, treatment vs holdout (both arms carry scores; investigate if SMD &gt; 0.1).</li>
+<li>SRM (did the split come out 70/30): chi-square on the day-1 assignment file, overall AND per score band (the per-band check verifies the draw was score-independent; the current BAU holdout fails this pattern, which is why the experiment needs a fresh draw).</li>
+<li>Covariate Balance (are the two arms the same kind of clients): SMD on model score, treatment vs holdout (both arms carry scores; investigate if SMD &gt; 0.1; extended to other client attributes if the assignment file carries them).</li>
 </ul></li>
-<li><b>Primary Test Results:</b> Interim = wave 1 at ~80 days post-deploy; Final = 2 waves pooled. If O'Brien-Fleming spending is required: interim &alpha; = 0.005, final &alpha; = 0.048 (immaterial here given the overpowered headline).</li>
+<li><b>Primary Test Results:</b> Interim = wave 1 at ~80 days post-deploy; Final = 2 waves pooled. If O'Brien-Fleming spending is required: interim &alpha; &asymp; 0.005, final &alpha; &asymp; 0.049 (immaterial here given the overpowered headline).</li>
 </ul>
 <table border="1" cellpadding="4">
 <tr><th></th><th>Leads/Unique Clients</th><th>Treatment Metrics</th><th>Control Metrics</th><th>ATE (Lift)</th><th>P-value</th><th>Confidence Interval</th><th>$ Value (Size &times; lift &times; NIBT)</th></tr>
-<tr><td>Treatment: NR</td><td>(expected ~6,000&ndash;9,400)</td><td>(expected ~1.79%)</td><td></td><td></td><td></td><td></td><td>NIBT/upgrade: TBD</td></tr>
-<tr><td>Control: NR</td><td>(expected ~2,600&ndash;4,000)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
-<tr><td>Treatment: R_55</td><td>(expected ~5,400&ndash;8,500)</td><td>(expected ~2.40%)</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>Control: R_55</td><td>(expected ~2,300&ndash;3,600)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Treatment: NR</td><td>(expected ~6,300&ndash;9,900)</td><td>(expected ~1.79%)</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Control: NR</td><td>(expected ~2,700&ndash;4,300)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Treatment: R_55</td><td>(expected ~5,700&ndash;9,000)</td><td>(expected ~2.40%)</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>Control: R_55</td><td>(expected ~2,400&ndash;3,800)</td><td></td><td>(expected &asymp; 0%)</td><td></td><td></td><td></td><td></td></tr>
 </table>
+<p>$ Value applies to every row; NIBT per upgrade: TBD from finance.</p>
 <ul>
-<li><b>Subgroup Analysis:</b> score bands 1&ndash;4 individually + bands 5&ndash;9 as one pooled bottom bucket (upper bound only), per offer, same table format.</li>
+<li><b>Subgroup Analysis:</b> score bands 1&ndash;4 individually + bands 5&ndash;9 as one pooled bottom bucket (upper bound only), per offer, same table format. Band-level reads are descriptive calibration, reported with confidence intervals; no family-wise correction.</li>
 <li><b>Multiple Testing Adjustment:</b> the two offers are two independent business decisions and are read separately (no cross-offer correction). Bonferroni applies only if multiple primary metrics are added within one decision.</li>
 </ul>
 
@@ -95,7 +96,7 @@ H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided). Read separate
 <tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
 <tr><td>Holdout not truly no-touch (reassigned or picked up by another campaign)</td><td>Medium</td><td>Kills the estimand</td><td>Explicit CIDM confirmation; post-launch tactic-history audit of holdout clients</td></tr>
 <tr><td>Split drawn by the existing (score-linked) not-communicated mechanism</td><td>Medium</td><td>Biased control</td><td>Day-1 SRM per score band</td></tr>
-<tr><td>Read taken before maturity</td><td>Medium</td><td>Understated lift (Aug pattern: 0.44% at ~2.5 weeks)</td><td>No read before ~80 days post-deploy</td></tr>
+<tr><td>Read taken before maturity</td><td>Medium</td><td>Understated lift (treatment-side August read: 0.44% at ~2.5 weeks vs ~1.8% mature)</td><td>No read before ~80 days post-deploy</td></tr>
 <tr><td>Forgone conversions escalate if the test is forgotten</td><td>Low</td><td>Cost creep</td><td>Fixed 2-wave commitment with explicit stop/extend decision</td></tr>
 <tr><td>Scores/bands missing on holdout ledger rows</td><td>Low</td><td>Loses the band read</td><td>Ledger spec: score + band written for both arms at assignment (positions verified)</td></tr>
 </table>

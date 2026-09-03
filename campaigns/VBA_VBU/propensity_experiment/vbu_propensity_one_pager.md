@@ -1,10 +1,10 @@
 # VBU: Propensity Model Holdout Test
 
 > **Footnote version:** score-band holdout, a single client-level random 70/30 split
-> across the model-based offers; the 30% holdout receives no VBU communication. Two waves:
-> wave 1 powers the headline (expected ~1.8–2.4% vs ~0, read ~80 days post-deploy), wave 2
-> replicates and firms the band-level calibration (bands 1–4; 5–9 as bottom-bucket bound).
-> Cost: ~100–160 forgone upgrades per wave.
+> across the model-based offers; the 30% holdout receives no VBU communication and stays
+> held out for both waves. Wave 1 powers the headline (expected ~1.8–2.4% vs ~0, read ~80
+> days post-deploy), wave 2 replicates and firms the band-level calibration (bands 1–4;
+> 5–9 as bottom-bucket bound). Cost: ~102–160 forgone upgrades per wave.
 
 ## Testing Snapshot
 | Field | Value |
@@ -22,13 +22,14 @@
 ## Metrics (expected, pre-launch)
 | Group | Pop Count (per wave) | Communicated | Expected Conversion % |
 |-------|---------------------|--------------|----------------------|
-| Treatment: AIB_25K_NR | ~6,000–9,400 | Yes | ~1.79% |
-| Holdout: AIB_25K_NR | ~2,600–4,000 | No VBU touch | ≈ 0% |
-| Treatment: AIB_25K_R_55 | ~5,400–8,500 | Yes | ~2.40% |
-| Holdout: AIB_25K_R_55 | ~2,300–3,600 | No VBU touch | ≈ 0% |
+| Treatment: AIB_25K_NR | ~6,300–9,900 | Yes | ~1.79% |
+| Holdout: AIB_25K_NR | ~2,700–4,300 | No VBU touch | ≈ 0% |
+| Treatment: AIB_25K_R_55 | ~5,700–9,000 | Yes | ~2.40% |
+| Holdout: AIB_25K_R_55 | ~2,400–3,800 | No VBU touch | ≈ 0% |
 
-Baselines: mature Jun/Jul 2026 waves (stable across both). Historical not-communicated:
-0 target-product conversions / 2,956+; expected holdout behavior ≈ 0.
+Baselines: recent mature waves (Jun/Jul 2026); the full-year range across mature waves is
+NR 1.25–1.99%, R_55 2.36–3.56%. Historical not-communicated: 3 target-product conversions
+in ~7,550 clients (Jan–Aug); expected holdout behavior ≈ 0.
 
 ## Test Results
 | Comparison | Channel | P-Value | Lift | SRM |
@@ -38,9 +39,9 @@ Baselines: mature Jun/Jul 2026 waves (stable across both). Historical not-commun
 ## At-A-Glance
 | Field | Value |
 |-------|-------|
-| Clients | ~16–26K per wave (both offers) |
+| Clients | ~17–27K per wave (both offers) |
 | Period | {TBD} + ~80-day response window |
-| Design | RCT, client-level 70/30, holdout = no VBU touch |
+| Design | RCT, client-level 70/30, holdout = no VBU touch, arms persist across both waves |
 | Channels | BAU |
 | Readiness | Pending: CIDM feasibility (fresh random draw; holdout truly untouched) |
 | Attribution | Direct causal |

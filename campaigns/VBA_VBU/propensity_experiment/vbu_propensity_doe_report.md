@@ -32,9 +32,9 @@
   recommended 70/30: ~102–160 forgone upgrades per wave (dial table in §5).
 
 ## 2. Strategic Context
-The model path is live BAU, running from before our data window (earliest wave in the probe
-scan: 2026-04-13; true program start TBC with CIDM), monthly cadence, tactics consolidated
-5→1 over Apr–Aug. The
+The model path is live BAU, monthly waves since at least January 2026 (workstation pivot,
+2026-09-03; Jan is the earliest month shown, so the true start may predate it), tactics
+consolidated 5→1 over Apr–Aug. The
 business runs it without a causal value number. This test converts the model from "deployed"
 to "measured": a defensible dollar/upgrade value for model-targeted communication, plus a
 calibration read that tells CIDM whether the score cutoff is placed correctly. Rebate/offer
@@ -44,12 +44,15 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE: no arm varies
 - **Population:** all clients selected by the propensity model for a model-based offer
   (AIB_25K_NR, AIB_25K_R_55) in the wave.
 - **Primary Hypothesis (program value):** communicating the model's picks causes upgrades.
-  - H₀: τ = 0, H₁: τ > 0 (one-sided), τ = E[Y(Comm) − Y(NoTouch)], Y = target-product
-    upgrade within the ~80-day response window. Read separately per offer.
+  - H₀: τ = 0, H₁: τ > 0 (one-sided; pre-justified because holdout conversion has a
+    structural floor near zero, so negative τ is not plausible for this metric),
+    τ = E[Y(Comm) − Y(NoTouch)], Y = target-product upgrade within the ~80-day response
+    window. Read separately per offer.
   - Expected under H₁: NR ≈ +1.8pp, R_55 ≈ +2.4pp (vs ≈0 control; b3, mature Jun/Jul waves).
 - **Secondary Hypothesis (HTE, the "is the model working" read):** causal lift declines
-  monotonically with score band: band 1 ≈ 3.4–7.9pp fading to ~0 by bands 5+. Valid at band
-  level because randomization is client-level; every pre-treatment band inherits it.
+  monotonically with score band, from band 1 (≈ 3.4–7.9pp; June band-1 rates 3.44% NR /
+  7.89% R_55) toward ~0 in the pooled bottom bucket (bands 5–9). Valid at band level
+  because randomization is client-level; every pre-treatment band inherits it.
 - **Success Criteria:** primary lift significant per offer (α = 0.05); band-1 lift
   significant and larger than bands 4+ lift.
 - **Scope boundary (state, don't assume):** this design proves the model's selections respond
@@ -68,7 +71,10 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE: no arm varies
   | Arm | Description | Allocation |
   |-----|-------------|-----------|
   | Treatment | Communicated the model-assigned offer, BAU channels | 70% |
-  | Holdout | NO VBU touch: not communicated, not moved to another offer/path | 30% |
+  | Holdout | NO VBU touch in any channel: not communicated, not moved to another offer/path | 30% |
+
+  Arm assignment persists for the test's duration: a wave-1 holdout client stays held out
+  in wave 2 (prevents contamination; re-entry is rare). CIDM to confirm.
 
   Allocation is a dial (§5): 70/30 recommended; 50/50 adds only marginal bands 5–7 reads at
   ~1.7× the cost.
@@ -79,9 +85,13 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE: no arm varies
   ledger for BOTH arms at assignment (position @21,8 / band @50,2 verified 100% in t1).
 
 ## 5. Sample Size & Power Analysis
-- **Baseline (treatment side):** NR 1.79%, R_55 2.40–2.41%, stable across mature Jun/Jul
-  waves. **Control side expected ≈ 0** (0 target-product conversions in 2,956+ historical NM;
-  ~0 any-product organic switching).
+- **Baseline (treatment side):** NR 1.79%, R_55 2.40–2.41% in the recent mature waves
+  (Jun/Jul). Full-year range across mature waves (Jan–Jul): NR 1.25–1.99%, R_55 2.36–3.56% —
+  the swing is mostly band-mix (which deciles get contacted varies by month), which is why
+  the read is by band. **Control side expected ≈ 0**, resting on the mechanism (no touch, no
+  offer-driven upgrade); consistent with 3 target-product conversions in ~7,550 historical
+  NM clients (Jan–Aug) and ~0 any-product organic switching. The historical NM group is
+  supporting evidence, not proof (not a verified random control, §7c).
 - **Significance:** α = 0.05 one-sided primary. **Power:** 80%.
 - **Because control ≈ 0 this is a detection/precision problem, not a classic MDE:** with a
   ~2% vs ~0 contrast, even a 10% holdout detects the pooled effect. The holdout is sized for
@@ -147,7 +157,7 @@ simple random cut. The experiment therefore requires a fresh draw (§4) and the 
 |------|-----------|--------|------------|
 | Holdout not truly no-touch (reassigned or picked up by another campaign) | Medium | Kills the estimand | Explicit CIDM confirmation; post-launch tactic-history audit of holdout clients |
 | Split drawn by the existing (score-linked) NM mechanism | Medium | Biased control | §7a per-band SRM on day-1 assignment file |
-| Read taken before maturity | Medium | Understated lift (Aug pattern: 0.44% at ~2.5 wks) | No read before ~80 days post-deploy |
+| Read taken before maturity | Medium | Understated lift (treatment-side Aug read: 0.44% at ~2.5 wks vs ~1.8% mature) | No read before ~80 days post-deploy |
 | Forgone conversions escalate if test forgotten | Low | Cost creep | Fixed wave count with explicit stop/extend decision |
 | Scores/bands missing on holdout ledger rows | Low | Loses band read | Ledger spec §4(3); verified pattern from t1 |
 
