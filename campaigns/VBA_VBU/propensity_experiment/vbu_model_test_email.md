@@ -19,7 +19,8 @@ Expected results: ~1.79% (NR) and ~2.41% (R_55) vs ~0 in the holdout. First read
 after deploy.
 
 Two confirmations needed from decisioning:
-1. The split is a fresh client-level random draw, not the existing not-communicated mechanism.
+1. The split is a fresh client-level random draw, not the existing not-communicated
+   mechanism. We'll verify on day 1 that the 70/30 holds within every score band.
 2. Held-out clients receive nothing (not moved to another offer or path).
 
 One-pager attached; details on Confluence.
