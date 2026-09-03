@@ -1,6 +1,37 @@
 # Cards Pod — Active Workstreams
 
-Last updated: 2026-07-22
+Last updated: 2026-09-03
+
+## ⚡ HOT — pick up here (session 2026-08-25→31)
+
+### ★ VBU propensity model holdout test (DESIGN SHIPPED 2026-09-03 — green-lit test, our split rec delivered)
+- Design locked + red-teamed (4 blind reviewers, all fixes applied): client-level random **70/30**,
+  holdout = no VBU touch in any channel, arms persist across **2 waves**, read ~80d post-deploy.
+  Score-band reads analytic (bands 1–4 individual, 5–9 bottom bucket; no band logic in decisioning).
+  Cost ~102–160 forgone upgrades/wave (Jun/Jul basis, scales with wave size).
+- Docs all pushed (`campaigns/VBA_VBU/propensity_experiment/`): Confluence page PASTED
+  (vbu_propensity_confluence.html), DOE report, one-pager, exec email draft (send pending),
+  split explainer xlsx, deployment summary xlsx. Every number window-attributed (Jan–Aug 2026
+  history; Jun/Jul per-wave basis).
+- Key facts banked: program monthly since ≥Jan 2026; mature baselines NR 1.25–1.99% /
+  R_55 2.36–3.56% (swing = band mix), Jun/Jul anchor 1.79%/2.40%; control ≈0 (3/~7,550 NM
+  Jan–Aug); BAU NM draw is SCORE-LINKED (d1 ~8% vs d4 ~4%; Jan–Mar d9-10 NC≥COMM) → fresh
+  draw required, day-1 SRM per band. Full pivots transcribed in folder (workstation_pivot*.md).
+- OPEN (people-side): CIDM confirmations (fresh random draw, no-touch, arm persistence, how NM
+  is drawn), TST_GRP_CD pre-build, NIBT $/upgrade from finance, unsub guardrail threshold,
+  randomization owner + freeze date, launch wave date. Memory: project_vbu_propensity_experiment_status.
+
+### A. VBA/VBU Q3 scorecard reconciliation (ACTIVE — blocked on probes Andre runs)
+- Q3 Commentary email (2026-08-25): 2 open asks tagged to Andre — VBA ITA impact + MCB on TPA; VBU MC6→MCB. ANSWERS DRAFTED & VERIFIED: `campaigns/VBA_VBU/q3_commentary_answers_2026-08-27.md` (VBA: ITA = 60% of pool at +0.08pp n.s. → pooled 0.87→0.41pp, TPA flat 0.90pp, MCB immaterial; VBU: MC6→MCB = 48% of leads at +0.36pp → 1.93→1.36pp, excl. it −4%). Replies ready to send (+ maturity line, final after Sep 30).
+- MBR scorecard REPRODUCED: NBO Monthly Summary, campaign END month (May+Jun+Jul = 278,609 action / 0.16pp). Andre's PPK = start-month curated table (293,404 / 0.45pp). Remaining gap: NBO slice is ~3.5% smaller and NAC control 2,158 vs ledger 5,275 (May) → some decisioning field filters it. PROBES PUSHED, NOT RUN: `vba_nbo_dashboard_filter_probe.sql` (11 blocks) + `vba_decisioning_field_probe.sql` (46 blocks, classification in `vba_decisioning_fields.md`). Target: subset = 92,792/2,158 (end-May). Also open: earlier scorecard 184,521/0.0% (third source, unexplained); VBU NBO end-month check (target 87,203); PCL NIBT 156 vs 138 email thread (untouched).
+- Ledgers: `vba_vbu_monthly_ledger.sql` (two queries, cohort-month rollup, start+end month side by side). Cube queries with Q1-Q8 questions embedded: `nbo_vba_q3_cube.sql`, `vbu_q3_cube.sql` (VBU verified: control='Action'/'Control', responder 3-way label LIKE '1.%', year_mon_start 'YYYY-MM').
+- `references/campaign_query_cards.md` = per-table query cards (VBA/VBU/CRV ready; PCD/PCQ arm NOT on curated table → `campaigns/_templates/arm_probe_pcd_pcq.sql` pushed, not run).
+
+### B. PCD Async Banner Wave 4 (RESOLVED — slide copy final)
+- W4 (Aug 4) = TWO experiments: legacy offers 70/30 (0.57% vs 0.37%, +0.20pp, tracking W3) + NEW ION+ 21K cell 90/10 (48K test, 2.01% vs 1.07% no-offer control, +0.94pp, z=6.1, 69% of conversions). Pooled curve = mix artefact — never present. Final slide copy: `campaigns/PCD/async_banner_slide_text_2026-08-25.md` (W1/W2 frozen as seen; W3 finalized 201 incr/$936K; NIBT = $388/mo = $4,656/yr per incr client). Slide fixes flagged 2026-08-28: pp-not-bps, ION+ 452 not 552, W2 $90K, W3 row +30%, legend rename.
+- Evidence: `campaigns/PCD/async_banner_wave4_pivot_2026-08-25.md` (all pivots + SRM z-table + vintage by offer) and `async_is_mb_by_tactic_2026-08-25.md` (TREATMT_MN = offer; is_mb by offer: 13AA 99%/87AA 25%/84AA 10%).
+- OPEN: (1) ION+ control = no banner at all, or ION+ banner without bonus? (changes what +0.94pp measures); (2) is_mb semantics — if "got banner", ION/IOP cell is ~90% non-banner inside "async" (W1-W4 unchanged, doesn't affect W4 slide); (3) repo async SQL defines cohort by strategy-code list only + 2 files with typo'd lists (`async_banner_vintage_ab.sql:219`, `value_capture_report_v3.sql:154`); W2/W3 slide numbers not reproducible from repo SQL.
+
 
 ## Priority Stack
 
