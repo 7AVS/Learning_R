@@ -1,138 +1,84 @@
-"""Build vbu_split_explainer.xlsx — plain-language ammunition for the 70/30 vs 50/50
-conversation with marketing stakeholders. No stats jargon. Blocks sized to copy-paste
-straight into PowerPoint. Numbers from b3/b4 + workstation pivot (Jun/Jul mature waves).
+"""Build vbu_split_explainer.xlsx — ONE slide: two tables + three lines.
+Table 1 = actual results by score band (Jun+Jul pooled, mature waves).
+Table 2 = the 50/50 vs 70/30 decision. v2: numbers, minimal words.
 """
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 BOLD = Font(bold=True)
-BIG = Font(bold=True, size=14)
 HDR = PatternFill("solid", fgColor="D9E1F2")
-HILITE = PatternFill("solid", fgColor="E2EFDA")
-WRAP = Alignment(wrap_text=True, vertical="top")
+REC = PatternFill("solid", fgColor="E2EFDA")
 BOX = Border(*[Side(style="thin")] * 4)
+PCT = "0.00%"
+NUM = "#,##0"
 
 wb = Workbook()
 ws = wb.active
-ws.title = "explainer"
+ws.title = "holdout decision"
 ws.sheet_view.showGridLines = False
 
-r = 1
-def title(text):
-    global r
-    ws.cell(row=r, column=1, value=text).font = BIG
-    r += 1
+def cell(r, c, v, bold=False, fill=None, fmt=None):
+    x = ws.cell(row=r, column=c, value=v)
+    x.border = BOX
+    if bold: x.font = BOLD
+    if fill: x.fill = fill
+    if fmt: x.number_format = fmt
+    return x
 
-def block_table(headers, rows, widths=None, highlight_col=None):
-    global r
-    for j, h in enumerate(headers, start=1):
-        c = ws.cell(row=r, column=j, value=h)
-        c.font = BOLD
-        c.fill = HDR
-        c.border = BOX
-        c.alignment = WRAP
-    r += 1
-    for row in rows:
-        for j, v in enumerate(row, start=1):
-            c = ws.cell(row=r, column=j, value=v)
-            c.border = BOX
-            c.alignment = WRAP
-            if highlight_col and j == highlight_col:
-                c.fill = HILITE
-        r += 1
-    r += 1
+ws.cell(row=1, column=1, value="VBU model-based offers — holdout size (results Jun+Jul 2026)").font = Font(bold=True, size=13)
 
-def note(text):
-    global r
-    c = ws.cell(row=r, column=1, value=text)
-    c.font = Font(italic=True)
-    c.alignment = WRAP
-    r += 2
+# Table 1 — what we've seen
+r = 3
+for j, h in enumerate(["Score band", "NR clients", "NR upgrades", "NR rate",
+                       "R_55 clients", "R_55 upgrades", "R_55 rate"], 1):
+    cell(r, j, h, bold=True, fill=HDR)
+rows = [
+    ("1",   4212, 131, 3448, 241),
+    ("2",   4601, 106, 3166,  89),
+    ("3",   4351,  76, 3591,  64),
+    ("4",   4173,  54, 3940,  47),
+    ("5-9", 4611,  26, 5769,  38),
+]
+for i, (band, n_nr, u_nr, n_r, u_r) in enumerate(rows):
+    rr = r + 1 + i
+    cell(rr, 1, band)
+    cell(rr, 2, n_nr, fmt=NUM); cell(rr, 3, u_nr); cell(rr, 4, f"=C{rr}/B{rr}", fmt=PCT)
+    cell(rr, 5, n_r, fmt=NUM);  cell(rr, 6, u_r);  cell(rr, 7, f"=F{rr}/E{rr}", fmt=PCT)
+t = r + 6
+cell(t, 1, "All (communicated)", bold=True)
+cell(t, 2, 21948, bold=True, fmt=NUM); cell(t, 3, 393, bold=True); cell(t, 4, f"=C{t}/B{t}", bold=True, fmt=PCT)
+cell(t, 5, 19914, bold=True, fmt=NUM); cell(t, 6, 479, bold=True); cell(t, 7, f"=F{t}/E{t}", bold=True, fmt=PCT)
+cell(t + 1, 1, "Not communicated", bold=True)
+cell(t + 1, 2, 1192, fmt=NUM); cell(t + 1, 3, 0); cell(t + 1, 4, 0, fmt=PCT)
+cell(t + 1, 5, 954, fmt=NUM);  cell(t + 1, 6, 0); cell(t + 1, 7, 0, fmt=PCT)
 
-# ---------------------------------------------------------------- Block 1
-title("1. What we have already seen (June + July campaigns)")
-block_table(
-    ["What happened", "The numbers", "In plain words"],
-    [
-        ["Clients who RECEIVED the offer", "about 2 in every 100 upgraded "
-         "(1.8 per 100 on the no-rebate offer, 2.4 per 100 on the $55-rebate offer)",
-         "The campaign gets upgrades."],
-        ["Clients who did NOT receive the offer", "0 upgrades out of about 3,000 clients",
-         "Nobody upgrades on their own. No offer = no upgrade."],
-        ["Where the upgrades come from", "9 out of 10 upgrades come from the model's top 4 "
-         "score groups (group 1 alone: 3 to 8 per 100)",
-         "The model's ranking works — the top of the list responds, the bottom barely does."],
-    ],
-)
+# Table 2 — the decision
+r2 = t + 4
+for j, h in enumerate(["Per monthly wave", "50/50", "70/30 (recommended)"], 1):
+    cell(r2, j, h, bold=True, fill=HDR)
+dec = [
+    ("Clients held out", "~8,500–13,500", "~5,100–8,100"),
+    ("Upgrades given up", "~170–270", "~100–160"),
+    ("Reads bands 1–4 (9 of 10 upgrades)", "Yes", "Yes"),
+    ("Reads bands 5–9", "No", "No"),
+    ("Waves", "2", "2"),
+]
+for i, (a, b, c) in enumerate(dec):
+    rr = r2 + 1 + i
+    cell(rr, 1, a)
+    cell(rr, 2, b)
+    cell(rr, 3, c, fill=REC)
 
-# ---------------------------------------------------------------- Block 2
-title("2. What the test does")
-note("We let a coin flip decide which clients get the offer. The held-out clients tell us "
-     "what would have happened WITHOUT the campaign. Because we saw 0 upgrades without the "
-     "offer, we expect the held-out group to sit at ~0 — and then every upgrade in the "
-     "mailed group is proven to be caused by the campaign. The only decision is HOW MANY "
-     "clients to hold out.")
+# Three lines
+r3 = r2 + 8
+for i, line in enumerate([
+    "No offer = no upgrades (0 of 2,146). Any random holdout proves the campaign causes them.",
+    "9 of 10 upgrades come from bands 1–4 — fully readable at 70/30.",
+    "Bands 5–9 are unreadable even at 50/50. The extra ~110 lost upgrades buy nothing.",
+]):
+    ws.cell(row=r3 + i, column=1, value="• " + line)
 
-# ---------------------------------------------------------------- Block 3
-title("3. The two scenarios, per monthly wave (~17,000–27,000 model-selected clients)")
-block_table(
-    ["", "Hold out half (50/50)", "Hold out 3 in 10 (70/30) — RECOMMENDED"],
-    [
-        ["Clients still receiving the offer", "~8,500–13,500", "~12,000–18,900"],
-        ["Clients held out", "~8,500–13,500", "~5,100–8,100"],
-        ["Upgrades we give up, per wave", "~170–270", "~100–160"],
-        ["Answers 'does the campaign cause the upgrades?'", "Yes — after wave 1",
-         "Yes — after wave 1"],
-        ["Reads each of the top 4 score groups (9 of 10 upgrades)", "Yes", "Yes"],
-        ["Reads each of the bottom score groups (5–9)",
-         "No — too few clients there, even after 2 waves",
-         "No — same (see block 4)"],
-        ["Waves needed", "2 (second wave confirms it wasn't luck)", "2 (same)"],
-    ],
-    highlight_col=3,
-)
-
-# ---------------------------------------------------------------- Block 4
-title("4. Why 70/30 is enough — the one-paragraph version")
-note("The only thing a bigger holdout could buy is a verdict on the bottom score groups "
-     "(5 to 9). But the model sends very few people there (a few hundred per group) and "
-     "almost none of them upgrade (less than 1 in 100). Groups that small and that quiet "
-     "don't produce enough upgrades to measure — not at 70/30, and not at 50/50 either, "
-     "even after two waves. So going 50/50 costs about 110 extra lost upgrades every wave "
-     "and buys nothing we can use. We will still report the bottom groups — as one combined "
-     "bucket with a ceiling ('at most X per 100'), which is all any split can honestly say.")
-
-# ---------------------------------------------------------------- Block 5
-title("5. Why two waves")
-note("Wave 1 gives the answer. Wave 2 repeats the test on the next month's clients: if the "
-     "same result shows up twice, nobody can call it a one-month fluke — and it doubles the "
-     "data behind the score-group read at no extra design effort.")
-
-# ---------------------------------------------------------------- Block 6
-title("6. The full dial (backup — if someone asks 'why not smaller / bigger')")
-block_table(
-    ["Holdout size", "Upgrades given up per wave", "What we can read",
-     "Verdict"],
-    [
-        ["1 in 10 (90/10)", "~34–53", "Campaign yes/no + top 3 score groups",
-         "Cheapest, but loses score group 4"],
-        ["2 in 10 (80/20)", "~68–107", "Campaign yes/no + top 4 score groups",
-         "Workable minimum"],
-        ["3 in 10 (70/30) — RECOMMENDED", "~102–160",
-         "Campaign yes/no + top 4 score groups, solidly, twice",
-         "Best answer-per-upgrade-lost"],
-        ["Half (50/50)", "~170–270",
-         "Same as 70/30 — bottom groups still unreadable",
-         "Pays ~70% more for the same answers"],
-    ],
-    highlight_col=1,
-)
-
-note("Sources: June/July 2026 waves, model-based offers (AIB_25K_NR, AIB_25K_R_55). "
-     "Communicated: 1.79% / 2.40% conversion. Not communicated: 0 of 2,956. "
-     "Full design: vbu_propensity_doe_report.md.")
-
-for col, w in (("A", 46), ("B", 44), ("C", 46), ("D", 30)):
+for col, w in (("A", 34), ("B", 15), ("C", 15), ("D", 10), ("E", 15), ("F", 15), ("G", 10)):
     ws.column_dimensions[col].width = w
 
 path = (r"C:\Users\andre\New_projects\cards\campaigns\VBA_VBU\propensity_experiment"
