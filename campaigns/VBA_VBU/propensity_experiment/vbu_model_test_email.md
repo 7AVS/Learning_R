@@ -11,16 +11,16 @@ Here's our read on the split for the VBU model test, based on the June and July 
 
 Recommendation: 70/30, client level, for 2 waves. The held-out 30% get no VBU touch.
 
-Why not 50/50: there's no real minimum detectable effect question here. Not-communicated
-clients show 0 upgrades (0 of 2,146 in June and July), so any random holdout of 10% or more
-proves the effect. The split only decides how deep we can read the score bands. 70/30 reads
-bands 1 to 4 cleanly, which is where 9 of 10 upgrades come from. 50/50 doesn't add a usable
-read on the lower bands (they're too thin either way) and gives up roughly 70 more upgrades
-per wave. At 70/30 the cost is about 100-160 upgrades not made per wave.
+A 50/50 split isn't needed for detection. Not-communicated clients show 0 upgrades (0 of
+2,146 in June and July), so any random holdout of 10% or more proves the effect; the split
+size only determines how deep we can read the score bands. 70/30 gives a clean read on bands
+1 to 4, where 9 of 10 upgrades come from. Going to 50/50 would not add a usable read on the
+lower bands (their volumes are too thin under any split) and would give up roughly 70 more
+upgrades per wave. At 70/30 the expected cost is about 100-160 upgrades not made per wave.
 
-What to expect: communicated clients around 1.79% (NR) and 2.41% (R_55), holdout at or near
-zero, and the lift concentrated in band 1 (3.4 to 7.9pp). First read lands ~80 days after
-deploy; the second wave confirms and firms the band-level numbers.
+On expected results: communicated clients around 1.79% (NR) and 2.41% (R_55), holdout at or
+near zero, with the lift concentrated in band 1 (3.4 to 7.9pp). The first read lands ~80 days
+after deploy, and the second wave confirms and firms the band-level numbers.
 
 Two things to confirm on the operational side:
 
