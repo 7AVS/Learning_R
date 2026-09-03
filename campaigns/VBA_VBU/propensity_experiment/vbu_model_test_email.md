@@ -1,37 +1,28 @@
 # Email draft: VBU model test, split recommendation
 
 **To:** {campaign owner / CIDM contact}
-**Subject:** VBU model test: split recommendation and expected results
+**Subject:** VBU model test: split recommendation
 
 ---
 
 Hi {name},
 
-Here's our read on the split for the VBU model test, based on the June and July waves.
+Recommendation for the VBU model test: 70/30 at client level, run for 2 waves. The held-out
+30% receive no VBU communication.
 
-Recommendation: 70/30, client level, for 2 waves. The held-out 30% get no VBU touch.
+50/50 isn't needed. Clients without the offer don't upgrade (0 of 2,146 in Jun/Jul), so even
+a small holdout proves the effect. 70/30 reads score bands 1-4, where 9 of 10 upgrades come
+from; 50/50 adds no usable read and costs ~70 more upgrades per wave. Cost at 70/30: ~100-160
+upgrades per wave.
 
-A 50/50 split isn't needed for detection. Not-communicated clients show 0 upgrades (0 of
-2,146 in June and July), so any random holdout of 10% or more proves the effect; the split
-size only determines how deep we can read the score bands. 70/30 gives a clean read on bands
-1 to 4, where 9 of 10 upgrades come from. Going to 50/50 would not add a usable read on the
-lower bands (their volumes are too thin under any split) and would give up roughly 70 more
-upgrades per wave. At 70/30 the expected cost is about 100-160 upgrades not made per wave.
+Expected results: ~1.79% (NR) and ~2.41% (R_55) vs ~0 in the holdout. First read ~80 days
+after deploy.
 
-On expected results: communicated clients around 1.79% (NR) and 2.41% (R_55), holdout at or
-near zero, with the lift concentrated in band 1 (3.4 to 7.9pp). The first read lands ~80 days
-after deploy, and the second wave confirms and firms the band-level numbers.
+Two confirmations needed from decisioning:
+1. The split is a fresh client-level random draw, not the existing not-communicated mechanism.
+2. Held-out clients receive nothing (not moved to another offer or path).
 
-Two things to confirm on the operational side:
-
-1. The split needs to be a fresh client-level random draw, not the existing not-communicated
-   mechanism. We see that group running ~8% in the top decile vs ~4% in decile 4 for NR every
-   wave, so something in that draw is score-linked. Related: is that group a deliberate
-   holdout, and how is it drawn?
-2. The held-out 30% should receive nothing at all, not be moved to another offer or path.
-   Can the mechanism do that?
-
-One-pager attached; full write-up on the Confluence page.
+One-pager attached; details on Confluence.
 
 Thanks,
 Andre
