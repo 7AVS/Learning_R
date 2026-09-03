@@ -9,12 +9,11 @@
 
 ## 0. Footnote version (the whole experiment in four lines)
 
-> Client-level random 50/50 holdout within the model-based VBU offers (~8–13K clients per
-> offer per wave); holdout receives no VBU communication. One wave fully powers the headline
-> read — expected ~1.8–2.4% vs ~0, detectable down to ~0.2pp. A second wave extends the read
-> to band-level calibration through band 7 (bands 8–9 unreadable at any split).
-> Cost of the answer at 50/50: ~170–270 forgone upgrades per wave (20% holdout: ~70–110,
-> keeps headline + bands 1–4).
+> Client-level random 70/30 holdout within the model-based VBU offers (~8–13K clients per
+> offer per wave); the 30% holdout receives no VBU communication. Two waves: wave 1 fully
+> powers the headline read (expected ~1.8–2.4% vs ~0), wave 2 replicates and firms the
+> band-level calibration (bands 1–4 individually; bands 5–9 as one bottom-bucket upper bound).
+> Cost of the answer: ~100–160 forgone upgrades per wave.
 
 ---
 
@@ -29,8 +28,8 @@
   holdout ≈ 0, and causal lift declines monotonically from band 1 (~3.4–7.9pp) toward ~0 at
   bands 5+.
 - **How long / how safe:** 1 wave for the headline (read mature ~80 days after deploy),
-  2 waves for band calibration. Reversible at any wave boundary. Cost at 50/50: ~170–267
-  forgone upgrades per wave (dial table in §5).
+  2 waves for band calibration and replication. Reversible at any wave boundary. Cost at the
+  recommended 70/30: ~102–160 forgone upgrades per wave (dial table in §5).
 
 ## 2. Strategic Context
 The model path is live BAU (monthly waves since April 2026, tactics consolidated 5→1). The
@@ -66,8 +65,11 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE — no arm var
 
   | Arm | Description | Allocation |
   |-----|-------------|-----------|
-  | Treatment | Communicated the model-assigned offer, BAU channels | 50% |
-  | Holdout | NO VBU touch — not communicated, not moved to another offer/path | 50% |
+  | Treatment | Communicated the model-assigned offer, BAU channels | 70% |
+  | Holdout | NO VBU touch — not communicated, not moved to another offer/path | 30% |
+
+  Allocation is a dial (§5): 70/30 recommended; 50/50 adds only marginal bands 5–7 reads at
+  ~1.7× the cost.
 
 - **Critical mechanics (CIDM asks, §9):** (1) the split must be a fresh random draw — NOT the
   existing NM mechanism, whose share is score-linked (§7c); (2) holdout clients receive
@@ -80,7 +82,7 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE — no arm var
   ~0 any-product organic switching).
 - **Significance:** α = 0.05 one-sided primary. **Power:** 80%.
 - **Because control ≈ 0 this is a detection/precision problem, not a classic MDE:** with a
-  ~2% vs ~0 contrast, even a 10% holdout detects the pooled effect. 50/50 is chosen to buy
+  ~2% vs ~0 contrast, even a 10% holdout detects the pooled effect. The holdout is sized for
   band-level precision, not headline power.
 
 - **Detection mechanic (why holdout size matters):** with a zero-converting control, the
@@ -94,13 +96,17 @@ content (NR vs R_55 vs rule-based 35K) is explicitly OUT OF SCOPE — no arm var
 | Holdout | Headline (per offer) | Band read, 1 wave | Band read, 2 waves | Forgone upgrades/wave |
 |---------|---------------------|-------------------|--------------------|-----------------------|
 | 10% | Yes | Bands 1–3 | 1–4 | ~34–53 |
-| 20% | Yes | Bands 1–4 | 1–4, partial 5–7 | ~68–107 |
-| 50% | Yes | Bands 1–4 | 1–7 | ~170–267 |
+| 20% | Yes | Bands 1–4 | 1–4, firmer | ~68–107 |
+| **30%** | **Yes** | **Bands 1–4** | **1–4 clean + replication** | **~102–160** |
+| 50% | Yes | Bands 1–4 (+6 marginal) | 1–4 clean; 5–7 marginal (~50–70% power) | ~170–267 |
 
-- **Recommendation:** 50/50 only if the team wants bands 5–7; if calibration to band 4 (the
-  effective cutoff region) suffices, 20% holdout delivers it at ~40% of the cost.
-- **Bands 8–9:** never readable at any split (~0.1% rate needs ~30–60K/band; model selects a
-  few hundred). Pool as one bottom bucket, report an upper bound only.
+- **Recommendation: 70/30 × 2 waves.** Bands 5–7 are underpowered even at 50/50 over 2 waves
+  (~4–6 expected conversions vs ~7 needed), so the 50/50 premium (~175 extra forgone upgrades
+  over 2 waves) buys mostly marginal reads. 70/30 × 2 waves holds out roughly the same total
+  clients as 50/50 × 1 wave — same evidence budget, plus replication.
+- **Bands 5–9:** pooled as one bottom bucket, reported as an upper bound only ("consistent
+  with ~0, at most X%"). Bands 8–9 are never readable individually at any split (~0.1% rate
+  needs ~30–60K/band; model selects a few hundred).
 - **Duration decision:** 1 wave = headline; 2 waves = headline + full calibration depth for
   the chosen split, plus replication (wave-to-wave stability is what makes the number
   defensible). Recommended: commit 2 waves, wave 1 read as interim headline.

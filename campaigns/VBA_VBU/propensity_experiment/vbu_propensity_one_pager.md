@@ -1,9 +1,10 @@
 # VBU — Propensity Model Holdout Test
 
-> **Footnote version:** score-band holdout, implemented as a single client-level random 50/50
-> across the model-based offers; holdout receives no VBU communication. One wave powers the
-> headline (expected ~1.8–2.4% vs ~0); a second wave adds replication and band depth.
-> Cost at 50/50: ~170–270 forgone upgrades per wave (20% holdout: ~70–110, keeps bands 1–4).
+> **Footnote version:** score-band holdout, implemented as a single client-level random 70/30
+> across the model-based offers; the 30% holdout receives no VBU communication. Two waves:
+> wave 1 powers the headline (expected ~1.8–2.4% vs ~0, read ~80 days post-deploy), wave 2
+> replicates and firms the band-level calibration (bands 1–4; 5–9 as bottom-bucket bound).
+> Cost: ~100–160 forgone upgrades per wave.
 
 ## Testing Snapshot
 | Field | Value |
@@ -13,18 +14,18 @@
 | Treatment Period | Next wave, {TBD — monthly cadence, ~13th} |
 | Response Period | ~80 days post-deploy (no read before maturity) |
 | Channels | BAU VBU channels, unchanged |
-| Experiment Design | Score-band holdout: single client-level random 50/50 RCT across the model-based population (no band logic in decisioning — scores stored at assignment; every band inherits its own ~50/50; results read per band) |
+| Experiment Design | Score-band holdout: single client-level random 70/30 RCT across the model-based population (no band logic in decisioning — scores stored at assignment; every band inherits its own ~70/30; results read per band) |
 | Significance | 95% (α = 0.05, one-sided primary) |
 | Power | 80% — overpowered for the headline; split sized for band-level depth |
-| Treatment/Control Split | 50/50 (decision dial: 20% keeps headline + bands 1–4 at ~40% of cost) |
+| Treatment/Control Split | 70/30 recommended (dial in DOE §5 — 50/50 adds only marginal bands 5–7 reads at ~1.7× the cost) |
 
 ## Metrics (expected — pre-launch)
 | Group | Pop Count (per wave) | Communicated | Expected Conversion % |
 |-------|---------------------|--------------|----------------------|
-| Treatment — AIB_25K_NR | ~4,300–6,700 | Yes | ~1.79% |
-| Holdout — AIB_25K_NR | ~4,300–6,700 | No VBU touch | ≈ 0% |
-| Treatment — AIB_25K_R_55 | ~3,900–6,100 | Yes | ~2.40% |
-| Holdout — AIB_25K_R_55 | ~3,900–6,100 | No VBU touch | ≈ 0% |
+| Treatment — AIB_25K_NR | ~6,000–9,400 | Yes | ~1.79% |
+| Holdout — AIB_25K_NR | ~2,600–4,000 | No VBU touch | ≈ 0% |
+| Treatment — AIB_25K_R_55 | ~5,400–8,500 | Yes | ~2.40% |
+| Holdout — AIB_25K_R_55 | ~2,300–3,600 | No VBU touch | ≈ 0% |
 
 Baselines: mature Jun/Jul 2026 waves (stable across both). Historical not-communicated:
 0 target-product conversions / 2,956+ — expected holdout behavior ≈ 0.
@@ -39,7 +40,7 @@ Baselines: mature Jun/Jul 2026 waves (stable across both). Historical not-commun
 |-------|-------|
 | Clients | ~16–26K per wave (both offers) |
 | Period | {TBD} + ~80-day response window |
-| Design | RCT, client-level 50/50, holdout = no VBU touch |
+| Design | RCT, client-level 70/30, holdout = no VBU touch |
 | Channels | BAU |
 | Readiness | Pending — CIDM feasibility (fresh random draw; holdout truly untouched) |
 | Attribution | Direct causal |
