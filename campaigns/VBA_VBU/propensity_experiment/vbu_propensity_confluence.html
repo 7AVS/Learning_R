@@ -20,7 +20,7 @@
 <ul>
 <li><b>Why are we testing?</b> The model path is live BAU (monthly waves since at least January 2026) with no causal value number. The existing ~5% not-communicated group is not a verified random control (its share varies by score band), so today's numbers can't certify the model.</li>
 <li><b>What is being tested and measured?</b> Target-product upgrade rate, communicated vs held-out, per offer, overall and by model score band.</li>
-<li><b>What will success look like?</b> Treatment converts in the historical range (NR 1.3&ndash;2.0%, R_55 2.4&ndash;3.6%; recent waves 1.79% / 2.40%) with holdout &asymp; 0, and the lift concentrates in the top score bands (band 1: ~3.4&ndash;7.9pp).</li>
+<li><b>What will success look like?</b> Treatment converts in the range of the mature Jan&ndash;Jul 2026 waves (NR 1.3&ndash;2.0%, R_55 2.4&ndash;3.6%; Jun/Jul: 1.79% / 2.40%) with holdout &asymp; 0, and the lift concentrates in the top score bands (band 1: ~3.4&ndash;7.9pp, June rates).</li>
 <li><b>How long and how safe?</b> Two monthly waves, each read ~80 days post-deploy; reversible at any wave boundary. Cost: ~102&ndash;160 forgone upgrades per wave at 70/30 (scales with wave size; 2026 waves ranged ~11&ndash;24K clients). End-to-end answer: roughly 4.5 months from wave-1 deploy.</li>
 </ul>
 
@@ -46,7 +46,7 @@ H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided; pre-justified 
 <li><b>Treatment Arms (split tree, ratio 70/30):</b></li>
 </ul>
 <table border="1" cellpadding="4">
-<tr><th>Arm</th><th>Description</th><th>Allocation</th><th>Expected clients / wave</th></tr>
+<tr><th>Arm</th><th>Description</th><th>Allocation</th><th>Expected clients / wave (sized on the Jun/Jul 2026 waves)</th></tr>
 <tr><td>Treatment</td><td>Communicated the model-assigned offer, BAU channels</td><td>70%</td><td>NR ~6,300&ndash;9,900; R_55 ~5,700&ndash;9,000</td></tr>
 <tr><td>Holdout</td><td>NO VBU touch in any channel: not communicated, not moved to another offer or path</td><td>30%</td><td>NR ~2,700&ndash;4,300; R_55 ~2,400&ndash;3,800</td></tr>
 </table>
@@ -54,9 +54,9 @@ H<sub>0</sub>: &tau; = 0; H<sub>1</sub>: &tau; &gt; 0 (one-sided; pre-justified 
 
 <h1>4 - Sample Size &amp; Power Analysis</h1>
 <ul>
-<li><b>Baseline Conversion Rate:</b> recent mature waves (Jun/Jul 2026): NR 1.79%, R_55 2.40%. Full 2026 range across mature waves (Jan&ndash;Jul): NR 1.25&ndash;1.99%, R_55 2.36&ndash;3.56%. Band 1 in June: NR 3.44%, R_55 7.89% (the source of the 3.4&ndash;7.9pp expectation). Source: curated conversion table joined to tactic populations (clnt_no + tactic_id), ~80-day response windows. Holdout side expectation &asymp; 0, resting on the mechanism (no touch means no offer-driven upgrade) and consistent with 3 conversions in ~7,550 historical not-communicated clients (cited as supporting evidence, not proof; that group is not a verified random control).</li>
+<li><b>Baseline Conversion Rate:</b> recent mature waves (Jun/Jul 2026): NR 1.79%, R_55 2.40%. Full 2026 range across mature waves (Jan&ndash;Jul): NR 1.25&ndash;1.99%, R_55 2.36&ndash;3.56%. Band 1 in June: NR 3.44%, R_55 7.89% (the source of the 3.4&ndash;7.9pp expectation). Source: curated conversion table joined to tactic populations (clnt_no + tactic_id), ~80-day response windows. Holdout side expectation &asymp; 0, resting on the mechanism (no touch means no offer-driven upgrade) and consistent with 3 conversions in ~7,550 historical not-communicated clients across Jan&ndash;Aug 2026 (cited as supporting evidence, not proof; that group is not a verified random control). Traceability: every volume and rate on this page comes from the Jan&ndash;Aug 2026 deployment history (curated conversion table joined to tactic populations, ~80-day response windows); per-wave figures use the Jun/Jul 2026 waves unless labeled otherwise.</li>
 <li><b>Power Analysis &amp; MDE:</b> with a ~2% vs ~0 contrast this is a detection problem, not a classic MDE: the headline is overpowered at any holdout &ge; 10%. Holdout size is set by score-band depth. Detection rule (exact test, &alpha;=0.05 one-sided, 80% power): conversions needed per band &asymp; 5 at 50% holdout, 9 at 30%, 14 at 20%.</li>
-<li><b>Power Calculation Steps / Scenarios (per wave, per offer; NR is the binding case):</b></li>
+<li><b>Power Calculation Steps / Scenarios (per wave, per offer; NR is the binding case; volumes, rates, and forgone-upgrade figures computed on the Jun/Jul 2026 waves):</b></li>
 </ul>
 <table border="1" cellpadding="4">
 <tr><th>Holdout</th><th>Headline</th><th>Band read, 1 wave</th><th>Band read, 2 waves</th><th>Forgone upgrades / wave</th></tr>
