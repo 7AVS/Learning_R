@@ -1,3 +1,6 @@
+-- 60 v2 (2026-09-04): grain = ONE ROW PER CLIENT in the window on both sides (first SF unsub / first CPC
+--   revocation), matching Q1 and the director's table (506,646). v1 was per client-month and ran 12% high.
+--   RERUN NOTE: run 00_reset_volatiles.sql first if v1's tables are still in the session.
 -- 60: Salesforce-primary unsub count vs CPC-1012-revocation count, monthly (Teradata-direct)
 -- DIRECTOR'S ASK (verbatim): "if we use Salesforce as the primary unsub source, what % of
 -- unsubs would be added if we included CPC changes where e-mail channel consent has been
@@ -74,7 +77,7 @@ CREATE VOLATILE TABLE vt_sf_unsub60 AS (
     ),
     ranked AS (
         SELECT CLNT_NO, evt_month, mne, dt, TREATMENT_ID,
-               ROW_NUMBER() OVER (PARTITION BY CLNT_NO, evt_month
+               ROW_NUMBER() OVER (PARTITION BY CLNT_NO  -- v2: first unsub per client in the WINDOW (Q1 grain, reconciles to 506,646); was per client-month
                                   ORDER BY dt ASC, mne ASC, TREATMENT_ID ASC) AS rn
         FROM base
     )
@@ -126,7 +129,7 @@ CREATE VOLATILE TABLE vt_cpc_write60 AS (
     ),
     ranked AS (
         SELECT CLNT_NO, wr_month, APP_SYS_CD, ts,
-               ROW_NUMBER() OVER (PARTITION BY CLNT_NO, wr_month
+               ROW_NUMBER() OVER (PARTITION BY CLNT_NO  -- v2: first 1012 revocation per client in the WINDOW; was per client-month
                                   ORDER BY ts ASC, APP_SYS_CD ASC) AS rn
         FROM base
     )
