@@ -1,0 +1,19 @@
+# File 58 (prior unsub same-MNE vs other-MNE-only), run 2026-09-04, Teradata-direct, Cards MNEs, decisions 2025-01-01+, unsub lookback 2024-01-01+, zero-send months excluded, grain client x tactic. BLOCK 3: same-MNE prior-unsub decisions that WERE sent, by days between the unsub and the decision. AUH has no same-MNE rows.
+mne	days_since_unsub_bucket	decisions_sent
+CRV	91-365	5
+CRV	365+	35
+PCD	0-7	4
+PCD	8-30	59
+PCD	31-90	331
+PCD	91-365	2026
+PCD	365+	1581
+PCL	0-7	1
+PCL	8-30	8
+PCL	31-90	63
+PCL	91-365	1807
+PCL	365+	2816
+PCQ	0-7	118
+PCQ	8-30	829
+PCQ	31-90	2327
+PCQ	91-365	13150
+PCQ	365+	12530

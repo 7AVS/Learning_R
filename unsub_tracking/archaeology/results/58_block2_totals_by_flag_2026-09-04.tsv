@@ -1,0 +1,5 @@
+# File 58 (prior unsub same-MNE vs other-MNE-only), run 2026-09-04, Teradata-direct, Cards MNEs, decisions 2025-01-01+, unsub lookback 2024-01-01+, zero-send months excluded, grain client x tactic. BLOCK 2 totals.
+prior_unsub_flag	decisions	distinct_clients	decisions_sent
+NO_PRIOR_UNSUB	32233159	4714863	30394824
+PRIOR_UNSUB_OTHER_MNE_ONLY	1298998	239553	784763
+PRIOR_UNSUB_SAME_MNE	188909	32840	37690

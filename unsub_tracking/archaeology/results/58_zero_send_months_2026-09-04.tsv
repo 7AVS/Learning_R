@@ -1,0 +1,7 @@
+# File 58 (prior unsub same-MNE vs other-MNE-only), run 2026-09-04, Teradata-direct, Cards MNEs, decisions 2025-01-01+, unsub lookback 2024-01-01+, zero-send months excluded, grain client x tactic. ZERO-SEND MONTHS.
+mne	cohort_yyyymm
+CRV	202502
+CRV	202503
+CRV	202504
+CRV	202505
+PCL	202607
