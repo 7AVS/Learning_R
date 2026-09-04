@@ -1,0 +1,5 @@
+# File 64 BLOCK 2: of the 100,649 CPC-only 7020 revokers found in MASTER, sent an email (disposition 1) in the 90 days before the write? run 2026-09-04.
+bucket	rows
+NO_SEND_90D_BEFORE	1710
+SENT_WITHIN_90D_BEFORE	98939
+TOTAL	100649

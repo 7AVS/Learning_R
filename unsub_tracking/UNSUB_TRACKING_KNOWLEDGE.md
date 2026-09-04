@@ -1376,5 +1376,5 @@ Reading, combined with the forward gap (99% of SF disposition-4 unsubs have no C
 - Path 1: one-click / list-unsubscribe from the mail client -> disposition 4 in Salesforce -> no CPC write.
 - Path 2: the CloudPages unsubscribe form -> CPC via the 7020 backfeed -> no disposition 4.
 - The two paths are nearly disjoint by mechanism. Neither system is complete; the union (pack 60) is the only complete count. The hypothesis in sfmc_unsub_blueprint_notes §7 is now measured from both sides.
-- Open: pack 64 Block 2 (were these clients sent an email in the prior 90 days) not yet recorded; if most were not, some are preference-centre visits without an email.
+- Block 2: 98,939 of the 100,649 (98%) were sent an email in the 90 days before the revocation; 1,710 were not. Path 2 is email-driven, not preference-centre traffic.
 - Results: archaeology/results/64_*.tsv.
