@@ -1362,5 +1362,5 @@ Window Aug-2024..Jul-2026, active-personal universe, SF = first disposition-4 pe
 - If Salesforce is primary, CPC email-consent revocations add 291,152 on 568,795 = +51% (the director guessed +20%). Overlap 0.8%: the two sources are near-disjoint; the combined view is close to the sum.
 - CPC_ONLY by writer: 7001 144,821; 7020 100,847; 7003 33,547; 7053 9,705; 7006 2,232. The 100,847 written by the email page (7020) with no SF disposition-4 within 14 days is the REVERSE gap - open, probed by pack 64.
 - By LOB (Andre's pivot of Block 3): LOYALTY 371,270 / OTHER 153,826 / CARDS 39,271 SF-only; 2,453 / 1,600 / 375 matched. VRE alone 281,440.
-- RECONCILIATION OPEN: pack 60's SF total 568,795 vs Q1 / Andre's LOB table 506,646, 4-12% higher every month. Grain or universe difference, being diffed. Do not put both numbers in one document until closed.
+- RECONCILIATION RESOLVED: v1 counted each client once per MONTH (568,795); Q1 and the director's table count each client once in the WINDOW (506,646). Everything else identical (spine, filters, dates). Pack 60 v2 dedups per client in the window on both sides; v1 numbers above are client-months and must not sit next to 506,646. v2 NOT YET RUN.
 - Results: archaeology/results/60_*.tsv.
