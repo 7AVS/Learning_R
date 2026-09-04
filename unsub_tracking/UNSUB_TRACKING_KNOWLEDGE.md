@@ -1273,3 +1273,32 @@ above — Pack 57 Block 2 (all months) shows a slightly larger population once i
 **Next = Pack 58**, splitting PRIOR_UNSUB by same-MNE vs other-MNE: is a still-sent decision a
 compliance problem (the program re-mails its own unsubscribers) or expected behaviour (a
 different program's opt-out shouldn't apply here)?
+
+## 23. Pack 58 (2026-09-04): same-MNE vs other-MNE prior unsub
+
+**Same-program unsub is honoured for ~90 days, then decays.** Pack 57's PRIOR_UNSUB split by
+whether the earlier unsub was on the SAME MNE or a DIFFERENT one, zero-send months excluded:
+
+| MNE | NO_PRIOR sent/dec | OTHER_MNE_ONLY sent/dec | SAME_MNE sent/dec |
+|---|---|---|---|
+| AUH | 629,332/716,613 | 13,210/39,824 | (no SAME rows) |
+| CRV | 654,274/876,935 | 34,422/48,910 | 40/449 |
+| PCD | 7,732,049/8,153,301 | 142,221/390,826 | 4,001/29,805 |
+| PCL | 11,416,399/12,039,061 | 416,256/453,537 | 4,695/53,416 |
+| PCQ | 9,962,770/10,447,249 | 178,654/365,901 | 28,954/105,239 |
+| TOTAL | 30,394,824/32,233,159 | 784,763/1,298,998 | 37,690/188,909 |
+
+**Days-since-unsub for same-MNE re-sends (decisions_sent):** CRV 91-365:5, 365+:35; PCD
+0-7:4, 8-30:59, 31-90:331, 91-365:2026, 365+:1581; PCL 0-7:1, 8-30:8, 31-90:63, 91-365:1807,
+365+:2816; PCQ 0-7:118, 8-30:829, 31-90:2327, 91-365:13150, 365+:12530. **~90% of all same-MNE
+re-sends land at 91+ days.**
+
+**Four readings:** (1) same-program unsub is honoured ~90 days, then decays — a list-freshness
+problem, not a standing ignore. (2) hypothesis: the selection list rebuilds from a CPC/CIDM
+feed that never learned of the SFMC unsub (list-rebuild-from-CPC, not re-consent) — untested,
+Pack 59 tests it. (3) OTHER_MNE_ONLY sent rate is ~60% overall but ranges 33% (AUH) to 92%
+(PCL) — open question on suppression-list specificity per MNE. (4) same-MNE dead weight is
+~2% of the email-action population per arm — small share, real repeat-mail-to-opt-out.
+
+**Next = Pack 59**, overlaying CPC state (1002/1012/1014) as of each decision date onto the
+same-MNE population, split by sent vs not-sent — tests reading (2) directly.
