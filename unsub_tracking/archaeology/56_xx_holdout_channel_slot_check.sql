@@ -42,23 +42,28 @@ WITH xx_decis AS (
         t.TACTIC_ID,
         SUBSTR(t.TACTIC_ID, 8, 3) AS mne
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
-    WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
+    WHERE t.TREATMT_STRT_DT >= DATE '2025-01-01'  -- 2024-01-01 full pull exhausted spool on 2026-09-04 (Pack 54); widen only after this pass completes
       AND SUBSTR(t.TACTIC_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')
       AND (   TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30)) LIKE '%XX%'
            OR TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, ''))) LIKE '%XX%' )
 ),
+-- v3.1 (matches Pack 54's spool fix): INNER JOIN to a derived distinct-tactic-id table
+-- instead of an IN-subquery — the IN-subquery forces a dedupe-and-compare against every
+-- MASTER/EVENT row scanned and burns spool at this population size.
 in_master AS (
     SELECT DISTINCT m.TREATMENT_ID, m.CLNT_NO, m.consumer_id_hashed
     FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    INNER JOIN (SELECT DISTINCT TACTIC_ID FROM xx_decis) x
+        ON x.TACTIC_ID = m.TREATMENT_ID
     WHERE m.CLNT_NO IS NOT NULL
-      AND m.TREATMENT_ID IN (SELECT TACTIC_ID FROM xx_decis)
 ),
 sent_events AS (
     SELECT DISTINCT e.TREATMENT_ID, e.consumer_id_hashed
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN (SELECT DISTINCT TACTIC_ID FROM xx_decis) x
+        ON x.TACTIC_ID = e.TREATMENT_ID
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
-      AND e.TREATMENT_ID IN (SELECT TACTIC_ID FROM xx_decis)
+      AND e.disposition_dt_tm >= DATE '2025-01-01'  -- 2024-01-01 full pull exhausted spool on 2026-09-04 (Pack 54); widen only after this pass completes
 ),
 flags AS (
     SELECT

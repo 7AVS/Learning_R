@@ -1,59 +1,80 @@
 -- 54: Email-decisioned send funnel — Cards MNEs only (CRV, PCL, PCQ, PCD, AUH)
 -- v3 2026-09-04: arms from channel slot (XX = holdout), TG-code mapping removed per Andre.
+-- v3.1 2026-09-04: spool fix — volatile tables live in spool; Step A restricted to two arms
+-- + window param, tactic-id driver table for MASTER/EVENT joins.
 -- ENGINE: Teradata-direct.
--- PURPOSE: of ALL decisions on these five Cards MNEs since 2024-01-01, tag each by its
--- channel slot (EM = email action, XX = holdout/no-contact, blank, or other) and see how
--- many action-tagged decisions reach the vendor send chain vs how many holdout-tagged ones
--- do (should be ~zero sent).
--- RUN ORDER: Step A (volatile decisioned pop, channel-tagged) -> Step B (volatile MASTER
--- match) -> Step C (volatile SENT match) -> Block 0 (channel-slot proof) -> Block 1
--- (EMAIL_ACTION funnel by MNE) -> Block 2 (HOLDOUT_XX funnel by MNE) -> Block 3 (full cube).
--- Bank-wide was attempted 2026-09-04 and ran out of spool; Cards-only by design.
+-- PURPOSE: of EMAIL_ACTION and HOLDOUT_XX decisions on these five Cards MNEs, how many reach
+-- the vendor send chain vs how many are actually sent (HOLDOUT_XX sends should be ~zero).
+-- RUN ORDER: Step 0 (reset) -> Step A (volatile, two arms only) -> Step A2 (tactic-id driver
+-- table) -> SIZE CHECK -> Step B (volatile MASTER match) -> Step C (volatile SENT match) ->
+-- Block 0 (action-vs-holdout proof) -> Block 1 (EMAIL_ACTION funnel) -> Block 2 (HOLDOUT_XX
+-- funnel) -> Block 3 (full cube).
+-- Bank-wide was attempted 2026-09-04 and ran out of spool; Cards-only by design. The
+-- all-arms, full-2024 version of Step A also ran out of spool at 110M rows (2026-09-04) —
+-- fixed here by restricting to two arms and swapping every downstream IN-subquery for a
+-- join against a small tactic-id driver table.
 -- Grain = (CLNT_NO, TACTIC_ID) throughout — one row per decision, not per client.
--- Counts only, no rates. VOLATILE TABLEs persist in-session — each step's DROP line is
--- commented at the top of the step; uncomment and run it alone if a prior run failed midway.
+-- Counts only, no rates. VOLATILE TABLEs persist in-session — Step 0 resets them.
 -- =============================================================================
 
--- ===== PARAMETER BLOCK 1: MNE SCOPE (from Pack 17 — do not guess, do not add MNEs here) =====
--- Cards personal MNEs, exactly as Pack 17 scoped them:
+-- ===== STEP 0: RESET — drop volatile tables from any previous attempt =====
+-- Errors "does not exist" on a first run are expected here; keep going.
+DROP TABLE vt_em_decis_cards;
+DROP TABLE vt_tactic_ids;
+DROP TABLE vt_master_cards;
+DROP TABLE vt_sent_cards;
+
+
+-- ===== PARAMETER BLOCK 1: MNE SCOPE + WINDOW START =====
+-- MNE scope — Cards personal MNEs, exactly as Pack 17 scoped them:
 -- archaeology/17_em_decision_vendor_coverage.sql -> SUBSTR(t.TACTIC_ID,8,3) IN ('CRV','PCL','PCQ','PCD','AUH')
--- The list is written directly into Step A's WHERE clause below. Edit it in ONE place — Step A —
--- if the scope ever changes; this block is the documentation copy, not a live variable.
+-- Window start — DATE '2025-01-01' for this pass. 2024-01-01 full pull = 110M rows and
+-- exhausted spool on 2026-09-04; widen only after this pass completes successfully.
+-- Both values are written directly into Step A (and the window into Step C) below — Teradata
+-- has no shared variable across statements in a plain SQL script, so edit both places together
+-- if either parameter changes; this block is the documentation copy, not a live variable.
 
 
--- ===== STEP A: VOLATILE — ALL decisions for the Cards MNEs, tagged by channel slot =====
--- DROP TABLE vt_em_decis_cards;  -- uncomment + run alone if rerunning after a failed pass
+-- ===== STEP A: VOLATILE — EMAIL_ACTION + HOLDOUT_XX decisions for the Cards MNEs =====
+-- DROP TABLE vt_em_decis_cards;  -- also see STEP 0; kept here too in case this step alone reruns
 --
--- No channel filter in the WHERE clause (v3 change) — every decision on these five MNEs is
--- pulled, then classified below. XX-match uses LIKE '%XX%', the same substring style as the
--- documented EM rule (UNSUB_TRACKING_KNOWLEDGE.md §6: `SUBSTR(...,121,30) LIKE '%EM%'`), not
--- exact equality — see the report for the evidence this choice is based on.
+-- v3.1: restricted to the two arms this file measures (2024-01-01, all-arms pull was 110M rows
+-- and exhausted spool). Raw chnl_slot_vrb/chnl_slot_addnl columns are dropped — that raw-value
+-- profiling now lives in Pack 56 Block 1. CASE lives in a derived table; the outer query
+-- filters on its result so the arm logic is written once.
 
 CREATE VOLATILE TABLE vt_em_decis_cards AS (
-    SELECT DISTINCT
-        t.CLNT_NO,
-        t.TACTIC_ID,
-        SUBSTR(t.TACTIC_ID, 8, 3)                                    AS mne,
-        EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
-          + EXTRACT(MONTH FROM t.TREATMT_STRT_DT)                    AS cohort_yyyymm,
-        TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30))              AS chnl_slot_vrb,
-        TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')))              AS chnl_slot_addnl,
-        CASE
-            -- Andre 2026-09-04: holdout = channel slot XX; action = channel code; no TG codes
-            WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-              OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
-                THEN 'EMAIL_ACTION'
-            WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%XX%'
-              OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%XX%'
-                THEN 'HOLDOUT_XX'
-            WHEN TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30)) = ''
-             AND TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, ''))) = ''
-                THEN 'NO_CHANNEL_BLANK'
-            ELSE 'OTHER_CHANNEL'
-        END                                                          AS arm_from_channel
-    FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
-    WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
-      AND SUBSTR(t.TACTIC_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')  -- PARAMETER BLOCK 1
+    SELECT
+        CLNT_NO,
+        TACTIC_ID,
+        mne,
+        cohort_yyyymm,
+        arm_from_channel
+    FROM (
+        SELECT DISTINCT
+            t.CLNT_NO,
+            t.TACTIC_ID,
+            SUBSTR(t.TACTIC_ID, 8, 3)                                AS mne,
+            EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
+              + EXTRACT(MONTH FROM t.TREATMT_STRT_DT)                AS cohort_yyyymm,
+            CASE
+                -- Andre 2026-09-04: holdout = channel slot XX; action = channel code; no TG codes
+                WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
+                    THEN 'EMAIL_ACTION'
+                WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%XX%'
+                  OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%XX%'
+                    THEN 'HOLDOUT_XX'
+                WHEN TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30)) = ''
+                 AND TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, ''))) = ''
+                    THEN 'NO_CHANNEL_BLANK'
+                ELSE 'OTHER_CHANNEL'
+            END                                                      AS arm_from_channel
+        FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
+        WHERE t.TREATMT_STRT_DT >= DATE '2025-01-01'                          -- PARAMETER BLOCK 1: window start
+          AND SUBSTR(t.TACTIC_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')     -- PARAMETER BLOCK 1: MNE scope
+    ) tagged
+    WHERE arm_from_channel IN ('EMAIL_ACTION', 'HOLDOUT_XX')
 ) WITH DATA
 PRIMARY INDEX (TACTIC_ID, CLNT_NO)
 ON COMMIT PRESERVE ROWS;
@@ -61,8 +82,46 @@ ON COMMIT PRESERVE ROWS;
 COLLECT STATISTICS ON vt_em_decis_cards COLUMN (TACTIC_ID, CLNT_NO);
 
 
--- ===== STEP B: VOLATILE — MASTER match, restricted to Step A's tactic ids =====
--- DROP TABLE vt_master_cards;  -- uncomment + run alone if rerunning after a failed pass
+-- ===== STEP A2: VOLATILE — distinct tactic ids from Step A (join driver for Steps B/C) =====
+-- DROP TABLE vt_tactic_ids;  -- also see STEP 0
+
+CREATE VOLATILE TABLE vt_tactic_ids AS (
+    SELECT DISTINCT TACTIC_ID FROM vt_em_decis_cards
+) WITH DATA
+PRIMARY INDEX (TACTIC_ID)
+ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_tactic_ids COLUMN (TACTIC_ID);
+
+
+-- ===== SIZE CHECK: how big is the population before we join it? =====
+-- QUESTION: how big is the population before we join it?
+-- ROWS: 3
+-- GOOD LOOKS LIKE: a few tens of millions at most
+-- WHAT TO DO WITH IT: paste to Claude
+
+SELECT
+    CAST(arm_from_channel AS VARCHAR(20))     AS arm_from_channel,
+    CAST(COUNT(*) AS BIGINT)                  AS decisions,
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT)   AS distinct_clients,
+    CAST(COUNT(DISTINCT TACTIC_ID) AS BIGINT) AS distinct_tactics
+FROM vt_em_decis_cards
+GROUP BY 1
+UNION ALL
+SELECT
+    CAST('TOTAL' AS VARCHAR(20))              AS arm_from_channel,
+    CAST(COUNT(*) AS BIGINT)                  AS decisions,
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT)   AS distinct_clients,
+    CAST(COUNT(DISTINCT TACTIC_ID) AS BIGINT) AS distinct_tactics
+FROM vt_em_decis_cards
+ORDER BY 1;
+
+
+-- ===== STEP B: VOLATILE — MASTER match, restricted via join to Step A2's tactic ids =====
+-- DROP TABLE vt_master_cards;  -- also see STEP 0
+-- v3.1: INNER JOIN to vt_tactic_ids instead of an IN-subquery. The IN-subquery forced a
+-- 110M-row dedupe-and-compare against every MASTER row scanned and burned spool; the join
+-- lets the optimizer use vt_tactic_ids' own (small, stats-collected) footprint instead.
 
 CREATE VOLATILE TABLE vt_master_cards AS (
     SELECT DISTINCT
@@ -70,8 +129,9 @@ CREATE VOLATILE TABLE vt_master_cards AS (
         m.CLNT_NO,
         m.consumer_id_hashed
     FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    INNER JOIN vt_tactic_ids x
+        ON x.TACTIC_ID = m.TREATMENT_ID
     WHERE m.CLNT_NO IS NOT NULL
-      AND m.TREATMENT_ID IN (SELECT TACTIC_ID FROM vt_em_decis_cards)
 ) WITH DATA
 PRIMARY INDEX (TREATMENT_ID, CLNT_NO)
 ON COMMIT PRESERVE ROWS;
@@ -80,16 +140,17 @@ COLLECT STATISTICS ON vt_master_cards COLUMN (TREATMENT_ID, CLNT_NO);
 
 
 -- ===== STEP C: VOLATILE — SENT (disposition_cd=1) match, restricted the same way =====
--- DROP TABLE vt_sent_cards;  -- uncomment + run alone if rerunning after a failed pass
+-- DROP TABLE vt_sent_cards;  -- also see STEP 0
 
 CREATE VOLATILE TABLE vt_sent_cards AS (
     SELECT DISTINCT
         e.TREATMENT_ID,
         e.consumer_id_hashed
     FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN vt_tactic_ids x
+        ON x.TACTIC_ID = e.TREATMENT_ID
     WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2024-01-01'
-      AND e.TREATMENT_ID IN (SELECT TACTIC_ID FROM vt_em_decis_cards)
+      AND e.disposition_dt_tm >= DATE '2025-01-01'  -- PARAMETER BLOCK 1: window start
 ) WITH DATA
 PRIMARY INDEX (TREATMENT_ID, consumer_id_hashed)
 ON COMMIT PRESERVE ROWS;
@@ -98,19 +159,16 @@ COLLECT STATISTICS ON vt_sent_cards COLUMN (TREATMENT_ID, consumer_id_hashed);
 
 
 -- ===== BLOCK 0: does the channel slot separate action from holdout? =====
--- QUESTION: Does the channel slot separate action from holdout? Which raw values does each
---   Cards MNE use?
--- ROWS: <=30 (5 Cards MNEs x top 6 combinations each)
--- GOOD LOOKS LIKE: HOLDOUT_XX rows have decisions_sent_disposition1 at or near zero;
---   EMAIL_ACTION rows have sends close to decisions_in_master
+-- QUESTION: does the channel slot separate action from holdout, per MNE?
+-- ROWS: 10 (5 Cards MNEs x 2 arms)
+-- GOOD LOOKS LIKE: HOLDOUT_XX rows show sends at or near zero; EMAIL_ACTION sends close to
+--   in_master
 -- WHAT TO DO WITH IT: paste to Claude
 
 WITH flags AS (
     SELECT
         d.mne,
         d.arm_from_channel,
-        d.chnl_slot_vrb,
-        d.chnl_slot_addnl,
         d.CLNT_NO,
         d.TACTIC_ID,
         MAX(CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)            AS f_in_master,
@@ -122,21 +180,18 @@ WITH flags AS (
     LEFT JOIN vt_sent_cards s
         ON  s.TREATMENT_ID       = d.TACTIC_ID
         AND s.consumer_id_hashed = m.consumer_id_hashed
-    GROUP BY 1, 2, 3, 4, 5, 6
+    GROUP BY 1, 2, 3, 4
 )
 SELECT
     mne,
     arm_from_channel,
-    chnl_slot_vrb,
-    chnl_slot_addnl,
     CAST(COUNT(*) AS BIGINT)                AS decisions,
     CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
     CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
     CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
 FROM flags
-GROUP BY 1, 2, 3, 4
-QUALIFY ROW_NUMBER() OVER (PARTITION BY mne ORDER BY COUNT(*) DESC) <= 6
-ORDER BY mne, decisions DESC;
+GROUP BY 1, 2
+ORDER BY 1, 2;
 
 
 -- ===== BLOCK 1: funnel by MNE — EMAIL_ACTION rows only, plus one TOTAL row =====
@@ -227,11 +282,10 @@ FROM flags
 ORDER BY 1;
 
 
--- ===== BLOCK 3: full cube — MNE x cohort_month x arm_from_channel (all four arms) =====
+-- ===== BLOCK 3: full cube — MNE x cohort_month x arm_from_channel (both arms) =====
 -- QUESTION: same funnel, broken out by MNE x month x channel-slot arm, for self-service
---   slicing across all four arm categories (EMAIL_ACTION, HOLDOUT_XX, NO_CHANNEL_BLANK,
---   OTHER_CHANNEL)
--- ROWS: many (5 MNEs x ~20 months x up to 4 arms — roughly 200-400)
+--   slicing
+-- ROWS: many (5 MNEs x ~8-12 months x 2 arms — roughly 60-120)
 -- GOOD LOOKS LIKE: EMAIL_ACTION and HOLDOUT_XX both show continuous monthly coverage per
 --   MNE; HOLDOUT_XX sends stay near zero every month, not just on average
 -- WHAT TO DO WITH IT: save to Excel, do not paste
