@@ -1354,3 +1354,13 @@ Two test clients, one visit per page variant (one page per CPC code, EN and FR),
 - In every tested case a page wrote exactly one code. The data (packs 61-63) and the test workbook do not show a cascade from 1012 to any program code. On that evidence the 3,293 same-day 1012+1046 pairs (pack 61) look like two submissions, and the director's 19.2% "also RBC-wide" should be read as a floor: a RBC-wide choice made from an Avion email would write 1012 only and be invisible to a 1046-based dataset. Phrase it as "the data does not show a cascade", not as a claim about the page.
 - Residue: CPC does not refresh the timestamp when a value is rewritten unchanged, so the workbook cannot literally show "Rewards page + RBC-wide = 1046 untouched". Ask Digital Messaging (Matt) to confirm; otherwise the template evidence stands.
 - Details (people, hashed ids, timestamps) in local sfmc_unsub_blueprint_notes.md §9 (gitignored).
+
+## §27 (2026-09-04) Pack 60: SF-primary + CPC-only union, monthly (the director's reporting ask)
+
+Window Aug-2024..Jul-2026, active-personal universe, SF = first disposition-4 per client-month, CPC = 1012 -> 5002 any origin (CPC_RB_PREF), match on CLNT_NO with the write within [-1,+14] days of the unsub.
+- SF_ONLY 564,367 | SF_AND_CPC 4,428 | CPC_ONLY 291,152 client-months.
+- If Salesforce is primary, CPC email-consent revocations add 291,152 on 568,795 = +51% (the director guessed +20%). Overlap 0.8%: the two sources are near-disjoint; the combined view is close to the sum.
+- CPC_ONLY by writer: 7001 144,821; 7020 100,847; 7003 33,547; 7053 9,705; 7006 2,232. The 100,847 written by the email page (7020) with no SF disposition-4 within 14 days is the REVERSE gap - open, probed by pack 64.
+- By LOB (Andre's pivot of Block 3): LOYALTY 371,270 / OTHER 153,826 / CARDS 39,271 SF-only; 2,453 / 1,600 / 375 matched. VRE alone 281,440.
+- RECONCILIATION OPEN: pack 60's SF total 568,795 vs Q1 / Andre's LOB table 506,646, 4-12% higher every month. Grain or universe difference, being diffed. Do not put both numbers in one document until closed.
+- Results: archaeology/results/60_*.tsv.
