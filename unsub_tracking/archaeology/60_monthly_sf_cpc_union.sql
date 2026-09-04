@@ -5,13 +5,13 @@
 -- Universe, active-check style, EVENT<->MASTER merge and MNE derivation copied verbatim from
 -- 45_audit_queries.sql: Q1 (SF unsub, lines 59-148), Q2 (CPC 1012 writes, 151-239), Q3b
 -- (waterfall v3 universe, 589-782), Q5 (the [-1,+14]-day match rule, 483-586).
--- RUN ORDER: Step 0 (reset) -> Step A (SF unsub, first per CLNT_NO/month) -> Step B (CPC
--- 1012->5002 write, first per CLNT_NO/month) -> Step C1-C3 (pairs + flags) -> Block 1 (month x
+-- RUN ORDER: Step 0 (reset) -> Step A (SF unsub, first per CLNT_NO/cohort_yyyymm) -> Step B (CPC
+-- 1012->5002 write, first per CLNT_NO/cohort_yyyymm) -> Step C1-C3 (pairs + flags) -> Block 1 (cohort_yyyymm x
 -- segment, paste) -> Block 2A/2B (segment totals + APP_SYS_CD for CPC_ONLY, paste) -> Block 3
--- (month x mne, Excel) -> Block 4 (mne totals, paste).
+-- (cohort_yyyymm x mne, Excel) -> Block 4 (mne totals, paste).
 -- RECONCILES TO: 48_q3b_q3c_results.md and 49_q1_q2_monthly_consolidated.md - these two
 -- disagree on the SF unsub total (473,863 vs 506,646); this file follows Q1's number - see
--- the report for why. Grain = CLNT_NO x month. Counts only, plus one ratio column that IS the
+-- the report for why. Grain = CLNT_NO x cohort_yyyymm. Counts only, plus one ratio column that IS the
 -- director's literal ask.
 -- =============================================================================
 
@@ -65,10 +65,10 @@ DROP TABLE vt_cpc_flagged60;         -- this file, prior attempt
 -- in place (Step A, Step B) if the window changes.
 
 
--- ===== STEP A: VOLATILE — SF unsubs, first disposition_cd=4 per (CLNT_NO, month) =====
+-- ===== STEP A: VOLATILE — SF unsubs, first disposition_cd=4 per (CLNT_NO, cohort_yyyymm) =====
 -- DROP TABLE vt_sf_unsub60;  -- also see STEP 0
 -- Universe + locked merge copied verbatim from Q1 (45_audit_queries.sql lines 67-131): act
--- spine = RB_CLNT_DLY CLNT_STS='A' CLNT_TYP=1, date-matched at the event's OWN month-end;
+-- spine = RB_CLNT_DLY CLNT_STS='A' CLNT_TYP=1, date-matched at the event's OWN cohort_yyyymm-end;
 -- MASTER reduced to DISTINCT (consumer_id_hashed, TREATMENT_ID, CLNT_NO), CLNT_NO NOT NULL;
 -- shape guard (10-char, numeric 7-prefix) is the actual mechanism Q1/Q3b use to exclude
 -- DEFAULT/CABVRSN1 and other vendor junk IDs (kept as-is rather than an explicit NOT IN list).
@@ -124,13 +124,13 @@ COLLECT STATISTICS ON vt_sf_unsub60 COLUMN (CLNT_NO);
 COLLECT STATISTICS ON vt_sf_unsub60 COLUMN (CLNT_NO, evt_month);
 
 
--- ===== STEP B: VOLATILE — CPC 1012 writes to No (5002), first per (CLNT_NO, month) =====
+-- ===== STEP B: VOLATILE — CPC 1012 writes to No (5002), first per (CLNT_NO, cohort_yyyymm) =====
 -- DROP TABLE vt_cpc_write60;  -- also see STEP 0
 -- "Write to No" copied verbatim from Q2's writes CTE (45_audit_queries.sql lines 197-222):
 -- DDWV01.CPC_RB_PREF, PREF_ID=1012, CLNT_CONSENT_TYP=5002, act join at the WRITE's own
--- month-end (RB_CLNT_DLY CLNT_STS='A' CLNT_TYP=1 - same spine as Step A, re-declared locally).
+-- cohort_yyyymm-end (RB_CLNT_DLY CLNT_STS='A' CLNT_TYP=1 - same spine as Step A, re-declared locally).
 -- ANY APP_SYS_CD kept (director's ask covers any origin); APP_SYS_CD carried through for
--- Block 2B. Client-month grain (first write per client per month) mirrors Step A's dedup so
+-- Block 2B. Client-cohort_yyyymm grain (first write per client per cohort_yyyymm) mirrors Step A's dedup so
 -- Step C matches one CLNT_NO x date row per side.
 
 CREATE VOLATILE TABLE vt_cpc_write60 AS (
@@ -180,7 +180,7 @@ COLLECT STATISTICS ON vt_cpc_write60 COLUMN (CLNT_NO, wr_month);
 -- DROP TABLE vt_pairs60;  -- also see STEP 0
 -- Match rule copied verbatim from Q5 (45_audit_queries.sql lines 555-561): a CPC write dated
 -- within [unsub_dt - 1, unsub_dt + 14] counts as matched. Both sides are already deduped to
--- CLNT_NO x month (Steps A/B) so this is a small driver join, not a big-table join - single
+-- CLNT_NO x cohort_yyyymm (Steps A/B) so this is a small driver join, not a big-table join - single
 -- INNER JOIN, per pack 58's convention (never a 3-way join in one CREATE).
 
 CREATE VOLATILE TABLE vt_pairs60 AS (
@@ -238,9 +238,9 @@ COLLECT STATISTICS ON vt_cpc_flagged60 COLUMN (CLNT_NO);
 DROP TABLE vt_pairs60;
 
 
--- ===== BLOCK 1: month x {SF_ONLY, SF_AND_CPC, CPC_ONLY}, one row per month + TOTAL =====
+-- ===== BLOCK 1: cohort_yyyymm x {SF_ONLY, SF_AND_CPC, CPC_ONLY}, one row per cohort_yyyymm + TOTAL =====
 -- QUESTION: if Salesforce were the primary unsub source, how many CPC-1012-revoke clients per
---   month would be ADDED that Salesforce alone misses?
+--   cohort_yyyymm would be ADDED that Salesforce alone misses?
 -- ROWS: 25 (24 months Aug-24..Jul-26 + 1 TOTAL row)
 -- GOOD LOOKS LIKE: sf_only + sf_and_cpc TOTAL ~506,646 (Q1's first_unsub_clients grand total,
 --   49_q1_q2_monthly_consolidated.md) - NOT Q3b's 473,863 (see report: different universe).
@@ -249,27 +249,27 @@ DROP TABLE vt_pairs60;
 -- WHAT TO DO WITH IT: paste to Claude
 
 WITH sf_side AS (
-    SELECT evt_month AS month,
+    SELECT evt_month AS cohort_yyyymm,
            CAST(SUM(CASE WHEN matched_cpc = 0 THEN 1 ELSE 0 END) AS BIGINT) AS sf_only,
            CAST(SUM(CASE WHEN matched_cpc = 1 THEN 1 ELSE 0 END) AS BIGINT) AS sf_and_cpc
     FROM vt_sf_flagged60
     GROUP BY 1
 ),
 cpc_side AS (
-    SELECT wr_month AS month,
+    SELECT wr_month AS cohort_yyyymm,
            CAST(SUM(CASE WHEN matched_sf = 0 THEN 1 ELSE 0 END) AS BIGINT) AS cpc_only
     FROM vt_cpc_flagged60
     GROUP BY 1
 ),
 final AS (
-    SELECT CAST(COALESCE(sf.month, cpc.month) AS VARCHAR(10)) AS month,
+    SELECT CAST(COALESCE(sf.cohort_yyyymm, cpc.cohort_yyyymm) AS VARCHAR(10)) AS cohort_yyyymm,
            COALESCE(sf.sf_only, 0)    AS sf_only,
            COALESCE(sf.sf_and_cpc, 0) AS sf_and_cpc,
            COALESCE(cpc.cpc_only, 0)  AS cpc_only
     FROM sf_side sf
-    FULL OUTER JOIN cpc_side cpc ON cpc.month = sf.month
+    FULL OUTER JOIN cpc_side cpc ON cpc.cohort_yyyymm = sf.cohort_yyyymm
 )
-SELECT month, sf_only, sf_and_cpc, cpc_only
+SELECT cohort_yyyymm, sf_only, sf_and_cpc, cpc_only
 FROM final
 UNION ALL
 SELECT CAST('TOTAL' AS VARCHAR(10)),
@@ -313,17 +313,17 @@ GROUP BY APP_SYS_CD
 ORDER BY cpc_only_clients DESC;
 
 
--- ===== BLOCK 3: month x mne, SF_ONLY / SF_AND_CPC only (Excel, not paste) =====
+-- ===== BLOCK 3: cohort_yyyymm x mne, SF_ONLY / SF_AND_CPC only (Excel, not paste) =====
 -- QUESTION: by MNE, how does the SF-only vs SF-and-CPC split move over time - a lower/upper
 --   bound view per program?
 -- CPC_ONLY has NO mne (preference-center writes carry no campaign attribution) and CANNOT be
 --   added to this cut. If an MNE-level upper bound is needed, apply Block 1's bank-wide
 --   the CPC-only ratio from Block 1 to this table's totals - it is not a per-MNE number.
 -- ROWS: many (up to 24 months x MNE count) - Excel only
--- GOOD LOOKS LIKE: summed across mne, reproduces Block 1's sf_only/sf_and_cpc per month
+-- GOOD LOOKS LIKE: summed across mne, reproduces Block 1's sf_only/sf_and_cpc per cohort_yyyymm
 -- WHAT TO DO WITH IT: save to Excel, do not paste
 
-SELECT evt_month AS month, mne,
+SELECT evt_month AS cohort_yyyymm, mne,
        CAST(SUM(CASE WHEN matched_cpc = 0 THEN 1 ELSE 0 END) AS BIGINT) AS sf_only,
        CAST(SUM(CASE WHEN matched_cpc = 1 THEN 1 ELSE 0 END) AS BIGINT) AS sf_and_cpc
 FROM vt_sf_flagged60
