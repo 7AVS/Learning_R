@@ -1,0 +1,7 @@
+# File 61 v1 (SOURCE = DDWV01.CPC_RB_PREF_LOG, APP_SYS_CD=7020), run 2026-09-04, Teradata-direct, 1012 window 2025-05-01..2026-06-25, 1046 window 2025-04-01..2026-07-31. WRONG SOURCE: the log carries ~1% of the 7020-origin writes seen on CPC_RB_PREF (17,127 Avion closures in the same window). Kept as evidence about the log table only; v2 re-reads CPC_RB_PREF. BLOCK 1 forward cascade (7020 1012 revocations -> nearest 1046).
+cascade_bucket	clients
+BEFORE_THE_1012	1
+NEVER	310
+SAME_DAY	12
+WITHIN_14_DAYS	1
+TOTAL	324
