@@ -1243,3 +1243,33 @@ of an IN-subquery for every downstream MASTER/EVENT restriction.
 
 Files: `archaeology/54_email_decisioned_send_funnel.sql` (v3.1),
 `archaeology/56_xx_holdout_channel_slot_check.sql`, `archaeology/57_prior_unsub_send_split.sql`.
+
+## 22. Pack 57 (2026-09-04): prior SFMC unsub vs send
+
+**Prior unsub (any program, bank-wide) does NOT stop the email — it reduces send rate, doesn't
+zero it.** Email-action decisions, Cards MNEs, 2025-01+, zero-send months excluded:
+
+| MNE | NO_PRIOR_UNSUB sent/decisions | PRIOR_UNSUB sent/decisions |
+|---|---|---|
+| AUH | 629,332 / 716,613 (88%) | 13,210 / 39,824 (33%) |
+| CRV | 654,274 / 876,935 (75%) | 34,462 / 49,359 (70%) |
+| PCD | 7,732,049 / 8,153,301 (95%) | 146,222 / 420,631 (35%) |
+| PCL | 11,416,399 / 12,039,061 (95%) | 420,951 / 506,953 (83%) |
+| PCQ | 9,962,770 / 10,447,249 (95%) | 207,608 / 471,140 (44%) |
+| TOTAL | 30,394,824 / 32,223,159 (94%) | 822,453 / 1,487,907 (55%) |
+
+**Four readings:** (1) prior unsub drops send from 94% to 55% — a real effect, not a
+suppression gate (a gate would read 0%). (2) PCL is the outlier at 83% sent despite prior
+unsub — closest to re-mailing regardless. (3) prior-unsub clients are only ~5% of the
+email-action population (261,400 of 4,976,263 distinct clients) — small population, large
+effect. (4) prior unsubs explain ~665K of ~2.49M total non-sends (about a quarter) — most
+non-send has another cause, still unidentified.
+
+**Caveats:** "prior unsub" = disposition_cd=4 on ANY program, bank-wide, since 2024-01-01 only
+(no visibility earlier); no re-subscribe/re-consent modelling — a re-opted-in client still
+flags PRIOR_UNSUB; zero-send months (CRV 202502-202505, PCL 202607) excluded from the table
+above — Pack 57 Block 2 (all months) shows a slightly larger population once included.
+
+**Next = Pack 58**, splitting PRIOR_UNSUB by same-MNE vs other-MNE: is a still-sent decision a
+compliance problem (the program re-mails its own unsubscribers) or expected behaviour (a
+different program's opt-out shouldn't apply here)?
