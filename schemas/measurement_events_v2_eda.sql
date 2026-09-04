@@ -58,7 +58,7 @@ ORDER BY 1, 2;
 -- Q3 — JSON key discovery per event_cd (top-level keys only)
 -- Proves: which nested keys each event_cd carries, so the catalog can record the
 -- per-code JSON contract before any campaign-derived field is trusted.
--- event_attributes is a PLACEHOLDER: replace with the real column name from the DDL.
+-- event_attributes is VARCHAR (SHOW COLUMNS 2026-09-04), so json_parse() is required.
 -- IS NOT NULL guard: json_parse(NULL) is fine, but malformed strings throw; check Q4 first if Q3 errors.
 -- One month only: this is a discovery probe, not a scan.
 -- ============================================================
