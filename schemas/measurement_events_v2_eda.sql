@@ -53,3 +53,40 @@ FROM edl0_im.prod_zp10_prod_staging.measurement_events_v2
 WHERE event_date >= DATE '2026-01-01'
 GROUP BY 1, 2
 ORDER BY 1, 2;
+
+-- ============================================================
+-- Q3 — JSON key discovery per event_cd (top-level keys only)
+-- Proves: which nested keys each event_cd carries, so the catalog can record the
+-- per-code JSON contract before any campaign-derived field is trusted.
+-- <json_col> is a PLACEHOLDER: replace with the real column name from the DDL.
+-- Drop json_parse() if the column is already JSON type (not VARCHAR).
+-- One month only: this is a discovery probe, not a scan.
+-- ============================================================
+SELECT
+    event_cd,
+    k                               AS json_key,
+    COUNT(*)                        AS rows_with_key
+FROM edl0_im.prod_zp10_prod_staging.measurement_events_v2
+CROSS JOIN UNNEST(map_keys(CAST(json_parse(<json_col>) AS MAP(VARCHAR, JSON)))) AS t(k)
+WHERE event_date >= DATE '2026-07-01'
+  AND event_date <  DATE '2026-08-01'
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC;
+
+-- ============================================================
+-- Q4 — one raw JSON sample per event_cd
+-- Proves: the actual nesting shape per code (objects vs scalars), which Q3 cannot
+-- see below the top level. Feed these samples into the per-code catalog.
+-- ============================================================
+SELECT event_cd, json_sample
+FROM (
+    SELECT
+        event_cd,
+        <json_col>                                                     AS json_sample,
+        ROW_NUMBER() OVER (PARTITION BY event_cd ORDER BY event_date DESC) AS rn
+    FROM edl0_im.prod_zp10_prod_staging.measurement_events_v2
+    WHERE event_date >= DATE '2026-07-01'
+      AND event_date <  DATE '2026-08-01'
+) s
+WHERE rn = 1
+ORDER BY event_cd;
