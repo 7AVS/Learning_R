@@ -6,9 +6,12 @@
 -- its own unsub list and "unreachable" = PRIOR_UNSUB decisions / all decisions. If not, SFMC
 -- re-mails unsubscribed clients and the unsub list isn't a suppression gate.
 -- RUN ORDER: Step 0 (reset) -> Step A (EMAIL_ACTION decisions) -> Step A2 (tactic-id driver)
--- -> Step B (sent) -> Step C (first-ever unsub per client, bank-wide) -> Step D (zero-send
--- months) -> ZERO-SEND MONTHS output -> Block 1 (excl. zero-send months) -> Block 2 (all
--- months) -> Block 3 (cube).
+-- -> Step B1 (MASTER match) -> Step B2 (SENT events) -> Step B3 (sent = join B1+B2, then drop
+-- B1/B2) -> Step C (first-ever unsub per client, bank-wide) -> Step D (zero-send months) ->
+-- ZERO-SEND MONTHS output -> Block 1 (excl. zero-send months) -> Block 2 (all months) ->
+-- Block 3 (cube). 31 statements total (v2, 2026-09-04 spool fix — the v1 draft hit
+-- "No more spool space" on the single three-way-join Step B; this version pre-narrows
+-- MASTER and EVENT separately (B1, B2) and drops both right after B3 joins them).
 -- Grain = (CLNT_NO, TACTIC_ID). Counts only, no rates. Volatile tables live in spool
 -- (Pack 54's 110M-row lesson) — Step 0 resets them, every downstream join uses the
 -- tactic-id driver table, not an IN-subquery.
@@ -16,8 +19,14 @@
 
 -- ===== STEP 0: RESET — drop volatile tables from any previous attempt =====
 -- Errors "does not exist" on a first run are expected here; keep going.
+DROP TABLE vt_em_decis_cards;   -- file 54 leftovers — volatile tables persist for the session and consume spool
+DROP TABLE vt_tactic_ids;       -- file 54 leftovers — volatile tables persist for the session and consume spool
+DROP TABLE vt_master_cards;     -- file 54 leftovers — volatile tables persist for the session and consume spool
+DROP TABLE vt_sent_cards;       -- file 54 leftovers — volatile tables persist for the session and consume spool
 DROP TABLE vt_em_decis57;
 DROP TABLE vt_tactic_ids57;
+DROP TABLE vt_master57;
+DROP TABLE vt_sent_evt57;
 DROP TABLE vt_sent57;
 DROP TABLE vt_first_unsub57;
 DROP TABLE vt_zero_send_months57;
@@ -73,28 +82,71 @@ ON COMMIT PRESERVE ROWS;
 COLLECT STATISTICS ON vt_tactic_ids57 COLUMN (TACTIC_ID);
 
 
--- ===== STEP B: VOLATILE — sent (disposition_cd=1), restricted via the tactic-id driver =====
+-- ===== STEP B1: VOLATILE — MASTER match, restricted via the tactic-id driver =====
+-- DROP TABLE vt_master57;  -- also see STEP 0
+
+CREATE VOLATILE TABLE vt_master57 AS (
+    SELECT DISTINCT
+        m.TREATMENT_ID,
+        m.CLNT_NO,
+        m.consumer_id_hashed
+    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
+    INNER JOIN vt_tactic_ids57 x
+        ON x.TACTIC_ID = m.TREATMENT_ID
+    WHERE m.CLNT_NO IS NOT NULL
+) WITH DATA
+PRIMARY INDEX (TREATMENT_ID, CLNT_NO)
+ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_master57 COLUMN (TREATMENT_ID, CLNT_NO);
+
+
+-- ===== STEP B2: VOLATILE — SENT (disposition_cd=1) events, restricted via the tactic-id driver =====
+-- DROP TABLE vt_sent_evt57;  -- also see STEP 0
+
+CREATE VOLATILE TABLE vt_sent_evt57 AS (
+    SELECT DISTINCT
+        e.TREATMENT_ID,
+        e.consumer_id_hashed
+    FROM DTZV01.VENDOR_FEEDBACK_EVENT e
+    INNER JOIN vt_tactic_ids57 x
+        ON x.TACTIC_ID = e.TREATMENT_ID
+    WHERE e.disposition_cd = 1
+      AND e.disposition_dt_tm >= DATE '2025-01-01'  -- PARAMETER BLOCK: decision window start
+) WITH DATA
+PRIMARY INDEX (TREATMENT_ID, consumer_id_hashed)
+ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS ON vt_sent_evt57 COLUMN (TREATMENT_ID, consumer_id_hashed);
+
+
+-- ===== STEP B3: VOLATILE — sent, two-way join of B1+B2 (not the original 3-way join) =====
 -- DROP TABLE vt_sent57;  -- also see STEP 0
--- Pack 54 v3.1 proved in_master == sent for this population, so one table (sent) suffices —
--- no separate MASTER-presence table needed here.
+-- v2 fix (2026-09-04 real run): the v1 Step B joined MASTER, the tactic-id driver, and EVENT
+-- in one statement and hit "[2646] No more spool space" at STATEMENT 10. Same fix as Pack 54
+-- v3.1 — pre-narrow MASTER and EVENT separately (B1, B2, both already restricted to the
+-- tactic-id population and each with its own stats) and join only those two small tables here,
+-- instead of joining the full MASTER/EVENT scans together in one statement.
 
 CREATE VOLATILE TABLE vt_sent57 AS (
     SELECT DISTINCT
         m.CLNT_NO,
         m.TREATMENT_ID
-    FROM DTZV01.VENDOR_FEEDBACK_MASTER m
-    INNER JOIN vt_tactic_ids57 x
-        ON x.TACTIC_ID = m.TREATMENT_ID
-    INNER JOIN DTZV01.VENDOR_FEEDBACK_EVENT e
-        ON  e.TREATMENT_ID       = m.TREATMENT_ID
-        AND e.consumer_id_hashed = m.consumer_id_hashed
-    WHERE e.disposition_cd = 1
-      AND e.disposition_dt_tm >= DATE '2025-01-01'  -- PARAMETER BLOCK: decision window start
+    FROM vt_master57 m
+    INNER JOIN vt_sent_evt57 s
+        ON  s.TREATMENT_ID       = m.TREATMENT_ID
+        AND s.consumer_id_hashed = m.consumer_id_hashed
 ) WITH DATA
 PRIMARY INDEX (TREATMENT_ID, CLNT_NO)
 ON COMMIT PRESERVE ROWS;
 
 COLLECT STATISTICS ON vt_sent57 COLUMN (TREATMENT_ID, CLNT_NO);
+
+-- Drop the two intermediate tables now that vt_sent57 is built — they're not needed again and
+-- freeing their spool here (rather than waiting for STEP 0 on the next run) is what keeps
+-- Step C/D and the blocks below from repeating today's spool exhaustion.
+DROP TABLE vt_master57;
+DROP TABLE vt_sent_evt57;
 
 
 -- ===== STEP C: VOLATILE — first-ever unsub per client, bank-wide, 2024-01-01+ =====
