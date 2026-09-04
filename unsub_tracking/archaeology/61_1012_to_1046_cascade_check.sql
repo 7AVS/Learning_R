@@ -8,7 +8,7 @@
 --   (2025-04-01..2026-07-31) to catch cascades landing just outside the 1012 window.
 -- WRITER/ORIGIN COLUMN: FIXED 2026-09-04 - both CTEs were reading DDWV01.CPC_RB_PREF_LOG, which
 --   returned only 324 (1012/7020) and 70 (1046) clients for this window - ~1-2% of the ~3,300
---   and ~17,000 the director's extract and Andre's own 7020 query agree on. The 7020-origin
+--   and ~17,000 the director's extract and a separately run 7020 query agree on. The 7020-origin
 --   writes live on DDWV01.CPC_RB_PREF (current-state table), not the LOG. Table + column names
 --   (CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD) copied verbatim from pack 60's
 --   working query against this table: 60_monthly_sf_cpc_union.sql line 118 (FROM
@@ -44,7 +44,7 @@
 -- ROWS: 7 (6 categories + TOTAL)
 -- GOOD LOOKS LIKE: if NEVER is large, choosing RBC-wide does not write 1046 and any split that
 --   starts from 1046 closures undercounts RBC-wide.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 -- BUCKET DEFINITION: one row per client (client's earliest 1012/7020 write in window). Nearest
 --   1046 = MIN(1046 write_dt - 1012 write_dt) among 1046 writes ON OR AFTER the 1012 date
 --   (the cascade candidate); if none on/after, check for any 1046 write BEFORE the 1012 date
@@ -124,7 +124,7 @@ ORDER BY 1;
 --   email page, how many also have a 1012 revocation nearby?
 -- ROWS: 5 (4 categories + TOTAL)
 -- GOOD LOOKS LIKE: NEVER ~= 80%, SAME_DAY ~= 19-20% (director's split, seen from the CPC side)
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 -- BUCKET DEFINITION: one row per client (client's earliest 1046/7020 write in the PARAMETER
 --   window). Nearest 1012 = MIN(ABS(1012 write_dt - 1046 write_dt)) in EITHER direction
 --   (this check is symmetry, not causal ordering); diff > 14 days folds into NEVER along with
@@ -197,7 +197,7 @@ ORDER BY 1;
 -- GOOD LOOKS LIKE: clnt_both_same_day tracks Block 1's SAME_DAY total when rolled up; a big gap
 --   between clnt_7020_1012 and clnt_both_same_day confirms Block 1's NEVER share is not a
 --   one-off month.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH vt_1012_email61 AS (
     SELECT DISTINCT

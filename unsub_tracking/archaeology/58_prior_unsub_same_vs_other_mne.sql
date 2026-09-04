@@ -11,8 +11,8 @@
 -- (mne x flag) -> Block 2 (TOTAL by flag) -> Block 3 (days-since-unsub buckets, SAME_MNE
 -- sent only) -> Block 4 (cube).
 -- Volatile tables persist for the session and consume spool (Pack 54/57 lesson) — this file
--- builds its own 58-suffixed tables from scratch rather than reusing 57's, since Andre may
--- reconnect between sessions and 57's tables may already be gone.
+-- builds its own 58-suffixed tables from scratch rather than reusing 57's, since a session
+-- reconnect between runs could mean 57's tables are already gone.
 -- Grain = (CLNT_NO, TACTIC_ID). Counts only, no rates.
 -- =============================================================================
 
@@ -180,7 +180,7 @@ COLLECT STATISTICS ON vt_zero_send_months58 COLUMN (mne, cohort_yyyymm);
 -- QUESTION: which mne x month combinations had zero sends at all among EMAIL_ACTION decisions?
 -- ROWS: ~5
 -- GOOD LOOKS LIKE: matches Pack 57 — CRV 202502-202505 and PCL 202607
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT mne, cohort_yyyymm
 FROM vt_zero_send_months58
@@ -195,7 +195,7 @@ ORDER BY 1, 2;
 --   program); PRIOR_UNSUB_OTHER_MNE_ONLY sends near the NO_PRIOR rate (program-specific
 --   opt-out). If SAME_MNE sends are substantial, the program re-mails clients who
 --   unsubscribed from it.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH same_mne_unsub AS (
     SELECT CLNT_NO, unsub_mne, first_unsub_dt_tm
@@ -261,7 +261,7 @@ ORDER BY 1, 2;
 -- QUESTION: bank-wide across these five MNEs, how does send behave for each of the three flags?
 -- ROWS: 3
 -- GOOD LOOKS LIKE: same shape as Block 1's per-MNE rows, summed
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH same_mne_unsub AS (
     SELECT CLNT_NO, unsub_mne, first_unsub_dt_tm
@@ -329,7 +329,7 @@ ORDER BY 1;
 -- GOOD LOOKS LIKE: if re-sends cluster in 0-7/8-30, it's a suppression-list update lag, not a
 --   standing failure to honour the unsub; heavy weight in 91-365/365+ points at a stale or
 --   reset suppression list instead
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH same_mne_unsub AS (
     SELECT CLNT_NO, unsub_mne, first_unsub_dt_tm

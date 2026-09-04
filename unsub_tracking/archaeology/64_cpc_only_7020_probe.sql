@@ -242,7 +242,7 @@ COLLECT STATISTICS ON vt_cpc_only_master64 COLUMN (CLNT_NO);
 -- ROWS: 3 (IN_MASTER, NOT_IN_MASTER, TOTAL)
 -- GOOD LOOKS LIKE: if NOT_IN_MASTER is large, the CLNT_NO key does not line up to MASTER (or
 --   these clients were never emailed through SFMC at all) - a data/key problem, not a timing one.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH c AS (
     SELECT DISTINCT CLNT_NO FROM vt_cpc_only_clients64
@@ -271,17 +271,23 @@ ORDER BY 1;
 -- ROWS: 3 (SENT_WITHIN_90D_BEFORE, NO_SEND_90D_BEFORE, TOTAL)
 -- GOOD LOOKS LIKE: if NO_SEND_90D_BEFORE is large, these clients were not being actively
 --   emailed at the time - a page-submission origin story becomes less plausible.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
-WITH flagged AS (
+WITH sent_before AS (
+    -- Teradata does not accept a subquery inside CASE (error 3706 illegal expression); flag via LEFT JOIN + MAX
     SELECT o.CLNT_NO, o.write_dt,
-           CASE WHEN EXISTS (
-                     SELECT 1 FROM vt_event_sent64 s
-                     WHERE s.CLNT_NO = o.CLNT_NO
-                       AND s.sent_dt >= o.write_dt - 90
-                       AND s.sent_dt <  o.write_dt
-                ) THEN 'SENT_WITHIN_90D_BEFORE' ELSE 'NO_SEND_90D_BEFORE' END AS bucket
+           MAX(CASE WHEN s.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END) AS f_sent_90d_before
     FROM vt_cpc_only_master64 o
+    LEFT JOIN vt_event_sent64 s
+        ON  s.CLNT_NO = o.CLNT_NO
+        AND s.sent_dt >= o.write_dt - 90
+        AND s.sent_dt <  o.write_dt
+    GROUP BY o.CLNT_NO, o.write_dt
+),
+flagged AS (
+    SELECT CLNT_NO, write_dt,
+           CASE WHEN f_sent_90d_before = 1 THEN 'SENT_WITHIN_90D_BEFORE' ELSE 'NO_SEND_90D_BEFORE' END AS bucket
+    FROM sent_before
 )
 SELECT CAST(bucket AS VARCHAR(30)) AS bucket, CAST(COUNT(*) AS BIGINT) AS rows_
 FROM flagged
@@ -299,7 +305,7 @@ ORDER BY 1;
 -- GOOD LOOKS LIKE: if most are NEVER, SF genuinely has no unsub record for a page submission
 --   (real gap). If many are 1-14_DAYS or 15-90_DAYS, Step A's act-join/shape-guard/dedup
 --   restrictions - not a real SF gap - are dropping matches that do exist in the raw data.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 -- ASSUMPTION: "1-14_DAYS_EITHER_SIDE" folds in the +/-1-day edge of pack 60's asymmetric
 --   [-1,+14] match window (unsub up to 14d before write, or 1d after) - flag if a strict
 --   2-14 split (excluding the +/-1 edge) is wanted instead.
@@ -343,7 +349,7 @@ ORDER BY 1;
 -- ROWS: <=10 (9 quarters, Aug-24..Jul-26, + TOTAL)
 -- GOOD LOOKS LIKE: a quarter (or quarters) with a much higher cpc_only-to-sf_and_cpc ratio than
 --   the rest points at a specific system change, not a steady-state key mismatch.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH q AS (
     SELECT wr_month,

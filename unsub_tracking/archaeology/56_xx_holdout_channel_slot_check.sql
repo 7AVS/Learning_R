@@ -1,7 +1,7 @@
 -- 56: Quick check — is "channel slot = XX" the holdout flag? (Cards MNEs, Teradata-direct)
--- Andre 2026-09-04: holdout/control cells carry no channel label (slot reads XX); action cells
+-- 2026-09-04: holdout/control cells carry no channel label (slot reads XX); action cells
 -- carry the channel code (EM, MB, ...). If true, the channel slot is a universal arm flag and
--- TST_GRP_CD is never needed. Two blocks, run in order, both paste to Claude.
+-- TST_GRP_CD is never needed. Two blocks, run in order, both feed the same record-and-compare step.
 -- Scope: CRV, PCL, PCQ, PCD, AUH, TREATMT_STRT_DT >= 2024-01-01. Grain = (CLNT_NO, TACTIC_ID).
 -- =============================================================================
 
@@ -11,7 +11,7 @@
 -- ROWS: <=25 (5 MNEs x top 5 value pairs)
 -- GOOD LOOKS LIKE: every MNE shows an EM-bearing value AND an XX value; the XX rows carry
 --   several test-group codes (holdouts exist inside many cells, not one)
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record which raw values carry XX
 
 SELECT
     SUBSTR(t.TACTIC_ID, 8, 3)                                       AS mne,
@@ -34,7 +34,7 @@ ORDER BY 1, 4 DESC;
 -- ROWS: 5 (one per MNE)
 -- GOOD LOOKS LIKE: decisions_sent_disposition1 at or near zero for every MNE. Any MNE with real
 --   sends under XX means XX is not (only) the holdout marker there.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH xx_decis AS (
     SELECT DISTINCT

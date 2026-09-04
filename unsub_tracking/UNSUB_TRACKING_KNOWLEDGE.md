@@ -12,12 +12,12 @@ Folder layout (2026-07-24): archaeology/ = exploratory packs 01-22 (results cata
 Re-explained across at least five sessions because none of it was written down. It is written down now.
 Do not re-litigate. Do not ask again.
 
-1. **NEVER query `DDWV01.CPC_RB_PREF_LOG`. The log is broken (Andre 2026-09-04).** It carries
+1. **NEVER query `DDWV01.CPC_RB_PREF_LOG`. The log is broken (2026-09-04).** It carries
    ~1% of the email-origin (7020) consent writes: pack 61 v1 read it and found 324 RBC-wide /
    70 Avion closures over May-2025..Jun-2026 where the standing table holds 17,127 Avion
    closures. Every CPC read (state, writes, revocations, as-of-date) goes to
    `DDWV01.CPC_RB_PREF` (writes, with `APP_SYS_CD`) or `DDWV01.CPC_RB_PREF_MTHLY` (month-end
-   snapshots). If a query, agent, or memory file names `CPC_RB_PREF_LOG`, stop and fix it
+   snapshots). If a query or notes file names `CPC_RB_PREF_LOG`, stop and fix it
    before running. This supersedes every reference to "the log" / `CPC_RB_PREF_LOG` below —
    they describe the archaeology as it was built, not what to run today.
 
@@ -1314,7 +1314,7 @@ same-MNE population, split by sent vs not-sent — tests reading (2) directly.
 
 ## §24 (2026-09-04) CPC_RB_PREF_LOG exposure audit
 
-Trigger: pack 61 v1 read `DDWV01.CPC_RB_PREF_LOG` for 7020-origin writes and got 324 (1012) / 70 (1046) clients, May-2025..Jun-2026; `DDWV01.CPC_RB_PREF` holds 50,660 / 17,126 for the same filters. The log carries about 1% of email-origin writes. Andre banned it (LOCKED FACT 1). Every headline number was traced to its CPC source:
+Trigger: pack 61 v1 read `DDWV01.CPC_RB_PREF_LOG` for 7020-origin writes and got 324 (1012) / 70 (1046) clients, May-2025..Jun-2026; `DDWV01.CPC_RB_PREF` holds 50,660 / 17,126 for the same filters. The log carries about 1% of email-origin writes. It is banned (LOCKED FACT 1). Every headline number was traced to its CPC source:
 
 | Number | Source file | CPC table | Status |
 |---|---|---|---|
@@ -1336,14 +1336,14 @@ Consequences:
 
 ## §25 (2026-09-04) Packs 61-63: what the email page writes to CPC (the "80/20" question)
 
-Director (JP) reported, from MarTech's extract (proven to replicate CPC): of 17,013 Avion (1046) closures May-2025..25-Jun-2026, 19.2% also closed 1012 same time, 80.8% Avion-only. Andre's concern: the split starts from 1046 closures, so it only sees RBC-wide choices that also wrote 1046.
+The director reported, from MarTech's extract (proven to replicate CPC): of 17,013 Avion (1046) closures May-2025..25-Jun-2026, 19.2% also closed 1012 same time, 80.8% Avion-only. Concern: the split starts from 1046 closures, so it only sees RBC-wide choices that also wrote 1046.
 
-Pack 61 v2 (CPC_RB_PREF, APP_SYS_CD 7020): 17,126 Avion closures, 3,293 same-day 1012 (reproduces JP exactly, monthly too). Forward: 50,660 1012 revocations via the page; 46,813 (92%) never get a 1046; 3,293 same day.
+Pack 61 v2 (CPC_RB_PREF, APP_SYS_CD 7020): 17,126 Avion closures, 3,293 same-day 1012 (reproduces the director's number exactly, monthly too). Forward: 50,660 1012 revocations via the page; 46,813 (92%) never get a 1046; 3,293 same day.
 Pack 63: of the 50,660, 46,514 (92%) close NOTHING else the same day; 4,119 close exactly one other pref; the companion is the page's program pref (1046 3,293; 1006 385; 1004 359; 1025 104; 1026 10), all origin 7020. No cascade to the consent set.
 
 Settled: 1012 does not trickle down. The page writes 1012 alone, or 1012 plus one program pref.
 Open: whether the 3,293 are "RBC-wide chosen on the Avion page, page writes both" (then 80/20 valid for Avion visitors; the 46,514 come from pages with no program pref) or "clients who chose both" (then RBC-wide is undercounted). CPC carries no page. Resolution = MarTech page table: of all 1012 selections, how many on the Avion page. SF join (pack 62) PARKED: 99.7% of SF unsubs never reach CPC, so any rate from matched pairs would mislead.
-Headline for JP: Avion visitors are at most 16,854 of 67,514 page revocations in the window; 46,514 RBC-wide choices are invisible to a 1046-based split.
+Headline for the director: Avion visitors are at most 16,854 of 67,514 page revocations in the window; 46,514 RBC-wide choices are invisible to a 1046-based split.
 Pack 61 v1 read CPC_RB_PREF_LOG and returned 324/70 -> the LOG ban (LOCKED FACT 1, §24).
 
 ## §26 (2026-09-04) Unsubscribe page design, from the 2022 test-case workbook (Personal_RBC_Clients_Test_Cases_MM_V2/V4)
@@ -1352,7 +1352,7 @@ Two test clients, one visit per page variant (one page per CPC code, EN and FR),
 - Program option: each page writes ITS OWN code to 5002 and nothing else. Verified on 1002, 1004, 1012, 1023, 1024, 1025, 1026, 1044, 1045, 1046 (one write each, 4:03-4:10 PM 7/20/2022).
 - RBC-wide option (bottom radio "unsubscribe from promotional emails from RBC Royal Bank"): writes 1012 to 5002 and nothing else (8/2/2022; one week later only the batch timestamp changed, 4:24 AM).
 - In every tested case a page wrote exactly one code. The data (packs 61-63) and the test workbook do not show a cascade from 1012 to any program code. On that evidence the 3,293 same-day 1012+1046 pairs (pack 61) look like two submissions, and the director's 19.2% "also RBC-wide" should be read as a floor: a RBC-wide choice made from an Avion email would write 1012 only and be invisible to a 1046-based dataset. Phrase it as "the data does not show a cascade", not as a claim about the page.
-- Residue: CPC does not refresh the timestamp when a value is rewritten unchanged, so the workbook cannot literally show "Rewards page + RBC-wide = 1046 untouched". Ask Digital Messaging (Matt) to confirm; otherwise the template evidence stands.
+- Residue: CPC does not refresh the timestamp when a value is rewritten unchanged, so the workbook cannot literally show "Rewards page + RBC-wide = 1046 untouched". Ask Digital Messaging to confirm; otherwise the template evidence stands.
 - Details (people, hashed ids, timestamps) in local sfmc_unsub_blueprint_notes.md §9 (gitignored).
 
 ## §27 (2026-09-04) Pack 60: SF-primary + CPC-only union, monthly (the director's reporting ask)
@@ -1361,7 +1361,7 @@ Window Aug-2024..Jul-2026, active-personal universe, SF = first disposition-4 pe
 - SF_ONLY 564,367 | SF_AND_CPC 4,428 | CPC_ONLY 291,152 client-months.
 - If Salesforce is primary, CPC email-consent revocations add 291,152 on 568,795 = +51% (the director guessed +20%). Overlap 0.8%: the two sources are near-disjoint; the combined view is close to the sum.
 - CPC_ONLY by writer: 7001 144,821; 7020 100,847; 7003 33,547; 7053 9,705; 7006 2,232. The 100,847 written by the email page (7020) with no SF disposition-4 within 14 days is the REVERSE gap - open, probed by pack 64.
-- By LOB (Andre's pivot of Block 3): LOYALTY 371,270 / OTHER 153,826 / CARDS 39,271 SF-only; 2,453 / 1,600 / 375 matched. VRE alone 281,440.
+- By LOB (manual pivot of Block 3): LOYALTY 371,270 / OTHER 153,826 / CARDS 39,271 SF-only; 2,453 / 1,600 / 375 matched. VRE alone 281,440.
 - RECONCILIATION RESOLVED: v1 counted each client once per MONTH (568,795); Q1 and the director's table count each client once in the WINDOW (506,646). Everything else identical (spine, filters, dates). Pack 60 v2 dedups per client in the window on both sides; v1 numbers above are client-months and must not sit next to 506,646. v2 NOT YET RUN.
 - Results: archaeology/results/60_*.tsv.
 

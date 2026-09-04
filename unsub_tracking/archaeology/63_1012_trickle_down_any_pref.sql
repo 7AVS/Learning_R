@@ -3,7 +3,7 @@
 --   was ANY other PREF_ID written to 5002 the same day (any origin)? Pack 61 tested 1046 only.
 -- ENGINE: Teradata-direct, pure CTEs, no volatile tables, no DROPs. Source = DDWV01.CPC_RB_PREF
 --   (NEVER the LOG). Window = director's extract, 2025-05-01..2026-06-25. Grain = CLNT_NO.
--- RUN ORDER: Block 1 -> Block 2. Both paste to Claude. Counts only.
+-- RUN ORDER: Block 1 -> Block 2. Both feed the same record-and-compare step. Counts only.
 -- COMPANION TO pack 61 v2 (50,660 7020 1012 revocations; 92% never get a 1046).
 -- =============================================================================
 
@@ -14,7 +14,7 @@
 -- GOOD LOOKS LIKE: if the 0 bucket holds ~90%+, 1012 is written alone and there is no
 --   trickle-down to any program consent. If most rows sit in 3-5 or 6+, the cascade exists
 --   and pack 61's 1046 result is Avion-specific.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH rev_1012 AS (
     SELECT CLNT_NO, MIN(CAST(CHG_TMSTMP AS DATE)) AS rev_dt
@@ -61,7 +61,7 @@ ORDER BY 1;
 -- ROWS: <=15 (top 15 PREF_ID x APP_SYS_CD pairs by clients)
 -- GOOD LOOKS LIKE: 1046 appears with ~3,293 clients (pack 61 v2 same-day figure) as a
 --   consistency check. Anything above it is a program consent the page DOES cascade to.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH rev_1012 AS (
     SELECT CLNT_NO, MIN(CAST(CHG_TMSTMP AS DATE)) AS rev_dt

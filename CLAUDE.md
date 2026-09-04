@@ -174,5 +174,7 @@ This workbench follows a strict build-and-verify methodology:
 5. **Reserved words as column aliases (2026-09-04):** `month` (also `year`, `day`, `date`, `time`) as an output alias makes Teradata parse it as a function and block the statement. Use `cohort_yyyymm`, `evt_month`, `wr_month` etc. Never a bare calendar word.
 6. **ORDER BY after UNION ALL must use ordinals (2026-09-04, error 3848):** `ORDER BY 4 DESC`, never `ORDER BY total_sf DESC`, whenever the SELECT contains a UNION ALL.
 
+7. **No subquery inside CASE (2026-09-04, error 3706 'illegal expression'):** `CASE WHEN EXISTS (SELECT ...)` is rejected. Flag with a LEFT JOIN + `MAX(CASE WHEN x.key IS NOT NULL THEN 1 ELSE 0 END)` in a grouped CTE, then CASE on the flag.
+
 ## CPC HARD RULE (Andre 2026-09-04)
 **NEVER query `DDWV01.CPC_RB_PREF_LOG`. The log is broken.** It carries ~1% of the email-origin (7020) consent writes: pack 61 v1 read it and found 324 RBC-wide / 70 Avion closures over May-2025..Jun-2026 where the standing table holds 17,127 Avion closures. Every CPC read (state, writes, revocations, as-of-date) goes to **`DDWV01.CPC_RB_PREF`** (writes, with APP_SYS_CD) or **`DDWV01.CPC_RB_PREF_MTHLY`** (month-end snapshots). If a query, agent, or memory file names CPC_RB_PREF_LOG, stop and fix it before running.

@@ -192,7 +192,7 @@ COLLECT STATISTICS ON vt_zero_send_months57 COLUMN (mne, cohort_yyyymm);
 -- QUESTION: which mne x month combinations had zero sends at all among EMAIL_ACTION decisions?
 -- ROWS: ~5
 -- GOOD LOOKS LIKE: CRV 202502-202505 and PCL 202607 appear, matching Pack 54 v3.1's cube
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT mne, cohort_yyyymm
 FROM vt_zero_send_months57
@@ -206,7 +206,7 @@ ORDER BY 1, 2;
 -- GOOD LOOKS LIKE: PRIOR_UNSUB sends far below NO_PRIOR_UNSUB. If PRIOR_UNSUB sends are near
 --   zero, SFMC honours its own list and the unreachable share = PRIOR_UNSUB decisions / all
 --   decisions. If PRIOR_UNSUB sends are high, SFMC re-mails unsubscribed clients.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH decis_flagged AS (
     SELECT
@@ -272,7 +272,7 @@ ORDER BY 1, 2;
 -- ROWS: 12 (5 Cards MNEs x 2 flags + 1 TOTAL row per flag)
 -- GOOD LOOKS LIKE: broadly similar shape to Block 1; a big divergence means the zero-send
 --   months carry a disproportionate share of one flag
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH decis_flagged AS (
     SELECT

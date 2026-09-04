@@ -1,4 +1,4 @@
--- UNPARKED 2026-09-04 (Andre): run as a MECHANICS check only. The matched pairs are the ~3% of SF
+-- UNPARKED 2026-09-04: run as a MECHANICS check only. The matched pairs are the ~3% of SF
 --   unsubs that reached CPC: a selected sample, so NO rate from Block 1 may be quoted as a population
 --   share. The one question it answers: among LOYALTY-email unsubs that wrote 1012, did 1046 get
 --   written too? If 1012_ONLY dominates within LOYALTY, the Avion page is no exception and the
@@ -34,7 +34,7 @@
 -- ===== PARAMETER BLOCK: MNE -> LOB MAPPING =====
 -- SOURCE: unsub_tracking/archaeology/47_mne_lob_mapping_cards_loyalty.csv, column LOB_MANUAL
 --   (the manually-curated column - same one 45_audit_queries.sql Q4/Q5 point at as the
---   authoritative split, "Andre maps MNE -> LOB in Excel (LOB MANUAL)"). That csv only
+--   authoritative split, MNE mapped to LOB in Excel (LOB MANUAL)). That csv only
 --   catalogues 45 mnemonics; it is the ONLY LOB source on file, so any mne NOT in it maps to
 --   OTHERS below - this is a coverage gap, not a business decision, and OTHERS will include
 --   both true "other LOB" sends and un-catalogued mnemonics. If OTHERS turns out large, that's
@@ -206,7 +206,7 @@ COLLECT STATISTICS ON vt_classified62 COLUMN (lob);
 -- GOOD LOOKS LIKE: NO_CPC_WRITE dominates every lob (the known gap). Among LOYALTY rows with a
 --   write: if 1012_ONLY is large relative to 1046_ONLY, RBC-wide choices do not write 1046
 --   (reading A). If 1046_ONLY is large and 1012_ONLY small, reading B holds.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH combo AS (
     SELECT
@@ -236,7 +236,7 @@ ORDER BY 1, 2;
 -- ROWS: <=14 (months in the parameter window)
 -- GOOD LOOKS LIKE: n_no_write is the largest column every month, consistent with Block 1;
 --   n_1012_only vs n_1046_only tells reading A vs B, and should not swing wildly month to month.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT
     cohort_yyyymm,
@@ -258,7 +258,7 @@ ORDER BY 1;
 -- GOOD LOOKS LIKE: a small, interpretable set of PREF_IDs (e.g. other e-newsletter or product
 --   preferences) - not a long tail, which would suggest 7020 writes broadly rather than
 --   page-specific gates.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH other_matches AS (
     SELECT DISTINCT s.CLNT_NO, c.PREF_ID

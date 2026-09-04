@@ -4,7 +4,7 @@
 --   "table already exists". On a fresh session do NOT run this: every line errors
 --   "does not exist", which is harmless but noisy.
 -- WHAT TO DO WITH IT: run, ignore all output, then run the pack.
--- Packs never contain DROP statements (2026-09-04, Andre: DROP errors made success unreadable).
+-- Packs never contain DROP statements (2026-09-04: DROP errors made success unreadable).
 -- =============================================================================
 DROP TABLE vt_em_decis_cards;
 DROP TABLE vt_tactic_ids;

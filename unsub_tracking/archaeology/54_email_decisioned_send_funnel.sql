@@ -1,5 +1,5 @@
 -- 54: Email-decisioned send funnel — Cards MNEs only (CRV, PCL, PCQ, PCD, AUH)
--- v3 2026-09-04: arms from channel slot (XX = holdout), TG-code mapping removed per Andre.
+-- v3 2026-09-04: arms from channel slot (XX = holdout), TG-code mapping removed.
 -- v3.1 2026-09-04: spool fix — volatile tables live in spool; Step A restricted to two arms
 -- + window param, tactic-id driver table for MASTER/EVENT joins.
 -- ENGINE: Teradata-direct.
@@ -54,7 +54,7 @@ CREATE VOLATILE TABLE vt_em_decis_cards AS (
             EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
               + EXTRACT(MONTH FROM t.TREATMT_STRT_DT)                AS cohort_yyyymm,
             CASE
-                -- Andre 2026-09-04: holdout = channel slot XX; action = channel code; no TG codes
+                -- 2026-09-04: holdout = channel slot XX; action = channel code; no TG codes
                 WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
                   OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
                     THEN 'EMAIL_ACTION'
@@ -94,7 +94,7 @@ COLLECT STATISTICS ON vt_tactic_ids COLUMN (TACTIC_ID);
 -- QUESTION: how big is the population before we join it?
 -- ROWS: 3
 -- GOOD LOOKS LIKE: a few tens of millions at most
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT
     CAST(arm_from_channel AS VARCHAR(20))     AS arm_from_channel,
@@ -159,7 +159,7 @@ COLLECT STATISTICS ON vt_sent_cards COLUMN (TREATMENT_ID, consumer_id_hashed);
 -- ROWS: 10 (5 Cards MNEs x 2 arms)
 -- GOOD LOOKS LIKE: HOLDOUT_XX rows show sends at or near zero; EMAIL_ACTION sends close to
 --   in_master
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH flags AS (
     SELECT
@@ -196,7 +196,7 @@ ORDER BY 1, 2;
 -- ROWS: 6 (5 Cards MNEs + 1 TOTAL row)
 -- GOOD LOOKS LIKE: decisions_sent_disposition1 close to decisions_in_master — Pack 17 found
 --   these nearly equal for these same five MNEs
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH flags AS (
     SELECT
@@ -240,7 +240,7 @@ ORDER BY 1;
 -- ROWS: 6 (5 Cards MNEs + 1 TOTAL row)
 -- GOOD LOOKS LIKE: decisions_sent_disposition1 near zero — holdout cells should not receive
 --   the email
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH flags AS (
     SELECT

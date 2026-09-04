@@ -1,3 +1,5 @@
+-- 60 v3 (2026-09-04): dedup lookback starts 2024-01-01 (as Q1), reporting from 2024-08; v2 residual 3.5% was clients whose
+--   first unsub fell in Jan-Jul 2024 and who unsubscribed again inside the window.
 -- 60 v2 (2026-09-04): grain = ONE ROW PER CLIENT in the window on both sides (first SF unsub / first CPC
 --   revocation), matching Q1 and the director's table (506,646). v1 was per client-month and ran 12% high.
 --   RERUN NOTE: run 00_reset_volatiles.sql first if v1's tables are still in the session.
@@ -46,7 +48,7 @@ CREATE VOLATILE TABLE vt_sf_unsub60 AS (
         SELECT SNAP_DT, CLNT_NO
         FROM DDWV01.RB_CLNT_DLY
         WHERE CLNT_STS = 'A'
-          AND SNAP_DT >= DATE '2024-08-01'   -- PARAMETER BLOCK: WIN_START
+          AND SNAP_DT >= DATE '2024-01-01'   -- v3: lookback
           AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
           AND CLNT_TYP = 1
     ),
@@ -62,7 +64,7 @@ CREATE VOLATILE TABLE vt_sf_unsub60 AS (
         FROM DTZV01.VENDOR_FEEDBACK_EVENT e
         INNER JOIN (SELECT DISTINCT consumer_id_hashed, TREATMENT_ID, CLNT_NO
                     FROM DTZV01.VENDOR_FEEDBACK_MASTER
-                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2024122' AND '2026212'  -- PARAMETER BLOCK: MASTER SUBSTR bounds
+                    WHERE SUBSTR(TREATMENT_ID, 1, 7) BETWEEN '2023274' AND '2026212'  -- v3: same MASTER bounds as Q1
                       AND CLNT_NO IS NOT NULL) m
           ON  m.consumer_id_hashed = e.consumer_id_hashed
           AND m.TREATMENT_ID       = e.TREATMENT_ID
@@ -70,7 +72,7 @@ CREATE VOLATILE TABLE vt_sf_unsub60 AS (
                       AND act.SNAP_DT = ADD_MONTHS(CAST(e.disposition_dt_tm AS DATE)
                                                    - EXTRACT(DAY FROM e.disposition_dt_tm) + 1, 1) - 1
         WHERE e.disposition_cd = 4
-          AND e.disposition_dt_tm >= DATE '2024-08-01'   -- PARAMETER BLOCK: WIN_START
+          AND e.disposition_dt_tm >= DATE '2024-01-01'   -- v3: DEDUP LOOKBACK start (Q1 scans from 2024-01); reporting window filtered below
           AND e.disposition_dt_tm <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIN_END_EXCL
           AND CHARACTER_LENGTH(TRIM(e.TREATMENT_ID)) = 10
           AND SUBSTR(e.TREATMENT_ID, 1, 7) BETWEEN '0000000' AND '9999999'
@@ -84,6 +86,7 @@ CREATE VOLATILE TABLE vt_sf_unsub60 AS (
     SELECT CLNT_NO, evt_month, mne, CAST(dt AS DATE) AS unsub_dt
     FROM ranked
     WHERE rn = 1
+      AND evt_month >= '2024-08'   -- v3: REPORTING WINDOW start (WIN_START)
 ) WITH DATA
 PRIMARY INDEX (CLNT_NO)
 ON COMMIT PRESERVE ROWS;
@@ -106,7 +109,7 @@ CREATE VOLATILE TABLE vt_cpc_write60 AS (
         SELECT SNAP_DT, CLNT_NO
         FROM DDWV01.RB_CLNT_DLY
         WHERE CLNT_STS = 'A'
-          AND SNAP_DT >= DATE '2024-08-01'   -- PARAMETER BLOCK: WIN_START
+          AND SNAP_DT >= DATE '2024-01-01'   -- v3: lookback
           AND EXTRACT(DAY FROM SNAP_DT + 1) = 1
           AND CLNT_TYP = 1
     ),
@@ -124,7 +127,7 @@ CREATE VOLATILE TABLE vt_cpc_write60 AS (
                                                    - EXTRACT(DAY FROM w.CHG_TMSTMP) + 1, 1) - 1
         WHERE w.PREF_ID = 1012
           AND w.CLNT_CONSENT_TYP = 5002
-          AND w.CHG_TMSTMP >= DATE '2024-08-01'   -- PARAMETER BLOCK: WIN_START
+          AND w.CHG_TMSTMP >= DATE '2024-01-01'   -- v3: DEDUP LOOKBACK start; reporting window filtered below
           AND w.CHG_TMSTMP <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIN_END_EXCL
     ),
     ranked AS (
@@ -136,6 +139,7 @@ CREATE VOLATILE TABLE vt_cpc_write60 AS (
     SELECT CLNT_NO, wr_month, APP_SYS_CD, CAST(ts AS DATE) AS write_dt
     FROM ranked
     WHERE rn = 1
+      AND wr_month >= '2024-08'   -- v3: REPORTING WINDOW start (WIN_START)
 ) WITH DATA
 PRIMARY INDEX (CLNT_NO)
 ON COMMIT PRESERVE ROWS;
@@ -214,7 +218,7 @@ DROP TABLE vt_pairs60;
 --   49_q1_q2_monthly_consolidated.md) - NOT Q3b's 473,863 (see report: different universe).
 --   cpc_only is the raw count Salesforce would be missing; the % added = cpc_only / (sf_only + sf_and_cpc), computed in Excel (counts only in output). It was the
 --   director's number directly.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH sf_side AS (
     SELECT evt_month AS cohort_yyyymm,
@@ -252,7 +256,7 @@ ORDER BY 1;
 -- QUESTION: over the whole Aug-24..Jul-26 window, how big is each segment?
 -- ROWS: 3
 -- GOOD LOOKS LIKE: SF_ONLY + SF_AND_CPC = Block 1's TOTAL row sf_only+sf_and_cpc
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT CAST('SF_ONLY' AS VARCHAR(20)) AS segment,
        CAST(SUM(CASE WHEN matched_cpc = 0 THEN 1 ELSE 0 END) AS BIGINT) AS clients
@@ -272,7 +276,7 @@ ORDER BY 1;
 -- QUESTION: which system/channel writes the CPC-only 1012 revocations Salesforce never sees?
 -- ROWS: <=10 (distinct APP_SYS_CD values seen on 1012 writes)
 -- GOOD LOOKS LIKE: 7020 (email backfeed) likely dominates, per Q3b's seg_email_cpc (72,346)
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT APP_SYS_CD, CAST(COUNT(*) AS BIGINT) AS cpc_only_clients
 FROM vt_cpc_flagged60
@@ -303,7 +307,7 @@ ORDER BY 1, 2;
 -- QUESTION: which MNEs carry the SF-only vs SF-and-CPC volume?
 -- ROWS: <=9 (top 8 MNEs by total SF volume + 1 OTHER row)
 -- GOOD LOOKS LIKE: LOYALTY-family MNEs (VRE/VME/VRG) dominate total_sf, per Q1/Q4 precedent
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH mne_totals AS (
     SELECT mne,

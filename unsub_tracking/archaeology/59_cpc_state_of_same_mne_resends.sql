@@ -314,7 +314,7 @@ COLLECT STATISTICS ON vt_cpc_state_asof59 COLUMN (CLNT_NO, TACTIC_ID);
 -- ROWS: <=12 (3 prefs x up to 4 codes seen)
 -- GOOD LOOKS LIKE: only 5001/5002/5003 appear (5004 is a 1016-only code per the schema and
 --   shouldn't show up here); a NULL/no-row share worth noting before trusting Blocks 1-4
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT
     CAST('1002' AS VARCHAR(4)) AS pref_id, consent_1002 AS raw_consent_code,
@@ -341,7 +341,7 @@ ORDER BY 1, 2;
 --   1002 (do-not-solicit / email-gate, §17-T3) state look different between sent and not-sent?
 -- ROWS: <=32 (2 sent flags x 4 states x 4 states)
 -- GOOD LOOKS LIKE: SENT rows concentrate in Yes/Blank; NOT_SENT rows concentrate in No
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT
     CASE WHEN v.f_sent = 1 THEN 'SENT' ELSE 'NOT_SENT' END AS sent_flag,
@@ -375,7 +375,7 @@ ORDER BY 1, 2, 3;
 --   different between sent and not-sent — checking it's genuinely uninvolved, as canon says
 -- ROWS: <=8 (2 sent flags x 4 states)
 -- GOOD LOOKS LIKE: no strong split (1014 isn't expected to explain send behavior at all)
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 SELECT
     CASE WHEN v.f_sent = 1 THEN 'SENT' ELSE 'NOT_SENT' END AS sent_flag,
@@ -441,7 +441,7 @@ ORDER BY 1, 2, 3;
 --   send time and simply finding nothing since the unsub (list-rebuild-from-CPC hypothesis,
 --   §22). If both groups show similar write rates, CPC saw something either way and the
 --   split is elsewhere.
--- WHAT TO DO WITH IT: paste to Claude
+-- WHAT TO DO WITH IT: record the result
 
 WITH any_write AS (
     SELECT
