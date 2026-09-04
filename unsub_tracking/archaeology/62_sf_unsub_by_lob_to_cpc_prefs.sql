@@ -1,3 +1,7 @@
+-- PARKED 2026-09-04 (Andre): do not run yet. 99.7% of SF unsubs never reach CPC, so the matched
+--   sample is tiny and selected; a RATE from it would mislead. Valid only as a page-MECHANICS check
+--   (does the Avion page write 1046 when RBC-wide is chosen). Preferred route: ask MarTech for the
+--   page table cut - of all 1012 selections, how many were on the Avion page.
 -- 62: SF unsubs by line of business -> CPC preference writes (Teradata-direct)
 -- QUESTION: for SF unsubs by LOB (Loyalty/Avion vs Cards vs Others), which CPC preference(s)
 --   get written within a day?
