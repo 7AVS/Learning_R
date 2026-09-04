@@ -360,4 +360,4 @@ SELECT CAST('OTHER' AS VARCHAR(10)),
        CAST(SUM(total_sf) AS BIGINT)
 FROM ranked
 WHERE rn > 8
-ORDER BY total_sf DESC;
+ORDER BY 4 DESC;
