@@ -1,0 +1,6 @@
+# file 54 v3.1, run 2026-09-04, Teradata-direct, Cards MNEs (CRV/PCL/PCQ/PCD/AUH), window 2025-01-01+, grain client x tactic -- BLOCK 2 HOLDOUT_XX by mne
+mne	decisions	distinct_clients	decisions_in_master	decisions_sent_disposition1
+AUH	381656	359558	0	0
+PCD	2374218	210217	0	0
+PCL	16988	16988	0	0
+TOTAL	2772862	570889	0	0

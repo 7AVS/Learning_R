@@ -125,7 +125,7 @@ COLLECT STATISTICS ON vt_first_unsub57 COLUMN (CLNT_NO);
 
 -- ===== STEP D: VOLATILE — mne x cohort_yyyymm pairs with ZERO sends (operational gaps) =====
 -- DROP TABLE vt_zero_send_months57;  -- also see STEP 0
--- Pack 54 v3.1's cube showed whole months with zero sends (CRV 202602-202605, PCL 202607) —
+-- Pack 54 v3.1's cube showed whole months with zero sends (CRV 202502-202505, PCL 202607) —
 -- an operational gap, not client-level suppression. Exclude these before reading Block 1's
 -- prior-unsub split, or a zero-send month with zero PRIOR_UNSUB clients in it will make the
 -- split look cleaner than it is.
@@ -150,7 +150,7 @@ COLLECT STATISTICS ON vt_zero_send_months57 COLUMN (mne, cohort_yyyymm);
 -- ===== ZERO-SEND MONTHS: mne x cohort_yyyymm pairs excluded from Block 1 =====
 -- QUESTION: which mne x month combinations had zero sends at all among EMAIL_ACTION decisions?
 -- ROWS: ~5
--- GOOD LOOKS LIKE: CRV 202602-202605 and PCL 202607 appear, matching Pack 54 v3.1's cube
+-- GOOD LOOKS LIKE: CRV 202502-202505 and PCL 202607 appear, matching Pack 54 v3.1's cube
 -- WHAT TO DO WITH IT: paste to Claude
 
 SELECT mne, cohort_yyyymm

@@ -1,0 +1,5 @@
+# file 54 v3.1, run 2026-09-04, Teradata-direct, Cards MNEs (CRV/PCL/PCQ/PCD/AUH), window 2025-01-01+, grain client x tactic -- SIZE CHECK
+arm_from_channel	decisions	distinct_clients	distinct_tactics
+EMAIL_ACTION	34629979	4931448	529
+HOLDOUT_XX	2772862	570889	23
+TOTAL	37402841	5132674	530

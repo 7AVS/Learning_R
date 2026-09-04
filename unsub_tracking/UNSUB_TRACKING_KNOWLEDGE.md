@@ -1228,7 +1228,7 @@ Per-MNE EMAIL_ACTION sent/decisioned:
 | PCQ | 10,170,378 | 10,918,389 |
 
 **Zero-send months exist and must be excluded before reading non-send as client-level
-suppression.** CRV 202602-202605 and PCL 202607 show zero sends across the whole month — an
+suppression.** CRV 202502-202505 and PCL 202607 show zero sends across the whole month — an
 operational/vendor-side gap, not a suppression signal. Rule: exclude mne x cohort_month pairs
 with zero sends before attributing any client's non-send to unsub/consent suppression (applied
 in Pack 57).
