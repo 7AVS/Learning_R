@@ -1333,3 +1333,15 @@ Consequences:
 - §17-C's "T3 reproduces museum E4 exactly" was two pipelines on the same broken table, not a cross-check.
 - Scope caveat: the ~1% coverage is proven for APP_SYS_CD 7020 writes only; coverage for branch / call-centre origins was not measured. The ban applies regardless.
 - Banners added to every file that reads the log (06-14, 21a/b, 22, 30-33, 59 fixed, 61 fixed, museum/cpc_evidence.sql, museum/cpc_reservoir_extract.py).
+
+## §25 (2026-09-04) Packs 61-63: what the email page writes to CPC (the "80/20" question)
+
+Director (JP) reported, from MarTech's extract (proven to replicate CPC): of 17,013 Avion (1046) closures May-2025..25-Jun-2026, 19.2% also closed 1012 same time, 80.8% Avion-only. Andre's concern: the split starts from 1046 closures, so it only sees RBC-wide choices that also wrote 1046.
+
+Pack 61 v2 (CPC_RB_PREF, APP_SYS_CD 7020): 17,126 Avion closures, 3,293 same-day 1012 (reproduces JP exactly, monthly too). Forward: 50,660 1012 revocations via the page; 46,813 (92%) never get a 1046; 3,293 same day.
+Pack 63: of the 50,660, 46,514 (92%) close NOTHING else the same day; 4,119 close exactly one other pref; the companion is the page's program pref (1046 3,293; 1006 385; 1004 359; 1025 104; 1026 10), all origin 7020. No cascade to the consent set.
+
+Settled: 1012 does not trickle down. The page writes 1012 alone, or 1012 plus one program pref.
+Open: whether the 3,293 are "RBC-wide chosen on the Avion page, page writes both" (then 80/20 valid for Avion visitors; the 46,514 come from pages with no program pref) or "clients who chose both" (then RBC-wide is undercounted). CPC carries no page. Resolution = MarTech page table: of all 1012 selections, how many on the Avion page. SF join (pack 62) PARKED: 99.7% of SF unsubs never reach CPC, so any rate from matched pairs would mislead.
+Headline for JP: Avion visitors are at most 16,854 of 67,514 page revocations in the window; 46,514 RBC-wide choices are invisible to a 1046-based split.
+Pack 61 v1 read CPC_RB_PREF_LOG and returned 324/70 -> the LOG ban (LOCKED FACT 1, §24).

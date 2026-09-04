@@ -1,0 +1,8 @@
+# File 63 (CPC_RB_PREF, 7020 1012 revocations 2025-05-01..2026-06-25, other closures same day any origin), run 2026-09-04, Teradata-direct, grain client. BLOCK 1.
+other_prefs_closed_same_day	clients
+0_NONE	46514
+1	4119
+2	21
+3_TO_5	1
+6_PLUS	5
+TOTAL	50660
