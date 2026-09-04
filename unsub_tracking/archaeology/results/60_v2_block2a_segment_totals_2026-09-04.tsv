@@ -1,0 +1,5 @@
+# File 60 v2 (dedup ONE ROW PER CLIENT in window, both sides; SF disp-4 vs CPC_RB_PREF 1012->5002 any origin; CLNT_NO match within [-1,+14] days), run 2026-09-04, window 2024-08..2026-07, active-personal universe. SF total 524,576 vs Q1 506,646: residual 3.5% = Q1 dedups from 2024-01; v3 will match. BLOCK 2A.
+segment	clients
+CPC_ONLY	291463
+SF_AND_CPC	4106
+SF_ONLY	520470
