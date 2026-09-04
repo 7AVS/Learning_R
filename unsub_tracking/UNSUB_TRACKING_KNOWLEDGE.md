@@ -62,6 +62,12 @@ Do not re-litigate. Do not ask again.
    per batch.** Record the cross-checks that prove the read (a sum matching a figure already in canon).
    Scripts with no catalogued output are unfinished.
 
+7. **Holdout = channel slot XX (0 sends across 2.77M holdout decisions).** Action cells carry a
+   channel code (`EM` for email); holdout/control cells carry none — the slot reads `XX`. Confirmed
+   empirically 2026-09-04 (Pack 54 v3.1, §21). `TST_GRP_CD` is NOT a reliable arm indicator — no
+   standard convention across MNEs (PCD alone has 81 distinct codes) — never use it to derive
+   Action/Control.
+
 ---
 
 ## 0. REQUIRED OUTCOMES (locked 2026-07-15, team-confirmed)
@@ -1197,3 +1203,43 @@ helped — 14.3% → 13.4% unmatched.
 3. **Group by MNE, not by full TACTIC_ID.** Cost, stated: two waves of one mnemonic in a month
    collapse into one row. The brief asks for unsubs by campaign, not by wave. Per-wave questions
    would need the tactic table back — and it is incomplete, so that is a separate problem.
+
+## 21. Pack 54 v3.1 (2026-09-04): email-decisioned send funnel, Cards MNEs, 2025-01+
+
+**Arms come from the channel slot, not TST_GRP_CD (Andre 2026-09-04, operational fact).** Holdout/
+control cells carry NO channel label — the slot reads `XX`. Action cells carry the channel code
+(`EM` for email). `TST_GRP_CD` values are plain numbered test groups (TG1, TG4, ...) with no
+consistent Action/Control convention across MNEs (PCD 81 distinct codes, PCL 53, AUH 42, PCQ 40,
+CRV 3) — **never use TST_GRP_CD to derive an arm.**
+
+**XX = holdout, CONFIRMED empirically.** HOLDOUT_XX: 2,772,862 decisions (AUH 381,656; PCD
+2,374,218; PCL 16,988; CRV/PCQ none) — **0 in MASTER, 0 sent**, zero across all 2.77M. EMAIL_ACTION:
+34,629,979 decisions / 4,931,448 clients / 529 tactics, 31,217,277 in MASTER and 31,217,277 sent —
+**in_master == sent again** (Pack 17's finding, reproduced at 30M-decision scale).
+
+Per-MNE EMAIL_ACTION sent/decisioned:
+
+| MNE | Sent | Decisions |
+|---|---|---|
+| AUH | 642,542 | 756,437 |
+| CRV | 688,736 | 1,157,152 |
+| PCD | 7,878,271 | 8,573,932 |
+| PCL | 11,837,350 | 13,224,069 |
+| PCQ | 10,170,378 | 10,918,389 |
+
+**Zero-send months exist and must be excluded before reading non-send as client-level
+suppression.** CRV 202602-202605 and PCL 202607 show zero sends across the whole month — an
+operational/vendor-side gap, not a suppression signal. Rule: exclude mne x cohort_month pairs
+with zero sends before attributing any client's non-send to unsub/consent suppression (applied
+in Pack 57).
+
+**Spool lesson: VOLATILE TABLEs live in the user's spool, not a separate scratch area.** A
+110M-row Step A (all channel arms, full 2024+ floor) alone exhausted spool before Steps B/C
+could run — `TREATMENT_ID IN (SELECT ... FROM <110M-row table>)` then forced a dedupe-and-
+compare against every MASTER/EVENT row scanned on top of that. Fix, now standard in Packs 54
+v3.1 / 56 / 57: (1) filter to only the arms/window actually needed before creating any volatile
+table; (2) materialize a small DISTINCT tactic-id "driver" table and INNER JOIN to it instead
+of an IN-subquery for every downstream MASTER/EVENT restriction.
+
+Files: `archaeology/54_email_decisioned_send_funnel.sql` (v3.1),
+`archaeology/56_xx_holdout_channel_slot_check.sql`, `archaeology/57_prior_unsub_send_split.sql`.
