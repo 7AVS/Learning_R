@@ -1345,3 +1345,12 @@ Settled: 1012 does not trickle down. The page writes 1012 alone, or 1012 plus on
 Open: whether the 3,293 are "RBC-wide chosen on the Avion page, page writes both" (then 80/20 valid for Avion visitors; the 46,514 come from pages with no program pref) or "clients who chose both" (then RBC-wide is undercounted). CPC carries no page. Resolution = MarTech page table: of all 1012 selections, how many on the Avion page. SF join (pack 62) PARKED: 99.7% of SF unsubs never reach CPC, so any rate from matched pairs would mislead.
 Headline for JP: Avion visitors are at most 16,854 of 67,514 page revocations in the window; 46,514 RBC-wide choices are invisible to a 1046-based split.
 Pack 61 v1 read CPC_RB_PREF_LOG and returned 324/70 -> the LOG ban (LOCKED FACT 1, §24).
+
+## §26 (2026-09-04) Unsubscribe page design, from the 2022 test-case workbook (Personal_RBC_Clients_Test_Cases_MM_V2/V4)
+
+Two test clients, one visit per page variant (one page per CPC code, EN and FR), before/after CPC snapshots:
+- Program option: each page writes ITS OWN code to 5002 and nothing else. Verified on 1002, 1004, 1012, 1023, 1024, 1025, 1026, 1044, 1045, 1046 (one write each, 4:03-4:10 PM 7/20/2022).
+- RBC-wide option (bottom radio "unsubscribe from promotional emails from RBC Royal Bank"): writes 1012 to 5002 and nothing else (8/2/2022; one week later only the batch timestamp changed, 4:24 AM).
+- No page writes two codes. Therefore the 3,293 same-day 1012+1046 pairs (pack 61) are two submissions, not a cascade, and packs 61-63 are consistent with the design. The director's 19.2% "also RBC-wide" is a floor: RBC-wide choices made from Avion emails write 1012 only and are invisible to a 1046-based dataset.
+- Residue: CPC does not refresh the timestamp when a value is rewritten unchanged, so the workbook cannot literally show "Rewards page + RBC-wide = 1046 untouched". Ask Digital Messaging (Matt) to confirm; otherwise the template evidence stands.
+- Details (people, hashed ids, timestamps) in local sfmc_unsub_blueprint_notes.md §9 (gitignored).
