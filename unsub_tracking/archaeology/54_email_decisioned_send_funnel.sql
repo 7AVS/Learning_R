@@ -1,11 +1,13 @@
 -- 54: Email-decisioned send funnel — Cards MNEs only (CRV, PCL, PCQ, PCD, AUH)
+-- v3 2026-09-04: arms from channel slot (XX = holdout), TG-code mapping removed per Andre.
 -- ENGINE: Teradata-direct.
--- PURPOSE: of clients decisioned into email and not in a control cell, how many appear in
--- the vendor send chain, and how many were actually sent — scoped to the five Cards MNEs
--- (list taken from Pack 17, archaeology/17_em_decision_vendor_coverage.sql).
--- RUN ORDER: Step A (volatile decisioned pop) -> Step B (volatile MASTER match) ->
--- Step C (volatile SENT match) -> Block 0 (arm profiling) -> Block 1 (NON_CONTROL funnel by
--- MNE) -> Block 2 (CONTROL funnel by MNE) -> Block 3 (full MNE x month x arm cube).
+-- PURPOSE: of ALL decisions on these five Cards MNEs since 2024-01-01, tag each by its
+-- channel slot (EM = email action, XX = holdout/no-contact, blank, or other) and see how
+-- many action-tagged decisions reach the vendor send chain vs how many holdout-tagged ones
+-- do (should be ~zero sent).
+-- RUN ORDER: Step A (volatile decisioned pop, channel-tagged) -> Step B (volatile MASTER
+-- match) -> Step C (volatile SENT match) -> Block 0 (channel-slot proof) -> Block 1
+-- (EMAIL_ACTION funnel by MNE) -> Block 2 (HOLDOUT_XX funnel by MNE) -> Block 3 (full cube).
 -- Bank-wide was attempted 2026-09-04 and ran out of spool; Cards-only by design.
 -- Grain = (CLNT_NO, TACTIC_ID) throughout — one row per decision, not per client.
 -- Counts only, no rates. VOLATILE TABLEs persist in-session — each step's DROP line is
@@ -18,37 +20,40 @@
 -- The list is written directly into Step A's WHERE clause below. Edit it in ONE place — Step A —
 -- if the scope ever changes; this block is the documentation copy, not a live variable.
 
--- ===== PARAMETER BLOCK 2: CONTROL ARM MAPPING — FILL FROM BLOCK 0 OUTPUT =====
--- No suffix guessing (bank-wide Pack 54 v1 tried a '%C'/'%T' suffix rule and Block 0 showed it
--- was 100% wrong for these MNEs). Every (mne, test_group_code) pair confirmed CONTROL from
--- Block 0's output gets its own WHEN line below; everything else defaults to NON_CONTROL until
--- filled in. This exact CASE expression is copy-pasted into Blocks 1, 2 and 3 below — edit it
--- here, then paste the edited version into all three places (Teradata CTEs don't share across
--- statements, so there is no single point of definition to change instead).
---
--- CASE
---     -- FILL FROM BLOCK 0 OUTPUT: one WHEN per (mne, test_group_code) confirmed CONTROL, e.g.:
---     -- WHEN d.mne = 'CRV' AND d.test_group_code = 'CODE_HERE' THEN 'CONTROL'
---     ELSE 'NON_CONTROL'
--- END AS arm_group
 
-
--- ===== STEP A: VOLATILE — email-decisioned Cards population =====
+-- ===== STEP A: VOLATILE — ALL decisions for the Cards MNEs, tagged by channel slot =====
 -- DROP TABLE vt_em_decis_cards;  -- uncomment + run alone if rerunning after a failed pass
+--
+-- No channel filter in the WHERE clause (v3 change) — every decision on these five MNEs is
+-- pulled, then classified below. XX-match uses LIKE '%XX%', the same substring style as the
+-- documented EM rule (UNSUB_TRACKING_KNOWLEDGE.md §6: `SUBSTR(...,121,30) LIKE '%EM%'`), not
+-- exact equality — see the report for the evidence this choice is based on.
 
 CREATE VOLATILE TABLE vt_em_decis_cards AS (
     SELECT DISTINCT
         t.CLNT_NO,
         t.TACTIC_ID,
-        SUBSTR(t.TACTIC_ID, 8, 3)                        AS mne,
+        SUBSTR(t.TACTIC_ID, 8, 3)                                    AS mne,
         EXTRACT(YEAR FROM t.TREATMT_STRT_DT) * 100
-          + EXTRACT(MONTH FROM t.TREATMT_STRT_DT)         AS cohort_yyyymm,
-        TRIM(t.TST_GRP_CD)                                AS test_group_code
+          + EXTRACT(MONTH FROM t.TREATMT_STRT_DT)                    AS cohort_yyyymm,
+        TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30))              AS chnl_slot_vrb,
+        TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')))              AS chnl_slot_addnl,
+        CASE
+            -- Andre 2026-09-04: holdout = channel slot XX; action = channel code; no TG codes
+            WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
+              OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%'
+                THEN 'EMAIL_ACTION'
+            WHEN SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%XX%'
+              OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%XX%'
+                THEN 'HOLDOUT_XX'
+            WHEN TRIM(SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30)) = ''
+             AND TRIM(UPPER(COALESCE(t.ADDNL_DECISN_DATA1, ''))) = ''
+                THEN 'NO_CHANNEL_BLANK'
+            ELSE 'OTHER_CHANNEL'
+        END                                                          AS arm_from_channel
     FROM DG6V01.TACTIC_EVNT_IP_AR_HIST t
     WHERE t.TREATMT_STRT_DT >= DATE '2024-01-01'
       AND SUBSTR(t.TACTIC_ID, 8, 3) IN ('CRV','PCL','PCQ','PCD','AUH')  -- PARAMETER BLOCK 1
-      AND (   SUBSTR(t.TACTIC_DECISN_VRB_INFO, 121, 30) LIKE '%EM%'
-           OR UPPER(COALESCE(t.ADDNL_DECISN_DATA1, '')) LIKE '%EM%' )
 ) WITH DATA
 PRIMARY INDEX (TACTIC_ID, CLNT_NO)
 ON COMMIT PRESERVE ROWS;
@@ -92,183 +97,168 @@ ON COMMIT PRESERVE ROWS;
 COLLECT STATISTICS ON vt_sent_cards COLUMN (TREATMENT_ID, consumer_id_hashed);
 
 
--- ===== BLOCK 0: top 5 TST_GRP_CD codes per Cards MNE, by decision volume =====
--- QUESTION: what are the top 5 TST_GRP_CD codes by decision volume for each Cards MNE, and
---   how big is each one relative to that MNE's total decision volume?
--- ROWS: 25 (5 Cards MNEs x top 5 codes each). NOT the full code list — first pass showed
---   PCD/PCL/AUH/PCQ each carry dozens of distinct codes (81/53/42/40; CRV only 3), and codes
---   read as plain numbered test groups (TG1, TG4, ...) with no C/T suffix to guess from, so a
---   full dump is unreadable. Top 5 by volume is where the real cells are; re-run without the
---   QUALIFY cap if a specific MNE needs its long tail checked.
--- GOOD LOOKS LIKE: one of each MNE's top codes reads as a clear holdout/no-contact cell (a
---   TG code with meaningfully lower volume than its siblings, or one that never repeats
---   across cohorts the way action codes do)
--- WHAT TO DO WITH IT: paste to Claude — used to fill PARAMETER BLOCK 2 above
+-- ===== BLOCK 0: does the channel slot separate action from holdout? =====
+-- QUESTION: Does the channel slot separate action from holdout? Which raw values does each
+--   Cards MNE use?
+-- ROWS: <=30 (5 Cards MNEs x top 6 combinations each)
+-- GOOD LOOKS LIKE: HOLDOUT_XX rows have decisions_sent_disposition1 at or near zero;
+--   EMAIL_ACTION rows have sends close to decisions_in_master
+-- WHAT TO DO WITH IT: paste to Claude
 
+WITH flags AS (
+    SELECT
+        d.mne,
+        d.arm_from_channel,
+        d.chnl_slot_vrb,
+        d.chnl_slot_addnl,
+        d.CLNT_NO,
+        d.TACTIC_ID,
+        MAX(CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)            AS f_in_master,
+        MAX(CASE WHEN s.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent
+    FROM vt_em_decis_cards d
+    LEFT JOIN vt_master_cards m
+        ON  m.TREATMENT_ID = d.TACTIC_ID
+        AND m.CLNT_NO       = d.CLNT_NO
+    LEFT JOIN vt_sent_cards s
+        ON  s.TREATMENT_ID       = d.TACTIC_ID
+        AND s.consumer_id_hashed = m.consumer_id_hashed
+    GROUP BY 1, 2, 3, 4, 5, 6
+)
 SELECT
     mne,
-    test_group_code,
-    CAST(COUNT(*) AS BIGINT)                              AS decisions_email,
-    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT)                AS distinct_clients,
-    CAST(SUM(COUNT(*)) OVER (PARTITION BY mne) AS BIGINT)  AS mne_total_decisions
-FROM vt_em_decis_cards
-GROUP BY mne, test_group_code
-QUALIFY ROW_NUMBER() OVER (PARTITION BY mne ORDER BY COUNT(*) DESC) <= 5
-ORDER BY mne, decisions_email DESC;
+    arm_from_channel,
+    chnl_slot_vrb,
+    chnl_slot_addnl,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
+    CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
+    CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
+FROM flags
+GROUP BY 1, 2, 3, 4
+QUALIFY ROW_NUMBER() OVER (PARTITION BY mne ORDER BY COUNT(*) DESC) <= 6
+ORDER BY mne, decisions DESC;
 
 
--- ===== BLOCK 1: funnel by MNE only — NON_CONTROL rows, plus one TOTAL row =====
--- QUESTION: of clients decisioned to email and NOT flagged control, how many show up in the
---   vendor send chain, and how many were actually sent?
+-- ===== BLOCK 1: funnel by MNE — EMAIL_ACTION rows only, plus one TOTAL row =====
+-- QUESTION: of email-action decisions on these five MNEs, how many show up in the vendor
+--   send chain, and how many were actually sent?
 -- ROWS: 6 (5 Cards MNEs + 1 TOTAL row)
 -- GOOD LOOKS LIKE: decisions_sent_disposition1 close to decisions_in_master — Pack 17 found
 --   these nearly equal for these same five MNEs
 -- WHAT TO DO WITH IT: paste to Claude
 
-WITH arm_tagged AS (
+WITH flags AS (
     SELECT
         d.mne,
         d.CLNT_NO,
         d.TACTIC_ID,
-        CASE
-            -- FILL FROM BLOCK 0 OUTPUT: one WHEN per (mne, test_group_code) confirmed CONTROL, e.g.:
-            -- WHEN d.mne = 'CRV' AND d.test_group_code = 'CODE_HERE' THEN 'CONTROL'
-            ELSE 'NON_CONTROL'
-        END AS arm_group
-    FROM vt_em_decis_cards d
-),
-flags AS (
-    SELECT
-        a.mne,
-        a.arm_group,
-        a.CLNT_NO,
-        a.TACTIC_ID,
         MAX(CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)            AS f_in_master,
         MAX(CASE WHEN s.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent
-    FROM arm_tagged a
+    FROM vt_em_decis_cards d
     LEFT JOIN vt_master_cards m
-        ON  m.TREATMENT_ID = a.TACTIC_ID
-        AND m.CLNT_NO       = a.CLNT_NO
+        ON  m.TREATMENT_ID = d.TACTIC_ID
+        AND m.CLNT_NO       = d.CLNT_NO
     LEFT JOIN vt_sent_cards s
-        ON  s.TREATMENT_ID       = a.TACTIC_ID
+        ON  s.TREATMENT_ID       = d.TACTIC_ID
         AND s.consumer_id_hashed = m.consumer_id_hashed
-    GROUP BY 1, 2, 3, 4
+    WHERE d.arm_from_channel = 'EMAIL_ACTION'
+    GROUP BY 1, 2, 3
 )
 SELECT
     CAST(mne AS VARCHAR(20))                AS mne,
-    CAST(COUNT(*) AS BIGINT)                AS decisions_email,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
     CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
     CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
     CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
 FROM flags
-WHERE arm_group = 'NON_CONTROL'
 GROUP BY 1
 UNION ALL
 SELECT
     CAST('TOTAL' AS VARCHAR(20))            AS mne,
-    CAST(COUNT(*) AS BIGINT)                AS decisions_email,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
     CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
     CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
     CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
 FROM flags
-WHERE arm_group = 'NON_CONTROL'
 ORDER BY 1;
 
 
--- ===== BLOCK 2: same four counts, CONTROL rows by MNE =====
--- QUESTION: of clients decisioned to email and flagged CONTROL, how many show up in the
---   vendor send chain, and how many were actually sent?
--- ROWS: expect <=6 (one row per Cards MNE with a filled control code — zero rows until
---   PARAMETER BLOCK 2 is filled in, since everything defaults to NON_CONTROL until then)
--- GOOD LOOKS LIKE: decisions_sent_disposition1 near zero — control cells should not receive
+-- ===== BLOCK 2: funnel by MNE — HOLDOUT_XX rows only, plus one TOTAL row =====
+-- QUESTION: of holdout (channel slot XX) decisions on these five MNEs, how many show up in
+--   the vendor send chain, and how many were actually sent?
+-- ROWS: 6 (5 Cards MNEs + 1 TOTAL row)
+-- GOOD LOOKS LIKE: decisions_sent_disposition1 near zero — holdout cells should not receive
 --   the email
 -- WHAT TO DO WITH IT: paste to Claude
 
-WITH arm_tagged AS (
+WITH flags AS (
     SELECT
         d.mne,
         d.CLNT_NO,
         d.TACTIC_ID,
-        CASE
-            -- FILL FROM BLOCK 0 OUTPUT: one WHEN per (mne, test_group_code) confirmed CONTROL, e.g.:
-            -- WHEN d.mne = 'CRV' AND d.test_group_code = 'CODE_HERE' THEN 'CONTROL'
-            ELSE 'NON_CONTROL'
-        END AS arm_group
-    FROM vt_em_decis_cards d
-),
-flags AS (
-    SELECT
-        a.mne,
-        a.arm_group,
-        a.CLNT_NO,
-        a.TACTIC_ID,
         MAX(CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)            AS f_in_master,
         MAX(CASE WHEN s.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent
-    FROM arm_tagged a
+    FROM vt_em_decis_cards d
     LEFT JOIN vt_master_cards m
-        ON  m.TREATMENT_ID = a.TACTIC_ID
-        AND m.CLNT_NO       = a.CLNT_NO
+        ON  m.TREATMENT_ID = d.TACTIC_ID
+        AND m.CLNT_NO       = d.CLNT_NO
     LEFT JOIN vt_sent_cards s
-        ON  s.TREATMENT_ID       = a.TACTIC_ID
+        ON  s.TREATMENT_ID       = d.TACTIC_ID
         AND s.consumer_id_hashed = m.consumer_id_hashed
-    GROUP BY 1, 2, 3, 4
+    WHERE d.arm_from_channel = 'HOLDOUT_XX'
+    GROUP BY 1, 2, 3
 )
 SELECT
-    mne,
-    CAST(COUNT(*) AS BIGINT)                AS decisions_email,
+    CAST(mne AS VARCHAR(20))                AS mne,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
     CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
     CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
     CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
 FROM flags
-WHERE arm_group = 'CONTROL'
 GROUP BY 1
+UNION ALL
+SELECT
+    CAST('TOTAL' AS VARCHAR(20))            AS mne,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
+    CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
+    CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
+    CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
+FROM flags
 ORDER BY 1;
 
 
--- ===== BLOCK 3: full cube — MNE x cohort_month x arm (NON_CONTROL and CONTROL) =====
--- QUESTION: same funnel, broken out by MNE x month x arm, for self-service slicing
--- ROWS: many (5 MNEs x ~20 months x up to 2 arm groups — roughly 150-200)
--- GOOD LOOKS LIKE: continuous monthly coverage per MNE in both arm groups once PARAMETER
---   BLOCK 2 is filled in — gaps or a permanently-empty CONTROL arm mean the mapping is
---   still wrong or incomplete for that MNE
+-- ===== BLOCK 3: full cube — MNE x cohort_month x arm_from_channel (all four arms) =====
+-- QUESTION: same funnel, broken out by MNE x month x channel-slot arm, for self-service
+--   slicing across all four arm categories (EMAIL_ACTION, HOLDOUT_XX, NO_CHANNEL_BLANK,
+--   OTHER_CHANNEL)
+-- ROWS: many (5 MNEs x ~20 months x up to 4 arms — roughly 200-400)
+-- GOOD LOOKS LIKE: EMAIL_ACTION and HOLDOUT_XX both show continuous monthly coverage per
+--   MNE; HOLDOUT_XX sends stay near zero every month, not just on average
 -- WHAT TO DO WITH IT: save to Excel, do not paste
 
-WITH arm_tagged AS (
+WITH flags AS (
     SELECT
         d.mne,
         d.cohort_yyyymm,
+        d.arm_from_channel,
         d.CLNT_NO,
         d.TACTIC_ID,
-        CASE
-            -- FILL FROM BLOCK 0 OUTPUT: one WHEN per (mne, test_group_code) confirmed CONTROL, e.g.:
-            -- WHEN d.mne = 'CRV' AND d.test_group_code = 'CODE_HERE' THEN 'CONTROL'
-            ELSE 'NON_CONTROL'
-        END AS arm_group
-    FROM vt_em_decis_cards d
-),
-flags AS (
-    SELECT
-        a.mne,
-        a.cohort_yyyymm,
-        a.arm_group,
-        a.CLNT_NO,
-        a.TACTIC_ID,
         MAX(CASE WHEN m.CLNT_NO IS NOT NULL THEN 1 ELSE 0 END)            AS f_in_master,
         MAX(CASE WHEN s.consumer_id_hashed IS NOT NULL THEN 1 ELSE 0 END) AS f_sent
-    FROM arm_tagged a
+    FROM vt_em_decis_cards d
     LEFT JOIN vt_master_cards m
-        ON  m.TREATMENT_ID = a.TACTIC_ID
-        AND m.CLNT_NO       = a.CLNT_NO
+        ON  m.TREATMENT_ID = d.TACTIC_ID
+        AND m.CLNT_NO       = d.CLNT_NO
     LEFT JOIN vt_sent_cards s
-        ON  s.TREATMENT_ID       = a.TACTIC_ID
+        ON  s.TREATMENT_ID       = d.TACTIC_ID
         AND s.consumer_id_hashed = m.consumer_id_hashed
     GROUP BY 1, 2, 3, 4, 5
 )
 SELECT
     mne,
     cohort_yyyymm,
-    arm_group,
-    CAST(COUNT(*) AS BIGINT)                AS decisions_email,
+    arm_from_channel,
+    CAST(COUNT(*) AS BIGINT)                AS decisions,
     CAST(COUNT(DISTINCT CLNT_NO) AS BIGINT) AS distinct_clients,
     CAST(SUM(f_in_master) AS BIGINT)        AS decisions_in_master,
     CAST(SUM(f_sent) AS BIGINT)             AS decisions_sent_disposition1
