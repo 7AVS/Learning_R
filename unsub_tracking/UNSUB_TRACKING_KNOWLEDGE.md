@@ -1364,3 +1364,17 @@ Window Aug-2024..Jul-2026, active-personal universe, SF = first disposition-4 pe
 - By LOB (Andre's pivot of Block 3): LOYALTY 371,270 / OTHER 153,826 / CARDS 39,271 SF-only; 2,453 / 1,600 / 375 matched. VRE alone 281,440.
 - RECONCILIATION RESOLVED: v1 counted each client once per MONTH (568,795); Q1 and the director's table count each client once in the WINDOW (506,646). Everything else identical (spine, filters, dates). Pack 60 v2 dedups per client in the window on both sides; v1 numbers above are client-months and must not sit next to 506,646. v2 NOT YET RUN.
 - Results: archaeology/results/60_*.tsv.
+
+## §28 (2026-09-04) Pack 64: the reverse gap - two unsubscribe paths, each recorded in one system
+
+Population: the 100,847 CPC 1012 revocations written by the email page (APP_SYS_CD 7020) with no SF disposition-4 within [-1,+14] days (pack 60, Aug-2024..Jul-2026).
+- 100,649 of them are in VENDOR_FEEDBACK_MASTER (key lines up); 198 are not.
+- Nearest SF disposition-4 at ANY distance: 1-14 days 337; 15-90 days 1,654; 91+ days 5,710; NEVER 92,948 (92%). The match window is not the cause.
+- Uniform across quarters: 2024-Q3 13,991 / 492 matched ... 2026-Q2 3,754 / 322. About 95% of email-page CPC writes have no SF unsub in every quarter.
+
+Reading, combined with the forward gap (99% of SF disposition-4 unsubs have no CPC write, §21-§27, waterfall v3):
+- Path 1: one-click / list-unsubscribe from the mail client -> disposition 4 in Salesforce -> no CPC write.
+- Path 2: the CloudPages unsubscribe form -> CPC via the 7020 backfeed -> no disposition 4.
+- The two paths are nearly disjoint by mechanism. Neither system is complete; the union (pack 60) is the only complete count. The hypothesis in sfmc_unsub_blueprint_notes §7 is now measured from both sides.
+- Open: pack 64 Block 2 (were these clients sent an email in the prior 90 days) not yet recorded; if most were not, some are preference-centre visits without an email.
+- Results: archaeology/results/64_*.tsv.

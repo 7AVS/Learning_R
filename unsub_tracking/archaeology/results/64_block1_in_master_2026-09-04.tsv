@@ -1,0 +1,5 @@
+# File 64 (probe of CPC-only 7020 revocations from pack 60 v1: CPC 1012->5002 written by the email page with no SF disposition-4 within [-1,+14] days), run 2026-09-04, Teradata-direct, window 2024-08..2026-07. BLOCK 1 in vendor MASTER at all.
+bucket	clients
+IN_MASTER	100649
+NOT_IN_MASTER	198
+TOTAL	100847

@@ -1,0 +1,11 @@
+# File 64 (probe of CPC-only 7020 revocations from pack 60 v1: CPC 1012->5002 written by the email page with no SF disposition-4 within [-1,+14] days), run 2026-09-04, Teradata-direct, window 2024-08..2026-07. BLOCK 4 by quarter.
+quarter_label	cpc_only_7020	sf_and_cpc_7020
+2024-Q3	13991	492
+2024-Q4	22230	670
+2025-Q1	17894	517
+2025-Q2	14881	497
+2025-Q3	9970	504
+2025-Q4	11550	704
+2026-Q1	6577	382
+2026-Q2	3754	322
+TOTAL	100847	4088

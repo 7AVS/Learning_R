@@ -1,0 +1,7 @@
+# File 64 (probe of CPC-only 7020 revocations from pack 60 v1: CPC 1012->5002 written by the email page with no SF disposition-4 within [-1,+14] days), run 2026-09-04, Teradata-direct, window 2024-08..2026-07. BLOCK 3 nearest SF disposition-4 at any distance (clients in MASTER).
+bucket	rows
+1-14_DAYS_EITHER_SIDE	337
+15-90_DAYS	1654
+91+_DAYS	5710
+NEVER	92948
+TOTAL	100649
