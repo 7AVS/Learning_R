@@ -6,8 +6,23 @@
 --   directions: forward (1012 -> nearest 1046) and reverse (1046/7020 -> nearest 1012).
 -- WINDOW: 1012 side = 2025-05-01..2026-06-25 (director's extract). 1046 side built wider
 --   (2025-04-01..2026-07-31) to catch cascades landing just outside the 1012 window.
--- WRITER/ORIGIN COLUMN: APP_SYS_CD on DDWV01.CPC_RB_PREF_LOG itself - schemas/cpc_rb_pref_log_schema.md
---   line 24 confirms the log carries it (S0 screenshot + dictionary); no fallback to CPC_RB_PREF needed.
+-- WRITER/ORIGIN COLUMN: FIXED 2026-09-04 - both CTEs were reading DDWV01.CPC_RB_PREF_LOG, which
+--   returned only 324 (1012/7020) and 70 (1046) clients for this window - ~1-2% of the ~3,300
+--   and ~17,000 the director's extract and Andre's own 7020 query agree on. The 7020-origin
+--   writes live on DDWV01.CPC_RB_PREF (current-state table), not the LOG. Table + column names
+--   (CLNT_NO, PREF_ID, CLNT_CONSENT_TYP, CHG_TMSTMP, APP_SYS_CD) copied verbatim from pack 60's
+--   working query against this table: 60_monthly_sf_cpc_union.sql line 118 (FROM
+--   DDWV01.CPC_RB_PREF w) and lines 112-113/122-123 (w.APP_SYS_CD, w.CHG_TMSTMP, w.PREF_ID,
+--   w.CLNT_CONSENT_TYP) - schemas/ has no CPC_RB_PREF schema file to cross-check against; the
+--   only schema on file (cpc_rb_pref_log_schema.md) documents the LOG table and calls
+--   CPC_RB_PREF a "CURRENT-STATE snapshot" companion, consistent with it holding the volume the
+--   LOG is missing. Why the LOG had only ~1-2% of the writes: UNKNOWN - the schema doc does not
+--   explain the LOG's ETL gap for 7020-origin rows specifically.
+-- UNIVERSE: pack 60 Step B (the source of the table/column proof above) joins CPC to an
+--   active-personal spine (RB_CLNT_DLY act CTE) before counting. That filter is NOT applied
+--   here - the director's extract this file reconciles to is not universe-filtered, so adding
+--   it would break the comparison. If a "% of the addressable book" cut is ever needed off this
+--   file, layer that spine in explicitly and say so.
 -- RUN ORDER: Block 1 (forward cascade, paste) -> Block 2 (reverse cascade, paste) -> Block 3 (monthly
 --   denominators, paste). Grain = CLNT_NO. Counts only.
 -- =============================================================================
@@ -40,7 +55,7 @@ WITH vt_1012_email61 AS (
     SELECT DISTINCT
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE) AS write_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
       AND CLNT_CONSENT_TYP = 5002
       AND APP_SYS_CD = 7020
@@ -52,7 +67,7 @@ vt_1046_61 AS (
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
         MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1046
       AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
@@ -119,7 +134,7 @@ WITH vt_1012_email61 AS (
     SELECT DISTINCT
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE) AS write_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
       AND CLNT_CONSENT_TYP = 5002
       AND APP_SYS_CD = 7020
@@ -131,7 +146,7 @@ vt_1046_61 AS (
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
         MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1046
       AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
@@ -188,7 +203,7 @@ WITH vt_1012_email61 AS (
     SELECT DISTINCT
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE) AS write_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1012
       AND CLNT_CONSENT_TYP = 5002
       AND APP_SYS_CD = 7020
@@ -200,7 +215,7 @@ vt_1046_61 AS (
         CLNT_NO,
         CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
         MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
-    FROM DDWV01.CPC_RB_PREF_LOG
+    FROM DDWV01.CPC_RB_PREF
     WHERE PREF_ID = 1046
       AND CLNT_CONSENT_TYP = 5002
       AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
