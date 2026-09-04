@@ -181,3 +181,9 @@ Last updated: 2026-09-03
 | PCD | PCD | 2026111PCD | cards_pcd_ongoing_decis_resp + TACTIC_EVNT_IP_AR_HIST + ga4_ecommerce |
 | PLI | PCL | (TBD) | cards_pli_decision_resp |
 | TPA | PCQ | (TBD) | cards_tpa_pcq_decision_resp |
+
+## 2026-09-04 Unsub / CPC gap (packs 54-65)
+- SENT to the director: chart (SF floor vs SF + CPC-only ceiling, monthly, workbook on SharePoint), answer "+56%, 0.8% overlap", and the 80/20 note (RBC-wide writes 1012 only; 19% is a floor).
+- DONE today: packs 54-65 built, run, results in unsub_tracking/archaeology/results/, canon in UNSUB_TRACKING_KNOWLEDGE.md §21-§29. CPC_RB_PREF_LOG banned (LOCKED FACT 1). Holdout = channel slot XX confirmed. Two unsubscribe paths measured (one-click -> SF only; page -> CPC only). Program unsub honoured ~90d then 20% re-mailed. Sep 2 catch-up batch 9,284 (form backlog only).
+- NEXT: run 00_reset_volatiles.sql then pack 60 v3 (expect SF total 506,646) and refresh the SharePoint workbook; rerun pack 65 Block 1 weekly while the backfeed fix is in flight; pack 62 optional (mechanics only); file 59 not run.
+- HELD: corrections to the director's 2-pager (recorded in memory), raise only when asked.
