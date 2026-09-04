@@ -1,7 +1,8 @@
--- PARKED 2026-09-04 (Andre): do not run yet. 99.7% of SF unsubs never reach CPC, so the matched
---   sample is tiny and selected; a RATE from it would mislead. Valid only as a page-MECHANICS check
---   (does the Avion page write 1046 when RBC-wide is chosen). Preferred route: ask MarTech for the
---   page table cut - of all 1012 selections, how many were on the Avion page.
+-- UNPARKED 2026-09-04 (Andre): run as a MECHANICS check only. The matched pairs are the ~3% of SF
+--   unsubs that reached CPC: a selected sample, so NO rate from Block 1 may be quoted as a population
+--   share. The one question it answers: among LOYALTY-email unsubs that wrote 1012, did 1046 get
+--   written too? If 1012_ONLY dominates within LOYALTY, the Avion page is no exception and the
+--   director's 19% is a floor (design doc: RBC-wide writes 1012 alone).
 -- 62: SF unsubs by line of business -> CPC preference writes (Teradata-direct)
 -- QUESTION: for SF unsubs by LOB (Loyalty/Avion vs Cards vs Others), which CPC preference(s)
 --   get written within a day?
