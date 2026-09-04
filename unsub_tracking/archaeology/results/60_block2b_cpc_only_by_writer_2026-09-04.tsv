@@ -1,0 +1,7 @@
+# File 60 (monthly SF-primary + CPC-only union; SF disp-4 first per client-month vs CPC_RB_PREF 1012->5002 any origin; match CLNT_NO write within [-1,+14] days), run 2026-09-04, Teradata-direct, window 2024-08..2026-07, active-personal universe, grain client-month. BLOCK 2B CPC_ONLY by writer.
+APP_SYS_CD	cpc_only_clients
+7001	144821
+7020	100847
+7003	33547
+7053	9705
+7006	2232

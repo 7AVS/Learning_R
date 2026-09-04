@@ -1,0 +1,11 @@
+# File 60 (monthly SF-primary + CPC-only union; SF disp-4 first per client-month vs CPC_RB_PREF 1012->5002 any origin; match CLNT_NO write within [-1,+14] days), run 2026-09-04, Teradata-direct, window 2024-08..2026-07, active-personal universe, grain client-month. BLOCK 4 top MNEs by SF volume.
+mne	sf_only	sf_and_cpc	total_sf
+VRE	279470	1970	281440
+OTHER	138515	1570	140085
+VME	64425	333	64758
+VRG	22417	107	22524
+PCQ	13564	126	13690
+QCF	12919	65	12984
+ERI	11222	78	11300
+RFT	11061	120	11181
+PAL	10774	59	10833
