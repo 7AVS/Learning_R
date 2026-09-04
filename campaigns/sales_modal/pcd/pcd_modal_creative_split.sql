@@ -1,12 +1,12 @@
 -- pcd_modal_creative_split.sql
 -- Engine: Starburst (Trino). Federated: Teradata cohort/conversion table + edl0_im GA4.
 -- Purpose: PCD's production async-banner engagement tracker
---   (campaigns/PCD/async_banner_responder_engagement.sql, BLOCK 1 — PCD) pools all 4 PCD GA4 mobile
+--   (campaigns/ASYNC/async_banner_responder_engagement.sql, BLOCK 1 — PCD) pools all 4 PCD GA4 mobile
 --   creatives into one IN-list before counting engagement, so SalesModal's two variants are invisible,
 --   mixed in with PPCN and Offer_Hub_Banner. This query adds it_item_name as its own grouping dimension
 --   so SalesModal gets its OWN read, split from PPCN/Offer_Hub_Banner, alongside the other banners.
 -- Population, window, and click-classification logic copied VERBATIM from the production tracker —
---   this does NOT modify campaigns/PCD/async_banner_responder_engagement.sql, it is an additional read.
+--   this does NOT modify campaigns/ASYNC/async_banner_responder_engagement.sql, it is an additional read.
 -- Counts only, no rates. Cohort dimension = wave_dt (response_start, treatment-start grain).
 
 WITH

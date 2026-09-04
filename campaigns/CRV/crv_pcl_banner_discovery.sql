@@ -8,7 +8,7 @@
 --   missing two (PLI/PCL and CRV) so the impression query can be parameterized.
 --
 -- Run in: Starburst / Trino  (GA4 catalog + Teradata catalog, federated)
---   Cross-catalog join pattern is proven in async_mb_tracker/async_combined_tracker.sql
+--   Cross-catalog join pattern is proven in campaigns/ASYNC/async_mb_tracker/async_combined_tracker.sql
 --   (GA4 g INNER JOIN DG6V01.TACTIC_EVNT_IP_AR_HIST t ON t.CLNT_NO = g.up_srf_id2_value)
 --
 -- GA4 table: edl0_im.prod_yg80_pcbsharedzone.tsz_00198_data_ga4_ecommerce

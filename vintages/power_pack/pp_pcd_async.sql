@@ -58,7 +58,7 @@
 -- *** [FLAG FOR ANDRE] CODE LIST DISCREPANCY, NOT SILENTLY RESOLVED ***
 --   Andre's working file (PCD_async_vintage.sql, transcribed from screenshots 2026-08-10)
 --   lists 'MAO28C35' in this 7-code set. This repo's files (this one and
---   campaigns/PCD/async_banner_summary.sql) have always used 'MAO28CJ5'. Kept OUR
+--   campaigns/ASYNC/async_banner_summary.sql) have always used 'MAO28CJ5'. Kept OUR
 --   value ('MAO28CJ5') because it matches the repo's independently-validated async
 --   summary file  but this is a single-character difference (C3 vs CJ) that could be
 --   a transcription typo on either side. CONFIRM which is correct before trusting any

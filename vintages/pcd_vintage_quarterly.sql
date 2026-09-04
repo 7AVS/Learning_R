@@ -27,7 +27,7 @@
 --          arm. cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT
 --          clients — sums cleanly: quarterly cum_responses = sum of the 3 monthly files'
 --          cum_responses.
--- Sourced from: campaigns/PCD/async_banner_vintage_success.sql BLOCK 1 (PCD), secondary/upgrade
+-- Sourced from: campaigns/ASYNC/async_banner_vintage_success.sql BLOCK 1 (PCD), secondary/upgrade
 --          metrics and segment slicer dropped here per the simple-version spec
 --
 -- Drop residual volatile tables if rerunning in the same session:

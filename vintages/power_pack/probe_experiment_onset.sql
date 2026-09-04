@@ -36,7 +36,7 @@
 --       (clients_in_experiment = NULL, experiment says NOT CONFIRMED) until someone hand-verifies
 --       the token-3-of-TACTIC_DECISN_VRB_INFO position holds under Teradata's own SUBSTR/INDEX
 --       semantics and writes the equivalent expression. Confirmed tactic-side (Trino form),
---       campaigns/PCD/async_banner_summary.sql:36-38 (cohort_raw CTE reads FROM
+--       campaigns/ASYNC/async_banner_summary.sql:36-38 (cohort_raw CTE reads FROM
 --       DG6V01.TACTIC_EVNT_IP_AR_HIST, line 41)  that source file stays on Trino, unaffected.
 --   - AUH Rewards/NonReward : SUBSTR(TRIM(TST_GRP_CD),1,2) IN ('NR','RN','RO')
 --       Tactic-side by construction -- vintages/power_pack's own prior AUH block

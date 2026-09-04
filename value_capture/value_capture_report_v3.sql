@@ -22,7 +22,7 @@
 --   Abramowitz-Stegun normal-CDF approximation (Teradata has no NORM.S.DIST). z is internal only.
 --
 -- v3 ADDS three async blocks (PCD, O2P, CTU), summary-converted from
--- campaigns/PCD/async_banner_vintage_ab.sql -- a transcribed DRAFT (10 phone photos, not yet
+-- campaigns/ASYNC/async_banner_vintage_ab.sql -- a transcribed DRAFT (10 phone photos, not yet
 -- verified against source or run). Every literal lifted from that draft that carried a [VERIFY]
 -- tag keeps the tag here; reconcile in-env before this ships. Only RANDOMIZED arms emit contract
 -- rows: PCD ASYNC TEST/CONTROL only (NON_ASYNC is not a randomized comparison, excluded); O2P NEW

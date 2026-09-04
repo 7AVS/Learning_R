@@ -28,8 +28,8 @@ Last updated: 2026-09-03
 - `references/campaign_query_cards.md` = per-table query cards (VBA/VBU/CRV ready; PCD/PCQ arm NOT on curated table → `campaigns/_templates/arm_probe_pcd_pcq.sql` pushed, not run).
 
 ### B. PCD Async Banner Wave 4 (RESOLVED — slide copy final)
-- W4 (Aug 4) = TWO experiments: legacy offers 70/30 (0.57% vs 0.37%, +0.20pp, tracking W3) + NEW ION+ 21K cell 90/10 (48K test, 2.01% vs 1.07% no-offer control, +0.94pp, z=6.1, 69% of conversions). Pooled curve = mix artefact — never present. Final slide copy: `campaigns/PCD/async_banner_slide_text_2026-08-25.md` (W1/W2 frozen as seen; W3 finalized 201 incr/$936K; NIBT = $388/mo = $4,656/yr per incr client). Slide fixes flagged 2026-08-28: pp-not-bps, ION+ 452 not 552, W2 $90K, W3 row +30%, legend rename.
-- Evidence: `campaigns/PCD/async_banner_wave4_pivot_2026-08-25.md` (all pivots + SRM z-table + vintage by offer) and `async_is_mb_by_tactic_2026-08-25.md` (TREATMT_MN = offer; is_mb by offer: 13AA 99%/87AA 25%/84AA 10%).
+- W4 (Aug 4) = TWO experiments: legacy offers 70/30 (0.57% vs 0.37%, +0.20pp, tracking W3) + NEW ION+ 21K cell 90/10 (48K test, 2.01% vs 1.07% no-offer control, +0.94pp, z=6.1, 69% of conversions). Pooled curve = mix artefact — never present. Final slide copy: `campaigns/ASYNC/async_banner_slide_text_2026-08-25.md` (W1/W2 frozen as seen; W3 finalized 201 incr/$936K; NIBT = $388/mo = $4,656/yr per incr client). Slide fixes flagged 2026-08-28: pp-not-bps, ION+ 452 not 552, W2 $90K, W3 row +30%, legend rename.
+- Evidence: `campaigns/ASYNC/async_banner_wave4_pivot_2026-08-25.md` (all pivots + SRM z-table + vintage by offer) and `async_is_mb_by_tactic_2026-08-25.md` (TREATMT_MN = offer; is_mb by offer: 13AA 99%/87AA 25%/84AA 10%).
 - OPEN: (1) ION+ control = no banner at all, or ION+ banner without bonus? (changes what +0.94pp measures); (2) is_mb semantics — if "got banner", ION/IOP cell is ~90% non-banner inside "async" (W1-W4 unchanged, doesn't affect W4 slide); (3) repo async SQL defines cohort by strategy-code list only + 2 files with typo'd lists (`async_banner_vintage_ab.sql:219`, `value_capture_report_v3.sql:154`); W2/W3 slide numbers not reproducible from repo SQL.
 
 
@@ -123,7 +123,7 @@ Last updated: 2026-09-03
 - **Launch:** ~2026-04-20 (confirmed live)
 - **Next:** (a) recover `tst_grp_cd → action_control` mapping for non-T/C codes; (b) capture schema columns past `clicked_mb`; (c) run diagnostics + vintage in work env, validate curve shapes
 - **Blocked on:** None active. Mapping list pending from Andre's external doc.
-- **2026-05-29:** Async banner interim deck reframed conservative — all 3 campaign slides (PCD/O2P/CTU) + slide-2 setup table + OBF caveat finalized in `campaigns/PCD/async_banner_slides_mockup.html` (v2). Stance: interim = directional only under O'Brien–Fleming; no "channel works" claims. O2P = context only (control not a valid benchmark, compass argument kept off-slide). CTU observational; randomised A/C DoE launches 9 Jun. Incremental reported per campaign (~60 PCD, ~1,850 O2P vs non-async, ~64 CTU), never pooled. NEXT: replace placeholder numbers with real query output; fold into PPT.
+- **2026-05-29:** Async banner interim deck reframed conservative — all 3 campaign slides (PCD/O2P/CTU) + slide-2 setup table + OBF caveat finalized in `campaigns/ASYNC/async_banner_slides_mockup.html` (v2). Stance: interim = directional only under O'Brien–Fleming; no "channel works" claims. O2P = context only (control not a valid benchmark, compass argument kept off-slide). CTU observational; randomised A/C DoE launches 9 Jun. Incremental reported per campaign (~60 PCD, ~1,850 O2P vs non-async, ~64 CTU), never pooled. NEXT: replace placeholder numbers with real query output; fold into PPT.
 
 ### 2. AUH Experiment Design / Control Split (HIGH)
 - **Ask:** Prepare for tomorrow's experiment design discussion

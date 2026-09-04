@@ -24,7 +24,7 @@
 --          deployment / last-touch attribution is needed here. Rolls up under the client's bin
 --          arm. cum_responses = cumulative SUCCESS EVENTS (one per deployment window), NOT
 --          clients.
--- Sourced from: campaigns/PCD/async_banner_vintage_success.sql BLOCK 1 (PCD), secondary/upgrade
+-- Sourced from: campaigns/ASYNC/async_banner_vintage_success.sql BLOCK 1 (PCD), secondary/upgrade
 --          metrics and segment slicer dropped here per the simple-version spec
 --
 -- Drop residual volatile tables if rerunning in the same session:

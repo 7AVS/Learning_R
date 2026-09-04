@@ -94,7 +94,7 @@ Until Andre locks a per-purpose rule for each, treat cross-file PCQ MS compariso
 
 PCD's SalesModal creatives (`PB_CC_ALL_26_02_RBC_PCD_SalesModal_cardupgrade_AVP` / `_IAV`) are pooled
 with `PPCN` and `Offer_Hub_Banner` inside the production async-banner engagement tracker
-(`campaigns/PCD/async_banner_responder_engagement.sql`, BLOCK 1) via a single `it_item_name IN (...)`
+(`campaigns/ASYNC/async_banner_responder_engagement.sql`, BLOCK 1) via a single `it_item_name IN (...)`
 filter — SalesModal has never had its own read. `pcd/pcd_modal_creative_split.sql` adds `it_item_name`
 as a grouping dimension (via a converters × creative-universe cross join, so every creative shares the
 same converter denominator) so SalesModal gets view/click_p/click_n counts split out from the other two

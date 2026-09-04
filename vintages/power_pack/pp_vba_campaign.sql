@@ -23,12 +23,12 @@
 --   I'm querying Teradata") and none of this file's tables ever had it:
 --   DG6V01.tactic_evnt_ip_ar_hist  bare, no dw00 prefix. Proven in pp_crv_campaign.sql,
 --     campaigns/CRV/vintage_reconciliation/crv_vintage_v2_production.sql, and
---     campaigns/PCD/async_banner_summary.sql  all three headed "Engine: Trino/Starburst".
+--     campaigns/ASYNC/async_banner_summary.sql  all three headed "Engine: Trino/Starburst".
 --   d3cv12a.appl_fact_dly (Casper)  bare, no dw00 prefix. This exact table isn't independently
 --     proven, but the D3CV12A schema's no-prefix pattern is proven for sibling tables
 --     (dly_full_portfolio, cr_crd_rpts_acct, visa_txn_dly, lkup_txn_cd_catg) in
 --     campaigns/CRV/suppression_experiment/c3_banner_reach_2026.sql, c4_demand_shaping.sql,
---     and campaigns/PCD/async_banner_summary.sql / pcd_success_validation.sql /
+--     and campaigns/ASYNC/async_banner_summary.sql / pcd_success_validation.sql /
 --     async_banner_vintage_tracker.sql  all Engine: Trino/Starburst. Same schema, same rule.
 --     (Note: query_engine_guidelines.md Catalog Naming lists "dw00_im.d3cv12a.*" as the
 --     federated form  that line does not match what actually runs in this repo's Trino files.
