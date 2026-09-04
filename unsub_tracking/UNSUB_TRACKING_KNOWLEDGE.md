@@ -1256,7 +1256,7 @@ zero it.** Email-action decisions, Cards MNEs, 2025-01+, zero-send months exclud
 | PCD | 7,732,049 / 8,153,301 (95%) | 146,222 / 420,631 (35%) |
 | PCL | 11,416,399 / 12,039,061 (95%) | 420,951 / 506,953 (83%) |
 | PCQ | 9,962,770 / 10,447,249 (95%) | 207,608 / 471,140 (44%) |
-| TOTAL | 30,394,824 / 32,223,159 (94%) | 822,453 / 1,487,907 (55%) |
+| TOTAL | 30,394,824 / 32,233,159 (94%) | 822,453 / 1,487,907 (55%) |
 
 **Four readings:** (1) prior unsub drops send from 94% to 55% — a real effect, not a
 suppression gate (a gate would read 0%). (2) PCL is the outlier at 83% sent despite prior

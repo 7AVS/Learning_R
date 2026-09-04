@@ -1,0 +1,7 @@
+# file 57 v1.1 (prior-SFMC-unsub split of email-action send rate), run 2026-09-04, Teradata-direct, Cards MNEs, decisions window 2025-01-01+, unsub lookback 2024-01-01+, grain client x tactic. Block: ZERO-SEND MONTHS
+mne	cohort_yyyymm
+CRV	202502
+CRV	202503
+CRV	202504
+CRV	202505
+PCL	202607
