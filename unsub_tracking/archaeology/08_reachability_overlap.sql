@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- =============================================================================
 -- Reachability loss — overlap of the four exit mechanisms (one cross-tab)
 -- =============================================================================

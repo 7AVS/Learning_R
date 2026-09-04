@@ -12,14 +12,14 @@
 -- population is already a fixed set of clients who WERE decisioned, so CLNT_TYP/CLNT_STS
 -- would only re-filter a population that's already real; noted, not applied, flagged here).
 -- REUSED PATTERN: archaeology/21a_cpc_landscape.sql's `vt_cpc_latest` CTE (CLNT_NO, PREF_ID,
--- CLNT_CONSENT_TYP, CHG_TMSTMP columns off DDWV01.CPC_RB_PREF_LOG; ROW_NUMBER-in-a-CTE latest-
+-- CLNT_CONSENT_TYP, CHG_TMSTMP columns off DDWV01.CPC_RB_PREF; ROW_NUMBER-in-a-CTE latest-
 -- state pattern). NOT reused verbatim because that pack uses ONE global as-of date for every
 -- client; this file needs a PER-DECISION as-of date (each decision has its own TREATMT_STRT_DT),
 -- so the state reconstruction here uses GROUP BY/MAX instead of ROW_NUMBER (§20.8: ordered
 -- analytics inside a subquery throw 3706 — MAX avoids the whole class of problem and scales
 -- the same way to a per-row as-of date, which ROW_NUMBER-per-partition would also need a
 -- CROSS JOIN per decision to do — messier for no benefit).
--- AS-OF METHOD CHOSEN: DDWV01.CPC_RB_PREF_LOG (the change log), latest row strictly before
+-- AS-OF METHOD CHOSEN: DDWV01.CPC_RB_PREF (the write table), latest row strictly before
 -- each decision's TREATMT_STRT_DT, NOT a monthly snapshot table (CPC_RB_PREF_MTHLY) — a
 -- decision-level as-of date needs day-level precision (Pack 58 Block 3 found the effect
 -- decays inside a 90-day window; a month-end snapshot would blur exactly the window that
@@ -237,7 +237,7 @@ CREATE VOLATILE TABLE vt_cpc_log59 AS (
         c.PREF_ID,
         c.CLNT_CONSENT_TYP,
         c.CHG_TMSTMP
-    FROM DDWV01.CPC_RB_PREF_LOG c
+    FROM DDWV01.CPC_RB_PREF c
     INNER JOIN vt_cpc_clients59 x
         ON x.CLNT_NO = c.CLNT_NO
     WHERE c.PREF_ID IN (1002, 1012, 1014)

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why the average can't answer it</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+  --grid:#e1e0d9;--axis:#c3c2b7;--rule:rgba(11,11,11,.10);
+  --blue:#2a78d6;--red:#e34948;--gray:#a9a7a0;
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme:dark;
+    --page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+    --grid:#2c2c2a;--axis:#383835;--rule:rgba(255,255,255,.10);
+    --blue:#3987e5;--red:#e66767;--gray:#6f6d67;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+  --grid:#2c2c2a;--axis:#383835;--rule:rgba(255,255,255,.10);
+  --blue:#3987e5;--red:#e66767;--gray:#6f6d67;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:40px 24px 80px;background:var(--page);color:var(--ink);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:25px;margin:0 0 6px;letter-spacing:-.01em}
+.sub{color:var(--ink2);margin:0 0 34px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+  padding:24px;margin:0 0 24px}
+.tag{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+h2{font-size:18px;margin:0 0 6px}
+.why{color:var(--ink2);font-size:14px;margin:0 0 16px}
+.figwrap{overflow-x:auto}
+svg{display:block;max-width:100%;height:auto}
+.ax{font:12px system-ui,sans-serif;fill:var(--muted)}
+.lab{font:13px system-ui,sans-serif;fill:var(--ink)}
+.val{font:13px system-ui,sans-serif;font-weight:700;fill:var(--ink)}
+.punch{border-top:1px solid var(--rule);margin-top:16px;padding-top:12px;font-size:14px;color:var(--ink2)}
+.punch b{color:var(--ink)}
+.toy{font-size:12px;color:var(--muted);margin:8px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Why the average can't answer "are we losing the good ones?"</h1>
+<p class="sub">Toy numbers throughout — the shapes are the point, not the values.</p>
+
+<!-- ===== 1 ===== -->
+<div class="card">
+  <p class="tag">Concept 1 · one average, two opposite stories</p>
+  <h2>Both groups average $2,360. They are not the same group.</h2>
+  <p class="why">Each dot is one client's monthly card spend. The dashed line is the average — identical in both rows.</p>
+  <div class="figwrap">
+  <svg viewBox="0 0 780 250" role="img" aria-label="Two dot distributions with the same mean: one tight cluster, one with most clients low and a few very high">
+    <!-- shared x scale: $0 .. $12k mapped 80..740 -->
+    <line x1="80" y1="210" x2="740" y2="210" stroke="var(--axis)" stroke-width="1.5"/>
+    <text x="80"  y="230" class="ax">$0</text>
+    <text x="380" y="230" class="ax">$6,000</text>
+    <text x="700" y="230" class="ax">$12,000</text>
+    <!-- mean line at 2360 => 80+2360/12000*660 = 209.8 -->
+    <line x1="210" y1="30" x2="210" y2="210" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 4" opacity=".55"/>
+    <text x="218" y="34" class="val">avg $2,360 — both rows</text>
+
+    <!-- Row A: tight cluster around 2360 -->
+    <text x="80" y="78" class="lab">Group A</text>
+    <g fill="var(--blue)">
+      <circle cx="178" cy="95" r="6"/><circle cx="192" cy="95" r="6"/><circle cx="206" cy="95" r="6"/>
+      <circle cx="220" cy="95" r="6"/><circle cx="234" cy="95" r="6"/><circle cx="199" cy="110" r="6"/>
+      <circle cx="213" cy="110" r="6"/><circle cx="185" cy="110" r="6"/><circle cx="227" cy="110" r="6"/>
+      <circle cx="206" cy="125" r="6"/>
+    </g>
+    <text x="260" y="112" class="ax">everyone near the average → losing them = losing typical clients</text>
+
+    <!-- Row B: 8 low + 2 whales, mean also 2360: 8×950 + 2×8000 = 23600 -->
+    <text x="80" y="158" class="lab">Group B</text>
+    <g fill="var(--red)">
+      <circle cx="122" cy="175" r="6"/><circle cx="132" cy="190" r="6"/><circle cx="128" cy="160" r="6"/>
+      <circle cx="138" cy="175" r="6"/><circle cx="144" cy="190" r="6"/><circle cx="148" cy="162" r="6"/>
+      <circle cx="154" cy="178" r="6"/><circle cx="160" cy="190" r="6"/>
+      <circle cx="520" cy="175" r="6"/><circle cx="520" cy="192" r="6"/>
+    </g>
+    <text x="540" y="182" class="ax">two whales carry the whole average</text>
+  </svg>
+  </div>
+  <p class="toy">Toy math: 8 clients × $950 + 2 clients × $8,000 = same mean as 10 clients × $2,360.</p>
+  <div class="punch"><b>The average is one number describing a shape it cannot see.</b> "Leavers average $2,360" is equally true of a group we can afford to lose and a group we absolutely cannot. The mean can't tell you which one you have.</div>
+</div>
+
+<!-- ===== 2 ===== -->
+<div class="card">
+  <p class="tag">Concept 2 · the decile chart is the answer to that blindness</p>
+  <h2>Line everyone up by spend, cut into 10 equal boxes, ask: where do the leavers sit?</h2>
+  <p class="why">Deciles = rank ALL clients (stayers + leavers together) by pre-unsub spend, split into tenths. Decile 1 = lowest spenders, 10 = highest. Then: what % of leavers fall in each box? If leaving had nothing to do with value, every box holds 10% — the dashed line.</p>
+  <div class="figwrap">
+  <svg viewBox="0 0 780 330" role="img" aria-label="Two possible decile outcomes: flat near ten percent everywhere, versus rising toward the top deciles">
+    <!-- panel 1: flat -->
+    <text x="60" y="24" class="lab">Outcome 1 — flat: we lose average clients</text>
+    <line x1="60" y1="130" x2="370" y2="130" stroke="var(--axis)" stroke-width="1.5"/>
+    <line x1="60" y1="80" x2="370" y2="80" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="5 4" opacity=".5"/>
+    <text x="374" y="84" class="ax">10%</text>
+    <g fill="var(--blue)">
+      <rect x="66"  y="85" width="22" height="45" rx="3"/><rect x="96"  y="78" width="22" height="52" rx="3"/>
+      <rect x="126" y="82" width="22" height="48" rx="3"/><rect x="156" y="76" width="22" height="54" rx="3"/>
+      <rect x="186" y="84" width="22" height="46" rx="3"/><rect x="216" y="79" width="22" height="51" rx="3"/>
+      <rect x="246" y="83" width="22" height="47" rx="3"/><rect x="276" y="77" width="22" height="53" rx="3"/>
+      <rect x="306" y="81" width="22" height="49" rx="3"/><rect x="336" y="80" width="22" height="50" rx="3"/>
+    </g>
+    <text x="66" y="146" class="ax">1</text><text x="341" y="146" class="ax">10</text>
+    <text x="60" y="166" class="ax">% of leavers per spend decile</text>
+
+    <!-- panel 2: top heavy -->
+    <text x="430" y="24" class="lab">Outcome 2 — top-heavy: we lose the good ones</text>
+    <line x1="430" y1="130" x2="740" y2="130" stroke="var(--axis)" stroke-width="1.5"/>
+    <line x1="430" y1="80" x2="740" y2="80" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="5 4" opacity=".5"/>
+    <text x="744" y="84" class="ax">10%</text>
+    <g fill="var(--red)">
+      <rect x="436" y="110" width="22" height="20" rx="3"/><rect x="466" y="106" width="22" height="24" rx="3"/>
+      <rect x="496" y="102" width="22" height="28" rx="3"/><rect x="526" y="97"  width="22" height="33" rx="3"/>
+      <rect x="556" y="92" width="22" height="38" rx="3"/><rect x="586" y="85"  width="22" height="45" rx="3"/>
+      <rect x="616" y="76" width="22" height="54" rx="3"/><rect x="646" y="62"  width="22" height="68" rx="3"/>
+      <rect x="676" y="48" width="22" height="82" rx="3"/><rect x="706" y="34"  width="22" height="96" rx="3"/>
+    </g>
+    <text x="436" y="146" class="ax">1</text><text x="711" y="146" class="ax">10</text>
+
+    <!-- caption strip -->
+    <text x="60"  y="205" class="ax">Same leaver COUNT and same leaver AVERAGE can produce either picture.</text>
+    <text x="60"  y="225" class="ax">The average was computed; the shape was thrown away. The decile chart puts the shape back.</text>
+    <!-- reading rule -->
+    <rect x="60" y="248" width="680" height="58" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="78" y="272" class="lab">Reading rule: bars hugging the dashed line → one boring sentence, no chart needed.</text>
+    <text x="78" y="292" class="lab">Bars climbing to the right → the finding of the deck. One glance, zero arithmetic.</text>
+  </svg>
+  </div>
+  <div class="punch"><b>This is why the pull is deciles, not another average.</b> "How many of the good ones are we losing" is a question about the top boxes — the mean literally does not contain the answer.</div>
+</div>
+
+<!-- ===== 3 ===== -->
+<div class="card">
+  <p class="tag">Concept 3 · survivorship — how an average quietly flatters itself</p>
+  <h2>Drop the clients who vanished, and the average "improves" on its own.</h2>
+  <p class="why">Five toy clients, measured then and 12 months later. One has left the bank — there's no number for them at POST, so the software skips them. Nobody decided this; it's what averaging NULLs does.</p>
+  <div class="figwrap">
+  <svg viewBox="0 0 780 260" role="img" aria-label="Five clients averaged at two points in time; the one who vanished is silently excluded, raising the second average">
+    <!-- THEN column -->
+    <text x="120" y="30" class="lab">THEN — all 5 counted</text>
+    <g font-family="system-ui" font-size="13">
+      <text x="120" y="60"  fill="var(--ink)">client 1 · $300</text>
+      <text x="120" y="85"  fill="var(--ink)">client 2 · $180</text>
+      <text x="120" y="110" fill="var(--ink)">client 3 · $250</text>
+      <text x="120" y="135" fill="var(--ink)">client 4 · $220</text>
+      <text x="120" y="160" fill="var(--ink)">client 5 · $50</text>
+    </g>
+    <line x1="120" y1="175" x2="290" y2="175" stroke="var(--axis)"/>
+    <text x="120" y="198" class="val">avg = $200</text>
+
+    <!-- arrow -->
+    <text x="360" y="110" class="ax" text-anchor="middle">12 months</text>
+    <line x1="315" y1="120" x2="405" y2="120" stroke="var(--muted)" stroke-width="1.5"/>
+    <path d="M405 120 l-8 -5 v10 z" fill="var(--muted)"/>
+
+    <!-- NOW column -->
+    <text x="440" y="30" class="lab">NOW — client 5 vanished</text>
+    <g font-family="system-ui" font-size="13">
+      <text x="440" y="60"  fill="var(--ink)">client 1 · $300</text>
+      <text x="440" y="85"  fill="var(--ink)">client 2 · $180</text>
+      <text x="440" y="110" fill="var(--ink)">client 3 · $250</text>
+      <text x="440" y="135" fill="var(--ink)">client 4 · $220</text>
+      <text x="440" y="160" fill="var(--red)" text-decoration="line-through">client 5 · NULL</text>
+      <text x="560" y="160" class="ax" fill="var(--red)">← skipped by avg()</text>
+    </g>
+    <line x1="440" y1="175" x2="610" y2="175" stroke="var(--axis)"/>
+    <text x="440" y="198" class="val">avg = $237.50</text>
+    <text x="440" y="220" fill="var(--red)" font-size="13" font-weight="700">"+19% growth" — yet nobody spent a dollar more</text>
+  </svg>
+  </div>
+  <div class="punch"><b>Now scale it up:</b> leavers lost 5.9% of their tail this way, stayers only 2.6%. The group that shed more of its bottom got a bigger free boost — which is exactly why "leavers grew +25% vs stayers +24%" can't be trusted as computed. Fix: compare only clients present in <b>both</b> periods, and show the vanished as their own bucket instead of deleting them.</div>
+</div>
+
+<div class="card">
+  <p class="tag">The three sentences, for the meeting</p>
+  <h2 style="margin-bottom:12px">If you keep nothing else:</h2>
+  <p class="why" style="margin:0 0 10px">1 · An average describes a typical client, not a distribution — "who are we losing" is a distribution question.</p>
+  <p class="why" style="margin:0 0 10px">2 · Deciles put the thrown-away shape back: rank by pre-unsub spend, ten boxes, see where leavers pile up.</p>
+  <p class="why" style="margin:0">3 · Any then-vs-now average silently drops the vanished — and our two groups vanish at different rates, so their growth rates aren't comparable until we fix the denominator.</p>
+</div>
+
+</div>
+</body>
+</html>

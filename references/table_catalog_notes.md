@@ -32,9 +32,19 @@ Engine/syntax rules are NOT here — see `references/query_engine_guidelines.md`
 | `dw00_im.dl_mr_prod.cards_bizups_vbu_descresp_clnt` | VBU curated outcomes (product-change success; schema at `schemas/cards_bizups_vbu_descresp_clnt.md`) |
 | `DTZV01.VENDOR_FEEDBACK_MASTER` / `..._EVENT` | email vendor feedback / events |
 | `DDWV01.EXT_CDP_CHNL_EVNT` | channel events |
+| `DDWV01.CPC_RB_PREF` | client contact consent, writes (with `APP_SYS_CD`, `CHG_TMSTMP`) — USE THIS |
+| `DDWV01.CPC_RB_PREF_MTHLY` | client contact consent, month-end snapshot — USE THIS |
 | `SYS_CALENDAR.CALENDAR` | Teradata system calendar (Trino: use `UNNEST(sequence(...))` instead) |
 
 `p3c` library = `d3cv12a` library (same tables). Use `d3cv12a`.
+
+> **CPC HARD RULE (Andre 2026-09-04).** NEVER query `DDWV01.CPC_RB_PREF_LOG`. The log is
+> broken. It carries ~1% of the email-origin (7020) consent writes: pack 61 v1 read it and
+> found 324 RBC-wide / 70 Avion closures over May-2025..Jun-2026 where the standing table
+> holds 17,127 Avion closures. Every CPC read (state, writes, revocations, as-of-date) goes
+> to `DDWV01.CPC_RB_PREF` (writes, with `APP_SYS_CD`) or `DDWV01.CPC_RB_PREF_MTHLY`
+> (month-end snapshots). If a query, agent, or memory file names `CPC_RB_PREF_LOG`, stop and
+> fix it before running.
 
 **EDL (Starburst / HDFS lake):**
 

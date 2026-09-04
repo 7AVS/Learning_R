@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- 21b_cpc_bridge.sql — expensive — run in a FRESH session, ideally alone; if killed, note which statement was last to complete
 -- Split from 21_cpc_study_consolidated.sql. Unsub resolution pipeline + blocks B-main/B-reverse/O. ENGINE: Teradata-direct.
 -- vt_params re-declared (session-scoped); trend_start = ONLY window edit point; floor_dt = hard floor (2024-01-01).

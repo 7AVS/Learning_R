@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- 22_cpc_gate_evidence.sql — 22-A: who writes the bridged flips; 22-B: gate-leak test (Andre's design). ENGINE: Teradata-direct.
 -- Reuses 21b's B-reverse pipeline verbatim (vt_unsub_evt12/vt_unsub_resolved 2-pass chunk) + 21a/21b's state-recon pattern.
 -- vt_params: trend_start/window_start = editable, one place; floor_dt = hard floor (2024-01-01); asof = implicit run date.

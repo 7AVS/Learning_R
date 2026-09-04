@@ -1,3 +1,6 @@
+> **DO NOT QUERY THIS TABLE.** Broken: ~1% of email-origin writes. Use CPC_RB_PREF /
+> CPC_RB_PREF_MTHLY. Andre 2026-09-04.
+
 # DDWV01.CPC_RB_PREF_LOG — Client Preference Log (AUTHORITATIVE)
 
 Source of truth for client contact consent — all campaigns must abide by it.

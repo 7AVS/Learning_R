@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cards unsubscribes — Spotlight</title>
+<style>
+  :root{
+    --blue:#0051A4; --navy:#002887; --sky:#0091DA; --vibrant:#006AC3;
+    --slate:#9DB0CF; --steel:#6E8DB8; --gold:#FDDF00;
+    --ink:#111C1F; --muted:#4f5763; --faint:#8b93a0;
+    --grid:#e5e8ec; --axis:#c5cbd3; --rule:#d9dee5;
+    --paper:#ffffff; --card:#F1F0EF; --ice:#EDF4F6;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#dfe3e8;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{font-variant-numeric:tabular-nums}
+  .slide{
+    width:min(1220px,96vw);height:min(688px,91vh);margin:3vh auto;background:var(--paper);
+    border:1px solid #d3d7dd;box-shadow:0 12px 34px rgba(17,28,31,.10);
+    display:none;flex-direction:column;padding:30px 42px 14px;position:relative;
+  }
+  .slide.active{display:flex}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:7px}
+  h1{font-size:22px;line-height:1.22;font-weight:700;letter-spacing:-.01em;color:var(--blue);max-width:74ch}
+  .hrule{height:2px;background:var(--slate);opacity:.55;margin:13px 0 4px}
+  .body{display:grid;grid-template-columns:1.5fr 1fr;gap:32px;flex:1;align-items:center;min-height:0}
+  .body.wide{display:flex;flex-direction:column;justify-content:center;align-items:stretch}
+  figure{margin:0;width:100%}
+  svg{width:100%;height:auto;display:block}
+  .grid{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--axis);stroke-width:1.3}
+  .gl{font-size:11px;fill:var(--faint);text-anchor:end}
+  .val{font-size:13.5px;font-weight:700;fill:var(--ink);text-anchor:middle}
+  .cat{font-size:11.5px;fill:var(--ink);text-anchor:middle;font-weight:600}
+  .sub{font-size:10px;fill:var(--faint);text-anchor:middle}
+  .pan{font-size:11.5px;fill:var(--muted);text-anchor:middle;font-weight:700}
+  .yt{font-size:11px;fill:var(--muted);text-anchor:middle}
+  .anno{font-size:11px;fill:var(--steel);font-weight:600}
+  .read h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-weight:700}
+  .read p{font-size:13.5px;line-height:1.45;color:#23282f;margin-bottom:9px}
+  .read .k{font-weight:700;color:var(--navy)}
+  .read .concl{border-left:3px solid var(--blue);padding:8px 0 8px 13px;background:var(--ice);font-size:13.5px;line-height:1.4}
+  .read .note{font-size:11px;color:var(--muted);font-style:italic;margin-top:8px;line-height:1.38}
+  footer{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--rule);margin-top:10px;padding-top:7px;
+    font-size:10.5px;color:var(--steel);font-style:italic}
+  .nav{position:fixed;right:22px;bottom:16px;display:flex;align-items:center;gap:11px;
+    background:#fff;border:1px solid #d3d7dd;border-radius:22px;padding:5px 9px;box-shadow:0 4px 14px rgba(17,28,31,.14);z-index:10}
+  .nav button{border:0;background:var(--blue);color:#fff;width:27px;height:27px;border-radius:50%;font-size:14px;cursor:pointer;line-height:1}
+  .nav button:disabled{background:var(--slate);cursor:default}
+  .nav .count{font-size:12px;color:var(--muted);font-weight:600;min-width:44px;text-align:center}
+  .mark{position:absolute;top:12px;right:20px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  @media print{
+    html,body{background:#fff}
+    .slide{display:flex !important;margin:0 auto;box-shadow:none;border:0;width:100%;height:auto;page-break-after:always}
+    .nav{display:none}
+    @page{size:landscape;margin:8mm}
+  }
+</style>
+</head>
+<body>
+
+  <!-- SLIDE 1 — THE BANK, THEN CARDS' PARTICIPATION (two-panel: macro -> verdict) -->
+  <section class="slide active">
+    <span class="mark">Unsub spotlight · Cards</span>
+    <div class="eyebrow">1 of 4 · zoom out — first the bank, then where Cards sits in it</div>
+    <h1>About 27,000 clients unsubscribe from marketing email every month — Cards' rate per email is level with the rest of the bank</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg id="c1" viewBox="0 0 900 400" role="img" aria-label="Bank-wide monthly unsubscribers, and unsub rate per delivered email by line of business"></svg>
+      </figure>
+    </div>
+    <footer><span>Source: campaign email feedback, completed per-list unsubscribes · left panel unique clients (flow); right panel per delivered email — bases labelled per panel</span><span>Cards pod · marketing measurement</span></footer>
+  </section>
+
+  <!-- SLIDE 2 — WHERE CARDS BLEEDS: ACTION TYPE + THE EVENT -->
+  <section class="slide">
+    <span class="mark">Unsub spotlight · Cards</span>
+    <div class="eyebrow">2 of 4 · zoom in — which Cards campaigns drive it</div>
+    <h1>Where Cards loses them: acquisition campaigns run hottest — and the one big spike was a one-off event</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg id="c2" viewBox="0 0 900 400" role="img" aria-label="Cards unsub rate by action type with member campaigns, and Cards share of monthly unsub events"></svg>
+      </figure>
+    </div>
+    <footer><span>Source: campaign email feedback · left panel attribution basis Jan–Apr 2026; right panel event basis (not deduplicated) — bases labelled per panel</span><span>Cards pod · marketing measurement</span></footer>
+  </section>
+
+  <!-- SLIDE 3 — WHAT IT COSTS: THEN -> NOW LEVELS -->
+  <section class="slide">
+    <span class="mark">Unsub spotlight · Cards</span>
+    <div class="eyebrow">3 of 4 · what happens after the unsub — Jun 2025 vs Jun 2026</div>
+    <h1>After the unsub, profit keeps growing and only card spend flattens — we lose the channel, not the client</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg id="c3" viewBox="0 0 900 400" role="img" aria-label="Profit and card spend levels, June 2025 to June 2026, leavers versus stayers"></svg>
+      </figure>
+    </div>
+    <footer><span>Source: Cards-mailed cohort anchored Jun 30 2025 → Jun 30 2026 · profit and spend panels use different populations — bases labelled per panel</span><span>Cards pod · marketing measurement</span></footer>
+  </section>
+
+  <!-- SLIDE 4 — WHO UNSUBSCRIBES -->
+  <section class="slide">
+    <span class="mark">Unsub spotlight · Cards</span>
+    <div class="eyebrow">4 of 4 · who the unsubscribers are</div>
+    <h1>Who unsubscribes: the youngest clients — and the lightly-but-repeatedly contacted</h1>
+    <div class="hrule"></div>
+    <div class="body wide">
+      <figure>
+        <svg id="c4" viewBox="0 0 900 400" role="img" aria-label="Unsub propensity by age band, and unsub rate by Cards contact frequency band"></svg>
+      </figure>
+    </div>
+    <footer><span>Source: campaign email feedback, Cards campaigns · left panel Jan–Apr 2026; right panel contact bands counted Oct 2025 – Apr 2026</span><span>Cards pod · marketing measurement</span></footer>
+  </section>
+
+<div class="nav">
+  <button id="prev" aria-label="Previous">‹</button>
+  <span class="count" id="count">1 / 4</span>
+  <button id="next" aria-label="Next">›</button>
+</div>
+
+<script>
+(function(){
+  function svg(id,s){var e=document.getElementById(id); if(e) e.innerHTML=s;}
+  var INK="#111C1F", BLUE="#0051A4", NAVY="#002887", SKY="#0091DA", SLATE="#9DB0CF", STEEL="#6E8DB8";
+
+  /* C1 — left: bank-wide unique unsubs/month; right: rate per delivered email */
+  (function(){
+    var s="";
+    /* left panel */
+    var v=[26774,30920,28859,29320,28164,27277,26119,27970,28318,24795,18746,22471];
+    var mL=["J","A","S","O","N","D","J","F","M","A","M","J"];
+    var x0=56,x1=486,top=66,base=322,MX=35000,AVG=26644;
+    var step=(x1-x0)/12, bw=24;
+    var X=function(i){return x0+step*(i+0.5);};
+    var Y=function(val){return base-(val/MX)*(base-top);};
+    s+='<text x="'+x0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">Bank-wide: clients who unsubscribed, by month of first unsub</text>';
+    s+='<text x="'+x0+'" y="38" font-size="10.5" fill="#8b93a0">Jul 2025 – Jun 2026 · unique clients (flow) · 319,733 over the year</text>';
+    [0,10000,20000,30000].forEach(function(g){var y=Y(g);
+      s+='<line class="grid" x1="'+x0+'" x2="'+x1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(x0-6)+'" y="'+(y+4)+'">'+(g/1000)+'K</text>';});
+    s+='<line class="axis" x1="'+x0+'" y1="'+top+'" x2="'+x0+'" y2="'+base+'"/>';
+    s+='<line class="axis" x1="'+x0+'" y1="'+base+'" x2="'+x1+'" y2="'+base+'"/>';
+    s+='<line x1="'+x0+'" y1="'+Y(AVG)+'" x2="'+x1+'" y2="'+Y(AVG)+'" stroke="'+STEEL+'" stroke-width="1.3" stroke-dasharray="5 4"/>';
+    s+='<text x="'+(x1-2)+'" y="'+(Y(AVG)-6)+'" text-anchor="end" class="anno" font-size="10">avg 26.6K / month</text>';
+    v.forEach(function(val,i){
+      var bx=X(i)-bw/2, by=Y(val), low=(i===10);
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+bw+'" height="'+(base-by)+'" rx="2" fill="'+(low?NAVY:BLUE)+'"/>';
+      s+='<text class="val" font-size="9" x="'+X(i)+'" y="'+(by-5)+'">'+(val/1000).toFixed(1)+'</text>';
+      s+='<text class="sub" font-size="9" x="'+X(i)+'" y="'+(base+13)+'">'+mL[i]+'</text>';
+    });
+    s+='<text class="sub" font-size="9" x="'+X(2.5)+'" y="'+(base+26)+'">2025</text><text class="sub" font-size="9" x="'+X(8.5)+'" y="'+(base+26)+'">2026</text>';
+    s+='<text x="'+X(10)+'" y="'+(Y(18746)-18)+'" text-anchor="middle" font-size="10" font-weight="700" fill="'+NAVY+'">lowest</text>';
+
+    /* right panel */
+    var rx0=580, rx1=884, rtop=66, rbase=322, RMX=0.45;
+    var RY=function(val){return rbase-(val/RMX)*(rbase-rtop);};
+    s+='<text x="'+rx0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">Unsubs per delivered email, by line of business</text>';
+    s+='<text x="'+rx0+'" y="38" font-size="10.5" fill="#8b93a0">Aug 2025 – Jun 2026 · unsubs ÷ delivered emails</text>';
+    [0,0.1,0.2,0.3,0.4].forEach(function(g){var y=RY(g);
+      s+='<line class="grid" x1="'+rx0+'" x2="'+rx1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(rx0-6)+'" y="'+(y+4)+'">'+g.toFixed(1)+'%</text>';});
+    s+='<line class="axis" x1="'+rx0+'" y1="'+rtop+'" x2="'+rx0+'" y2="'+rbase+'"/>';
+    s+='<line class="axis" x1="'+rx0+'" y1="'+rbase+'" x2="'+rx1+'" y2="'+rbase+'"/>';
+    s+='<line x1="'+rx0+'" y1="'+RY(0.27)+'" x2="'+rx1+'" y2="'+RY(0.27)+'" stroke="'+STEEL+'" stroke-width="1.3" stroke-dasharray="5 4"/>';
+    var rbars=[
+      {l:"Cards", v:0.18, c:NAVY, extra1:"20.5% of the bank's 109,431 unsubscribers", extra2:"unique clients · Jan–Apr 2026"},
+      {l:"Rest of bank", l2:"ex-Loyalty", v:0.17, c:BLUE},
+      {l:"Loyalty", v:0.37, c:SLATE}
+    ];
+    var rbw=64, rgap=(rx1-rbw*3- rx0)/4;
+    rbars.forEach(function(b,i){
+      var bx=rx0+rgap*(i+1)+rbw*i, by=RY(b.v), cx=bx+rbw/2;
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+rbw+'" height="'+(rbase-by)+'" rx="3" fill="'+b.c+'"/>';
+      s+='<text class="val" font-size="13" x="'+cx+'" y="'+(by-7)+'">'+b.v.toFixed(2)+'%</text>';
+      s+='<text class="cat" font-size="10.5" x="'+cx+'" y="'+(rbase+15)+'">'+b.l+'</text>';
+      if(b.l2) s+='<text class="cat" font-size="10.5" x="'+cx+'" y="'+(rbase+28)+'">'+b.l2+'</text>';
+      if(b.extra1){
+        s+='<text class="sub" font-size="9" x="'+cx+'" y="'+(rbase+42)+'">'+b.extra1+'</text>';
+        s+='<text class="sub" font-size="9" x="'+cx+'" y="'+(rbase+53)+'">'+b.extra2+'</text>';
+      }
+    });
+    s+='<text x="'+(rx0+6)+'" y="'+(RY(0.27)-20)+'" class="anno" font-size="10">bank average 0.27%</text>';
+    s+='<text x="'+(rx0+6)+'" y="'+(RY(0.27)-8)+'" class="anno" font-size="10">pulled up by Loyalty — 49% of all sends</text>';
+    svg("c1",s);
+  })();
+
+  /* C2 — panel A: rate by action type with members; panel B: monthly share of events */
+  (function(){
+    var s="";
+    /* Panel A */
+    var ax0=66, ax1=470, atop=76, abase=288, AMX=0.7;
+    var AY=function(val){return abase-(val/AMX)*(abase-atop);};
+    s+='<text x="'+ax0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">Cards unsub rate by campaign action type · Jan–Apr 2026</text>';
+    s+='<text x="'+ax0+'" y="38" font-size="10.5" fill="#8b93a0">unsubs ÷ clients mailed · attribution basis</text>';
+    [0,0.2,0.4,0.6].forEach(function(g){var y=AY(g);
+      s+='<line class="grid" x1="'+ax0+'" x2="'+ax1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(ax0-6)+'" y="'+(y+4)+'">'+g.toFixed(1)+'%</text>';});
+    s+='<line class="axis" x1="'+ax0+'" y1="'+atop+'" x2="'+ax0+'" y2="'+abase+'"/>';
+    s+='<line class="axis" x1="'+ax0+'" y1="'+abase+'" x2="'+ax1+'" y2="'+abase+'"/>';
+    s+='<line x1="'+ax0+'" y1="'+AY(0.58)+'" x2="'+ax1+'" y2="'+AY(0.58)+'" stroke="'+STEEL+'" stroke-width="1.2" stroke-dasharray="4 4"/>';
+    s+='<text x="'+ax1+'" y="'+(AY(0.58)-6)+'" text-anchor="end" class="anno" font-size="10">PCQ 0.58% — 82% of Attract&#8217;s audience</text>';
+    var bars=[
+      {l:"Attract", m1:"PCQ·VBA·CEC", m2:"+2 small", v:0.56, n:"935K · 5.2K", c:NAVY},
+      {l:"FIFA (FWC)", m1:"FWC", m2:"one-off event", v:0.39, n:"2.9M · 11.5K", c:SKY},
+      {l:"Deepen", m1:"PCL·PCD·CRV", m2:"VBU·AUH·VLI·MET", v:0.28, n:"2.5M · 6.8K", c:BLUE},
+      {l:"Onboard", m1:"COB·MWA·BCO·POT", m2:"", v:0.28, n:"406K · 1.1K", c:BLUE},
+      {l:"Retain", m1:"WJR", m2:"", v:0.22, n:"156K · 340", c:BLUE}
+    ];
+    var bw=56, gap=(ax1-ax0-bars.length*bw)/(bars.length+1);
+    bars.forEach(function(b,i){
+      var bx=ax0+gap*(i+1)+bw*i+bw/2, by=AY(b.v);
+      s+='<rect x="'+(bx-bw/2)+'" y="'+by+'" width="'+bw+'" height="'+(abase-by)+'" rx="3" fill="'+b.c+'"/>';
+      s+='<text class="val" font-size="12.5" x="'+bx+'" y="'+(by-7)+'">'+b.v.toFixed(2)+'%</text>';
+      s+='<text class="cat" font-size="10" x="'+bx+'" y="'+(abase+14)+'">'+b.l+'</text>';
+      s+='<text class="sub" font-size="7.5" x="'+bx+'" y="'+(abase+25)+'">'+b.m1+'</text>';
+      if(b.m2) s+='<text class="sub" font-size="7.5" x="'+bx+'" y="'+(abase+34)+'">'+b.m2+'</text>';
+      s+='<text class="sub" font-size="7.5" x="'+bx+'" y="'+(abase+46)+'">'+b.n+'</text>';
+    });
+    s+='<text class="sub" font-size="9" x="'+((ax0+ax1)/2)+'" y="'+(abase+60)+'">audience mailed · unsubs, Jan–Apr 2026</text>';
+
+    /* Panel B */
+    var share=[4.8,5.6,9.5,6.6,7.4,6.8,12.4,15.6,17.6,13.0,8.4,7.9];
+    var mL=["A","S","O","N","D","J","F","M","A","M","J","J"];
+    var bx0=536, bx1=884, btop=76, bbase=288, BMX=20;
+    var bstep=(bx1-bx0)/12, bbw=20;
+    var BX=function(i){return bx0+bstep*(i+0.5);};
+    var BY=function(val){return bbase-(val/BMX)*(bbase-btop);};
+    s+='<text x="'+bx0+'" y="22" font-size="12" font-weight="700" fill="'+INK+'">Cards share of unsub events, by month · Aug 2025–Jul 2026</text>';
+    s+='<text x="'+bx0+'" y="38" font-size="10.5" fill="#8b93a0">event basis (not deduplicated) · Jun–Jul immature · dashed = mature avg 9.9%</text>';
+    var ix=bx0+bstep*10+1;
+    s+='<rect x="'+ix+'" y="'+btop+'" width="'+(bx1-ix)+'" height="'+(bbase-btop)+'" fill="#f0f3f6"/>';
+    [0,5,10,15,20].forEach(function(g){var y=BY(g);
+      s+='<line class="grid" x1="'+bx0+'" x2="'+bx1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(bx0-6)+'" y="'+(y+4)+'">'+g+'%</text>';});
+    s+='<line class="axis" x1="'+bx0+'" y1="'+btop+'" x2="'+bx0+'" y2="'+bbase+'"/>';
+    s+='<line class="axis" x1="'+bx0+'" y1="'+bbase+'" x2="'+bx1+'" y2="'+bbase+'"/>';
+    s+='<line x1="'+bx0+'" y1="'+BY(9.9)+'" x2="'+ix+'" y2="'+BY(9.9)+'" stroke="'+STEEL+'" stroke-width="1.2" stroke-dasharray="5 4"/>';
+    share.forEach(function(val,i){
+      var imm=i>=10, by=BY(val);
+      s+='<rect x="'+(BX(i)-bbw/2)+'" y="'+by+'" width="'+bbw+'" height="'+(bbase-by)+'" rx="2" fill="'+(i===8?NAVY:BLUE)+'"'+(imm?' opacity="0.38"':'')+'/>';
+      s+='<text class="val" font-size="9" x="'+BX(i)+'" y="'+(by-5)+'"'+(imm?' fill="'+STEEL+'"':'')+'>'+val.toFixed(1)+'</text>';
+      s+='<text class="sub" font-size="9" x="'+BX(i)+'" y="'+(bbase+13)+'">'+mL[i]+'</text>';
+    });
+    s+='<text class="sub" font-size="9" x="'+BX(2)+'" y="'+(bbase+26)+'">2025</text><text class="sub" font-size="9" x="'+BX(8)+'" y="'+(bbase+26)+'">2026</text>';
+    s+='<line x1="'+BX(8)+'" y1="'+(BY(17.6)-22)+'" x2="'+BX(8)+'" y2="'+(BY(17.6)-8)+'" stroke="'+NAVY+'" stroke-width="1.1"/>';
+    s+='<text x="'+BX(8)+'" y="'+(BY(17.6)-28)+'" text-anchor="middle" font-size="11" font-weight="700" fill="'+NAVY+'">FIFA wave</text>';
+    s+='<text x="'+((bx0+bx1)/2)+'" y="'+(bbase+42)+'" text-anchor="middle" font-size="10" fill="#4f5763">deduplicated person share: 20.5% (slide 1) — repeat unsubscribers inflate this view</text>';
+    svg("c2",s);
+  })();
+
+  /* C3 — then->now slopes: profit panel + spend panel */
+  (function(){
+    var s="";
+    function slopePanel(px0, px1, title, basis, ymin, ymax, yticks, groups){
+      var top=74, base=296;
+      var Y=function(val){return base-((val-ymin)/(ymax-ymin))*(base-top);};
+      var o="";
+      o+='<text x="'+px0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">'+title+'</text>';
+      o+='<text x="'+px0+'" y="38" font-size="10.5" fill="#8b93a0">'+basis+'</text>';
+      yticks.forEach(function(g){var y=Y(g);
+        o+='<line class="grid" x1="'+px0+'" x2="'+px1+'" y1="'+y+'" y2="'+y+'"/>';
+        o+='<text class="gl" x="'+(px0-6)+'" y="'+(y+4)+'">$'+(g>=1000?(g/1000)+"K":g)+'</text>';});
+      o+='<line class="axis" x1="'+px0+'" y1="'+top+'" x2="'+px0+'" y2="'+base+'"/>';
+      o+='<line class="axis" x1="'+px0+'" y1="'+base+'" x2="'+px1+'" y2="'+base+'"/>';
+      var xt=px0+58, xn=px1-58;
+      o+='<text class="cat" font-size="11" x="'+xt+'" y="'+(base+16)+'">Jun 2025</text>';
+      o+='<text class="cat" font-size="11" x="'+xn+'" y="'+(base+16)+'">Jun 2026</text>';
+      groups.forEach(function(g){
+        var y1=Y(g.then), y2=Y(g.now);
+        o+='<line x1="'+xt+'" y1="'+y1+'" x2="'+xn+'" y2="'+y2+'" stroke="'+g.c+'" stroke-width="3"/>';
+        o+='<circle cx="'+xt+'" cy="'+y1+'" r="4" fill="'+g.c+'"/>';
+        o+='<circle cx="'+xn+'" cy="'+y2+'" r="4" fill="'+g.c+'"/>';
+        o+='<text x="'+(xt-10)+'" y="'+(y1+4)+'" text-anchor="end" font-size="12" font-weight="700" fill="'+g.c+'">$'+g.then.toLocaleString()+'</text>';
+        o+='<text x="'+(xn+10)+'" y="'+(y2+4)+'" text-anchor="start" font-size="12" font-weight="700" fill="'+g.c+'">$'+g.now.toLocaleString()+'</text>';
+        o+='<text x="'+(xt-10)+'" y="'+(y1+(g.nameDy||-10))+'" text-anchor="end" font-size="10.5" fill="#4f5763">'+g.name+'</text>';
+        var cf=g.chipFrac||0.5;
+        var mx=xt+(xn-xt)*cf, my=y1+(y2-y1)*cf+(g.chipDy!==undefined?g.chipDy:-26);
+        o+='<rect x="'+(mx-52)+'" y="'+(my-12)+'" width="104" height="17" rx="8" fill="#fff" stroke="'+g.c+'" stroke-width="1.2"/>';
+        o+='<text x="'+mx+'" y="'+my+'" text-anchor="middle" font-size="10.5" font-weight="700" fill="'+g.c+'">'+g.chip+'</text>';
+      });
+      return o;
+    }
+    s+=slopePanel(70, 430, "Avg annual profit per client · Jun 2025 → Jun 2026",
+      "every Cards-mailed client · departed counted at $0 (population-fixed)",
+      0, 1100, [0,250,500,750,1000],
+      [{name:"stayers · 4.31M", then:795, now:982, chip:"+$187 (+23.6%)", c:SLATE},
+       {name:"leavers · 12.8K", then:550, now:688, chip:"+$138 (+25.1%)", c:NAVY}]);
+    s+=slopePanel(520, 880, "Avg monthly card spend per client · Jun 2025 → Jun 2026",
+      "card-spend-matched clients · axis starts at $1,800 · levels pending re-verification",
+      1800, 2500, [1800,2000,2200,2400],
+      [{name:"stayers", then:2147, now:2195, chip:"+$48 (+2.3%)", c:SLATE, chipFrac:0.36, chipDy:22, nameDy:16},
+       {name:"leavers", then:2360, now:2333, chip:"−$27 (−1.1%)", c:NAVY, chipFrac:0.64, chipDy:-22}]);
+    s+='<text class="anno" x="450" y="336" text-anchor="middle">Same-tier check: leavers hold their spend tier as often as stayers — High 77.6% vs 76.1% · Mid 54.9% vs 54.5%</text>';
+    s+='<text class="anno" x="450" y="352" text-anchor="middle">5.9% of leavers vs 2.6% of stayers were no longer on the books at Jun 2026 · descriptive — groups not matched</text>';
+    s+='<text x="450" y="376" text-anchor="middle" font-size="12.5" font-weight="700" fill="'+NAVY+'">The aggregate gap is who unsubscribes, not what happens after — cadence discipline belongs on acquisition audiences (slide 2)</text>';
+    svg("c3",s);
+  })();
+
+  /* C4 — panel A: age propensity; panel B: frequency bands */
+  (function(){
+    var s="";
+    /* Panel A — age */
+    var ax0=66, ax1=440, atop=76, abase=300, AMX=1.6;
+    var AY=function(val){return abase-(val/AMX)*(abase-atop);};
+    s+='<text x="'+ax0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">Unsubs per 1,000 Cards emails delivered, by age · Jan–Apr 2026</text>';
+    s+='<text x="'+ax0+'" y="38" font-size="10.5" fill="#8b93a0">contact volume is flat across ages (4.4–4.7 emails/client) — this is propensity, not over-contacting</text>';
+    [0,0.4,0.8,1.2,1.6].forEach(function(g){var y=AY(g);
+      s+='<line class="grid" x1="'+ax0+'" x2="'+ax1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(ax0-6)+'" y="'+(y+4)+'">'+g.toFixed(1)+'</text>';});
+    s+='<line class="axis" x1="'+ax0+'" y1="'+atop+'" x2="'+ax0+'" y2="'+abase+'"/>';
+    s+='<line class="axis" x1="'+ax0+'" y1="'+abase+'" x2="'+ax1+'" y2="'+abase+'"/>';
+    s+='<line x1="'+ax0+'" y1="'+AY(0.96)+'" x2="'+ax1+'" y2="'+AY(0.96)+'" stroke="'+STEEL+'" stroke-width="1.2" stroke-dasharray="4 4"/>';
+    var ages=[{l:"<25",v:1.37},{l:"25–34",v:1.13},{l:"35–49",v:0.81},{l:"50–64",v:0.76},{l:"65+",v:1.11}];
+    var abw=54, agap=(ax1-ax0-ages.length*abw)/(ages.length+1);
+    ages.forEach(function(b,i){
+      var bx=ax0+agap*(i+1)+abw*i, by=AY(b.v), hot=(b.v>0.96);
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+abw+'" height="'+(abase-by)+'" rx="3" fill="'+(hot?NAVY:BLUE)+'"/>';
+      s+='<text class="val" font-size="12" x="'+(bx+abw/2)+'" y="'+(by-6)+'">'+b.v.toFixed(2)+'</text>';
+      s+='<text class="cat" font-size="10.5" x="'+(bx+abw/2)+'" y="'+(abase+15)+'">'+b.l+'</text>';
+    });
+    s+='<text x="'+((ax0+ax1)/2)+'" y="'+(AY(0.96)-8)+'" text-anchor="middle" class="anno" font-size="10">all-ages 0.96</text>';
+    s+='<text class="sub" x="'+((ax0+ax1)/2)+'" y="'+(abase+30)+'">age band</text>';
+
+    /* Panel B — frequency */
+    var bx0=530, bx1=884, btop=76, bbase=300, BMX=1.2;
+    var BY=function(val){return bbase-(val/BMX)*(bbase-btop);};
+    s+='<text x="'+bx0+'" y="22" font-size="13" font-weight="700" fill="'+INK+'">Unsub rate by Cards emails received · Oct 2025–Apr 2026</text>';
+    s+='<text x="'+bx0+'" y="38" font-size="10" fill="#8b93a0">caution: an unsub stops the count — low bands partly by construction</text>';
+    [0,0.3,0.6,0.9,1.2].forEach(function(g){var y=BY(g);
+      s+='<line class="grid" x1="'+bx0+'" x2="'+bx1+'" y1="'+y+'" y2="'+y+'"/>';
+      s+='<text class="gl" x="'+(bx0-6)+'" y="'+(y+4)+'">'+g.toFixed(1)+'%</text>';});
+    s+='<line class="axis" x1="'+bx0+'" y1="'+btop+'" x2="'+bx0+'" y2="'+bbase+'"/>';
+    s+='<line class="axis" x1="'+bx0+'" y1="'+bbase+'" x2="'+bx1+'" y2="'+bbase+'"/>';
+    var bands=[
+      {l:"1–2", v:0.50, n:"935K"},
+      {l:"3–5", v:1.00, n:"894K"},
+      {l:"6–10", v:0.24, n:"2.6M"},
+      {l:"11–20", v:0.24, n:"413K"},
+      {l:"21+", v:0.12, n:"1.6K"}
+    ];
+    var bbw=52, bgap=(bx1-bx0-bands.length*bbw)/(bands.length+1);
+    bands.forEach(function(b,i){
+      var bx=bx0+bgap*(i+1)+bbw*i, by=BY(b.v), hot=(i===1);
+      s+='<rect x="'+bx+'" y="'+by+'" width="'+bbw+'" height="'+(bbase-by)+'" rx="3" fill="'+(hot?NAVY:BLUE)+'"/>';
+      s+='<text class="val" font-size="12" x="'+(bx+bbw/2)+'" y="'+(by-6)+'">'+b.v.toFixed(2)+'%</text>';
+      s+='<text class="cat" font-size="10.5" x="'+(bx+bbw/2)+'" y="'+(bbase+15)+'">'+b.l+'</text>';
+      s+='<text class="sub" font-size="9" x="'+(bx+bbw/2)+'" y="'+(bbase+28)+'">'+b.n+'</text>';
+    });
+    s+='<text x="'+(bx0+bgap*2+bbw*1.5)+'" y="'+(btop+14)+'" text-anchor="middle" font-size="10.5" font-weight="700" fill="'+NAVY+'">43% of unsubs vs 18% of stayers</text>';
+    s+='<text class="sub" x="'+((bx0+bx1)/2)+'" y="'+(bbase+42)+'">tenure: unsubscribers over-represented at 4–7 years with the bank (≈1.2×)</text>';
+    svg("c4",s);
+  })();
+
+  /* navigation */
+  var slides=[].slice.call(document.querySelectorAll(".slide"));
+  var i=0, prev=document.getElementById("prev"), next=document.getElementById("next"), count=document.getElementById("count");
+  function show(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach(function(s,k){s.classList.toggle("active",k===i);});
+    count.textContent=(i+1)+" / "+slides.length;
+    prev.disabled=i===0; next.disabled=i===slides.length-1;}
+  prev.onclick=function(){show(i-1);}; next.onclick=function(){show(i+1);};
+  document.addEventListener("keydown",function(e){if(e.key==="ArrowRight"||e.key==="PageDown")show(i+1);if(e.key==="ArrowLeft"||e.key==="PageUp")show(i-1);});
+  show(0);
+})();
+</script>
+</body>
+</html>

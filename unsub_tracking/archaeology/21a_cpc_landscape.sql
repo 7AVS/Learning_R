@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- 21a_cpc_landscape.sql — cheap — CPC log + sliced probes only; delivers the zoom-out slide
 -- Split from 21_cpc_study_consolidated.sql. Blocks Z1/Z2/Z3 + E1/E2. ENGINE: Teradata-direct.
 -- vt_params: trend_start = ONLY window edit point; asof = run date; floor_dt = hard floor (2024-01-01).

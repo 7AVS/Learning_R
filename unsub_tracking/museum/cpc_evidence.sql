@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- volatile tables vt_unsub_base + vt_unsub_first + vt_q2_send_detail + vt_q2_sends + vt_dns_1002 + vt_gate_cohorts + vt_postunsub_sends persist per session; DROP all seven at end
 -- rerun after failure: run all seven DROPs first
 -- run ONE statement at a time

@@ -1,3 +1,4 @@
+# !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 # %% [markdown]
 # # 33 — CPC preference tables EDA: which one can we actually use?
 #

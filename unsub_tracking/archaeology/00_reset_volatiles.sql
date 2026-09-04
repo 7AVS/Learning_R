@@ -43,3 +43,7 @@ DROP TABLE vt_sf_flagged60;
 DROP TABLE vt_cpc_flagged60;
 DROP TABLE vt_1012_email61;
 DROP TABLE vt_1046_61;
+DROP TABLE vt_sf_unsub62;
+DROP TABLE vt_sf_clients62;
+DROP TABLE vt_cpc_write62;
+DROP TABLE vt_classified62;

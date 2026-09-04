@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- 31: 10 clients whose CPC says No. Did the vendor feedback table see an unsub before it?
 -- Teradata-direct. One query. Right-hand columns NULL = no unsub signal behind the No.
 

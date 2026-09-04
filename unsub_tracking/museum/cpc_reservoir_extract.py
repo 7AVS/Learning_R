@@ -1,3 +1,4 @@
+# !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Its parquet feeds 23_cpc_landscape.py T1-T4 (KNOWLEDGE §17), which are therefore EXPOSED. Andre 2026-09-04 !!
 # RESERVOIR EXTRACT - Teradata -> HDFS landing ONLY. No evidence here: run once, then work in cpc_evidence_hdfs.py.
 # Every land() is idempotent (skip-if-landed) and restartable per bite.
 

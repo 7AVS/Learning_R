@@ -12,15 +12,24 @@ Folder layout (2026-07-24): archaeology/ = exploratory packs 01-22 (results cata
 Re-explained across at least five sessions because none of it was written down. It is written down now.
 Do not re-litigate. Do not ask again.
 
-1. **What this project is.** Learning how these systems work. **We are not claiming anything.** Not
+1. **NEVER query `DDWV01.CPC_RB_PREF_LOG`. The log is broken (Andre 2026-09-04).** It carries
+   ~1% of the email-origin (7020) consent writes: pack 61 v1 read it and found 324 RBC-wide /
+   70 Avion closures over May-2025..Jun-2026 where the standing table holds 17,127 Avion
+   closures. Every CPC read (state, writes, revocations, as-of-date) goes to
+   `DDWV01.CPC_RB_PREF` (writes, with `APP_SYS_CD`) or `DDWV01.CPC_RB_PREF_MTHLY` (month-end
+   snapshots). If a query, agent, or memory file names `CPC_RB_PREF_LOG`, stop and fix it
+   before running. This supersedes every reference to "the log" / `CPC_RB_PREF_LOG` below —
+   they describe the archaeology as it was built, not what to run today.
+
+2. **What this project is.** Learning how these systems work. **We are not claiming anything.** Not
    hunting for a suppression gate, not proving who is or isn't reached, not building a compliance case.
    The one established finding: **there is no bridge between the two systems** (vendor/SFMC unsubscribes
    and the CPC preference log). That is the finding. Nothing further is asserted.
 
-2. **We track all three switches — 1002, 1012, 1014 — as a set.** Do not isolate one. Do not ask which
+3. **We track all three switches — 1002, 1012, 1014 — as a set.** Do not isolate one. Do not ask which
    "should be the gate." The question is not which switch gates email.
 
-3. **1014 is the most important, and here is why:** it is the **parameter used in the client decisioning
+4. **1014 is the most important, and here is why:** it is the **parameter used in the client decisioning
    tree in the design of every campaign** — campaign teams read 1014 to select clients for their
    communications. This is operational fact from Andre, and it outranks the EDW dictionary's nominal
    framing of 1014 as a cross-entity sharing consent. Consistent with §0.2 above: *"PREF_ID 1014 with
@@ -30,7 +39,7 @@ Do not re-litigate. Do not ask again.
    *"CONTEXT ONLY / NOT a same-entity email gate"* are the dictionary's framing, not this project's.
    They are what pushed four red-team rounds and the deck toward a 1002 lead. Do not inherit them.
 
-4a. **NO ROW ≠ BLANK (ruled by Andre 2026-07-25).** `CPC_RB_PREF_LOG` is a log of events. If a client has
+5a. **NO ROW ≠ BLANK (ruled by Andre 2026-07-25).** `CPC_RB_PREF_LOG` is a log of events. If a client has
    **no row** on a switch, no consent record for them exists anywhere in the corporation — they are a
    *true blank*, and they are **NOT an opt-out**. Exclude them from every "No" population.
    A client who **has a row** whose value is blank (5003) or No (5002) **is** counted as an opt-out on
@@ -39,12 +48,12 @@ Do not re-litigate. Do not ask again.
    → Therefore E2b's `standing_no_under_rule = explicit_no + blank` is **CORRECT**. 1014 among the
    319,733 unsubscribers = **89,518** (912 explicit + 88,606 blank). The 223,373 no-row clients stay out.
 
-4. **Blank = No on 1014 and 1015 ONLY.** Blank = Yes on 1002/1006/1012 (§16 addendum line 767,
+5. **Blank = No on 1014 and 1015 ONLY.** Blank = Yes on 1002/1006/1012 (§16 addendum line 767,
    §17-D line 814). `museum/cpc_evidence.sql` breaks this — `CLNT_CONSENT_TYP = 5002` in seven places,
    understating every 1014 figure. `cpc_evidence_hdfs.py` and `archaeology/23_cpc_landscape.py`
    (`is_no()`) implement it correctly.
 
-5. **Folder rule — museum is FINAL ONLY.** `museum/` holds the finished, consolidated version of what
+6. **Folder rule — museum is FINAL ONLY.** `museum/` holds the finished, consolidated version of what
    goes into the deck: the evidence code, the deck, the README. It is a compilation of what the
    archaeology already settled — only what matters, nothing exploratory. **Never write a new
    investigative script into `museum/`.** Anything that explores, tests, checks, or answers a new
@@ -55,14 +64,14 @@ Do not re-litigate. Do not ask again.
    plotted. Not print statements, not formatted console text, not a wall of hard-coded strings. If the
    only way to get a number out is to read it off a screenshot, the code is not finished.
 
-6. **Never ask Andre to re-run something before grepping this file AND `RESULTS_CATALOG.md`.** He runs
+7. **Never ask Andre to re-run something before grepping this file AND `RESULTS_CATALOG.md`.** He runs
    everything in a closed environment and results return only as photos of the screen, which do not
    survive a session. Any result he shares gets transcribed **in the same turn** into
    `unsub_tracking/RESULTS_CATALOG.md` — **ONE document, appended as a dated section. Never a new file
    per batch.** Record the cross-checks that prove the read (a sum matching a figure already in canon).
    Scripts with no catalogued output are unfinished.
 
-7. **Holdout = channel slot XX (0 sends across 2.77M holdout decisions).** Action cells carry a
+8. **Holdout = channel slot XX (0 sends across 2.77M holdout decisions).** Action cells carry a
    channel code (`EM` for email); holdout/control cells carry none — the slot reads `XX`. Confirmed
    empirically 2026-09-04 (Pack 54 v3.1, §21). `TST_GRP_CD` is NOT a reliable arm indicator — no
    standard convention across MNEs (PCD alone has 81 distinct codes) — never use it to derive
@@ -1302,3 +1311,25 @@ Pack 59 tests it. (3) OTHER_MNE_ONLY sent rate is ~60% overall but ranges 33% (A
 
 **Next = Pack 59**, overlaying CPC state (1002/1012/1014) as of each decision date onto the
 same-MNE population, split by sent vs not-sent — tests reading (2) directly.
+
+## §24 (2026-09-04) CPC_RB_PREF_LOG exposure audit
+
+Trigger: pack 61 v1 read `DDWV01.CPC_RB_PREF_LOG` for 7020-origin writes and got 324 (1012) / 70 (1046) clients, May-2025..Jun-2026; `DDWV01.CPC_RB_PREF` holds 50,660 / 17,126 for the same filters. The log carries about 1% of email-origin writes. Andre banned it (LOCKED FACT 1). Every headline number was traced to its CPC source:
+
+| Number | Source file | CPC table | Status |
+|---|---|---|---|
+| Waterfall v3: 99.7% of SF unsubs no CPC write; 84% blind | 45_audit_queries.sql Q3b/Q5 | CPC_RB_PREF_MTHLY + CPC_RB_PREF | SAFE |
+| 7020 writes collapse Mar-2026 (343-753/mo vs 3-9K) | 45_audit_queries.sql Q2 | CPC_RB_PREF | SAFE |
+| 251,177 CPC 1012 flips | 32_cpc_1012_last_email_gap.py v2 | CPC_RB_PREF | SAFE |
+| §0: 649,885 unsub clients, 0.06% CPC change in 7d, 0.33% in 90d | 06_cpc_pref_log_eda.sql | CPC_RB_PREF_LOG | EXPOSED |
+| §17-C T1: 319,733 unsubs, 0.278% CPC No/blank in 90d | museum/cpc_reservoir_extract.py -> 23_cpc_landscape.py | CPC_RB_PREF_LOG | EXPOSED |
+| §17-C T3/T4: 1002=No emailed 19.2% vs 58.9%; 1014=No emailed 61.4% ("1014 does not gate email") | museum/cpc_evidence.sql E4 and 23_cpc_landscape.py T3 | CPC_RB_PREF_LOG (both) | EXPOSED |
+| museum/cpc_evidence.sql E1-E8 | itself | CPC_RB_PREF_LOG | EXPOSED |
+| "96.6% of 251,177 flips have no prior vendor unsub" (pack 34b) | not found as one result anywhere in the repo | - | UNKNOWN, do not cite |
+
+Consequences:
+- The structural gap conclusion (SF unsubs never reach CPC) stands on the SAFE lineage (waterfall v3, pack 60).
+- "1014 is not the email gate" (T3/T4) is UNPROVEN until rerun on CPC_RB_PREF. reference_cpc_1014_decisioning_parameter memory depends on it.
+- §17-C's "T3 reproduces museum E4 exactly" was two pipelines on the same broken table, not a cross-check.
+- Scope caveat: the ~1% coverage is proven for APP_SYS_CD 7020 writes only; coverage for branch / call-centre origins was not measured. The ban applies regardless.
+- Banners added to every file that reads the log (06-14, 21a/b, 22, 30-33, 59 fixed, 61 fixed, museum/cpc_evidence.sql, museum/cpc_reservoir_extract.py).

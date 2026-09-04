@@ -1,3 +1,4 @@
+-- !! READS DDWV01.CPC_RB_PREF_LOG, WHICH IS BROKEN (~1% of writes). DO NOT RUN. Historical only. Andre 2026-09-04 !!
 -- 30: 10 clients who unsubscribed 2+ campaigns on the SAME DATE — entire raw dump. Teradata-direct.
 
 -- QUERY 1 — full vendor feedback history for 10 such clients. Self-contained, nothing to paste.
