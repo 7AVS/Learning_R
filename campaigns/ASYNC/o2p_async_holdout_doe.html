@@ -1,0 +1,198 @@
+<!doctype html>
+<html><head><meta charset='utf-8'><title>O2P Async BAU Transition with 5% Holdout DOE</title><style>
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:14px;line-height:1.5;
+     color:#111;max-width:900px;margin:24px auto;padding:0 16px;background:#fff}
+h1{font-size:22px} h2{font-size:16px;margin-top:22px}
+table{border-collapse:collapse;margin:10px 0}
+th,td{border:1px solid #ccc;padding:4px 10px;text-align:left;font-size:13px}
+th{background:#f0f0f0}
+code{background:#f4f4f4;padding:1px 4px;font-size:12.5px}
+pre{background:#f4f4f4;padding:10px;overflow-x:auto;font-size:12.5px}
+li{margin:4px 0}
+</style>
+</head><body>
+<h1>O2P Async BAU Transition with 5% Holdout (DOE draft)</h1>
+<p>Draft in the pod's Confluence DOE shape (<code>campaigns/_templates/confluence_doe_template_2026-07.md</code>).
+Status: PROPOSAL DRAFT 2026-09-04. Items marked <code>[ASK]</code> need a number or a decision before this
+goes on Confluence.</p>
+<p><strong>Read plan before finalizing (Andre 2026-09-04):</strong> current numbers are interim. The Jun 18
+cohort ran only an 18-day window, so its rates are understated. Jul 7 is the only complete
+30-day cohort. Aug 11 completes ~2026-09-11. Final version: rerun the tracker after ~Sep 11 and
+refresh baseline, lift, and MDE from all three deployments at full window (the workbook is
+tracker-fed, so updating Sheet 2 counts refreshes everything). The experiment itself is
+documented in <code>o2p_async_champion_challenger_doe.md</code>.</p>
+<p>Baseline rule (do not lose this): the MDE baseline is the NON_MB (no-banner) arm's conversion
+rate from the completed 50/50 async experiment, tracker-fed average 0.628% (Jun 18 short-window
++ Jul 7). Arm labels are mechanical (MB / NON_MB): the source tracker's champion/challenger tags
+are inverted, do not use those words. TG7 is NOT the baseline for the async read: it never
+reaches the mobile channel (0.01%, 2/27,407 as of the May 29 deck) and stays what it is today,
+the campaign-level holdout.</p>
+<h2>Header table</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MNE</td>
+<td>O2P</td>
+</tr>
+<tr>
+<td>Description</td>
+<td>Async banner BAU transition, 5% in-channel holdout</td>
+</tr>
+<tr>
+<td>Treatment Start Date</td>
+<td>[ASK: next deployment cycle date]</td>
+</tr>
+<tr>
+<td>Treatment End Date</td>
+<td>ongoing (BAU with standing holdout; review cadence below)</td>
+</tr>
+<tr>
+<td>Channel</td>
+<td>Mobile (async banner)</td>
+</tr>
+<tr>
+<td>TST_GRP_CD</td>
+<td>TG4 (95% Action; MB/non-MB randomized inside it) / TG7 (5% campaign control, untouched)</td>
+</tr>
+<tr>
+<td>Measurement Package Link</td>
+<td>(SharePoint, after first read)</td>
+</tr>
+<tr>
+<td>Tableau Dashboard Link</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td>GitHub Link</td>
+<td>(repo path once measurement SQL is final)</td>
+</tr>
+<tr>
+<td>Measurement &amp; Analytics Lead</td>
+<td>Andre</td>
+</tr>
+</tbody>
+</table>
+<h2>1 - Executive Summary</h2>
+<ul>
+<li><strong>Why:</strong> the 50/50 async test proved the mobile banner drives conversion (+0.198pp, +31%,
+  consistent across cohorts). Keeping half the channel unexposed now costs conversions with no
+  learning payoff.</li>
+<li><strong>What:</strong> serve the banner to 95% of the Action population as BAU; retain a randomized 4.75%
+  no-banner holdout inside the channel.</li>
+<li><strong>Success:</strong> sustained lift in line with the experiment read, re-confirmed each cycle from the
+  holdout contrast.</li>
+<li><strong>How long / how safe:</strong> standing BAU holdout, read per deployment cycle. At 4.75% the MDE
+  (0.146pp) sits well below the proven effect, so measurement power is preserved (Section 4).</li>
+</ul>
+<h2>2 - Hypothesis &amp; Objectives</h2>
+<ul>
+<li><strong>Primary:</strong> H0: banner treatment effect = 0; H1: treatment effect &gt; 0. Expected to re-confirm
+  the completed experiment in steady-state BAU.</li>
+<li><strong>Secondary (optional):</strong> effect stability across deployment cycles; segment reads if cell
+  volumes allow (mix-effect lesson from PCD Wave 4: report within-cell, never pooled-only).</li>
+<li><strong>Metrics:</strong> Primary = product 43 open (pre-approved overdraft), per
+  <code>reference_o2p_primary_secondary_definition</code>; Secondary = 40/41/43 open; Guard rail =
+  [ASK: unsubscribe is the template default but is email-specific. Propose banner
+  dismissal/complaint rate, or none].</li>
+</ul>
+<h2>3 - Experiment Design &amp; Treatment Assignment</h2>
+<ul>
+<li><strong>Design type:</strong> two-proportion z-test (large n, binary conversion), same as the proven read.</li>
+<li><strong>Randomization unit:</strong> client (<code>clnt_no</code>).</li>
+<li><strong>Eligibility:</strong> O2P decisioned population, tactic IDs 2026099O2P / 2026126O2P / 2026132O2P
+  family. Per tech spec §6.3 (<code>o2p_offer_channel_trees.md</code>): three segments PR (Premium) / NL
+  (No Limit) / OT (Other eligible); the banner only serves report-group leaves 01/03/07, so the
+  async contrast lives entirely inside those leaves. The holdout is carved INSIDE the channel:
+  banner-eligible, randomized away from the MB banner only. It is not TG7.</li>
+<li><strong>Current design (per spec):</strong> TG4 = 95% Action, randomized 47.5% MB / 47.5% non-MB of total.
+  This is a designed RCT within TG4. TG7 = 5% campaign control, untouched.</li>
+<li><strong>Proposed arms (the change):</strong> re-weight the TG4 internal split to 90.25% MB / 4.75% non-MB
+  of total (= 95/5 of Action). TG7 stays 5%.</li>
+<li>Split locked at assignment in a cell/TG registry BEFORE launch (PCD Wave 4 SRM was caused by
+    an unregistered cell leaking in; z≈55 on one segment).</li>
+</ul>
+<h2>4 - Sample Size &amp; Power Analysis</h2>
+<ul>
+<li><strong>Baseline (from Async_tracker_Aug pivot, see <code>o2p_async_tracker_aug_pivot_2026-09-04.md</code>):</strong>
+  NON_MB arm 0.628% tracker-fed average (6/18: 0.633%, 7/7: 0.623%); MB arm 0.817–0.835%;
+  proven lift +0.198pp average (+31%). Cohort cadence ~3–5 weeks, ~470–543K Action clients/cycle.</li>
+<li><strong>MDE</strong> (two-proportion z, two-sided α=0.05, power 80%, 4.75/90.25 split of a ~505K cycle:
+  holdout ≈ 24K, treated ≈ 481K, baseline 0.628%; live in <code>o2p_holdout_mde_calculator.xlsx</code>):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Read window</th>
+<th>Holdout n</th>
+<th>MDE</th>
+<th>vs proven lift +0.198pp</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 cohort (~505K)</td>
+<td>~24K</td>
+<td>0.146pp</td>
+<td>PASS (power 97%)</td>
+</tr>
+<tr>
+<td>2 cohorts pooled (~1.0M)</td>
+<td>~48K</td>
+<td>0.104pp</td>
+<td>PASS, comfortable</td>
+</tr>
+<tr>
+<td>(rejected) 2.5% holdout, 1 cohort</td>
+<td>~12.6K</td>
+<td>0.200pp</td>
+<td>FAIL: MDE ≈ the effect itself</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Read:</strong> shrinking NON_MB from 47.5% to 4.75% widens the MDE 2.3× vs 50/50. Acceptable: the
+  goal is monitoring a proven +0.198pp effect, not discovering a new one, and one cohort alone
+  re-detects it at 97% power. 4.75% is the smallest share that still confirms within a single
+  cycle; 2.5% fails that test.</li>
+<li><strong>What the change buys:</strong> ~216K clients per cohort move from no-banner to banner. At the proven
+  lift that is ≈ +427 extra target responders per cycle.</li>
+<li><strong>Final sample size:</strong> one cohort suffices for the primary read; pool two consecutive cohorts
+  for segment-level (PR/NL/OT) reads.</li>
+</ul>
+<h2>5 - Analysis Plan and Results</h2>
+<ul>
+<li><strong>Quality checks:</strong> SRM (chi-square, 95/5 expected) every cycle; covariate balance (SMD) at
+  first read.</li>
+<li><strong>Primary results:</strong> interim reads follow O'Brien-Fleming (pod convention; ~z 2.5 at interim,
+  not 1.96); final per accumulated window. Results table per template: Leads | Treatment |
+  Control | ATE | p | CI | $ Value (Size × lift × NIBT) [ASK: NIBT per conversion; verify units,
+  a prior async slide shipped monthly NIBT labeled as 5-yr].</li>
+<li><strong>Subgroup:</strong> per-cell first, pooled second (mix-effect guard).</li>
+<li><strong>Multiple testing:</strong> single primary metric; no adjustment needed unless secondary 40/41/43 is
+  promoted.</li>
+</ul>
+<h2>6 - Risks &amp; Mitigation Plan</h2>
+<ul>
+<li>SRM from unregistered cells: lock the (strategy code, TG) registry pre-launch; SRM check gate
+  on the first cycle.</li>
+<li>Population definition drift (our mobile count ran +18.6% over a colleague's under the old IM
+  filter): reconcile before launch so holdout denominators are agreed. Mobile = MB token only.</li>
+<li>Holdout contamination (holdout clients seeing the banner via other surfaces): confirm
+  suppression is enforced at deployment, not just at decisioning.</li>
+</ul>
+<h2>7 - Appendix</h2>
+<ul>
+<li>Experiment documentation: <code>o2p_async_champion_challenger_doe.md</code>.</li>
+<li>Measurement SQL: success via CR_APP chain (no curated table for O2P) + DG6V01.TACTIC_EVNT_IP_AR_HIST.</li>
+<li>MDE workbook: <code>o2p_holdout_mde_calculator.xlsx</code> (tracker-fed baseline/lift, editable holdout
+  shares, PASS/FAIL verdicts per scenario).</li>
+<li>One-pager for stakeholders: <code>o2p_holdout_onepager.html</code> (detection bar vs observed lift).</li>
+<li>Historical context: May 29 deck (async 0.68% vs non-async 0.32%; TG7 0.01%, context only).</li>
+</ul>
+</body></html>

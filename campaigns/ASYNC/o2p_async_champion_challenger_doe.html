@@ -1,0 +1,265 @@
+<!doctype html>
+<html><head><meta charset='utf-8'><title>O2P Async Channel Experiment: Champion/Challenger DOE</title><style>
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:14px;line-height:1.5;
+     color:#111;max-width:900px;margin:24px auto;padding:0 16px;background:#fff}
+h1{font-size:22px} h2{font-size:16px;margin-top:22px}
+table{border-collapse:collapse;margin:10px 0}
+th,td{border:1px solid #ccc;padding:4px 10px;text-align:left;font-size:13px}
+th{background:#f0f0f0}
+code{background:#f4f4f4;padding:1px 4px;font-size:12.5px}
+pre{background:#f4f4f4;padding:10px;overflow-x:auto;font-size:12.5px}
+li{margin:4px 0}
+</style>
+</head><body>
+<h1>O2P Async Channel Experiment: Champion/Challenger (DOE documentation, retroactive)</h1>
+<p>Shape: pod Confluence DOE template + the fuller repo template
+(<code>campaigns/_templates/confluence_doe_template_2026-07.md</code>, <code>doe_report_template_full.md</code>).
+Status: DRAFT 2026-09-04, written retroactively; the experiment launched without a DOE page.
+Results are INTERIM until the Aug 11 cohort completes its 30-day window (~2026-09-11).</p>
+<p>Label rule: arms are mechanical in all data work. MB = mobile banner served, NON_MB = no
+banner. The Async_tracker workbook's champion/challenger tags are INVERTED; in results, use
+only MB / NON_MB.</p>
+<h2>Header table</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MNE</td>
+<td>O2P</td>
+</tr>
+<tr>
+<td>Description</td>
+<td>Async channel test: O2P offer served as a mobile banner, randomized 50/50 inside TG4</td>
+</tr>
+<tr>
+<td>Treatment Start Date</td>
+<td>2026-06-18 (first deployment cohort)</td>
+</tr>
+<tr>
+<td>Treatment End Date</td>
+<td>rolling deployments; final read cohort Aug 11, window closes ~2026-09-11</td>
+</tr>
+<tr>
+<td>Channel</td>
+<td>Mobile banner (MB token); all arms stay eligible for their leaf's other channels</td>
+</tr>
+<tr>
+<td>TST_GRP_CD</td>
+<td>TG4 (95% Action, split MB / NON_MB 47.5 / 47.5 of cohort) · TG7 (5% campaign control, not part of this contrast)</td>
+</tr>
+<tr>
+<td>Measurement Package Link</td>
+<td>(SharePoint: Async_tracker workbook)</td>
+</tr>
+<tr>
+<td>Tableau Dashboard Link</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td>GitHub Link</td>
+<td>campaigns/ASYNC/ (trackers, validations)</td>
+</tr>
+<tr>
+<td>Measurement &amp; Analytics Lead</td>
+<td>Andre</td>
+</tr>
+</tbody>
+</table>
+<h2>1 - Executive Summary</h2>
+<ul>
+<li><strong>Why are we testing?</strong> The async banner is a new program: serving NBA offers as banners
+  inside the mobile app, a channel the bank has not used for these campaigns before. Before
+  the channel becomes part of standard deployment, we need causal proof that it produces
+  conversions the existing experience does not.</li>
+<li><strong>What is being tested and measured?</strong> The channel itself, with O2P (pre-approved
+  overdraft) as the first offer through it. Challenger = the client's mobile experience with
+  the O2P banner. Champion = the same client experience without it. Measured: overdraft
+  conversion within the deployment window.</li>
+<li><strong>What will success look like?</strong> A statistically significant conversion lift in the banner
+  arm, stable across deployment cohorts. That result makes the channel BAU (see the follow-on
+  5% holdout DOE).</li>
+<li><strong>How long and how safe?</strong> Three deployment cohorts (Jun 18, Jul 7, Aug 11), each read at a
+  30-day window; final read ~Sep 11. Safe by construction: the banner adds a surface, removes
+  nothing, and both arms keep every other channel their leaf allows.</li>
+<li><strong>Interim answer:</strong> +0.19 to +0.20pp lift (+31% relative), consistent across the two cohorts
+  read so far.</li>
+</ul>
+<h2>2 - Strategic Context</h2>
+<p>The async banner capability shipped under NBA-12268 with three campaigns (PCD, CTU, O2P).
+O2P is the campaign where the channel gets a clean causal test. A simple before/after or
+served/not-served comparison would not work here: clients who see mobile banners are mobile-
+active, and mobile-active clients convert more with or without a banner. Self-selection would
+inflate any observational read. The champion/challenger design removes that bias by
+randomizing banner exposure within the same decisioned Action population, so the two arms
+differ in nothing but the banner. The 50/50 split maximizes power for a first read of an
+unproven channel. This experiment is the template for onboarding the async channel to other
+campaigns: prove the channel, then shrink the holdout and make it BAU.</p>
+<h2>3 - Hypothesis &amp; Objectives</h2>
+<ul>
+<li><strong>Primary (ATE):</strong> τ = E[Y(MB) − Y(NON_MB)], Y = overdraft conversion in the window.
+  H0: τ = 0 vs H1: τ &gt; 0.</li>
+<li><strong>Success criteria:</strong> reject H0 at α = 0.05 (two-sided z-test) at the full window, with
+  lift directionally consistent across cohorts.</li>
+<li><strong>Secondary:</strong> lift stability across cohorts (channel durability, creative fatigue) and
+  across segments PR / NL / OT where volumes allow.</li>
+<li><strong>Metrics:</strong> Primary = <code>responders_target</code> per the Async_tracker
+  [OPEN: confirm whether this counts product 43 only (primary success) or 40/41/43 (secondary)].</li>
+<li><strong>Guard rail:</strong> none defined at launch (template default unsubscribe is email-specific).</li>
+</ul>
+<h2>4 - Experiment Design &amp; Treatment Assignment</h2>
+<ul>
+<li><strong>Design type:</strong> two-proportion z-test. Chosen because the outcome is binary (converted or
+  not), arms are independent, and n per arm (&gt;230K) puts the normal approximation beyond
+  question. No stratification was needed: full randomization at this n balances covariates.</li>
+<li><strong>Randomization unit:</strong> client (<code>clnt_no</code>), randomized within TG4 at cohort assignment.</li>
+<li><strong>Eligibility:</strong> O2P decisioned Action population, banner-capable report-group leaves
+  01 / 03 / 07 in the PR (Premium) / NL (No Limit) / OT (Other) trees (tech spec §6.3,
+  <code>o2p_offer_channel_trees.md</code>). Tactic IDs 2026099O2P / 2026126O2P / 2026132O2P.</li>
+<li><strong>Treatment arms (split tree, share of cohort):</strong></li>
+</ul>
+<pre><code>Deployment cohort (~505K decisioned clients)
+├─ TG4 Action 95%
+│   ├─ MB (challenger): mobile banner served ..... 47.5%
+│   └─ NON_MB (champion): no banner ............... 47.5%
+└─ TG7 campaign control (never in channel) ........ 5%
+</code></pre>
+<p>TG7 measures the whole campaign vs nothing and is outside this contrast.</p>
+<h2>5 - Sample Size &amp; Power Analysis</h2>
+<ul>
+<li><strong>Baseline conversion rate:</strong> no channel-specific baseline existed before launch (new
+  channel); the 50/50 split was sized for maximum power rather than to a target MDE.
+  Realized NON_MB baseline: 0.628% (average of Jun 18 short-window 0.633% and Jul 7 full
+  0.623%).</li>
+<li><strong>Power calculation steps (post-hoc, per cohort):</strong></li>
+<li>n per arm ≈ 253K (smallest cohort), p = 0.00628.</li>
+<li>SE = √(p(1−p)(1/n₁+1/n₂)) = √(0.00624 × 2/253,000) ≈ 0.000222.</li>
+<li>MDE = (z₀.₉₇₅ + z₀.₈₀) × SE = 2.80 × 0.000222 ≈ 0.062pp.</li>
+<li>Observed lift +0.198pp is 3.2× the MDE; power to detect it ≈ 100%.</li>
+<li><strong>Final sample size:</strong> one cohort was already sufficient; three cohorts were run to test
+  stability, not to reach significance. The surplus power is what justifies the follow-on
+  move to a 4.75% holdout (<code>o2p_async_holdout_doe_draft.md</code>, <code>o2p_holdout_mde_calculator.xlsx</code>).</li>
+</ul>
+<h2>6 - Analysis Plan and Results</h2>
+<ul>
+<li><strong>Plan:</strong> per-cohort read first (window lengths differ), pooled second. Interim reads follow
+  O'Brien-Fleming (pod convention, ~z 2.5 at interim). Final read at full window per cohort.
+  $ value = size × lift × NIBT [OPEN: NIBT per conversion; verify units, a prior async slide
+  shipped monthly NIBT labeled as 5-yr].</li>
+<li><strong>Window caveats (material):</strong> Jun 18 ran only 18 days, NOT a full 30-day window; its rates
+  are understated and not comparable to full-window cohorts. Jul 7 is complete, the only fully
+  clean read today. Aug 11 closes ~2026-09-11. Final read (~Sep 11+) uses all three cohorts at
+  full window.</li>
+<li><strong>Interim results (Async_tracker_Aug pivot, transcribed 2026-09-04):</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Cohort</th>
+<th>Window</th>
+<th>Arm</th>
+<th>Clients</th>
+<th>Conversions</th>
+<th>Rate</th>
+<th>Lift</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jun 18</td>
+<td>18 days (short)</td>
+<td>MB</td>
+<td>271,731</td>
+<td>2,269</td>
+<td>0.835%</td>
+<td>+0.202pp</td>
+</tr>
+<tr>
+<td>Jun 18</td>
+<td>18 days (short)</td>
+<td>NON_MB</td>
+<td>271,737</td>
+<td>1,720</td>
+<td>0.633%</td>
+<td></td>
+</tr>
+<tr>
+<td>Jul 7</td>
+<td>full</td>
+<td>MB</td>
+<td>234,863</td>
+<td>1,918</td>
+<td>0.817%</td>
+<td>+0.193pp</td>
+</tr>
+<tr>
+<td>Jul 7</td>
+<td>full</td>
+<td>NON_MB</td>
+<td>234,866</td>
+<td>1,464</td>
+<td>0.623%</td>
+<td></td>
+</tr>
+<tr>
+<td>Aug 11</td>
+<td>in flight to ~Sep 11</td>
+<td>MB</td>
+<td>253,657</td>
+<td>1,232</td>
+<td>0.486%</td>
+<td>(immature)</td>
+</tr>
+<tr>
+<td>Aug 11</td>
+<td>in flight to ~Sep 11</td>
+<td>NON_MB</td>
+<td>253,661</td>
+<td>856</td>
+<td>0.337%</td>
+<td>(immature)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Multiple testing:</strong> single primary metric; none needed.</li>
+</ul>
+<h2>7 - Randomization &amp; Quality Checks</h2>
+<ul>
+<li><strong>SRM (chi-square, Cohen effective size):</strong> expected 50/50 within TG4. Observed arm gaps:
+  6 clients (Jun 18), 3 (Jul 7), 4 (Aug 11). Cohen w = √(χ²/n) &lt; 0.0001 in every cohort,
+  far under the 0.05 threshold. No SRM.</li>
+<li><strong>Covariate balance (SMD):</strong> [OPEN: run at final read; threshold SMD ≤ 0.1 per template].</li>
+</ul>
+<h2>8 - Risk &amp; Mitigation (learned during execution)</h2>
+<ul>
+<li>Tracker arm labels champion/challenger are inverted. All reporting uses MB / NON_MB.</li>
+<li><code>%IM%</code> is NOT a mobile filter (it matches the IN_IM OLB eOffer token; also a CRV quirk).
+  Mobile = MB token. Legacy O2P daily trackers still carry the IM filter; patch before
+  reusing their outputs.</li>
+<li>Jun 18 short window: exclude from steady-state rate claims; keep in pooled lift reads only
+  with the window noted.</li>
+<li>The experiment launched without this DOE page; this document is the retroactive record and
+  the follow-on holdout DOE goes through the normal approval path.</li>
+</ul>
+<h2>9 - Final Decision Path</h2>
+<ul>
+<li>Test owner: Andre (Measurement &amp; Analytics).</li>
+<li>Approval: [OPEN: product owner name].</li>
+<li>Decision rule: challenger confirmed at final read → channel becomes BAU with a 4.75%
+  standing holdout (<code>o2p_async_holdout_doe_draft.md</code>); lift collapses or reverses → hold at
+  50/50 and investigate.</li>
+</ul>
+<h2>10 - Appendix</h2>
+<ul>
+<li>Data: Async_tracker workbook (SharePoint); transcription
+  <code>o2p_async_tracker_aug_pivot_2026-09-04.md</code>.</li>
+<li>Design decode: <code>o2p_offer_channel_trees.md</code> (tech spec §6.3); photos in <code>pics/</code>.</li>
+<li>Follow-on: 5% holdout transition (<code>o2p_async_holdout_doe_draft.md</code>,
+  <code>o2p_holdout_mde_calculator.xlsx</code>, <code>o2p_holdout_onepager.html</code>).</li>
+</ul>
+</body></html>
