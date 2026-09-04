@@ -1,0 +1,9 @@
+# File 61 v2 (SOURCE = DDWV01.CPC_RB_PREF, APP_SYS_CD=7020), run 2026-09-04, Teradata-direct, 1012 window 2025-05-01..2026-06-25, 1046 window 2025-04-01..2026-07-31, grain client. BLOCK 1 forward cascade: 7020 1012 revocations -> nearest 1046 (any origin).
+cascade_bucket	clients
+BEFORE_THE_1012	430
+LATER_THAN_14_DAYS	16
+NEVER	46813
+SAME_DAY	3293
+WITHIN_14_DAYS	88
+WITHIN_1_DAY	20
+TOTAL	50660

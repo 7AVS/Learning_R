@@ -1,0 +1,7 @@
+# File 61 v2 (SOURCE = DDWV01.CPC_RB_PREF, APP_SYS_CD=7020), run 2026-09-04, Teradata-direct, 1012 window 2025-05-01..2026-06-25, 1046 window 2025-04-01..2026-07-31, grain client. BLOCK 2 reverse: 7020 1046 closures -> nearest 7020 1012. Reproduces JP 19.2/80.8 (3293/17126).
+cascade_bucket	clients
+NEVER	13561
+SAME_DAY	3293
+WITHIN_14_DAYS	230
+WITHIN_1_DAY	42
+TOTAL	17126
