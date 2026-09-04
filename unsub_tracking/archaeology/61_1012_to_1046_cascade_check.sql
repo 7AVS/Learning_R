@@ -8,21 +8,11 @@
 --   (2025-04-01..2026-07-31) to catch cascades landing just outside the 1012 window.
 -- WRITER/ORIGIN COLUMN: APP_SYS_CD on DDWV01.CPC_RB_PREF_LOG itself - schemas/cpc_rb_pref_log_schema.md
 --   line 24 confirms the log carries it (S0 screenshot + dictionary); no fallback to CPC_RB_PREF needed.
--- RUN ORDER: Step 0 (reset) -> Step A (1012/7020 writes) -> Step B (1046 writes, any origin) ->
---   Block 1 (forward cascade, paste) -> Block 2 (reverse cascade, paste) -> Block 3 (monthly
+-- RUN ORDER: Block 1 (forward cascade, paste) -> Block 2 (reverse cascade, paste) -> Block 3 (monthly
 --   denominators, paste). Grain = CLNT_NO. Counts only.
 -- =============================================================================
 
--- ===== STEP 0: RESET — drop volatile tables from any previous attempt (this file + pack 60) =====
--- Errors "does not exist" on a first run are expected here; keep going.
-DROP TABLE vt_1012_email61;          -- this file, prior attempt
-DROP TABLE vt_1046_61;               -- this file, prior attempt
-DROP TABLE vt_sf_unsub60;            -- Pack 60 leftover
-DROP TABLE vt_cpc_write60;           -- Pack 60 leftover
-DROP TABLE vt_pairs60;               -- Pack 60 leftover
-DROP TABLE vt_sf_flagged60;          -- Pack 60 leftover
-DROP TABLE vt_cpc_flagged60;         -- Pack 60 leftover
-
+-- No DROP / volatile tables in this file (2026-09-04): both sources are small, built as CTEs in each block.
 
 -- ===== PARAMETER BLOCK: WINDOWS =====
 -- WIN_START        = DATE '2025-05-01'  - 1012 side, matches the director's extract.
@@ -31,57 +21,6 @@ DROP TABLE vt_cpc_flagged60;         -- Pack 60 leftover
 -- WIDE_END_EXCL    = DATE '2026-08-01'  - 1046 side, one month later to catch late cascades.
 -- No shared variables across statements in a plain Teradata script - edit all four literals
 -- in place (Step A, Step B, and the re-bound of vt_1046_61 in Blocks 2/3) if the window changes.
-
-
--- ===== STEP A: VOLATILE — 1012->5002 writes, origin 7020 (email page), one row per (CLNT_NO, write date) =====
--- DROP TABLE vt_1012_email61;  -- also see STEP 0
--- Source columns proven in schemas/cpc_rb_pref_log_schema.md and used identically in
--- 59_cpc_state_of_same_mne_resends.sql Step F: DDWV01.CPC_RB_PREF_LOG, CLNT_NO/PREF_ID/
--- CLNT_CONSENT_TYP/CHG_TMSTMP. APP_SYS_CD added here as the origin filter (7020 = Exact
--- Target, the email consent page - schema doc line 24).
-
-CREATE VOLATILE TABLE vt_1012_email61 AS (
-    SELECT DISTINCT
-        CLNT_NO,
-        CAST(CHG_TMSTMP AS DATE) AS write_dt
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1012
-      AND CLNT_CONSENT_TYP = 5002
-      AND APP_SYS_CD = 7020
-      AND CHG_TMSTMP >= DATE '2025-05-01'   -- PARAMETER BLOCK: WIN_START
-      AND CHG_TMSTMP <  DATE '2026-06-26'   -- PARAMETER BLOCK: WIN_END_EXCL
-) WITH DATA
-PRIMARY INDEX (CLNT_NO)
-ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_1012_email61 COLUMN (CLNT_NO);
-COLLECT STATISTICS ON vt_1012_email61 COLUMN (CLNT_NO, write_dt);
-
-
--- ===== STEP B: VOLATILE — 1046->5002 writes, ANY origin, wider window, one row per (CLNT_NO, write date) =====
--- DROP TABLE vt_1046_61;  -- also see STEP 0
--- is_email_origin flags whether THIS write_dt had a 7020 write, without losing the
--- any-origin grain Block 1 needs for the forward-cascade check. Wider window than Step A
--- (WIDE_START/WIDE_END_EXCL) so a cascade landing just before/after the 1012 window is not
--- mistaken for NEVER.
-
-CREATE VOLATILE TABLE vt_1046_61 AS (
-    SELECT
-        CLNT_NO,
-        CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
-        MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
-    FROM DDWV01.CPC_RB_PREF_LOG
-    WHERE PREF_ID = 1046
-      AND CLNT_CONSENT_TYP = 5002
-      AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
-      AND CHG_TMSTMP <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIDE_END_EXCL
-    GROUP BY CLNT_NO, CAST(CHG_TMSTMP AS DATE)
-) WITH DATA
-PRIMARY INDEX (CLNT_NO)
-ON COMMIT PRESERVE ROWS;
-
-COLLECT STATISTICS ON vt_1046_61 COLUMN (CLNT_NO);
-COLLECT STATISTICS ON vt_1046_61 COLUMN (CLNT_NO, write_dt);
 
 
 -- ===== BLOCK 1: forward cascade — 1012/7020 clients, nearest 1046 (any origin), by timing bucket =====
@@ -97,7 +36,30 @@ COLLECT STATISTICS ON vt_1046_61 COLUMN (CLNT_NO, write_dt);
 --   (already closed earlier, not a cascade result) -> BEFORE_THE_1012; if no 1046 write at
 --   all (either side) -> NEVER.
 
-WITH first_1012 AS (
+WITH vt_1012_email61 AS (
+    SELECT DISTINCT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE) AS write_dt
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND APP_SYS_CD = 7020
+      AND CHG_TMSTMP >= DATE '2025-05-01'   -- PARAMETER BLOCK: WIN_START
+      AND CHG_TMSTMP <  DATE '2026-06-26'   -- PARAMETER BLOCK: WIN_END_EXCL
+),
+vt_1046_61 AS (
+    SELECT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
+        MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1046
+      AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
+      AND CHG_TMSTMP <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIDE_END_EXCL
+    GROUP BY CLNT_NO, CAST(CHG_TMSTMP AS DATE)
+),
+first_1012 AS (
     SELECT CLNT_NO, MIN(write_dt) AS write_dt
     FROM vt_1012_email61
     GROUP BY CLNT_NO
@@ -153,7 +115,30 @@ ORDER BY 1;
 --   (this check is symmetry, not causal ordering); diff > 14 days folds into NEVER along with
 --   clients with no 1012 write at all - both mean "no meaningful association."
 
-WITH first_1046_email AS (
+WITH vt_1012_email61 AS (
+    SELECT DISTINCT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE) AS write_dt
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND APP_SYS_CD = 7020
+      AND CHG_TMSTMP >= DATE '2025-05-01'   -- PARAMETER BLOCK: WIN_START
+      AND CHG_TMSTMP <  DATE '2026-06-26'   -- PARAMETER BLOCK: WIN_END_EXCL
+),
+vt_1046_61 AS (
+    SELECT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
+        MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1046
+      AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
+      AND CHG_TMSTMP <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIDE_END_EXCL
+    GROUP BY CLNT_NO, CAST(CHG_TMSTMP AS DATE)
+),
+first_1046_email AS (
     SELECT CLNT_NO, MIN(write_dt) AS write_dt
     FROM vt_1046_61
     WHERE is_email_origin = 1
@@ -199,7 +184,30 @@ ORDER BY 1;
 --   one-off month.
 -- WHAT TO DO WITH IT: paste to Claude
 
-WITH d1012 AS (
+WITH vt_1012_email61 AS (
+    SELECT DISTINCT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE) AS write_dt
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1012
+      AND CLNT_CONSENT_TYP = 5002
+      AND APP_SYS_CD = 7020
+      AND CHG_TMSTMP >= DATE '2025-05-01'   -- PARAMETER BLOCK: WIN_START
+      AND CHG_TMSTMP <  DATE '2026-06-26'   -- PARAMETER BLOCK: WIN_END_EXCL
+),
+vt_1046_61 AS (
+    SELECT
+        CLNT_NO,
+        CAST(CHG_TMSTMP AS DATE)                                        AS write_dt,
+        MAX(CASE WHEN APP_SYS_CD = 7020 THEN 1 ELSE 0 END)              AS is_email_origin
+    FROM DDWV01.CPC_RB_PREF_LOG
+    WHERE PREF_ID = 1046
+      AND CLNT_CONSENT_TYP = 5002
+      AND CHG_TMSTMP >= DATE '2025-04-01'   -- PARAMETER BLOCK: WIDE_START
+      AND CHG_TMSTMP <  DATE '2026-08-01'   -- PARAMETER BLOCK: WIDE_END_EXCL
+    GROUP BY CLNT_NO, CAST(CHG_TMSTMP AS DATE)
+),
+d1012 AS (
     SELECT CLNT_NO, write_dt,
            TRIM(EXTRACT(YEAR FROM write_dt)) || '-' ||
              TRIM(CASE WHEN EXTRACT(MONTH FROM write_dt) < 10 THEN '0' ELSE '' END) ||

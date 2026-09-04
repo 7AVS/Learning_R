@@ -1,0 +1,48 @@
+excel_row,mnemonic,mne_desc,lob_cid,lob_manual,action_type
+10,WEF,WESTJET RBC WORLD ELITE MC BUS (MCB) 10K WestJet points top up,CPS,LOYALTY,Fulfillment
+14,AUH,Card Authorized User Acquisition,Cards,CARDS,Deepen
+15,VJB,Journey Builder Rewards eMail Triggers,CPS,LOYALTY,Deepen
+22,VMB,Avion Rewards (RBC client) onboarding communication,CPS,LOYALTY,Deepen
+27,VBA,Business Credit Card Opportunity,CPS,CARDS,Attract
+52,CRV,Credit card installment plan offer,Cards,CARDS,Deepen
+53,VIF,INFO PROTECTOR,CPB,CARDS,Attract
+58,COB,Personal Cards Onboarding,CPS,CARDS,Onboard
+65,VLI,Business Credit Card Limit Increase,CPS,CARDS,Deepen
+66,PCQ,Credit Card Opportunity,Cards,CARDS,Attract
+69,WJR,Fall 2022 WestJet Retention Trigger Monthly Campaign,CPS,CARDS,Retain
+75,FWC,RBC X VISA: FIFA Campaign,CPS,CARDS,Pre_Attract
+80,CEC,CRO Reminder Emails on Retail PreApproved Credit,CPS,CARDS,Attract
+84,VRG,Avion reward redemption email Borealis test campaign,CPS,LOYALTY,Deepen
+85,OTC,Regulatory notification on changes to program's T&C's,CPS,CARDS,Regulatory
+86,RPF,PBA Retention Fulfillment,CPS,CARDS,Fulfillment
+88,MVP,MVP Tests for Next Best Action,CPS,CARDS,Attract
+91,VOA,"Avion Rewards Program, formerly RBC Rewards - Personal",CPS,LOYALTY,Regulatory
+93,PCL,Credit Card Limit Increase Opportunity,Cards,CARDS,Deepen
+100,VBU,Business Cards Upgrade,CPS,CARDS,Deepen
+104,WJA,"WestJet Acquisition Offer Fulfillment (5,000 WestJet points)",CPS,CARDS,Fulfillment
+116,BXY,Perplexity Pro offer - BUSINESS,CPS,LOYALTY,Attract
+123,VME,RBC Rewards Member Engagement,Cards,LOYALTY,Deepen
+128,VN7,Avion Rewards and Offer campaigns,CPS,LOYALTY,Attract
+157,VN4,Avion Rewards and Offer campaigns,CPS,LOYALTY,Attract
+162,WJF,WestJet Engagement Trigger Fulfillment,CPS,CARDS,Fulfillment
+163,CLL,Credit Card limit increase nurture,CPS,CARDS,Attract
+166,VMF,Credit card clients who earned on merchant offer statements,CPS,LOYALTY,Regulatory
+191,HCD,"Medical & Dental Student, Resident, and Physician & Dentist Offers",CPS,CARDS,Fulfillment
+202,VCL,Credit Card Limit Increase Opportunity,CPS,CARDS,Deepen
+217,BAF,British Airways Fulfillment Process,CPB,CARDS,Fulfillment
+228,BCO,Business Cards Onboarding,CPS,CARDS,Onboard
+231,CRO,Retail - PreApproved Credit for New Clients,CPB,CARDS,Attract
+235,VO3,My Offer,CPB,LOYALTY,Attract
+240,MWA,Mobile Wallet Activity,CPS,CARDS,Onboard
+244,AML,AML - Client ID not compliant,CPS,CARDS,Regulatory
+248,VMS,Avion Rewards (non-RBC client) onboarding communication,CPS,LOYALTY,Deepen
+263,MEF,Metro Employee Application Bonus Fulfillment,CPS,CARDS,Fulfillment
+267,PON,Project Pontiac: Bill 96 Client Monitoring,CPS,CARDS,Regulatory
+268,VO4,My Offer,CPB,LOYALTY,Attract
+277,MET,moi RBC Visa Onboarding,CPS,CARDS,Deepen
+287,POT,Pontiac Life Cycle Trigger Onboarding Emails,CPS,CARDS,Onboard
+291,WNH,Remediation - ENOVA - WATERLOO NORTH HYDRO Declined payments,CPS,CARDS,Operational
+293,PCD,Credit Card Best Fit Check,Cards,CARDS,Deepen
+302,VRE,RBC Rewards E-Newsletter,Cards,LOYALTY,Deepen
+303,VO1,My Offer,CPB,LOYALTY,Attract
+305,VRD,Avion Rewards CC T&C disclosure for Quebec Residents,CPS,LOYALTY,Regulatory

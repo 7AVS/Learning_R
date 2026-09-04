@@ -17,19 +17,8 @@
 -- tactic-id driver table, not an IN-subquery.
 -- =============================================================================
 
--- ===== STEP 0: RESET — drop volatile tables from any previous attempt =====
--- Errors "does not exist" on a first run are expected here; keep going.
-DROP TABLE vt_em_decis_cards;   -- file 54 leftovers — volatile tables persist for the session and consume spool
-DROP TABLE vt_tactic_ids;       -- file 54 leftovers — volatile tables persist for the session and consume spool
-DROP TABLE vt_master_cards;     -- file 54 leftovers — volatile tables persist for the session and consume spool
-DROP TABLE vt_sent_cards;       -- file 54 leftovers — volatile tables persist for the session and consume spool
-DROP TABLE vt_em_decis57;
-DROP TABLE vt_tactic_ids57;
-DROP TABLE vt_master57;
-DROP TABLE vt_sent_evt57;
-DROP TABLE vt_sent57;
-DROP TABLE vt_first_unsub57;
-DROP TABLE vt_zero_send_months57;
+-- STEP 0 removed 2026-09-04: no DROP statements in packs. If you rerun a pack in the same
+-- session and hit 'table already exists', run 00_reset_volatiles.sql first.
 
 
 -- ===== PARAMETER BLOCK: MNE SCOPE + TWO WINDOWS =====

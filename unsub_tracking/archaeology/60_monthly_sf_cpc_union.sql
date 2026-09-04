@@ -15,43 +15,8 @@
 -- director's literal ask.
 -- =============================================================================
 
--- ===== STEP 0: RESET — drop volatile tables from any previous attempt (this file + 54/57/58/59) =====
--- Errors "does not exist" on a first run are expected here; keep going.
-DROP TABLE vt_em_decis_cards;        -- Pack 54 leftover
-DROP TABLE vt_tactic_ids;            -- Pack 54 leftover
-DROP TABLE vt_master_cards;          -- Pack 54 leftover
-DROP TABLE vt_sent_cards;            -- Pack 54 leftover
-DROP TABLE vt_em_decis57;            -- Pack 57 leftover
-DROP TABLE vt_tactic_ids57;          -- Pack 57 leftover
-DROP TABLE vt_master57;              -- Pack 57 leftover
-DROP TABLE vt_sent_evt57;            -- Pack 57 leftover
-DROP TABLE vt_sent57;                -- Pack 57 leftover
-DROP TABLE vt_first_unsub57;         -- Pack 57 leftover
-DROP TABLE vt_zero_send_months57;    -- Pack 57 leftover
-DROP TABLE vt_em_decis58;            -- Pack 58 leftover
-DROP TABLE vt_tactic_ids58;          -- Pack 58 leftover
-DROP TABLE vt_master58;              -- Pack 58 leftover
-DROP TABLE vt_sent_evt58;            -- Pack 58 leftover
-DROP TABLE vt_sent58;                -- Pack 58 leftover
-DROP TABLE vt_first_unsub_by_mne58;  -- Pack 58 leftover
-DROP TABLE vt_zero_send_months58;    -- Pack 58 leftover
-DROP TABLE vt_em_decis59;            -- Pack 59 leftover
-DROP TABLE vt_tactic_ids59;          -- Pack 59 leftover
-DROP TABLE vt_master59;              -- Pack 59 leftover
-DROP TABLE vt_sent_evt59;            -- Pack 59 leftover
-DROP TABLE vt_sent59;                -- Pack 59 leftover
-DROP TABLE vt_first_unsub_by_mne59;  -- Pack 59 leftover
-DROP TABLE vt_zero_send_months59;    -- Pack 59 leftover
-DROP TABLE vt_same_mne59;            -- Pack 59 leftover
-DROP TABLE vt_cpc_clients59;         -- Pack 59 leftover
-DROP TABLE vt_cpc_log59;             -- Pack 59 leftover
-DROP TABLE vt_cpc_asof_latest59;     -- Pack 59 leftover
-DROP TABLE vt_cpc_state_asof59;      -- Pack 59 leftover
-DROP TABLE vt_sf_unsub60;            -- this file, prior attempt
-DROP TABLE vt_cpc_write60;           -- this file, prior attempt
-DROP TABLE vt_pairs60;               -- this file, prior attempt
-DROP TABLE vt_sf_flagged60;          -- this file, prior attempt
-DROP TABLE vt_cpc_flagged60;         -- this file, prior attempt
+-- STEP 0 removed 2026-09-04: no DROP statements in packs. If you rerun a pack in the same
+-- session and hit 'table already exists', run 00_reset_volatiles.sql first.
 
 
 -- ===== PARAMETER BLOCK: WINDOW (matches Q3b, Aug-24 -> Jul-26) =====

@@ -17,12 +17,8 @@
 -- Counts only, no rates. VOLATILE TABLEs persist in-session — Step 0 resets them.
 -- =============================================================================
 
--- ===== STEP 0: RESET — drop volatile tables from any previous attempt =====
--- Errors "does not exist" on a first run are expected here; keep going.
-DROP TABLE vt_em_decis_cards;
-DROP TABLE vt_tactic_ids;
-DROP TABLE vt_master_cards;
-DROP TABLE vt_sent_cards;
+-- STEP 0 removed 2026-09-04: no DROP statements in packs. If you rerun a pack in the same
+-- session and hit 'table already exists', run 00_reset_volatiles.sql first.
 
 
 -- ===== PARAMETER BLOCK 1: MNE SCOPE + WINDOW START =====
