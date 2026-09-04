@@ -1378,3 +1378,12 @@ Reading, combined with the forward gap (99% of SF disposition-4 unsubs have no C
 - The two paths are nearly disjoint by mechanism. Neither system is complete; the union (pack 60) is the only complete count. The hypothesis in sfmc_unsub_blueprint_notes §7 is now measured from both sides.
 - Block 2: 98,939 of the 100,649 (98%) were sent an email in the 90 days before the revocation; 1,710 were not. Path 2 is email-driven, not preference-centre traffic.
 - Results: archaeology/results/64_*.tsv.
+
+## §29 (2026-09-04) Pack 65: the backfeed catch-up run of 2026-09-02
+
+- Since March 2026 the email-page (7020) writes to CPC ran at under 40 a day. On 2026-09-02 at 05:xx one 7020 batch wrote 9,284 revocations (regular batch hour is 04:xx); Sep 1 and Sep 3 regular batches wrote 71 and 239.
+- Of the 9,594 7020 revocations since 2026-08-01: 8,516 (89%) have no Salesforce disposition-4 at all; 25 within a day; 273 in 2-14 days; 214 in 15-30; 277 in 31-60; 289 at 61+.
+- Reading: the catch-up drained the form-path (path 2) backlog held since the March collapse. It did not feed the one-click Salesforce unsubs (path 1, 99% of SF intent) into CPC. The gate stays blind to path 1 after the fix.
+- Size: pre-March rate ~4,000/month implies ~24,000 of backlog for Mar-Aug; 9,284 landed. Partial, or more runs to come. Rerun pack 65 Block 1 weekly while the fix is in flight.
+- Monitoring consequence: fix-era pairs carry 15-60 day lags; the [-1,+14] match window in pack 60 must widen for the KPI.
+- Results: archaeology/results/65_*.tsv.

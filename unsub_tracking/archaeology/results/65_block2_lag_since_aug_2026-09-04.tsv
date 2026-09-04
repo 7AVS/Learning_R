@@ -1,0 +1,9 @@
+# File 65 (backfeed catch-up tracker, CPC_RB_PREF 1012->5002), run 2026-09-04. BLOCK 2 7020 writes since 2026-08-01, lag to last SF disposition-4 (hour band 3-5 labelled REGULAR, so the 05:28 batch is inside it).
+batch_type	lag_bucket	clients
+REGULAR_HOUR	LAG_0_1_DAY	25
+REGULAR_HOUR	LAG_2_14_DAYS	273
+REGULAR_HOUR	LAG_15_30_DAYS	214
+REGULAR_HOUR	LAG_31_60_DAYS	277
+REGULAR_HOUR	LAG_61_PLUS_DAYS	289
+REGULAR_HOUR	NO_SF_UNSUB	8516
+TOTAL	ALL	9594

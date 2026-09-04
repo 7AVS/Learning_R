@@ -63,7 +63,7 @@ lagged AS (
 ),
 bucketed AS (
     SELECT CLNT_NO, write_dt,
-           CASE WHEN write_hour BETWEEN 3 AND 5 THEN 'REGULAR_HOUR' ELSE 'OFF_HOUR' END AS batch_type,
+           CASE WHEN write_hour = 4 THEN 'REGULAR_HOUR' ELSE 'OFF_HOUR' END AS batch_type  -- 2026-09-04: regular 7020 batch is hour 4; the 2026-09-02 catch-up ran at hour 5,
            CASE WHEN last_unsub_before IS NULL                   THEN 'NO_SF_UNSUB'
                 WHEN write_dt - last_unsub_before <= 1           THEN 'LAG_0_1_DAY'
                 WHEN write_dt - last_unsub_before <= 14          THEN 'LAG_2_14_DAYS'
